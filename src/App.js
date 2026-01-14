@@ -30,6 +30,8 @@ const DesignEnforcer = () => {
       body { font-family: 'Pretendard', sans-serif !important; }
       .opacity-0 { opacity: 0; }
       .transition-opacity { transition: opacity 0.3s; }
+      /* 모바일 터치감 개선 */
+      button { min-height: 44px; } 
     `}} />
   );
 };
@@ -92,9 +94,9 @@ const getWeekOfMonth = (date) => {
 const formatDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 const generateTimeSlots = () => Array.from({ length: 12 }, (_, i) => `${i + 10}:00`);
 
-// --- UI 컴포넌트 ---
+// --- UI 컴포넌트 (모바일 가시성 개선) ---
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }) => {
-  const sizes = { sm: 'px-3 py-1.5 text-xs', md: 'px-4 py-2 text-sm', lg: 'px-6 py-3 text-base' };
+  const sizes = { sm: 'px-3 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-6 py-3 text-lg' }; // 터치 영역 확대
   const variants = {
     primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-md disabled:bg-blue-300',
     secondary: 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50',
@@ -104,28 +106,28 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
     ghost: 'bg-transparent text-gray-600 hover:bg-gray-100',
   };
   return (
-    <button onClick={onClick} className={`rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
-      {Icon && <Icon size={size === 'sm' ? 14 : 18} />} {children}
+    <button onClick={onClick} className={`rounded-lg font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
+      {Icon && <Icon size={size === 'sm' ? 16 : 20} />} {children}
     </button>
   );
 };
 
-const Card = ({ children, className = '' }) => <div className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 ${className}`}>{children}</div>;
+const Card = ({ children, className = '' }) => <div className={`bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6 ${className}`}>{children}</div>;
 const Badge = ({ status }) => {
   const styles = { open: 'bg-blue-100 text-blue-700', pending: 'bg-yellow-100 text-yellow-700', confirmed: 'bg-green-100 text-green-700', completed: 'bg-gray-100 text-gray-700 border border-gray-300', cancellation_requested: 'bg-red-100 text-red-700', addition_requested: 'bg-purple-100 text-purple-700' };
   const labels = { open: '예약 가능', pending: '승인 대기', confirmed: '예약 확정', completed: '클리닉 완료', cancellation_requested: '취소 요청중', addition_requested: '신청 대기중' };
-  return <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${styles[status] || styles.completed}`}>{labels[status] || status}</span>;
+  return <span className={`px-2.5 py-1 rounded-full text-xs md:text-sm font-bold ${styles[status] || styles.completed}`}>{labels[status] || status}</span>;
 };
 const Modal = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
       <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl transform transition-all max-h-[90vh] flex flex-col">
-        <div className="flex justify-between items-center p-6 border-b shrink-0">
-          <h3 className="text-lg font-bold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+        <div className="flex justify-between items-center p-5 border-b shrink-0">
+          <h3 className="text-xl font-bold text-gray-900">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={28} /></button>
         </div>
-        <div className="p-6 overflow-y-auto">{children}</div>
+        <div className="p-5 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
@@ -141,32 +143,33 @@ const LoginView = ({ form, setForm, error, onLogin }) => (
         <p className="text-gray-500 mt-2">임페리얼 학원 관리 시스템</p>
       </div>
       <div className="space-y-4">
-        <input type="text" placeholder="아이디" className="w-full border rounded-lg p-3" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
-        <input type="password" placeholder="비밀번호" className="w-full border rounded-lg p-3" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
+        <input type="text" placeholder="아이디" className="w-full border rounded-lg p-4 text-lg" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+        <input type="password" placeholder="비밀번호" className="w-full border rounded-lg p-4 text-lg" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
         {error && <div className="text-red-500 text-sm text-center">{error}</div>}
-        <Button onClick={onLogin} className="w-full py-3 text-lg">로그인</Button>
+        <Button onClick={onLogin} className="w-full py-4 text-xl">로그인</Button>
       </div>
     </div>
   </div>
 );
 
-// --- [분리됨] 달력 뷰 (관리자 강의실 배정 기능 추가됨) ---
-const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, setSelectedDateStr, onAddRequest, onDelete, onApprove, onCancel, onFeedback, onWithdrawCancel, onUpdateSession }) => {
+// --- [분리됨] 달력 뷰 (관리자/조교 공용) ---
+const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, setSelectedDateStr, onAddRequest, onDelete, onApprove, onCancel, onFeedback, onWithdrawCancel, onUpdateSession, onWithdrawAdd }) => {
   const mySessions = isInteractive ? sessions.filter(s=>s.taId===currentUser.id&&s.date===selectedDateStr) : sessions.filter(s=>s.date===selectedDateStr);
   const isAdmin = currentUser.role === 'admin';
+  const now = new Date(); // 현재 시간 (과거 시간 체크용)
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <Card className="lg:col-span-1 min-h-[400px]">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold flex items-center gap-2"><CalendarIcon size={18} className="text-blue-600"/> 달력</h3>
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="font-bold flex items-center gap-2 text-lg"><CalendarIcon size={20} className="text-blue-600"/> 달력</h3>
           <div className="flex gap-2">
-            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()-1)))} className="p-1 hover:bg-gray-100 rounded"><ChevronLeft size={20}/></button>
-            <span className="font-bold text-lg">{currentDate.getFullYear()}.{currentDate.getMonth()+1}</span>
-            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()+1)))} className="p-1 hover:bg-gray-100 rounded"><ChevronRight size={20}/></button>
+            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()-1)))} className="p-2 hover:bg-gray-100 rounded"><ChevronLeft size={24}/></button>
+            <span className="font-bold text-xl">{currentDate.getFullYear()}.{currentDate.getMonth()+1}</span>
+            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()+1)))} className="p-2 hover:bg-gray-100 rounded"><ChevronRight size={24}/></button>
           </div>
         </div>
-        <div className="grid grid-cols-7 text-center text-xs font-bold text-gray-500 mb-2">{DAYS.map(d=><div key={d}>{d}</div>)}</div>
+        <div className="grid grid-cols-7 text-center text-sm font-bold text-gray-500 mb-2">{DAYS.map(d=><div key={d} className="py-1">{d}</div>)}</div>
         <div className="grid grid-cols-7 gap-1">
           {getDaysInMonth(currentDate).map((d,i)=>{
             if(!d) return <div key={i} className="aspect-square"/>;
@@ -174,9 +177,9 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
             const isSel = dStr===selectedDateStr;
             const has = sessions.some(s=>s.date===dStr && (isInteractive?s.taId===currentUser.id:true));
             return (
-              <button key={i} onClick={()=>setSelectedDateStr(dStr)} className={`aspect-square rounded-lg flex flex-col items-center justify-center relative ${isSel?'bg-blue-600 text-white shadow':'hover:bg-gray-100'}`}>
-                <span className={`text-sm ${isSel?'font-bold':''}`}>{d.getDate()}</span>
-                {has && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-500'}`}/>}
+              <button key={i} onClick={()=>setSelectedDateStr(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative ${isSel?'bg-blue-600 text-white shadow-md scale-105':'hover:bg-gray-100'} transition-all`}>
+                <span className={`text-base ${isSel?'font-bold':''}`}>{d.getDate()}</span>
+                {has && <div className={`w-2 h-2 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-500'}`}/>}
               </button>
             );
           })}
@@ -184,55 +187,63 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
       </Card>
       <Card className="lg:col-span-2">
         <h3 className="font-bold text-xl mb-4">{selectedDateStr} 스케줄</h3>
-        <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+        <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s=>s.startTime===t);
+            const slotDateTime = new Date(`${selectedDateStr}T${t}`);
+            const isSlotPast = slotDateTime < now;
+
             if(slots.length===0) return isInteractive ? (
               <div key={i} className="flex gap-4 items-start group">
-                <div className="w-16 pt-3 text-right text-sm text-gray-500">{t}</div>
-                <div className="flex-1 border rounded-xl p-3 bg-gray-50 border-dashed flex justify-between items-center min-h-[60px]">
-                  <span className="text-xs text-gray-400">근무 없음</span>
-                  <Button size="sm" variant="secondary" icon={PlusCircle} onClick={()=>onAddRequest(t)}>추가</Button>
+                <div className="w-16 pt-3 text-right text-base font-medium text-gray-500">{t}</div>
+                <div className="flex-1 border rounded-xl p-4 bg-gray-50 border-dashed flex justify-between items-center min-h-[70px]">
+                  <span className="text-sm text-gray-400">근무 없음</span>
+                  {/* 과거 시간이면 추가 버튼 미노출 (Fix 1) */}
+                  {!isSlotPast && <Button size="sm" variant="secondary" icon={PlusCircle} onClick={()=>onAddRequest(t)}>추가</Button>}
                 </div>
               </div>
             ) : (
-              <div key={i} className="flex gap-4 items-start"><div className="w-16 pt-3 text-right text-sm text-gray-500">{t}</div><div className="flex-1 border rounded-xl p-3 bg-gray-50 min-h-[60px] flex items-center justify-center text-gray-400 text-xs">일정 없음</div></div>
+              <div key={i} className="flex gap-4 items-start"><div className="w-16 pt-3 text-right text-base font-medium text-gray-500">{t}</div><div className="flex-1 border rounded-xl p-4 bg-gray-50 min-h-[70px] flex items-center justify-center text-gray-400 text-sm">일정 없음</div></div>
             );
             return (
               <div key={i} className="flex gap-4 items-start">
-                <div className="w-16 pt-3 text-right text-sm text-gray-500">{t}</div>
-                <div className="flex-1 space-y-2">
-                  {slots.map(s=>(
-                    <div key={s.id} className={`border rounded-xl p-3 flex flex-col justify-center min-h-[80px] ${s.status==='confirmed'?'bg-green-50 border-green-200':s.status==='cancellation_requested'?'bg-red-50 border-red-200':s.status==='addition_requested'?'bg-purple-50 border-purple-200':'bg-blue-50 border-blue-200'}`}>
-                      <div className="flex justify-between items-start w-full">
-                        <div>
-                          <div className="flex items-center gap-2 mb-1"><span className="font-bold text-gray-900">{s.studentName||s.taName}</span><Badge status={s.status}/></div>
-                          <div className="text-sm text-gray-600">{s.topic||(isAdmin?`${s.taName} 근무`:'예약 대기')}</div>
-                          {/* 관리자인 경우 스케줄 칸에서 강의실 배정 */}
-                          {isAdmin && (
-                            <select 
-                              className={`text-xs border rounded p-1 mt-1 ${!s.classroom ? 'border-red-400 bg-red-50' : 'border-gray-200'}`} 
-                              value={s.classroom || ''} 
-                              onChange={(e) => onUpdateSession(s.id, { classroom: e.target.value })}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <option value="">강의실 선택</option>
-                              {CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
-                            </select>
-                          )}
-                          {!isAdmin && s.classroom && <div className="text-xs text-blue-600 mt-1">{s.classroom}</div>}
-                        </div>
-                        <div className="flex gap-1">
-                          {isInteractive && s.status==='open' && <Button size="sm" variant="danger" icon={XCircle} onClick={()=>onCancel(s)}>취소</Button>}
-                          {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" icon={Undo2} onClick={()=>onWithdrawCancel(s)}>요청 취소</Button>}
-                          {isInteractive && s.status==='addition_requested' && <span className="text-xs text-purple-600 flex items-center">승인 대기중</span>}
-                          {isAdmin && <button onClick={()=>onDelete(s.id)} className="text-red-400 p-1"><Trash2 size={14}/></button>}
-                          {isAdmin && s.status==='pending' && <Button size="sm" onClick={()=>onApprove(s)}>승인</Button>}
-                          {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant="success" icon={CheckSquare} onClick={()=>onFeedback(s)}>피드백</Button>}
+                <div className="w-16 pt-3 text-right text-base font-medium text-gray-500">{t}</div>
+                <div className="flex-1 space-y-3">
+                  {slots.map(s=>{
+                    const sessionDateTime = new Date(`${s.date}T${s.startTime}`);
+                    const isSessionPast = sessionDateTime < now;
+                    return (
+                      <div key={s.id} className={`border rounded-xl p-4 flex flex-col justify-center min-h-[90px] shadow-sm ${s.status==='confirmed'?'bg-green-50 border-green-200':s.status==='cancellation_requested'?'bg-red-50 border-red-200':s.status==='addition_requested'?'bg-purple-50 border-purple-200':'bg-blue-50 border-blue-200'}`}>
+                        <div className="flex justify-between items-start w-full">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1"><span className="font-bold text-lg text-gray-900">{s.studentName||s.taName}</span><Badge status={s.status}/></div>
+                            <div className="text-base text-gray-600">{s.topic||(isAdmin?`${s.taName} 근무`:'예약 대기')}</div>
+                            {isAdmin && (
+                              <select className={`text-sm border rounded p-1 mt-2 w-full ${!s.classroom ? 'border-red-400 bg-red-50' : 'border-gray-200'}`} value={s.classroom || ''} onChange={(e) => onUpdateSession(s.id, { classroom: e.target.value })} onClick={(e) => e.stopPropagation()}>
+                                <option value="">강의실 선택</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                            )}
+                            {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-1">{s.classroom}</div>}
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            {/* 과거 시간이면 취소 버튼 미노출 (Fix 1) */}
+                            {isInteractive && s.status==='open' && !isSessionPast && <Button size="sm" variant="danger" icon={XCircle} onClick={()=>onCancel(s)}>취소</Button>}
+                            {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" icon={Undo2} onClick={()=>onWithdrawCancel(s)}>요청 취소</Button>}
+                            {/* 근무 추가 철회 버튼 (Fix 2) */}
+                            {isInteractive && s.status==='addition_requested' && (
+                              <div className="flex flex-col items-end gap-1">
+                                <span className="text-xs text-purple-600 font-bold">승인 대기중</span>
+                                <Button size="sm" variant="secondary" icon={Undo2} onClick={()=>onWithdrawAdd(s.id)}>신청 철회</Button>
+                              </div>
+                            )}
+                            {isAdmin && <button onClick={()=>onDelete(s.id)} className="text-red-400 p-2 bg-white rounded-full shadow-sm border border-red-100"><Trash2 size={16}/></button>}
+                            {isAdmin && s.status==='pending' && <Button size="sm" onClick={()=>onApprove(s)}>승인</Button>}
+                            {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant="success" icon={CheckSquare} onClick={()=>onFeedback(s)}>피드백</Button>}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             );
@@ -375,6 +386,13 @@ export default function App() {
     }
   };
 
+  const handleWithdrawAddRequest = async (id) => {
+    if (window.confirm('근무 신청을 철회하시겠습니까?')) {
+      await deleteSession(id);
+      addNotification('신청이 철회되었습니다.');
+    }
+  };
+
   const handleApproveRequest = async (s) => {
     if(s.status === 'cancellation_requested') {
       await deleteSession(s.id);
@@ -451,6 +469,7 @@ export default function App() {
               <Card>
                 <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-blue-600"/> 신규 예약 확인 {pendingBookings.length>0&&<span className="bg-red-500 text-white text-xs px-2 rounded-full">{pendingBookings.length}</span>}</h2>
                 {pendingBookings.length===0?<p className="text-gray-500 text-center py-8 bg-gray-50 rounded-lg">신규 예약 없음</p>:<div className="grid gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">{pendingBookings.map(s=>(<div key={s.id} className="border-l-4 border-green-500 bg-white shadow-sm rounded-r-lg p-4 flex flex-col gap-2"><div><div className="flex items-center gap-2 mb-1"><span className="font-bold">{s.studentName}</span><span className="text-xs text-gray-500">({s.studentPhone}) → {s.taName}</span></div><div className="text-sm text-gray-600">{s.date} {s.startTime}~{s.endTime}</div><div className="text-xs text-gray-500 mt-1 whitespace-pre-line">{s.topic}<br/><span className="text-gray-400">{s.questionRange}</span></div></div>
+                <select className={`text-xs border rounded p-1 w-full ${!s.classroom?'border-red-400 bg-red-50':'border-gray-200'}`} value={s.classroom||''} onChange={(e)=>updateSession(s.id, {classroom:e.target.value})}><option value="">강의실 선택</option>{CLASSROOMS.map(r=><option key={r} value={r}>{r}</option>)}</select>
                 <Button variant="primary" onClick={()=>onApprove(s)}>확인 및 문자발송</Button></div>))}</div>}
               </Card>
               <Card>
@@ -514,13 +533,13 @@ export default function App() {
                 </div>
               </div>
             </Card>
-            <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={onAddRequest} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession}/>
+            <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={onAddRequest} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession} onWithdrawAdd={handleWithdrawAddRequest}/>
           </div>
         )}
 
         {currentUser.role==='student' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="col-span-1"><h3 className="font-bold mb-4">예약 날짜</h3><div className="grid grid-cols-7 text-center text-xs mb-2">{DAYS.map(d=><div key={d}>{d}</div>)}</div><div className="grid grid-cols-7 gap-1">{getDaysInMonth(studentDate).map((d,i)=>{if(!d)return<div key={i}/>;const dStr=formatDate(d);const isSel=dStr===studentSelectedDateStr;const has=sessions.some(s=>s.date===dStr&&s.status==='open');return<button key={i} onClick={()=>setStudentSelectedDateStr(dStr)} className={`aspect-square rounded ${isSel?'bg-blue-600 text-white':'hover:bg-gray-100'} ${has?'font-bold':''}`}>{d.getDate()}</button>})}</div></Card>
+            <Card className="col-span-1"><h3 className="font-bold mb-4">예약 날짜</h3><div className="grid grid-cols-7 text-center text-xs mb-2">{DAYS.map(d=><div key={d}>{d}</div>)}</div><div className="grid grid-cols-7 gap-1">{getDaysInMonth(studentDate).map((d,i)=>{if(!d)return<div key={i}/>;const dStr=formatDate(d);const isSel=dStr===studentSelectedDateStr;const has=sessions.some(s=>s.date===dStr&&s.status==='open');return<button key={i} onClick={()=>setStudentSelectedDateStr(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all ${isSel?'bg-blue-600 text-white shadow-md scale-105':'hover:bg-gray-100'} ${has?'font-bold':''}`}><span className="text-base">{d.getDate()}</span>{has && <div className={`w-2 h-2 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-500'}`}/>}</button>})}</div></Card>
             <Card className="lg:col-span-2"><h3 className="font-bold mb-4">{studentSelectedDateStr} 예약</h3><div className="grid grid-cols-2 gap-4">
               {sessions.filter(s=>s.date===studentSelectedDateStr&&s.status==='open').sort((a, b) => a.startTime.localeCompare(b.startTime)).map(s=>(
                 <div key={s.id} onClick={()=>{
@@ -537,7 +556,7 @@ export default function App() {
                     setStudentSelectedSlots(p=>[...p,s.id]);
                   }
                 }} className={`border rounded p-4 cursor-pointer relative ${studentSelectedSlots.includes(s.id)?'bg-blue-50 border-blue-500':'hover:bg-gray-50'}`}>
-                  {/* 학생 선택 박스 체크 표시 (Fix 4) */}
+                  {/* 학생 선택 박스 체크 표시 */}
                   <div className="absolute top-4 right-4">
                     {studentSelectedSlots.includes(s.id) ? <CheckCircle className="text-blue-600 fill-blue-100" size={24} /> : <div className="w-6 h-6 rounded-full border-2 border-gray-300" />}
                   </div>
