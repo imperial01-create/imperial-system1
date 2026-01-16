@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool
+  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -93,7 +93,7 @@ const getWeekOfMonth = (date) => {
 };
 const formatDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
-// 운영 시간: 08:00 ~ 22:00 (시작 시간 기준 08시~21시)
+// 운영 시간: 08:00 ~ 22:00
 const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i + 8).padStart(2, '0')}:00`);
 
 // --- UI 컴포넌트 ---
@@ -158,7 +158,9 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
   const mySessions = isInteractive ? sessions.filter(s=>s.taId===currentUser.id&&s.date===selectedDateStr) : sessions.filter(s=>s.date===selectedDateStr);
   const isAdmin = currentUser.role === 'admin';
   const isLecturer = currentUser.role === 'lecturer';
+  const isStudent = currentUser.role === 'student';
   const now = new Date();
+  const todayStr = getLocalToday();
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -177,7 +179,26 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
             if(!d) return <div key={i} className="aspect-square"/>;
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
-            const has = sessions.some(s=>s.date===dStr && (isInteractive?s.taId===currentUser.id : (isLecturer && s.status==='open' ? false : true))); 
+            // Dot Logic: 학생일 경우 과거 날짜는 표시 안 함
+            let has = false;
+            if (isStudent) {
+               // 오늘 포함 미래이고, open 상태인 세션이 있는 경우
+               if (dStr >= todayStr) {
+                 has = sessions.some(s => s.date === dStr && s.status === 'open');
+               }
+            } else if (isInteractive) {
+               // 조교는 본인 스케줄
+               has = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
+            } else if (isLecturer) {
+               // 강사는 오픈된 스케줄만 (없는 날은 점 X)
+               has = sessions.some(s => s.date === dStr && s.status !== 'open'); // 'open'이 아닌 예약된 것이 있거나 등등.. 요구사항은 "일정 없는 스케줄 보이지 않음" -> 점 로직은 유지하되 뷰에서 필터링. 여기선 스케줄 있는 날 표시.
+               // 강사: 일정이 있는 날만 표시 (open 포함)
+               has = sessions.some(s => s.date === dStr);
+            } else {
+               // 관리자는 모든 날 표시
+               has = sessions.some(s => s.date === dStr);
+            }
+
             return (
               <button key={i} onClick={()=>setSelectedDateStr(dStr)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative transition-all ${isSel?'bg-blue-600 text-white shadow-lg scale-105':'hover:bg-gray-100 bg-gray-50'}`}>
                 <span className={`text-lg ${isSel?'font-bold':''}`}>{d.getDate()}</span>
@@ -224,6 +245,7 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
                             <div className="text-sm text-gray-500 mt-1">{s.questionRange}</div>
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center">
+                                <div className="text-sm font-bold text-gray-500">담당 조교: {s.taName}</div>
                                 <select className={`text-base border rounded-lg p-2 w-40 ${!s.classroom ? 'border-red-400 bg-red-50' : 'border-gray-200'}`} value={s.classroom || ''} onChange={(e) => onUpdateSession(s.id, { classroom: e.target.value })} onClick={(e) => e.stopPropagation()}>
                                   <option value="">강의실 선택</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
@@ -457,6 +479,7 @@ export default function App() {
   const pendingBookings = sessions.filter(s => s.status === 'pending');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
+  const studentMyClinics = sessions.filter(s => s.studentName === currentUser.name && (s.status === 'confirmed' || s.status === 'pending')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-gray-800">
@@ -548,27 +571,56 @@ export default function App() {
           </div>
         )}
         {currentUser.role==='student' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="col-span-1"><h3 className="font-bold mb-4 text-2xl">예약 날짜</h3><div className="grid grid-cols-7 text-center text-base mb-2">{DAYS.map(d=><div key={d}>{d}</div>)}</div><div className="grid grid-cols-7 gap-2">{getDaysInMonth(studentDate).map((d,i)=>{if(!d)return<div key={i}/>;const dStr=formatDate(d);const isSel=dStr===studentSelectedDateStr;const has=sessions.some(s=>s.date===dStr&&s.status==='open');return<button key={i} onClick={()=>setStudentSelectedDateStr(dStr)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative transition-all ${isSel?'bg-blue-600 text-white shadow-lg':'hover:bg-gray-100'} ${has?'font-bold':''}`}><span className="text-lg">{d.getDate()}</span>{has&&<div className={`w-2 h-2 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-500'}`}/>}</button>})}</div></Card>
-            <Card className="lg:col-span-2"><h3 className="font-bold mb-4 text-2xl">{studentSelectedDateStr} 예약</h3><div className="grid grid-cols-2 gap-4">
-              {sessions.filter(s=>s.date===studentSelectedDateStr&&s.status==='open').sort((a, b) => a.startTime.localeCompare(b.startTime)).map(s=>{
-                const now = new Date();
-                const sDate = new Date(`${s.date}T${s.startTime}`);
-                if(sDate < now) return null;
-                return (
-                  <div key={s.id} onClick={()=>{
-                    if(studentSelectedSlots.includes(s.id)) setStudentSelectedSlots(p=>p.filter(id=>id!==s.id));
-                    else {
-                      if(studentSelectedSlots.length>0){const f=sessions.find(ss=>ss.id===studentSelectedSlots[0]);if(f&&f.date!==s.date){addNotification('다른 날짜 동시 신청 불가','error');return;}}
-                      setStudentSelectedSlots(p=>[...p,s.id])
-                    }
-                  }} className={`border-2 rounded-2xl p-5 cursor-pointer relative transition-all ${studentSelectedSlots.includes(s.id)?'bg-blue-50 border-blue-500':'hover:bg-gray-50 border-gray-100'}`}>
-                    <div className="absolute top-5 right-5">{studentSelectedSlots.includes(s.id)?<CheckCircle className="text-blue-600 fill-blue-100" size={28}/>:<div className="w-7 h-7 rounded-full border-2 border-gray-300"/>}</div>
-                    <div className="font-bold text-xl text-gray-800">{s.startTime}~{s.endTime}</div><div className="text-base text-gray-500 mt-1">{s.taName} TA</div>
-                  </div>
-                )
-              })}
-            </div>{studentSelectedSlots.length>0&&<Button className="w-full mt-6 py-4 text-xl shadow-xl" onClick={()=>setModalType('student_apply')}>{studentSelectedSlots.length}건 예약 신청</Button>}</Card>
+          <div className="flex flex-col gap-6">
+            {/* 학생용 내 신청 현황 카드 (추가) */}
+            <Card className="w-full">
+              <h3 className="font-bold mb-4 text-2xl flex items-center gap-2"><List className="text-blue-600"/> 나의 신청 현황</h3>
+              {studentMyClinics.length === 0 ? <p className="text-gray-500 text-center py-4 bg-gray-50 rounded-xl text-lg">예정된 클리닉이 없습니다.</p> : 
+                <div className="grid gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                  {studentMyClinics.map(s => (
+                    <div key={s.id} className="border-2 rounded-xl p-4 flex justify-between items-center shadow-sm">
+                      <div>
+                        <div className="font-bold text-lg text-gray-800">{s.date} {s.startTime}</div>
+                        <div className="text-sm text-gray-500">{s.taName} TA - {s.topic}</div>
+                      </div>
+                      <Badge status={s.status}/>
+                    </div>
+                  ))}
+                </div>
+              }
+            </Card>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <Card className="col-span-1"><h3 className="font-bold mb-4 text-2xl">예약 날짜</h3><div className="grid grid-cols-7 text-center text-base mb-2">{DAYS.map(d=><div key={d}>{d}</div>)}</div><div className="grid grid-cols-7 gap-2">{getDaysInMonth(studentDate).map((d,i)=>{if(!d)return<div key={i}/>;const dStr=formatDate(d);const isSel=dStr===studentSelectedDateStr;const has=sessions.some(s=>s.date===dStr&&s.status==='open');return<button key={i} onClick={()=>setStudentSelectedDateStr(dStr)} className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative transition-all ${isSel?'bg-blue-600 text-white shadow-lg':'hover:bg-gray-100'} ${has?'font-bold':''}`}><span className="text-lg">{d.getDate()}</span>{has&&<div className={`w-2 h-2 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-500'}`}/>}</button>})}</div></Card>
+              <Card className="lg:col-span-2"><h3 className="font-bold mb-4 text-2xl">{studentSelectedDateStr} 예약</h3><div className="grid grid-cols-2 gap-4">
+                {sessions.filter(s=>s.date===studentSelectedDateStr&&s.status==='open').sort((a, b) => a.startTime.localeCompare(b.startTime)).map(s=>{
+                  const now = new Date();
+                  const sDate = new Date(`${s.date}T${s.startTime}`);
+                  if(sDate < now) return null;
+                  return (
+                    <div key={s.id} onClick={()=>{
+                      if (studentSelectedSlots.includes(s.id)) {
+                        setStudentSelectedSlots(p=>p.filter(id=>id!==s.id));
+                      } else {
+                        if (studentSelectedSlots.length > 0) {
+                          const firstSession = sessions.find(sess => sess.id === studentSelectedSlots[0]);
+                          if (firstSession && firstSession.date !== s.date) {
+                            addNotification('다른 날짜의 클리닉은 동시에 신청할 수 없습니다.', 'error');
+                            return;
+                          }
+                        }
+                        setStudentSelectedSlots(p=>[...p,s.id]);
+                      }
+                    }} className={`border-2 rounded-2xl p-5 cursor-pointer relative transition-all ${studentSelectedSlots.includes(s.id)?'bg-blue-50 border-blue-500':'hover:bg-gray-50 border-gray-100'}`}>
+                      {/* 학생 선택 박스 체크 표시 */}
+                      <div className="absolute top-4 right-4">
+                        {studentSelectedSlots.includes(s.id) ? <CheckCircle className="text-blue-600 fill-blue-100" size={24} /> : <div className="w-6 h-6 rounded-full border-2 border-gray-300" />}
+                      </div>
+                      <div className="font-bold text-xl text-gray-800">{s.startTime}~{s.endTime}</div><div className="text-base text-gray-500 mt-1">{s.taName} TA</div>
+                    </div>
+                  )
+                })}
+              </div>{studentSelectedSlots.length>0&&<Button className="w-full mt-6 py-4 text-xl shadow-xl" onClick={()=>setModalType('student_apply')}>{studentSelectedSlots.length}건 예약 신청</Button>}</Card>
+            </div>
           </div>
         )}
       </main>
