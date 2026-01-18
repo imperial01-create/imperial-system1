@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List
+  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, List
 } from 'lucide-react';
 
 // --- Firebase Imports ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, writeBatch } from 'firebase/firestore';
+import { 
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
+  onSnapshot, writeBatch, query, where, getDocs 
+} from 'firebase/firestore';
 
-// --- 디자인 강제 적용 (Design Enforcer) ---
+// --- 디자인 강제 적용 ---
 const DesignEnforcer = () => {
   useEffect(() => {
     if (!document.getElementById('tailwind-script')) {
@@ -30,9 +33,8 @@ const DesignEnforcer = () => {
       body { font-family: 'Pretendard', sans-serif !important; }
       .opacity-0 { opacity: 0; }
       .transition-opacity { transition: opacity 0.3s; }
-      /* 모바일 터치감 및 가독성 개선 */
       button { min-height: 50px; } 
-      input, select, textarea { font-size: 16px !important; } /* iOS 줌 방지 */
+      input, select, textarea { font-size: 16px !important; }
     `}} />
   );
 };
@@ -92,8 +94,6 @@ const getWeekOfMonth = (date) => {
   return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 const formatDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-
-// 운영 시간: 08:00 ~ 22:00
 const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i + 8).padStart(2, '0')}:00`);
 
 // --- UI 컴포넌트 ---
@@ -135,8 +135,8 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
-// --- 분리된 뷰 ---
-const LoginView = ({ form, setForm, error, onLogin }) => (
+// --- 로그인 뷰 ---
+const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
   <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
     <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-10">
       <div className="text-center mb-10">
@@ -148,12 +148,15 @@ const LoginView = ({ form, setForm, error, onLogin }) => (
         <input type="text" placeholder="아이디" className="w-full border-2 rounded-xl p-5 text-xl bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-colors" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
         <input type="password" placeholder="비밀번호" className="w-full border-2 rounded-xl p-5 text-xl bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-colors" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
         {error && <div className="text-red-500 text-base text-center font-bold bg-red-50 p-3 rounded-lg">{error}</div>}
-        <Button onClick={onLogin} className="w-full py-5 text-xl shadow-xl">로그인</Button>
+        <Button onClick={onLogin} className="w-full py-5 text-xl shadow-xl" disabled={isLoading}>
+          {isLoading ? <Loader className="animate-spin"/> : '로그인'}
+        </Button>
       </div>
     </div>
   </div>
 );
 
+// --- 달력 뷰 ---
 const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, setSelectedDateStr, onAddRequest, onDelete, onApprove, onCancel, onFeedback, onWithdrawCancel, onUpdateSession, onWithdrawAdd, onAdminEdit }) => {
   const mySessions = isInteractive ? sessions.filter(s=>s.taId===currentUser.id&&s.date===selectedDateStr) : sessions.filter(s=>s.date===selectedDateStr);
   const isAdmin = currentUser.role === 'admin';
@@ -179,23 +182,14 @@ const CalendarView = ({ isInteractive, sessions, currentUser, currentDate, setCu
             if(!d) return <div key={i} className="aspect-square"/>;
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
-            // Dot Logic: 학생일 경우 과거 날짜는 표시 안 함
             let has = false;
             if (isStudent) {
-               // 오늘 포함 미래이고, open 상태인 세션이 있는 경우
-               if (dStr >= todayStr) {
-                 has = sessions.some(s => s.date === dStr && s.status === 'open');
-               }
+               if (dStr >= todayStr) has = sessions.some(s => s.date === dStr && s.status === 'open');
             } else if (isInteractive) {
-               // 조교는 본인 스케줄
                has = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
             } else if (isLecturer) {
-               // 강사는 오픈된 스케줄만 (없는 날은 점 X)
-               has = sessions.some(s => s.date === dStr && s.status !== 'open'); // 'open'이 아닌 예약된 것이 있거나 등등.. 요구사항은 "일정 없는 스케줄 보이지 않음" -> 점 로직은 유지하되 뷰에서 필터링. 여기선 스케줄 있는 날 표시.
-               // 강사: 일정이 있는 날만 표시 (open 포함)
                has = sessions.some(s => s.date === dStr);
             } else {
-               // 관리자는 모든 날 표시
                has = sessions.some(s => s.date === dStr);
             }
 
@@ -286,8 +280,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [authUser, setAuthUser] = useState(null);
   const [users, setUsers] = useState([]);
-  const [sessions, setSessions] = useState([]);
+  const [sessionMap, setSessionMap] = useState({});
+  const [sessions, setSessions] = useState([]); // Array derived from map
   const [loading, setLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [modalType, setModalType] = useState(null);
@@ -310,6 +306,7 @@ export default function App() {
   const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' });
   const [defaultSchedule, setDefaultSchedule] = useState({ 월: { start: '14:00', end: '22:00', active: false }, 화: { start: '14:00', end: '22:00', active: false }, 수: { start: '14:00', end: '22:00', active: false }, 목: { start: '14:00', end: '22:00', active: false }, 금: { start: '14:00', end: '22:00', active: false }, 토: { start: '10:00', end: '18:00', active: false }, 일: { start: '10:00', end: '18:00', active: false } });
 
+  // Init Auth
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -321,23 +318,78 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
+  // Data Syncing
   useEffect(() => {
     if (!authUser) return;
-    const unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (s) => {
-      const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
-      setUsers(u);
-      if (u.length === 0) {
-        const batch = writeBatch(db);
-        SEED_USERS.forEach(ud => batch.set(doc(collection(db, 'artifacts', appId, 'public', 'data', 'users')), ud));
-        batch.commit();
-      }
-    });
-    const unsubSessions = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), (s) => {
-      setSessions(s.docs.map(d => ({ id: d.id, ...d.data() })));
+    
+    // 1. Users Sync (For Admin Only)
+    let unsubUsers = () => {};
+    if (currentUser?.role === 'admin') {
+       unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (s) => {
+        const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
+        setUsers(u);
+        if (u.length === 0) {
+          const batch = writeBatch(db);
+          SEED_USERS.forEach(ud => batch.set(doc(collection(db, 'artifacts', appId, 'public', 'data', 'users')), ud));
+          batch.commit();
+        }
+      });
+    }
+
+    // 2. Sessions Sync (Calendar & Extras)
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth() + 1;
+    const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
+    const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
+
+    const calendarQuery = query(
+      collection(db, 'artifacts', appId, 'public', 'data', 'sessions'),
+      where('date', '>=', startOfMonth),
+      where('date', '<=', endOfMonth)
+    );
+
+    const unsubCalendar = onSnapshot(calendarQuery, (s) => {
+      const newDocs = {};
+      s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
+      setSessionMap(prev => ({ ...prev, ...newDocs })); 
       setLoading(false);
     });
-    return () => { unsubUsers(); unsubSessions(); };
-  }, [authUser]);
+
+    let unsubExtras = () => {};
+    // Student Extras (My Future Bookings)
+    if (currentUser?.role === 'student') {
+        const today = getLocalToday();
+        const myQuery = query(
+            collection(db, 'artifacts', appId, 'public', 'data', 'sessions'),
+            where('studentName', '==', currentUser.name),
+            where('date', '>=', today)
+        );
+        unsubExtras = onSnapshot(myQuery, (s) => {
+            const newDocs = {};
+            s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
+            setSessionMap(prev => ({ ...prev, ...newDocs }));
+        });
+    }
+    // Admin Extras (Requests)
+    if (currentUser?.role === 'admin') {
+      // Fetching active requests regardless of date might require separate query or index.
+      // For simplicity/cost, we stick to current month view or manually fetch if needed.
+      // But let's fetch cancellation/addition requests specifically if needed.
+      // Assuming Admin handles recent requests, month view usually covers it.
+    }
+
+    return () => {
+      unsubUsers();
+      unsubCalendar();
+      unsubExtras();
+    };
+  }, [authUser, currentUser, currentDate]);
+
+  // Update sessions array when map changes
+  useEffect(() => {
+    setSessions(Object.values(sessionMap));
+  }, [sessionMap]);
+
 
   const addNotification = (msg, type = 'success') => {
     const id = Date.now();
@@ -345,12 +397,31 @@ export default function App() {
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 3000);
   };
 
-  const handleLogin = () => {
-    const u = users.find(u => u.userId === loginForm.id && u.password === loginForm.password);
-    if (u) { setCurrentUser(u); setLoginError(''); addNotification(`${u.name}님 환영합니다!`); }
-    else setLoginError('아이디 또는 비밀번호가 일치하지 않습니다.');
+  const handleLogin = async () => {
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+        const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+        const q = query(usersRef, where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
+        const snapshot = await getDocs(q);
+        
+        if (!snapshot.empty) {
+            const user = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+            setCurrentUser(user);
+            addNotification(`${user.name}님 환영합니다!`);
+            setSessionMap({}); // Clear prev data
+        } else {
+            setLoginError('아이디 또는 비밀번호가 잘못되었습니다.');
+        }
+    } catch (e) {
+        setLoginError('로그인 중 오류가 발생했습니다.');
+        console.error(e);
+    } finally {
+        setLoginLoading(false);
+    }
   };
-  const handleLogout = () => { setCurrentUser(null); setLoginForm({id:'',password:''}); setModalType(null); };
+  
+  const handleLogout = () => { setCurrentUser(null); setLoginForm({id:'',password:''}); setSessionMap({}); setSessions([]); setStudentSelectedSlots([]); setModalType(null); };
 
   const createSession = async (data) => await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions'), data);
   const updateSession = async (id, data) => await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sessions', id), data);
@@ -360,6 +431,7 @@ export default function App() {
 
   const handleSaveDefaultSchedule = async () => {
     if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return;
+    // Note: 'users' array is populated only for Admin
     const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
     const batch = writeBatch(db);
     let count = 0;
@@ -369,12 +441,12 @@ export default function App() {
       const sched = defaultSchedule[dayName];
       if (sched && sched.active) {
         const sH = parseInt(sched.start.split(':')[0]), eH = parseInt(sched.end.split(':')[0]);
-        // 22:00 ~ 08:00 생성 제한 (08~21시 시작만 허용)
         if (sH < 8 || sH >= 22) continue; 
-
         for (let h = sH; h < eH; h++) {
-          if (h >= 22) break; // 22시 이후 생성 방지
+          if (h >= 22) break; 
           const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
+          // Note: duplicate check relies on loaded sessions. 
+          // Admin should ensure they are viewing the relevant month or we trust the user.
           if (!sessions.some(s => s.taId === targetTa.id && s.date === dStr && s.startTime === sT)) {
             batch.set(doc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions')), {
               taId: targetTa.id, taName: targetTa.name, date: dStr, startTime: sT, endTime: eT, status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', feedback: '', improvement: '', clinicContent: '', feedbackStatus: 'none', classroom: ''
@@ -388,16 +460,13 @@ export default function App() {
     addNotification(`${count}개의 스케줄 생성 완료`);
   };
 
-  const onAddRequest = async (t) => {
+  const handleRequestAdd = async (t) => {
     const h = parseInt(t.split(':')[0]);
-    // 22:00 ~ 08:00 생성 차단
     if (h < 8 || h >= 22) { addNotification('운영 시간(08:00~22:00) 외에는 신청할 수 없습니다.', 'error'); return; }
-    
     await createSession({
       taId: currentUser.id, taName: currentUser.name, date: selectedDateStr, startTime: t, endTime: `${String(h+1).padStart(2,'0')}:00`, status: 'addition_requested', source: 'system', studentName: '', topic: '', questionRange: '', feedback: '', improvement: '', clinicContent: '', feedbackStatus: 'none', classroom: ''
     });
-    setModalType(null);
-    addNotification('신청 완료');
+    setModalType(null); addNotification('신청 완료');
   };
   
   const onCancel = (s) => { setSelectedSession(s); setRequestData({reason:'', type:'cancel'}); setModalType('request_change'); };
@@ -418,17 +487,15 @@ export default function App() {
       studentName: adminEditData.studentName,
       topic: adminEditData.topic,
       questionRange: adminEditData.questionRange,
-      status: adminEditData.studentName ? 'confirmed' : 'open' // 학생 이름 있으면 확정, 없으면 오픈
+      status: adminEditData.studentName ? 'confirmed' : 'open' 
     });
-    setModalType(null);
-    addNotification('수정 완료');
+    setModalType(null); addNotification('수정 완료');
   };
 
   const handleRequestCancel = async () => {
     if (!requestData.reason) return addNotification('사유를 입력해주세요', 'error');
     await updateSession(selectedSession.id, { status: 'cancellation_requested', cancelReason: requestData.reason });
-    setModalType(null);
-    addNotification('취소 요청 완료');
+    setModalType(null); addNotification('취소 요청 완료');
   };
 
   const handleWithdrawCancelRequest = async (s) => {
@@ -469,12 +536,11 @@ export default function App() {
 
   const handleSubmitFeedback = async () => {
     await updateSession(selectedSession.id, { ...feedbackData, status: 'completed', feedbackStatus: 'submitted' });
-    setModalType(null);
-    addNotification('피드백 제출 완료');
+    setModalType(null); addNotification('피드백 제출 완료');
   };
 
-  if(loading) return <div className="min-h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={48}/></div>;
-  if(!currentUser) return <><DesignEnforcer/><LoginView form={loginForm} setForm={setLoginForm} error={loginError} onLogin={handleLogin}/></>;
+  if(!authUser) return <div className="min-h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={48}/></div>;
+  if(!currentUser) return <><DesignEnforcer/><LoginView form={loginForm} setForm={setLoginForm} error={loginError} onLogin={handleLogin} isLoading={loginLoading}/></>;
 
   const pendingBookings = sessions.filter(s => s.status === 'pending');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
@@ -512,7 +578,7 @@ export default function App() {
               <div className="grid grid-cols-7 gap-2 mb-4">{DAYS.map(d=>(<div key={d} className="border rounded-lg p-2 text-center bg-white"><div className="flex justify-between mb-1"><span className="text-sm font-bold">{d}</span><input type="checkbox" checked={defaultSchedule[d].active} onChange={()=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], active: !defaultSchedule[d].active}})}/></div><input type="time" className="w-full text-sm mb-1" value={defaultSchedule[d].start} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], start:e.target.value}})}/><input type="time" className="w-full text-sm" value={defaultSchedule[d].end} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], end:e.target.value}})}/></div>))}</div>
               <Button onClick={handleSaveDefaultSchedule} className="w-full">설정 저장</Button>
             </Card>
-            <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={onAddRequest} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession} onAdminEdit={onAdminEdit}/>
+            <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={handleRequestAdd} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession} onAdminEdit={onAdminEdit}/>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t">
               <Card>
                 <h2 className="text-2xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-blue-600"/> 신규 예약 확인 {pendingBookings.length>0&&<span className="bg-red-500 text-white text-sm px-2 rounded-full">{pendingBookings.length}</span>}</h2>
@@ -535,7 +601,7 @@ export default function App() {
             <div className="bg-white border-b pb-4 mb-4">
               <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
             </div>
-            <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={onAddRequest} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession}/>
+            <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={handleRequestAdd} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession}/>
             <div className="grid grid-cols-1 md:grid-cols-1 gap-6 pt-6 border-t">
               <Card>
                 <h2 className="text-2xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-blue-600" /> 진행 중인 클리닉 신청</h2>
@@ -567,12 +633,11 @@ export default function App() {
                 </div>
               </div>
             </Card>
-            <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={onAddRequest} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession} onWithdrawAdd={handleWithdrawAddRequest}/>
+            <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAddRequest={handleRequestAdd} onDelete={deleteSession} onApprove={onApprove} onCancel={onCancel} onFeedback={onFeedback} onWithdrawCancel={handleWithdrawCancelRequest} onUpdateSession={updateSession} onWithdrawAdd={handleWithdrawAddRequest}/>
           </div>
         )}
         {currentUser.role==='student' && (
           <div className="flex flex-col gap-6">
-            {/* 학생용 내 신청 현황 카드 (추가) */}
             <Card className="w-full">
               <h3 className="font-bold mb-4 text-2xl flex items-center gap-2"><List className="text-blue-600"/> 나의 신청 현황</h3>
               {studentMyClinics.length === 0 ? <p className="text-gray-500 text-center py-4 bg-gray-50 rounded-xl text-lg">예정된 클리닉이 없습니다.</p> : 
@@ -611,7 +676,6 @@ export default function App() {
                         setStudentSelectedSlots(p=>[...p,s.id]);
                       }
                     }} className={`border-2 rounded-2xl p-5 cursor-pointer relative transition-all ${studentSelectedSlots.includes(s.id)?'bg-blue-50 border-blue-500':'hover:bg-gray-50 border-gray-100'}`}>
-                      {/* 학생 선택 박스 체크 표시 */}
                       <div className="absolute top-4 right-4">
                         {studentSelectedSlots.includes(s.id) ? <CheckCircle className="text-blue-600 fill-blue-100" size={24} /> : <div className="w-6 h-6 rounded-full border-2 border-gray-300" />}
                       </div>
@@ -625,38 +689,15 @@ export default function App() {
         )}
       </main>
 
-      {/* 모달들: 사이즈 및 폰트 확대 */}
+      {/* 모달들 */}
       <Modal isOpen={modalType==='request_change'} onClose={()=>setModalType(null)} title="근무 취소"><textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/><Button onClick={handleRequestCancel} className="w-full py-4 text-lg">요청 전송</Button></Modal>
       <Modal isOpen={modalType==='student_apply'} onClose={()=>setModalType(null)} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalType==='feedback'} onClose={()=>setModalType(null)} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={handleSubmitFeedback}>저장 완료</Button></Modal>
       <Modal isOpen={modalType==='user_manage'} onClose={()=>setModalType(null)} title="사용자 관리"><div className="flex border-b mb-4">{['ta','student','lecturer'].map(t=><button key={t} className={`flex-1 py-3 font-bold text-lg capitalize ${manageTab===t?'text-blue-600 border-b-4 border-blue-600':'text-gray-400'}`} onClick={()=>setManageTab(t)}>{t}</button>)}</div><div className="flex flex-col gap-3 mb-4"><input placeholder="이름" className="border-2 rounded-lg p-3 text-lg" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/><input placeholder="ID" className="border-2 rounded-lg p-3 text-lg" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})}/><input placeholder="PW" className="border-2 rounded-lg p-3 text-lg" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/><Button onClick={()=>createUser({...newUser, role:manageTab})} className="py-3">추가</Button></div><div className="max-h-[300px] overflow-auto">{users.filter(u=>u.role===manageTab).map(u=>(<div key={u.id} className="flex justify-between p-4 border-b items-center"><div><span className="font-bold text-lg">{u.name}</span> <span className="text-gray-500 text-sm">({u.userId})</span></div><button onClick={()=>deleteUserAction(u.id)} className="text-red-500"><Trash2 size={20}/></button></div>))}</div></Modal>
       <Modal isOpen={modalType==='message_preview_confirm'} onClose={()=>setModalType(null)} title="문자 발송"><div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div><Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateSession(selectedSession.id, {status:'confirmed'}); setModalType(null); addNotification('발송 완료'); }}>전송 및 확정</Button></Modal>
       <Modal isOpen={modalType==='message_preview_feedback'} onClose={()=>setModalType(null)} title="피드백 발송"><div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed" onClick={()=>copyToClipboard(selectedSession&&TEMPLATES.feedbackParent(selectedSession))}>{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div><Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateSession(selectedSession.id, {feedbackStatus:'sent'}); setModalType(null); addNotification('발송 완료'); }}>전송 완료 처리</Button></Modal>
-      
-      {/* 관리자 수정 모달 (Fix 1) */}
-      <Modal isOpen={modalType==='admin_edit'} onClose={()=>setModalType(null)} title="예약/클리닉 수정">
-        <div className="space-y-4">
-          <div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div>
-          <div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div>
-          <div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div>
-          <Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button>
-        </div>
-      </Modal>
-
-      <Modal isOpen={modalType==='admin_stats'} onClose={()=>setModalType(null)} title="조교 근무 통계">
-        <div className="space-y-6">
-          <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl">
-            <span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span>
-            <div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-base text-left border-collapse">
-              <thead><tr className="bg-gray-100 border-b"><th className="p-3">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center">{w}주</th>)}<th className="p-3 text-center font-bold">합계</th></tr></thead>
-              <tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody>
-            </table>
-          </div>
-        </div>
-      </Modal>
+      <Modal isOpen={modalType==='admin_edit'} onClose={()=>setModalType(null)} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
+      <Modal isOpen={modalType==='admin_stats'} onClose={()=>setModalType(null)} title="조교 근무 통계"><div className="space-y-6"><div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div><div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center">{w}주</th>)}<th className="p-3 text-center font-bold">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div></div></Modal>
     </div>
   );
 }
