@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, List
+  Calendar as CalendarIcon, Clock, CheckCircle, User, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -11,7 +11,7 @@ import {
   onSnapshot, writeBatch, query, where, getDocs 
 } from 'firebase/firestore';
 
-// --- 디자인 강제 적용 ---
+// --- 디자인 강제 적용 (Design Enforcer) ---
 const DesignEnforcer = () => {
   useEffect(() => {
     if (!document.getElementById('tailwind-script')) {
@@ -33,8 +33,9 @@ const DesignEnforcer = () => {
       body { font-family: 'Pretendard', sans-serif !important; }
       .opacity-0 { opacity: 0; }
       .transition-opacity { transition: opacity 0.3s; }
+      /* 모바일 터치감 및 가독성 개선 */
       button { min-height: 50px; } 
-      input, select, textarea { font-size: 16px !important; }
+      input, select, textarea { font-size: 16px !important; } /* iOS 줌 방지 */
     `}} />
   );
 };
@@ -318,11 +319,10 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // Data Syncing
+  // Data Syncing (Optimized)
   useEffect(() => {
     if (!authUser) return;
     
-    // 1. Users Sync (For Admin Only)
     let unsubUsers = () => {};
     if (currentUser?.role === 'admin') {
        unsubUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (s) => {
@@ -336,27 +336,40 @@ export default function App() {
       });
     }
 
-    // 2. Sessions Sync (Calendar & Extras)
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
-    const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
+    let startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
     const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
 
-    const calendarQuery = query(
-      collection(db, 'artifacts', appId, 'public', 'data', 'sessions'),
-      where('date', '>=', startOfMonth),
-      where('date', '<=', endOfMonth)
-    );
+    // ★ Optimization: 학생은 오늘 이전 데이터 조회 차단 (비용 절감)
+    if (currentUser?.role === 'student') {
+        const today = getLocalToday();
+        if (startOfMonth < today) {
+            startOfMonth = today;
+        }
+    }
 
-    const unsubCalendar = onSnapshot(calendarQuery, (s) => {
-      const newDocs = {};
-      s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
-      setSessionMap(prev => ({ ...prev, ...newDocs })); 
-      setLoading(false);
-    });
+    let unsubCalendar = () => {};
+
+    // 날짜 범위가 유효할 때만 조회
+    if (startOfMonth <= endOfMonth) {
+        const calendarQuery = query(
+          collection(db, 'artifacts', appId, 'public', 'data', 'sessions'),
+          where('date', '>=', startOfMonth),
+          where('date', '<=', endOfMonth)
+        );
+
+        unsubCalendar = onSnapshot(calendarQuery, (s) => {
+          const newDocs = {};
+          s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
+          setSessionMap(prev => ({ ...prev, ...newDocs })); 
+          setLoading(false);
+        });
+    } else {
+        setLoading(false);
+    }
 
     let unsubExtras = () => {};
-    // Student Extras (My Future Bookings)
     if (currentUser?.role === 'student') {
         const today = getLocalToday();
         const myQuery = query(
@@ -370,13 +383,6 @@ export default function App() {
             setSessionMap(prev => ({ ...prev, ...newDocs }));
         });
     }
-    // Admin Extras (Requests)
-    if (currentUser?.role === 'admin') {
-      // Fetching active requests regardless of date might require separate query or index.
-      // For simplicity/cost, we stick to current month view or manually fetch if needed.
-      // But let's fetch cancellation/addition requests specifically if needed.
-      // Assuming Admin handles recent requests, month view usually covers it.
-    }
 
     return () => {
       unsubUsers();
@@ -385,7 +391,6 @@ export default function App() {
     };
   }, [authUser, currentUser, currentDate]);
 
-  // Update sessions array when map changes
   useEffect(() => {
     setSessions(Object.values(sessionMap));
   }, [sessionMap]);
@@ -409,7 +414,7 @@ export default function App() {
             const user = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
             setCurrentUser(user);
             addNotification(`${user.name}님 환영합니다!`);
-            setSessionMap({}); // Clear prev data
+            setSessionMap({}); // 로그인 시 데이터 초기화
         } else {
             setLoginError('아이디 또는 비밀번호가 잘못되었습니다.');
         }
@@ -431,7 +436,6 @@ export default function App() {
 
   const handleSaveDefaultSchedule = async () => {
     if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return;
-    // Note: 'users' array is populated only for Admin
     const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
     const batch = writeBatch(db);
     let count = 0;
@@ -445,8 +449,6 @@ export default function App() {
         for (let h = sH; h < eH; h++) {
           if (h >= 22) break; 
           const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
-          // Note: duplicate check relies on loaded sessions. 
-          // Admin should ensure they are viewing the relevant month or we trust the user.
           if (!sessions.some(s => s.taId === targetTa.id && s.date === dStr && s.startTime === sT)) {
             batch.set(doc(collection(db, 'artifacts', appId, 'public', 'data', 'sessions')), {
               taId: targetTa.id, taName: targetTa.name, date: dStr, startTime: sT, endTime: eT, status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', feedback: '', improvement: '', clinicContent: '', feedbackStatus: 'none', classroom: ''
