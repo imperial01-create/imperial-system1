@@ -11,7 +11,7 @@ import {
   onSnapshot, writeBatch, query, where, getDocs, limit 
 } from 'firebase/firestore';
 
-// --- Firebase Configuration & Initialization (Merged for Deployment) ---
+// --- Firebase Configuration & Initialization ---
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
   authDomain: "imperial-system-1221c.firebaseapp.com",
@@ -31,7 +31,7 @@ const APP_ID = 'imperial-clinic-v1'; // 데이터 격리용 ID
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 초기 데이터 (DB가 비었을 때만 사용 - 자동 시딩용)
+// 초기 데이터 (DB가 비었을 때만 사용)
 const SEED_USERS = [
   { role: 'admin', userId: 'imperialsys01', password: '1', name: '행정직원' }, 
   { role: 'ta', userId: 'ta_kim', password: '1', name: '김민성' },
@@ -255,7 +255,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
-                            
+                            {/* [요청 2: 관리자 뷰에 과목/범위 표시] */}
+                            {isAdmin && s.studentName && (
+                              <div className="text-xs text-gray-500 mt-1 space-y-0.5 bg-gray-50 p-2 rounded border border-gray-100">
+                                {s.topic && <div className="flex gap-1"><span className="font-bold w-8">과목:</span><span>{s.topic}</span></div>}
+                                {s.questionRange && <div className="flex gap-1"><span className="font-bold w-8">범위:</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
+                              </div>
+                            )}
+
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
@@ -267,6 +274,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-1"><Edit2 size={16}/></button>
+                                {/* [요청 3: 휴지통 클릭 시 확인 로직은 기존 onAction('delete')에서 askConfirm 호출로 이미 처리됨] */}
                                 <button onClick={()=>onAction('delete', s.id)} className="text-gray-500 hover:text-red-600 p-1"><Trash2 size={16}/></button>
                               </div>
                             )}
@@ -385,7 +393,6 @@ export default function App() {
             setCurrentUser(user);
             notify(`${user.name}님 환영합니다!`);
         } else {
-            // 초기 시딩 로직
             if (snapshot.empty) {
                 const allUsersQ = query(usersRef, limit(1));
                 const allUsersSnap = await getDocs(allUsersQ);
@@ -478,7 +485,11 @@ export default function App() {
         } else if (action === 'cancel_request') {
             setModalState({ type: 'cancel_reason', data: payload });
         } else if (action === 'delete') {
-            askConfirm("정말 삭제하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
+            // [요청 3: 삭제 확인 모달] 이미 구현되어 있으나, UI에서 확실히 트리거됨
+            askConfirm("정말 이 일정을 삭제하시겠습니까?", async () => {
+                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
+                notify('삭제되었습니다.');
+            });
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
         } else if (action === 'withdraw_add') {
@@ -492,7 +503,12 @@ export default function App() {
             setInputData({ clinicContent: payload.clinicContent||'', feedback: payload.feedback||'', improvement: payload.improvement||'' });
             setModalState({ type: 'feedback', data: payload });
         } else if (action === 'admin_edit') {
-            setInputData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' });
+            // [요청 2: 수정 시 과목/범위 분리 로딩]
+            setInputData({ 
+                studentName: payload.studentName||'', 
+                topic: payload.topic||'', 
+                questionRange: payload.questionRange||'' 
+            });
             setModalState({ type: 'admin_edit', data: payload });
         } else if (action === 'approve_schedule_change') { 
              if (payload.status === 'cancellation_requested') {
@@ -684,9 +700,13 @@ export default function App() {
 
       {confirmConfig && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl">
-                <h3 className="text-lg font-bold text-gray-900 mb-2">확인</h3><p className="text-gray-600 mb-6">{confirmConfig.message}</p>
-                <div className="flex gap-3"><Button variant="secondary" className="flex-1" onClick={() => setConfirmConfig(null)}>취소</Button><Button className="flex-1" onClick={() => { confirmConfig.onConfirm(); setConfirmConfig(null); }}>확인</Button></div>
+            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">
+                <h3 className="text-lg font-bold text-gray-900 mb-2">확인</h3>
+                <p className="text-gray-600 mb-6">{confirmConfig.message}</p>
+                <div className="flex gap-3">
+                    <Button variant="secondary" className="flex-1" onClick={() => setConfirmConfig(null)}>취소</Button>
+                    <Button className="flex-1" onClick={() => { confirmConfig.onConfirm(); setConfirmConfig(null); }}>확인</Button>
+                </div>
             </div>
         </div>
       )}
@@ -702,11 +722,13 @@ export default function App() {
           <div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap leading-relaxed mb-4">{modalState.data && TEMPLATES.feedbackParent(modalState.data)}</div>
           <Button className="w-full" onClick={async ()=>{ await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', modalState.data.id), { feedbackStatus: 'sent' }); setModalState({type:null}); notify('발송 완료 처리됨'); }}>전송 완료 처리</Button>
       </Modal>
+      {/* [요청 2: 수정 시 과목/범위 분리] */}
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="정보 수정">
          <div className="space-y-4">
              <div><label className="text-sm font-bold text-gray-500">학생 이름</label><input className="w-full border rounded-lg p-3 mt-1" value={inputData.studentName} onChange={e=>setInputData({...inputData, studentName:e.target.value})}/></div>
-             <div><label className="text-sm font-bold text-gray-500">과목/내용</label><input className="w-full border rounded-lg p-3 mt-1" value={inputData.topic} onChange={e=>setInputData({...inputData, topic:e.target.value})}/></div>
-             <Button className="w-full mt-4" onClick={async ()=>{ await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', modalState.data.id), { studentName: inputData.studentName, topic: inputData.topic, status: inputData.studentName ? 'confirmed' : 'open' }); setModalState({type:null}); notify('수정 완료'); }}>저장</Button>
+             <div><label className="text-sm font-bold text-gray-500">과목</label><input className="w-full border rounded-lg p-3 mt-1" value={inputData.topic} onChange={e=>setInputData({...inputData, topic:e.target.value})}/></div>
+             <div><label className="text-sm font-bold text-gray-500">범위</label><input className="w-full border rounded-lg p-3 mt-1" value={inputData.questionRange} onChange={e=>setInputData({...inputData, questionRange:e.target.value})}/></div>
+             <Button className="w-full mt-4" onClick={async ()=>{ await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', modalState.data.id), { studentName: inputData.studentName, topic: inputData.topic, questionRange: inputData.questionRange, status: inputData.studentName ? 'confirmed' : 'open' }); setModalState({type:null}); notify('수정 완료'); }}>저장</Button>
          </div>
       </Modal>
       <Modal isOpen={modalState.type==='user_manage'} onClose={()=>setModalState({type:null})} title="사용자 관리">
@@ -717,7 +739,17 @@ export default function App() {
              <input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/>
              <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})}/>
              <input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>
-             <Button size="sm" onClick={async ()=>{ await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), {...newUser, role:manageTab}); notify('추가 완료'); setNewUser({name:'',userId:'',password:'',phone:''}); }}>추가하기</Button>
+             {/* [요청 1: 계정 추가 오류 수정 - try-catch 및 알림] */}
+             <Button size="sm" onClick={async ()=>{ 
+                 try {
+                     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), {...newUser, role:manageTab}); 
+                     notify('추가 완료'); 
+                     setNewUser({name:'',userId:'',password:'',phone:''}); 
+                 } catch (e) {
+                     console.error(e);
+                     notify('추가 실패: 권한이 부족합니다. DB 규칙을 확인하세요.', 'error');
+                 }
+             }}>추가하기</Button>
          </div>
          <div className="max-h-[300px] overflow-auto divide-y">
             {users.filter(u=>u.role===manageTab).map(u=>(
