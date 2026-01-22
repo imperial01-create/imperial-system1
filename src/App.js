@@ -27,11 +27,10 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 // --- Constants & Utils ---
-const APP_ID = 'imperial-clinic-v1'; // 데이터 격리용 ID
+const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 초기 데이터 (DB가 비었을 때만 사용)
 const SEED_USERS = [
   { role: 'admin', userId: 'imperialsys01', password: '1', name: '행정직원' }, 
   { role: 'ta', userId: 'ta_kim', password: '1', name: '김민성' },
@@ -118,7 +117,6 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
-// --- Login View ---
 const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
   <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
     <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
@@ -146,7 +144,7 @@ const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
 );
 
 // --- Calendar View ---
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, setSelectedDateStr, onAction, selectedSlots = [] }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [] }) => {
   const mySessions = useMemo(() => {
      return isInteractive 
         ? sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr) 
@@ -160,7 +158,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Calendar Area */}
       <Card className="lg:col-span-1 min-h-[420px]">
         <div className="flex justify-between items-center mb-6">
           <h3 className="font-bold flex items-center gap-2 text-lg text-gray-800"><CalendarIcon size={20} className="text-blue-600"/> 일정 선택</h3>
@@ -177,10 +174,19 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
-            const hasEvent = sessions.some(s => s.date === dStr && (isStudent ? s.status === 'open' : true));
+            
+            // [Fix 2] 학생은 과거 날짜에 점 표시 안 함
+            let hasEvent = false;
+            if (isStudent) {
+                 if (dStr >= getLocalToday()) {
+                    hasEvent = sessions.some(s => s.date === dStr && s.status === 'open');
+                 }
+            } else {
+                 hasEvent = sessions.some(s => s.date === dStr);
+            }
 
             return (
-              <button key={i} onClick={()=>setSelectedDateStr(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'}`}>
+              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'}`}>
                 <span className={`text-sm ${isSel?'font-bold':''}`}>{d.getDate()}</span>
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-400'}`}/>}
               </button>
@@ -189,7 +195,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
       </Card>
 
-      {/* Schedule List Area */}
       <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto">
         <h3 className="font-bold text-xl mb-4 flex items-center gap-2">
             <span className="text-blue-600">{selectedDateStr.split('-')[2]}일</span> 상세 스케줄
@@ -197,8 +202,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            const isSlotPast = new Date(`${selectedDateStr}T${t}`) < now;
-
+            
             if (isStudent) {
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
                 if (availableSlots.length === 0) return null;
@@ -212,7 +216,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-16 pt-3 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {!isSlotPast && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
+                            {new Date(`${selectedDateStr}T${t}`) >= now && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
@@ -255,7 +259,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
-                            {/* [요청 2: 관리자 뷰에 과목/범위 표시] */}
+                            
                             {isAdmin && s.studentName && (
                               <div className="text-xs text-gray-500 mt-1 space-y-0.5 bg-gray-50 p-2 rounded border border-gray-100">
                                 {s.topic && <div className="flex gap-1"><span className="font-bold w-8">과목:</span><span>{s.topic}</span></div>}
@@ -274,7 +278,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-1"><Edit2 size={16}/></button>
-                                {/* [요청 3: 휴지통 클릭 시 확인 로직은 기존 onAction('delete')에서 askConfirm 호출로 이미 처리됨] */}
                                 <button onClick={()=>onAction('delete', s.id)} className="text-gray-500 hover:text-red-600 p-1"><Trash2 size={16}/></button>
                               </div>
                             )}
@@ -359,12 +362,23 @@ export default function App() {
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
     const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
 
-    let q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
-    const unsubCalendar = onSnapshot(q, (s) => {
+    // [Fix 2] 학생은 오늘 이후 데이터만 로딩 (과거 데이터 차단)
+    let sessionQuery;
+    if (currentUser.role === 'student') {
+        const today = getLocalToday();
+        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today));
+    } else {
+        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
+    }
+
+    const unsubCalendar = onSnapshot(sessionQuery, (s) => {
       const newDocs = {};
       s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
       setSessionMap(prev => {
-          const filteredPrev = Object.fromEntries(Object.entries(prev).filter(([k,v]) => v.date < startOfMonth || v.date > endOfMonth));
+          const filteredPrev = Object.fromEntries(Object.entries(prev).filter(([k,v]) => {
+              if (currentUser.role === 'student') return v.date >= getLocalToday(); // 학생은 과거 데이터 제외
+              return v.date < startOfMonth || v.date > endOfMonth;
+          }));
           return { ...filteredPrev, ...newDocs };
       });
       setAppLoading(false);
@@ -380,6 +394,14 @@ export default function App() {
   }, []);
 
   const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
+
+  // [Fix 3] 날짜 변경 시 학생 선택 슬롯 초기화
+  const handleDateChange = (newDate) => {
+    setSelectedDateStr(newDate);
+    if (currentUser && currentUser.role === 'student') {
+        setStudentSelectedSlots([]);
+    }
+  };
 
   const handleLogin = async () => {
     setLoginProcessing(true);
@@ -485,11 +507,7 @@ export default function App() {
         } else if (action === 'cancel_request') {
             setModalState({ type: 'cancel_reason', data: payload });
         } else if (action === 'delete') {
-            // [요청 3: 삭제 확인 모달] 이미 구현되어 있으나, UI에서 확실히 트리거됨
-            askConfirm("정말 이 일정을 삭제하시겠습니까?", async () => {
-                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
-                notify('삭제되었습니다.');
-            });
+            askConfirm("정말 삭제하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
         } else if (action === 'withdraw_add') {
@@ -503,12 +521,7 @@ export default function App() {
             setInputData({ clinicContent: payload.clinicContent||'', feedback: payload.feedback||'', improvement: payload.improvement||'' });
             setModalState({ type: 'feedback', data: payload });
         } else if (action === 'admin_edit') {
-            // [요청 2: 수정 시 과목/범위 분리 로딩]
-            setInputData({ 
-                studentName: payload.studentName||'', 
-                topic: payload.topic||'', 
-                questionRange: payload.questionRange||'' 
-            });
+            setInputData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' });
             setModalState({ type: 'admin_edit', data: payload });
         } else if (action === 'approve_schedule_change') { 
              if (payload.status === 'cancellation_requested') {
@@ -603,7 +616,7 @@ export default function App() {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={handleAction}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -649,7 +662,7 @@ export default function App() {
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => s.taId === currentUser.id && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
-                <CalendarView isInteractive={true} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={handleAction}/>
+                <CalendarView isInteractive={true} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
             </>
         )}
         {currentUser.role === 'lecturer' && (
@@ -657,7 +670,7 @@ export default function App() {
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={()=>{}}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}}/>
            </div>
         )}
         {currentUser.role === 'student' && (
@@ -692,7 +705,7 @@ export default function App() {
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
                         {studentSelectedSlots.length > 0 && <Button size="sm" onClick={()=>setModalState({type:'student_apply'})}>{studentSelectedSlots.length}건 예약 진행</Button>}
                     </div>
-                    <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={handleAction} selectedSlots={studentSelectedSlots}/>
+                    <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots}/>
                 </Card>
             </div>
         )}
@@ -722,7 +735,6 @@ export default function App() {
           <div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap leading-relaxed mb-4">{modalState.data && TEMPLATES.feedbackParent(modalState.data)}</div>
           <Button className="w-full" onClick={async ()=>{ await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', modalState.data.id), { feedbackStatus: 'sent' }); setModalState({type:null}); notify('발송 완료 처리됨'); }}>전송 완료 처리</Button>
       </Modal>
-      {/* [요청 2: 수정 시 과목/범위 분리] */}
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="정보 수정">
          <div className="space-y-4">
              <div><label className="text-sm font-bold text-gray-500">학생 이름</label><input className="w-full border rounded-lg p-3 mt-1" value={inputData.studentName} onChange={e=>setInputData({...inputData, studentName:e.target.value})}/></div>
@@ -739,7 +751,6 @@ export default function App() {
              <input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/>
              <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})}/>
              <input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>
-             {/* [요청 1: 계정 추가 오류 수정 - try-catch 및 알림] */}
              <Button size="sm" onClick={async ()=>{ 
                  try {
                      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), {...newUser, role:manageTab}); 
@@ -755,7 +766,8 @@ export default function App() {
             {users.filter(u=>u.role===manageTab).map(u=>(
                 <div key={u.id} className="flex justify-between p-3 items-center">
                     <div><span className="font-bold">{u.name}</span> <span className="text-gray-400 text-sm">({u.userId})</span></div>
-                    <button onClick={()=>askConfirm("삭제하시겠습니까?", async ()=>await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
+                    {/* [Fix 1] 계정 삭제 시 확인 모달(askConfirm) 호출 */}
+                    <button onClick={()=>askConfirm("정말 이 계정을 삭제하시겠습니까?", async ()=>await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
                 </div>
             ))}
          </div>
