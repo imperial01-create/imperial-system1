@@ -1,8 +1,7 @@
-// src/firebase.js
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth"; // Auth 모듈 추가
 
-// Step 1에서 복사해둔 설정 코드를 아래 객체 안에 채워넣으세요.
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
   authDomain: "imperial-system-1221c.firebaseapp.com",
@@ -15,3 +14,5 @@ const firebaseConfig = {
 // 파이어베이스 초기화
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+export const auth = getAuth(app); // auth export 추가
+export default app;
