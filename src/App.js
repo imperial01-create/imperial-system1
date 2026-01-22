@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send
+  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check
 } from 'lucide-react';
 
 // --- Firebase Libraries ---
@@ -8,10 +8,10 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
-  onSnapshot, writeBatch, query, where, getDocs, limit 
+  onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence 
 } from 'firebase/firestore';
 
-// --- Firebase Configuration & Initialization ---
+// --- Firebase Configuration ---
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
   authDomain: "imperial-system-1221c.firebaseapp.com",
@@ -25,6 +25,9 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+
+// [Optimization] 오프라인 퍼시스턴스 활성화 시도 (선택적)
+try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
 
 // --- Constants & Utils ---
 const APP_ID = 'imperial-clinic-v1';
@@ -72,13 +75,15 @@ const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i
 
 // --- UI Components ---
 const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }) => {
-  const sizes = { sm: 'px-4 py-2.5 text-sm', md: 'px-6 py-4 text-lg', lg: 'px-8 py-4 text-xl' };
+  const sizes = { sm: 'px-3 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-8 py-4 text-xl' }; // 모바일 최적화를 위해 패딩 조정
   const variants = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-md active:scale-95',
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95',
     secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',
-    success: 'bg-green-600 text-white hover:bg-green-700 shadow-md active:scale-95',
+    success: 'bg-green-600 text-white hover:bg-green-700 shadow-sm active:scale-95',
     danger: 'bg-red-50 text-red-600 hover:bg-red-100 active:scale-95',
     ghost: 'bg-transparent text-gray-600 hover:bg-gray-100',
+    outline: 'border-2 border-blue-600 text-blue-600 hover:bg-blue-50 active:scale-95', // [추가] 학생 선택용
+    selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner' // [추가] 학생 선택됨
   };
   return (
     <button onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
@@ -117,6 +122,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   );
 };
 
+// --- Login View ---
 const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
   <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
     <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
@@ -175,7 +181,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
             
-            // [Fix 2] 학생은 과거 날짜에 점 표시 안 함
             let hasEvent = false;
             if (isStudent) {
                  if (dStr >= getLocalToday()) {
@@ -235,21 +240,30 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
 
+                    // [Fix 2] 학생 뷰: 예약 버튼을 카드 내부로 이동하여 시선의 흐름 개선
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             <div key={s.id} onClick={()=>onAction('toggle_slot', s)} className={`border-2 rounded-xl p-4 cursor-pointer relative transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-md' : 'hover:bg-gray-50 border-gray-200'}`}>
-                                <div className="absolute top-4 right-4">
-                                    {isSelected ? <CheckCircle className="text-blue-600 fill-blue-100" size={24} /> : <div className="w-6 h-6 rounded-full border-2 border-gray-300" />}
+                             <div key={s.id} className={`border-2 rounded-xl p-4 flex justify-between items-center transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-md' : 'bg-white border-gray-200'}`}>
+                                <div>
+                                    <div className="font-bold text-lg text-gray-800">{s.startTime} ~ {s.endTime}</div>
+                                    <div className="text-sm text-gray-500 mt-1">{s.taName} 선생님</div>
                                 </div>
-                                <div className="font-bold text-lg text-gray-800">{s.startTime} ~ {s.endTime}</div>
-                                <div className="text-sm text-gray-500 mt-1">{s.taName} 선생님</div>
+                                <Button 
+                                    size="sm" 
+                                    variant={isSelected ? "selected" : "outline"}
+                                    onClick={()=>onAction('toggle_slot', s)}
+                                    icon={isSelected ? Check : Plus}
+                                >
+                                    {isSelected ? '선택됨' : '선택'}
+                                </Button>
                             </div>
                         );
                     }
 
+                    // Admin & TA & Lecturer View
                     return (
                       <div key={s.id} className={`border rounded-xl p-4 flex flex-col justify-center shadow-sm transition-all hover:shadow-md ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
@@ -260,7 +274,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             </div>
                             <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
                             
-                            {isAdmin && s.studentName && (
+                            {/* [Fix 1] 강사(Lecturer)도 학생의 과목/범위를 볼 수 있게 허용 (isAdmin || isLecturer) */}
+                            {(isAdmin || isLecturer) && s.studentName && (
                               <div className="text-xs text-gray-500 mt-1 space-y-0.5 bg-gray-50 p-2 rounded border border-gray-100">
                                 {s.topic && <div className="flex gap-1"><span className="font-bold w-8">과목:</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold w-8">범위:</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
@@ -345,24 +360,38 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // Data Sync
+  // [Fix 3] Data Sync Optimization (LocalStorage Cache + Selective Sync)
   useEffect(() => {
     if (!authUser || !currentUser) return;
     
-    let unsubUsers = () => {};
+    // 1. Users Cache Strategy (Offline-First)
     if (currentUser.role === 'admin') {
-       unsubUsers = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), (s) => {
-        const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
-        setUsers(u);
-      });
-    }
+       // 먼저 로컬 스토리지에서 불러와서 즉시 표시
+       const cachedUsers = localStorage.getItem('cached_users');
+       if (cachedUsers) setUsers(JSON.parse(cachedUsers));
 
+       const unsubUsers = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), (s) => {
+        const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
+        // 데이터가 변경되었을 때만 업데이트 및 캐싱
+        if (JSON.stringify(u) !== cachedUsers) {
+            setUsers(u);
+            localStorage.setItem('cached_users', JSON.stringify(u));
+        }
+      });
+      return () => unsubUsers();
+    }
+  }, [authUser, currentUser]); // Users logic detached
+
+  useEffect(() => {
+    if (!authUser || !currentUser) return;
+
+    // 2. Sessions Sync (Optimized Query)
+    // Sessions changes frequently, so keep onSnapshot but limit range strictly
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
     const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
 
-    // [Fix 2] 학생은 오늘 이후 데이터만 로딩 (과거 데이터 차단)
     let sessionQuery;
     if (currentUser.role === 'student') {
         const today = getLocalToday();
@@ -376,7 +405,7 @@ export default function App() {
       s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
       setSessionMap(prev => {
           const filteredPrev = Object.fromEntries(Object.entries(prev).filter(([k,v]) => {
-              if (currentUser.role === 'student') return v.date >= getLocalToday(); // 학생은 과거 데이터 제외
+              if (currentUser.role === 'student') return v.date >= getLocalToday(); 
               return v.date < startOfMonth || v.date > endOfMonth;
           }));
           return { ...filteredPrev, ...newDocs };
@@ -384,7 +413,7 @@ export default function App() {
       setAppLoading(false);
     });
 
-    return () => { unsubUsers(); unsubCalendar(); };
+    return () => unsubCalendar();
   }, [authUser, currentUser, currentDate]);
 
   const notify = useCallback((msg, type = 'success') => {
@@ -395,7 +424,6 @@ export default function App() {
 
   const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
 
-  // [Fix 3] 날짜 변경 시 학생 선택 슬롯 초기화
   const handleDateChange = (newDate) => {
     setSelectedDateStr(newDate);
     if (currentUser && currentUser.role === 'student') {
@@ -766,7 +794,6 @@ export default function App() {
             {users.filter(u=>u.role===manageTab).map(u=>(
                 <div key={u.id} className="flex justify-between p-3 items-center">
                     <div><span className="font-bold">{u.name}</span> <span className="text-gray-400 text-sm">({u.userId})</span></div>
-                    {/* [Fix 1] 계정 삭제 시 확인 모달(askConfirm) 호출 */}
                     <button onClick={()=>askConfirm("정말 이 계정을 삭제하시겠습니까?", async ()=>await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
                 </div>
             ))}
