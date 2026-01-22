@@ -26,10 +26,10 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// [Optimization] 오프라인 퍼시스턴스 활성화 시도 (선택적)
+// [Optimization] Offline Persistence
 try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
 
-// --- Constants & Utils ---
+// --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -49,6 +49,7 @@ const TEMPLATES = {
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
 };
 
+// --- Utils ---
 const getLocalToday = () => {
   const d = new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -75,19 +76,24 @@ const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i
 
 // --- UI Components ---
 const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }) => {
-  const sizes = { sm: 'px-3 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-8 py-4 text-xl' }; // 모바일 최적화를 위해 패딩 조정
+  // Mobile-First Sizes: Larger touch targets
+  const sizes = { 
+    sm: 'px-4 py-3 text-base md:text-sm md:px-3 md:py-2', 
+    md: 'px-6 py-4 text-lg md:text-base md:px-5 md:py-3', 
+    lg: 'px-8 py-5 text-xl md:text-lg md:px-8 md:py-4' 
+  };
   const variants = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95',
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-md active:scale-95 active:bg-blue-800',
     secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',
-    success: 'bg-green-600 text-white hover:bg-green-700 shadow-sm active:scale-95',
+    success: 'bg-green-600 text-white hover:bg-green-700 shadow-md active:scale-95',
     danger: 'bg-red-50 text-red-600 hover:bg-red-100 active:scale-95',
-    ghost: 'bg-transparent text-gray-600 hover:bg-gray-100',
-    outline: 'border-2 border-blue-600 text-blue-600 hover:bg-blue-50 active:scale-95', // [추가] 학생 선택용
-    selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner' // [추가] 학생 선택됨
+    ghost: 'bg-transparent text-gray-600 hover:bg-gray-100 active:bg-gray-200',
+    outline: 'border-2 border-blue-600 text-blue-600 bg-white hover:bg-blue-50 active:scale-95', 
+    selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner'
   };
   return (
     <button onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
-      {Icon && <Icon size={size === 'sm' ? 16 : 20} />} {children}
+      {Icon && <Icon size={size === 'sm' ? 18 : 22} />} {children}
     </button>
   );
 });
@@ -104,19 +110,19 @@ const Badge = React.memo(({ status }) => {
     addition_requested: 'bg-purple-50 text-purple-700 border border-purple-100' 
   };
   const labels = { open: '예약 가능', pending: '승인 대기', confirmed: '예약 확정', completed: '클리닉 완료', cancellation_requested: '취소 요청', addition_requested: '추가 신청' };
-  return <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold ${styles[status] || styles.completed}`}>{labels[status] || status}</span>;
+  return <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold whitespace-nowrap ${styles[status] || styles.completed}`}>{labels[status] || status}</span>;
 });
 
 const Modal = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl w-full max-w-xl shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-t-2xl md:rounded-2xl w-full max-w-xl shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in slide-in-from-bottom-4 md:zoom-in-95 duration-200">
+        <div className="flex justify-between items-center p-5 border-b border-gray-100 shrink-0">
           <h3 className="text-xl font-bold text-gray-900">{title}</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X size={24} className="text-gray-400" /></button>
         </div>
-        <div className="p-6 overflow-y-auto custom-scrollbar">{children}</div>
+        <div className="p-5 overflow-y-auto custom-scrollbar">{children}</div>
       </div>
     </div>
   );
@@ -129,18 +135,18 @@ const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
       <div className="text-center mb-8">
         <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200"><CheckCircle size={32}/></div>
         <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
-        <p className="text-gray-500 mt-2 text-sm">학생과 학부모를 위한 프리미엄 관리</p>
+        <p className="text-gray-500 mt-2 text-base">학생과 학부모를 위한 프리미엄 관리</p>
       </div>
-      <div className="space-y-4">
+      <div className="space-y-5">
         <div>
-           <label className="block text-sm font-bold text-gray-700 mb-1 ml-1">아이디</label>
-           <input type="text" placeholder="ID를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+           <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
+           <input type="text" placeholder="ID를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
         </div>
         <div>
-           <label className="block text-sm font-bold text-gray-700 mb-1 ml-1">비밀번호</label>
-           <input type="password" placeholder="비밀번호를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
+           <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
+           <input type="password" placeholder="비밀번호를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
         </div>
-        {error && <div className="text-red-500 text-sm font-bold bg-red-50 p-3 rounded-lg flex items-center gap-2"><AlertCircle size={16}/>{error}</div>}
+        {error && <div className="text-red-500 text-sm font-bold bg-red-50 p-4 rounded-xl flex items-center gap-2"><AlertCircle size={18}/>{error}</div>}
         <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>
           {isLoading ? <Loader className="animate-spin" /> : '로그인'}
         </Button>
@@ -164,7 +170,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <Card className="lg:col-span-1 min-h-[420px]">
+      {/* Calendar Area */}
+      <Card className="lg:col-span-1 min-h-[420px] p-4 md:p-6">
         <div className="flex justify-between items-center mb-6">
           <h3 className="font-bold flex items-center gap-2 text-lg text-gray-800"><CalendarIcon size={20} className="text-blue-600"/> 일정 선택</h3>
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
@@ -191,8 +198,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             }
 
             return (
-              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'}`}>
-                <span className={`text-sm ${isSel?'font-bold':''}`}>{d.getDate()}</span>
+              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
+                <span className={`text-base md:text-sm ${isSel?'font-bold':''}`}>{d.getDate()}</span>
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-400'}`}/>}
               </button>
             );
@@ -200,11 +207,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
       </Card>
 
-      <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto">
-        <h3 className="font-bold text-xl mb-4 flex items-center gap-2">
+      {/* Schedule List Area */}
+      <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto p-0 md:p-6 overflow-hidden">
+        <div className="p-5 md:p-0 border-b md:border-none bg-white sticky top-0 z-10">
+           <h3 className="font-bold text-xl flex items-center gap-2">
             <span className="text-blue-600">{selectedDateStr.split('-')[2]}일</span> 상세 스케줄
-        </h3>
-        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+           </h3>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
             
@@ -217,68 +227,63 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             if(slots.length === 0) {
                  return isInteractive ? (
-                    <div key={i} className="flex gap-4 items-start group min-h-[80px]">
-                        <div className="w-16 pt-3 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
+                    <div key={i} className="flex gap-4 items-center group min-h-[80px]">
+                        <div className="w-14 text-right text-base font-bold text-gray-400 font-mono">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {new Date(`${selectedDateStr}T${t}`) >= now && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
+                            {new Date(`${selectedDateStr}T${t}`) >= now && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>신청</Button>}
                         </div>
                     </div>
                 ) : (
                     !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
-                         <div className="w-16 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
+                         <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
                          <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
                     </div> : null
                 );
             }
 
             return (
-              <div key={i} className="flex gap-4 items-start">
-                <div className="w-16 pt-4 text-right text-sm font-bold text-gray-600 font-mono">{t}</div>
+              <div key={i} className="flex gap-3 md:gap-4 items-start">
+                <div className="w-14 pt-4 text-right text-base font-bold text-gray-600 font-mono">{t}</div>
                 <div className="flex-1 space-y-3">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
 
-                    // [Fix 2] 학생 뷰: 예약 버튼을 카드 내부로 이동하여 시선의 흐름 개선
+                    // [Mobile Optim] Student View: Inline Button
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             <div key={s.id} className={`border-2 rounded-xl p-4 flex justify-between items-center transition-all ${isSelected ? 'bg-blue-50 border-blue-500 shadow-md' : 'bg-white border-gray-200'}`}>
-                                <div>
+                             <div key={s.id} onClick={()=>onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-100 shadow-sm'}`}>
+                                <div className="flex-1">
                                     <div className="font-bold text-lg text-gray-800">{s.startTime} ~ {s.endTime}</div>
-                                    <div className="text-sm text-gray-500 mt-1">{s.taName} 선생님</div>
+                                    <div className="text-sm text-gray-500 mt-0.5">{s.taName} 선생님</div>
                                 </div>
-                                <Button 
-                                    size="sm" 
-                                    variant={isSelected ? "selected" : "outline"}
-                                    onClick={()=>onAction('toggle_slot', s)}
-                                    icon={isSelected ? Check : Plus}
-                                >
-                                    {isSelected ? '선택됨' : '선택'}
-                                </Button>
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                                    {isSelected ? <Check size={20} strokeWidth={3} /> : <Plus size={20} />}
+                                </div>
                             </div>
                         );
                     }
 
                     // Admin & TA & Lecturer View
                     return (
-                      <div key={s.id} className={`border rounded-xl p-4 flex flex-col justify-center shadow-sm transition-all hover:shadow-md ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
+                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1.5">
+                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                 <span className="font-bold text-lg text-gray-900">{s.studentName || s.taName}</span>
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
                             
-                            {/* [Fix 1] 강사(Lecturer)도 학생의 과목/범위를 볼 수 있게 허용 (isAdmin || isLecturer) */}
+                            {/* [Fix 1] Lecturer & Admin sees Details */}
                             {(isAdmin || isLecturer) && s.studentName && (
-                              <div className="text-xs text-gray-500 mt-1 space-y-0.5 bg-gray-50 p-2 rounded border border-gray-100">
-                                {s.topic && <div className="flex gap-1"><span className="font-bold w-8">과목:</span><span>{s.topic}</span></div>}
-                                {s.questionRange && <div className="flex gap-1"><span className="font-bold w-8">범위:</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
+                              <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
+                                {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
+                                {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
                               </div>
                             )}
 
@@ -286,27 +291,27 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 <select 
-                                    className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none ${!s.classroom ? 'border-red-300 bg-red-50 text-red-700' : 'border-gray-200'}`} 
+                                    className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none bg-white ${!s.classroom ? 'border-red-300 text-red-700' : 'border-gray-200'}`} 
                                     value={s.classroom || ''} 
                                     onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
                                 >
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
-                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-1"><Edit2 size={16}/></button>
-                                <button onClick={()=>onAction('delete', s.id)} className="text-gray-500 hover:text-red-600 p-1"><Trash2 size={16}/></button>
+                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
+                                <button onClick={()=>onAction('delete', s.id)} className="text-gray-500 hover:text-red-600 p-2"><Trash2 size={18}/></button>
                               </div>
                             )}
 
                             {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
 
-                          <div className="flex flex-col gap-2 ml-3">
-                            {isInteractive && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50" icon={XCircle} onClick={()=>onAction('cancel_request', s)}>취소</Button>}
-                            {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>요청 철회</Button>}
-                            {isInteractive && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>신청 철회</Button>}
+                          <div className="flex flex-col gap-2 ml-2">
+                            {isInteractive && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
+                            {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                            {isInteractive && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
-                            {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'제출됨':'피드백'}</Button>}
+                            {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
                           </div>
                         </div>
                       </div>
@@ -386,7 +391,6 @@ export default function App() {
     if (!authUser || !currentUser) return;
 
     // 2. Sessions Sync (Optimized Query)
-    // Sessions changes frequently, so keep onSnapshot but limit range strictly
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
