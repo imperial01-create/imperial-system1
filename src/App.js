@@ -445,30 +445,33 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // Data Sync
+  // [Optimization] Data Sync Strategy (1: Users Cache)
   useEffect(() => {
     if (!authUser || !currentUser) return;
     
-    // 1. Users Cache
     if (currentUser.role === 'admin') {
        const cachedUsers = localStorage.getItem('cached_users');
        if (cachedUsers) setUsers(JSON.parse(cachedUsers));
-
-       const unsubUsers = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), (s) => {
-        const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
-        if (JSON.stringify(u) !== cachedUsers) {
-            setUsers(u);
-            localStorage.setItem('cached_users', JSON.stringify(u));
-        }
-      });
-      return () => unsubUsers();
+       
+       // Use getDocs instead of onSnapshot for users to save reads, refresh manually or on load
+       const fetchUsers = async () => {
+         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+         const snapshot = await getDocs(q);
+         const u = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+         if (JSON.stringify(u) !== cachedUsers) {
+             setUsers(u);
+             localStorage.setItem('cached_users', JSON.stringify(u));
+         }
+       };
+       fetchUsers();
     }
   }, [authUser, currentUser]);
 
+  // [Optimization] Data Sync Strategy (2: Sessions Sync)
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
-    // 2. Sessions Sync
+    // Sessions Sync (All Roles, Unified Pipeline)
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
@@ -477,8 +480,9 @@ export default function App() {
     let sessionQuery;
     if (currentUser.role === 'student') {
         const today = getLocalToday();
-        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today));
+        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100)); // Limit for student
     } else {
+        // Admin, TA, Lecturer load month range
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
     }
 
@@ -492,7 +496,7 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false);
+      setAppLoading(false); // [Fix] Ensure loading state is cleared for everyone
     });
 
     return () => unsubCalendar();
