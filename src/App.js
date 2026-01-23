@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw
+  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, EyeOff, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw
 } from 'lucide-react';
 
 // --- Firebase Libraries ---
@@ -128,31 +128,77 @@ const Modal = ({ isOpen, onClose, title, children }) => {
 };
 
 // --- Login View ---
-const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
-  <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-    <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
-      <div className="text-center mb-8">
-        <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200"><CheckCircle size={32}/></div>
-        <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
-        <p className="text-gray-500 mt-2 text-base">학생과 학부모를 위한 프리미엄 관리</p>
-      </div>
-      <div className="space-y-5">
-        <div>
-           <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
-           <input type="text" placeholder="ID를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
+  const [showPassword, setShowPassword] = useState(false);
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
+        <div className="text-center mb-8">
+          <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200"><CheckCircle size={32}/></div>
+          <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
+          <p className="text-gray-500 mt-2 text-base">학생과 학부모를 위한 프리미엄 관리</p>
         </div>
-        <div>
-           <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
-           <input type="password" placeholder="비밀번호를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
+        <div className="space-y-5">
+          <div>
+            <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
+            <input type="text" placeholder="ID를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
+            <div className="relative">
+              <input 
+                type={showPassword ? "text" : "password"} 
+                placeholder="비밀번호를 입력하세요" 
+                className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all pr-12" 
+                value={form.password} 
+                onChange={e=>setForm({...form, password:e.target.value})} 
+                onKeyDown={e=>e.key==='Enter'&&onLogin()}
+              />
+              <button 
+                type="button"
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600"
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
+              </button>
+            </div>
+          </div>
+          <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>
+            {isLoading ? <Loader className="animate-spin" /> : '로그인'}
+          </Button>
         </div>
-        {error && <div className="text-red-500 text-sm font-bold bg-red-50 p-4 rounded-xl flex items-center gap-2"><AlertCircle size={18}/>{error}</div>}
-        <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>
-          {isLoading ? <Loader className="animate-spin" /> : '로그인'}
-        </Button>
       </div>
+
+      {/* 로그인 실패 모달 */}
+      <Modal isOpen={loginErrorModal.isOpen} onClose={() => setLoginErrorModal({ isOpen: false, msg: '' })} title="로그인 실패">
+        <div className="flex flex-col items-center text-center space-y-4 pt-2">
+          <div className="bg-red-50 p-4 rounded-full text-red-500 mb-2">
+            <AlertCircle size={48} />
+          </div>
+          <h3 className="text-xl font-bold text-gray-900">{loginErrorModal.msg}</h3>
+          <div className="w-full bg-gray-50 rounded-xl p-5 mt-4 text-left border border-gray-100">
+            <p className="text-sm text-gray-600 leading-relaxed mb-2 font-medium">
+              아이디 또는 비밀번호가 기억나지 않으시나요?
+            </p>
+            <p className="text-sm text-gray-500 leading-relaxed">
+              아래 관리자에게 문의해 주세요.<br/>
+              신속하게 처리를 도와드리겠습니다.
+            </p>
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-blue-600 text-sm">시스템 관리자</span>
+                <span className="text-gray-800 font-medium">김준혁</span>
+              </div>
+              <div className="text-lg font-bold text-gray-900">010-9510-2265</div>
+            </div>
+          </div>
+          <Button className="w-full mt-4" onClick={() => setLoginErrorModal({ isOpen: false, msg: '' })}>확인</Button>
+        </div>
+      </Modal>
     </div>
-  </div>
-);
+  );
+};
 
 // --- Calendar View ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [] }) => {
@@ -368,6 +414,7 @@ export default function App() {
   const [sessionMap, setSessionMap] = useState({});
   const [appLoading, setAppLoading] = useState(true);
   const [loginProcessing, setLoginProcessing] = useState(false);
+  const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
   const [notifications, setNotifications] = useState([]);
   const [modalState, setModalState] = useState({ type: null, data: null });
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -490,7 +537,7 @@ export default function App() {
                     return;
                 }
             }
-            notify('로그인 정보가 올바르지 않습니다.', 'error');
+            setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
         }
     } catch (e) { notify('로그인 오류', 'error'); } finally { setLoginProcessing(false); }
   };
@@ -609,7 +656,7 @@ export default function App() {
 
   // Render
   if(!authUser) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader className="animate-spin text-blue-600" size={40}/></div>;
-  if(!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} error={null} onLogin={handleLogin} isLoading={loginProcessing}/>;
+  if(!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal}/>;
   if (appLoading) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
   const pendingBookings = sessions.filter(s => s.status === 'pending');
@@ -686,7 +733,7 @@ export default function App() {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={handleAction}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
