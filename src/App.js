@@ -76,7 +76,6 @@ const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i
 
 // --- UI Components ---
 const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }) => {
-  // Mobile-First Sizes: Larger touch targets
   const sizes = { 
     sm: 'px-4 py-3 text-base md:text-sm md:px-3 md:py-2', 
     md: 'px-6 py-4 text-lg md:text-base md:px-5 md:py-3', 
@@ -158,14 +157,18 @@ const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
 // --- Calendar View ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [] }) => {
   const mySessions = useMemo(() => {
-     return isInteractive 
-        ? sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr) 
-        : sessions.filter(s => s.date === selectedDateStr);
-  }, [sessions, currentUser.id, selectedDateStr, isInteractive]);
+     // [Fix] TA의 경우 본인 스케줄만 필터링해서 보여주기
+     if (currentUser.role === 'ta') {
+        return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
+     }
+     // 그 외 (Admin, Lecturer, Student)
+     return sessions.filter(s => s.date === selectedDateStr);
+  }, [sessions, currentUser, selectedDateStr]);
 
   const isAdmin = currentUser.role === 'admin';
   const isStudent = currentUser.role === 'student';
   const isLecturer = currentUser.role === 'lecturer';
+  const isTa = currentUser.role === 'ta';
   const now = new Date();
 
   return (
@@ -193,6 +196,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                  if (dStr >= getLocalToday()) {
                     hasEvent = sessions.some(s => s.date === dStr && s.status === 'open');
                  }
+            } else if (isTa) {
+                 // TA는 본인 근무가 있는 날만 점 표시
+                 hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
             } else {
                  hasEvent = sessions.some(s => s.date === dStr);
             }
@@ -231,7 +237,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-14 text-right text-base font-bold text-gray-400 font-mono">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {new Date(`${selectedDateStr}T${t}`) >= now && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>신청</Button>}
+                            {/* TA나 Admin일 때 근무 추가 버튼 표시 */}
+                            {((isTa || isAdmin) && new Date(`${selectedDateStr}T${t}`) >= now) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
@@ -250,7 +257,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
 
-                    // [Mobile Optim] Student View: Inline Button
+                    // Student View: Inline Button
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
@@ -279,7 +286,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             </div>
                             <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
                             
-                            {/* [Fix 1] Lecturer & Admin sees Details */}
                             {(isAdmin || isLecturer) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
@@ -365,19 +371,17 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // [Fix 3] Data Sync Optimization (LocalStorage Cache + Selective Sync)
+  // [Optimization] Data Sync Strategy
   useEffect(() => {
     if (!authUser || !currentUser) return;
     
-    // 1. Users Cache Strategy (Offline-First)
+    // 1. Users Cache (Admin only)
     if (currentUser.role === 'admin') {
-       // 먼저 로컬 스토리지에서 불러와서 즉시 표시
        const cachedUsers = localStorage.getItem('cached_users');
        if (cachedUsers) setUsers(JSON.parse(cachedUsers));
 
        const unsubUsers = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), (s) => {
         const u = s.docs.map(d => ({ id: d.id, ...d.data() }));
-        // 데이터가 변경되었을 때만 업데이트 및 캐싱
         if (JSON.stringify(u) !== cachedUsers) {
             setUsers(u);
             localStorage.setItem('cached_users', JSON.stringify(u));
@@ -385,12 +389,12 @@ export default function App() {
       });
       return () => unsubUsers();
     }
-  }, [authUser, currentUser]); // Users logic detached
+  }, [authUser, currentUser]);
 
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
-    // 2. Sessions Sync (Optimized Query)
+    // 2. Sessions Sync (All Roles, Unified Pipeline)
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
@@ -401,6 +405,7 @@ export default function App() {
         const today = getLocalToday();
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today));
     } else {
+        // Admin, TA, Lecturer load month range
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
     }
 
@@ -414,7 +419,7 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false);
+      setAppLoading(false); // [Fix] Ensure loading state is cleared for everyone
     });
 
     return () => unsubCalendar();
