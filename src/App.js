@@ -8,7 +8,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
-  onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence 
+  onSnapshot, writeBatch, query, where, getDocs, limit, initializeFirestore, persistentLocalCache, persistentMultipleTabManager 
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -21,13 +21,12 @@ const firebaseConfig = {
   appId: "1:414889692060:web:9b6b89d0d918a74f8c1659"
 };
 
-// Initialize Firebase
+// Initialize Firebase with Persistence (Optimized)
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
-
-// [Optimization] Offline Persistence
-try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 
 // --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
@@ -287,6 +286,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
+            // [FIX] Define isSlotPast here before using it
+            const isSlotPast = new Date(`${selectedDateStr}T${t}`) < now;
             
             if (isStudent) {
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
@@ -321,7 +322,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     
                     // [Check] 동시간대 중복 신청 방지 로직
-                    // 현재 슬롯이 선택되지 않았는데, 같은 시간대에 이미 선택/예약된 것이 있다면 비활성화
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
 
                     // Student View: Inline Button
