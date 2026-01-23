@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check
+  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw
 } from 'lucide-react';
 
 // --- Firebase Libraries ---
@@ -157,11 +157,9 @@ const LoginView = ({ form, setForm, error, onLogin, isLoading }) => (
 // --- Calendar View ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [] }) => {
   const mySessions = useMemo(() => {
-     // [Fix] TA의 경우 본인 스케줄만 필터링해서 보여주기
      if (currentUser.role === 'ta') {
         return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
      }
-     // 그 외 (Admin, Lecturer, Student)
      return sessions.filter(s => s.date === selectedDateStr);
   }, [sessions, currentUser, selectedDateStr]);
 
@@ -170,6 +168,27 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isLecturer = currentUser.role === 'lecturer';
   const isTa = currentUser.role === 'ta';
   const now = new Date();
+
+  // [Helper] Check if student already booked/selected this time slot
+  const isTimeSlotBlockedForStudent = (time) => {
+    if (!isStudent) return false;
+    
+    // 1. 이미 다른 조교에게 예약된 시간인지 확인 (Confirmed or Pending)
+    const alreadyBooked = sessions.some(s => 
+        s.studentName === currentUser.name && 
+        s.date === selectedDateStr && 
+        s.startTime === time && 
+        (s.status === 'confirmed' || s.status === 'pending')
+    );
+    if (alreadyBooked) return true;
+
+    // 2. 현재 선택 목록에 같은 시간대가 있는지 확인 (다른 조교)
+    // 선택된 슬롯들의 ID를 기반으로 세션 정보를 찾아서 시간 비교
+    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
+    if (selectedSessionTimes.includes(time)) return true;
+
+    return false;
+  };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -197,7 +216,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     hasEvent = sessions.some(s => s.date === dStr && s.status === 'open');
                  }
             } else if (isTa) {
-                 // TA는 본인 근무가 있는 날만 점 표시
                  hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
             } else {
                  hasEvent = sessions.some(s => s.date === dStr);
@@ -237,7 +255,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-14 text-right text-base font-bold text-gray-400 font-mono">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {/* TA나 Admin일 때 근무 추가 버튼 표시 */}
                             {((isTa || isAdmin) && new Date(`${selectedDateStr}T${t}`) >= now) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
@@ -256,6 +273,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
+                    
+                    // [Check] 동시간대 중복 신청 방지 로직
+                    // 현재 슬롯이 선택되지 않았는데, 같은 시간대에 이미 선택/예약된 것이 있다면 비활성화
+                    const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
 
                     // Student View: Inline Button
                     if (isStudent) {
@@ -263,14 +284,20 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             <div key={s.id} onClick={()=>onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-100 shadow-sm'}`}>
-                                <div className="flex-1">
-                                    <div className="font-bold text-lg text-gray-800">{s.startTime} ~ {s.endTime}</div>
-                                    <div className="text-sm text-gray-500 mt-0.5">{s.taName} 선생님</div>
+                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                                <div>
+                                    <div className={`font-bold text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>{s.startTime} ~ {s.endTime}</div>
+                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>{s.taName} 선생님</div>
                                 </div>
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
-                                    {isSelected ? <Check size={20} strokeWidth={3} /> : <Plus size={20} />}
-                                </div>
+                                <Button 
+                                    size="sm" 
+                                    variant={isSelected ? "selected" : "outline"}
+                                    onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
+                                    icon={isSelected ? Check : Plus}
+                                    disabled={isBlocked}
+                                >
+                                    {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
+                                </Button>
                             </div>
                         );
                     }
@@ -371,11 +398,11 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // [Optimization] Data Sync Strategy
+  // Data Sync
   useEffect(() => {
     if (!authUser || !currentUser) return;
     
-    // 1. Users Cache (Admin only)
+    // 1. Users Cache
     if (currentUser.role === 'admin') {
        const cachedUsers = localStorage.getItem('cached_users');
        if (cachedUsers) setUsers(JSON.parse(cachedUsers));
@@ -394,7 +421,7 @@ export default function App() {
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
-    // 2. Sessions Sync (All Roles, Unified Pipeline)
+    // 2. Sessions Sync
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
@@ -405,7 +432,6 @@ export default function App() {
         const today = getLocalToday();
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today));
     } else {
-        // Admin, TA, Lecturer load month range
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
     }
 
@@ -419,7 +445,7 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false); // [Fix] Ensure loading state is cleared for everyone
+      setAppLoading(false);
     });
 
     return () => unsubCalendar();
@@ -552,6 +578,13 @@ export default function App() {
         } else if (action === 'approve_booking') {
             if (!payload.classroom) return notify('강의실을 배정해주세요.', 'error');
             setModalState({ type: 'preview_confirm', data: payload });
+        } else if (action === 'cancel_booking_admin') { // [추가] 관리자 예약 취소 (초기화)
+            askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { 
+                    status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system' 
+                });
+                notify('예약 신청이 취소되었습니다.');
+            });
         } else if (action === 'update_classroom') {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { classroom: payload.val });
         } else if (action === 'write_feedback') {
@@ -653,7 +686,7 @@ export default function App() {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} setSelectedDateStr={setSelectedDateStr} onAction={handleAction}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -668,7 +701,10 @@ export default function App() {
                                         <div className="whitespace-pre-wrap">{s.topic} / {s.questionRange}</div>
                                     </div>
                                 </div>
-                                <div className="ml-2"><Button size="sm" onClick={()=>handleAction('approve_booking', s)}>승인</Button></div>
+                                <div className="ml-2 flex flex-col gap-2">
+                                    <Button size="sm" onClick={()=>handleAction('approve_booking', s)}>승인</Button>
+                                    <Button size="sm" variant="danger" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
+                                </div>
                             </div>
                         ))}</div>
                     }
