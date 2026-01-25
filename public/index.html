@@ -20,16 +20,112 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" />
     
     <style>
-      body { font-family: 'Pretendard', sans-serif !important; }
+      body { font-family: 'Pretendard', sans-serif !important; margin: 0; padding: 0; background-color: #ffffff; }
+      
+      /* 스크롤바 커스텀 */
       .custom-scrollbar::-webkit-scrollbar { width: 6px; }
       .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
       .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
       .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       button { min-height: 48px; touch-action: manipulation; }
+
+      /* --- [로딩 화면 스타일] --- */
+      #root {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* 로딩 컨테이너가 화면 정중앙에 오도록 설정 */
+      .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 20px;
+        max-width: 80%;
+      }
+
+      /* 로고 이미지 스타일 */
+      .loading-logo {
+        width: 90px;
+        height: 90px;
+        margin-bottom: 30px;
+        border-radius: 20px;
+        /* 부드럽게 숨쉬는 듯한 애니메이션 */
+        animation: breathe 2s infinite ease-in-out;
+      }
+
+      /* 텍스트 기본 스타일 (처음엔 안 보임) */
+      .loading-text {
+        opacity: 0;
+        transform: translateY(10px); /* 살짝 아래에서 위로 올라옴 */
+        animation: fadeInUp 0.8s ease-out forwards;
+      }
+
+      /* 1. 접속 중입니다... (즉시 등장) */
+      .text-step-1 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #111827; /* 진한 회색 */
+        margin-bottom: 15px;
+        animation-delay: 0.2s;
+      }
+
+      /* 2. 로딩 지연 안내 (1.5초 뒤 등장) */
+      .text-step-2 {
+        font-size: 0.95rem;
+        color: #6b7280; /* 회색 */
+        margin-bottom: 5px;
+        animation-delay: 1.5s;
+        line-height: 1.5;
+      }
+
+      /* 3. 전화번호 (2.5초 뒤 등장) */
+      .text-step-3 {
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #2563eb; /* 임페리얼 블루 */
+        animation-delay: 2.5s;
+      }
+
+      /* 애니메이션 정의 */
+      @keyframes fadeInUp {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes breathe {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
     </style>
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
+    
+    <!-- React가 로드되기 전까지 이 내용이 보여집니다. -->
+    <div id="root">
+      <div class="loading-container">
+        <!-- 현재 설정된 앱 아이콘 사용 -->
+        <img src="%PUBLIC_URL%/logo192.png" alt="Imperial Logo" class="loading-logo" />
+        
+        <!-- 순차적으로 뜨는 텍스트 -->
+        <div class="loading-text text-step-1">
+          임페리얼 시스템에 접속중입니다...
+        </div>
+        <div class="loading-text text-step-2">
+          로딩이 불가능할 시에는<br/>데스크에 연락 바랍니다.
+        </div>
+        <div class="loading-text text-step-3">
+          02-2644-1178
+        </div>
+      </div>
+    </div>
   </body>
 </html>
