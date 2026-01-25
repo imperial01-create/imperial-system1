@@ -4,11 +4,16 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#2563eb" />
     <meta name="description" content="Imperial Academy Management System" />
+    
+    <!-- PWA 관련 태그 -->
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    
     <title>Imperial System</title>
     
-    <!-- Tailwind CSS (CDN for Simplicity) -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- Pretendard Font -->
@@ -16,12 +21,10 @@
     
     <style>
       body { font-family: 'Pretendard', sans-serif !important; }
-      /* Custom Scrollbar */
       .custom-scrollbar::-webkit-scrollbar { width: 6px; }
       .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
       .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
       .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-      /* Mobile Touch Optimization */
       button { min-height: 48px; touch-action: manipulation; }
     </style>
   </head>
