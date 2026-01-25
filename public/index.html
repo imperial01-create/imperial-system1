@@ -49,8 +49,9 @@
         max-width: 80%;
       }
 
-      /* 로고 이미지 스타일 */
+      /* 로고 이미지 스타일 (숨김 처리) */
       .loading-logo {
+        display: none; /* 로고를 화면에서 숨김 */
         width: 90px;
         height: 90px;
         margin-bottom: 30px;
@@ -112,7 +113,7 @@
     <!-- React가 로드되기 전까지 이 내용이 보여집니다. -->
     <div id="root">
       <div class="loading-container">
-        <!-- 현재 설정된 앱 아이콘 사용 -->
+        <!-- 현재 설정된 앱 아이콘 사용 (숨김 처리됨) -->
         <img src="%PUBLIC_URL%/logo192.png" alt="Imperial Logo" class="loading-logo" />
         
         <!-- 순차적으로 뜨는 텍스트 -->
