@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// [버그 수정] CheckCircle, X 아이콘 추가
+// [수정] CheckCircle, X 아이콘 import 추가
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -165,7 +165,9 @@ export const AdminLectureManager = ({ users }) => {
                         <label className="block text-sm font-bold text-gray-600 mb-2">담당 강사</label>
                         <select className="w-full border p-3 rounded-xl bg-white" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
                             <option value="">선택</option>
-                            {users.filter(u => u.role === 'lecturer').map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                            {users.filter(u => u.role === 'lecturer').map(l => (
+                                <option key={l.id} value={l.id}>{l.name}</option>
+                            ))}
                         </select>
                     </div>
 
@@ -189,7 +191,9 @@ export const AdminLectureManager = ({ users }) => {
                                 const isSelected = newClass.studentIds.includes(u.id);
                                 return (
                                     <div key={u.id} className={`flex items-center p-2 hover:bg-gray-50 cursor-pointer ${isSelected ? 'bg-blue-50' : ''}`} onClick={() => toggleArrayItem('studentIds', u.id)}>
-                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>{isSelected && <Check size={14} className="text-white" />}</div>
+                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
+                                            {isSelected && <Check size={14} className="text-white" />}
+                                        </div>
                                         <span>{u.name} ({u.userId})</span>
                                     </div>
                                 );
@@ -373,7 +377,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                                 <button onClick={() => handleOpenEdit(lec)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg ml-2"><Edit2 size={18}/></button>
                             </div>
                             
-                            {/* [버그 수정 완료] CheckCircle 아이콘 사용 */}
+                            {/* CheckCircle 아이콘 사용 */}
                             <div>
                                 <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황</h5>
                                 <div className="flex flex-wrap gap-2">
@@ -394,7 +398,6 @@ export const LecturerDashboard = ({ currentUser }) => {
 
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 정보 입력">
                 <div className="space-y-4">
-                    {/* [기능 개선] Textarea로 변경 및 줄바꿈 지원 */}
                     <div>
                         <label className="text-xs font-bold text-gray-500">진도 내용</label>
                         <textarea 

@@ -63,11 +63,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-    
-    // Check if user has selected this slot in other pending requests locally
-    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
+    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
     if (selectedSessionTimes.includes(time)) return true;
-    
     return false;
   };
 
@@ -113,7 +110,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            // [Bug Fix] isSlotPast 변수 선언 위치 확보 및 안정성 강화
+            
+            // [수정] isSlotPast 변수를 map 함수 내부 최상단에 선언하여 모든 분기에서 접근 가능하도록 수정
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -572,7 +570,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
             </div>
         )}
 
-      {/* --- Modals (Keep existing functionality, moved here) --- */}
+      {/* --- Modals --- */}
       {confirmConfig && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">
