@@ -204,7 +204,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
-// --- Calendar View (With Fixed Mobile UI) ---
+// --- Calendar View (Clinic) ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
@@ -449,8 +449,9 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
 const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [newClass, setNewClass] = useState({ name: '', days: [], students: [] });
+    const [newClass, setNewClass] = useState({ name: '', days: [], students: [], lecturerId: '' });
     const [selectedStudents, setSelectedStudents] = useState([]);
+    const [studentSearch, setStudentSearch] = useState(''); // [Fix 3] Student Search
 
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
@@ -458,11 +459,14 @@ const AdminLectureManager = ({ users }) => {
     }, []);
 
     const handleCreateClass = async () => {
+        // [Fix 5] Create Bug Fix
         if(!newClass.name) return alert('반 이름을 입력하세요');
+        if(!newClass.lecturerId) return alert('담당 강사를 선택하세요');
+
         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), {
             ...newClass, studentIds: selectedStudents, createdAt: serverTimestamp()
         });
-        setIsModalOpen(false); setNewClass({ name: '', days: [], students: [] }); setSelectedStudents([]);
+        setIsModalOpen(false); setNewClass({ name: '', days: [], students: [], lecturerId: '' }); setSelectedStudents([]);
     };
 
     const toggleDay = (day) => {
@@ -489,6 +493,9 @@ const AdminLectureManager = ({ users }) => {
                             {cls.days.map(d => <span key={d} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-bold">{d}</span>)}
                         </div>
                         <div className="text-sm text-gray-500">배정된 학생: {cls.studentIds?.length || 0}명</div>
+                        <div className="text-sm text-gray-400 mt-1">
+                             강사: {users.find(u => u.id === cls.lecturerId)?.name || '미정'}
+                        </div>
                     </Card>
                 ))}
             </div>
@@ -496,6 +503,18 @@ const AdminLectureManager = ({ users }) => {
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="새로운 반 생성">
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="반 이름 (예: 고1 수학 A반)" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
+                    
+                    {/* [Fix 2] Lecturer Select */}
+                    <div>
+                        <label className="block text-sm font-bold text-gray-600 mb-2">담당 강사</label>
+                        <select className="w-full border p-3 rounded-xl bg-white" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
+                            <option value="">강사 선택</option>
+                            {users.filter(u => u.role === 'lecturer').map(l => (
+                                <option key={l.id} value={l.id}>{l.name}</option>
+                            ))}
+                        </select>
+                    </div>
+
                     <div>
                         <label className="block text-sm font-bold text-gray-600 mb-2">수업 요일</label>
                         <div className="flex gap-2 flex-wrap">
@@ -506,13 +525,25 @@ const AdminLectureManager = ({ users }) => {
                     </div>
                     <div>
                         <label className="block text-sm font-bold text-gray-600 mb-2">학생 배정</label>
+                        {/* [Fix 3] Student Search */}
+                        <div className="relative mb-2">
+                             <input className="w-full border p-2 pl-8 rounded-lg text-sm" placeholder="학생 이름 검색" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
+                             <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
+                        </div>
+
                         <div className="max-h-40 overflow-y-auto border rounded-xl p-2 divide-y">
-                            {users.filter(u => u.role === 'student').map(u => (
-                                <div key={u.id} className="flex justify-between items-center p-2 hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedStudents(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])}>
-                                    <span>{u.name} ({u.userId})</span>
-                                    {selectedStudents.includes(u.id) && <CheckCircle size={16} className="text-green-600" />}
-                                </div>
-                            ))}
+                            {users.filter(u => u.role === 'student' && u.name.includes(studentSearch)).map(u => {
+                                const isSelected = selectedStudents.includes(u.id);
+                                return (
+                                    <div key={u.id} className={`flex items-center p-2 hover:bg-gray-50 cursor-pointer ${isSelected ? 'bg-blue-50' : ''}`} onClick={() => setSelectedStudents(prev => prev.includes(u.id) ? prev.filter(id => id !== u.id) : [...prev, u.id])}>
+                                        {/* [Fix 4] Checkmark on Left */}
+                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
+                                            {isSelected && <Check size={14} className="text-white" />}
+                                        </div>
+                                        <span>{u.name} ({u.userId})</span>
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                     <Button className="w-full" onClick={handleCreateClass}>생성하기</Button>
@@ -523,18 +554,22 @@ const AdminLectureManager = ({ users }) => {
 };
 
 // --- [Module 3] Lecturer Dashboard ---
-const LecturerDashboard = () => {
+const LecturerDashboard = ({ currentUser }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
     const [lectures, setLectures] = useState([]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingLecture, setEditingLecture] = useState({});
 
+    // Fetch Classes (Assigned to this lecturer)
     useEffect(() => {
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
+        if (!currentUser) return;
+        // Filter classes where lecturerId matches current user
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('lecturerId', '==', currentUser.id));
         return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    }, []);
+    }, [currentUser]);
 
+    // Fetch Lectures when Class Selected
     useEffect(() => {
         if (!selectedClass) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
@@ -569,7 +604,7 @@ const LecturerDashboard = () => {
                 ))}
             </div>
 
-            {selectedClass && (
+            {selectedClass ? (
                 <>
                     <div className="flex justify-between items-center">
                         <h3 className="font-bold text-xl">{selectedClass.name} 강의 기록</h3>
@@ -592,6 +627,10 @@ const LecturerDashboard = () => {
                         ))}
                     </div>
                 </>
+            ) : (
+                <div className="text-center py-10 text-gray-500">
+                    관리자가 배정한 반이 없습니다.
+                </div>
             )}
 
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 내용 입력">
@@ -925,7 +964,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>{setSelectedDateStr(d);if(currentUser.role==='student')setStudentSelectedSlots([])}} onAction={handleAction} users={users} selectedSlots={studentSelectedSlots}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -974,7 +1013,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => s.taId === currentUser.id && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
-                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>{setSelectedDateStr(d)}} onAction={handleAction}/>
+                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
             </>
         )}
        {currentUser.role === 'lecturer' && (
@@ -982,7 +1021,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>{setSelectedDateStr(d)}} onAction={()=>{}} users={users}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}} users={users}/>
            </div>
        )}
        {currentUser.role === 'student' && (
@@ -1016,7 +1055,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
                     </div>
-                    <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>{setSelectedDateStr(d);setStudentSelectedSlots([])}} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users}/>
+                    <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users}/>
                 </Card>
                 {studentSelectedSlots.length > 0 && (
                     <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
@@ -1047,7 +1086,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
       <Modal isOpen={modalState.type==='user_manage'} onClose={()=>setModalState({type:null})} title="사용자 관리"><div className="flex border-b mb-4">{['ta','student','lecturer'].map(t=><button key={t} className={`flex-1 py-3 font-bold text-lg capitalize ${manageTab===t?'text-blue-600 border-b-4 border-blue-600':'text-gray-400'}`} onClick={()=>setManageTab(t)}>{t}</button>)}</div><div className="mb-4 relative"><input placeholder="이름/ID 검색" className="w-full border rounded-lg p-3 pl-10" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/></div><div className="flex flex-col gap-3 mb-4 bg-gray-50 p-4 rounded-xl"><div className="flex justify-between mb-2"><span className="font-bold">{newUser.isEdit?'수정':'추가'}</span>{newUser.isEdit&&<button onClick={()=>setNewUser({name:'',userId:'',password:'',phone:'',subject:'',isEdit:false})} className="text-xs text-gray-500 underline">취소</button>}</div><input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/><input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})} disabled={newUser.isEdit}/><input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>{manageTab==='ta'&&<input placeholder="담당 과목" className="border rounded-lg p-2" value={newUser.subject||''} onChange={e=>setNewUser({...newUser,subject:e.target.value})}/>}<Button size="sm" onClick={async()=>{ try { if(newUser.isEdit){ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','users',newUser.id),{name:newUser.name,password:newUser.password,subject:newUser.subject}); notify('수정완료'); } else { await addDoc(collection(db,'artifacts',APP_ID,'public','data','users'),{...newUser,role:manageTab}); notify('추가완료'); } setNewUser({name:'',userId:'',password:'',phone:'',subject:'',isEdit:false}); } catch(e){ notify('권한오류','error'); } }}>{newUser.isEdit?'수정':'추가'}</Button></div><div className="max-h-[300px] overflow-auto divide-y">{users.filter(u=>u.role===manageTab&&(u.name.includes(searchQuery)||u.userId.includes(searchQuery))).map(u=>(<div key={u.id} className="flex justify-between p-3 items-center"><div><span className="font-bold">{u.name}</span> <span className="text-gray-400 text-sm">({u.userId})</span>{u.subject&&<span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">{u.subject}</span>}</div><div className="flex gap-2"><button onClick={()=>{setNewUser({...u,isEdit:true});}} className="text-gray-400 hover:text-blue-600"><Edit2 size={18}/></button><button onClick={()=>askConfirm("삭제하시겠습니까?",async()=>await deleteDoc(doc(db,'artifacts',APP_ID,'public','data','users',u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button></div></div>))}</div></Modal>
       <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송"><div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div><Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateSession(selectedSession.id, {status:'confirmed'}); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button></Modal>
-      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송"><div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed">{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div><Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateSession(selectedSession.id, {feedbackStatus:'sent'}); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button></Modal>
+      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송"><div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed" onClick={()=>copyToClipboard(selectedSession&&TEMPLATES.feedbackParent(selectedSession))}>{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div><Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateSession(selectedSession.id, {feedbackStatus:'sent'}); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button></Modal>
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계"><div className="space-y-6"><div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div><div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center">{w}주</th>)}<th className="p-3 text-center font-bold">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div></div></Modal>
     </div>
@@ -1173,7 +1212,7 @@ export default function App() {
                 {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                 {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
                 {activeTab === 'class_mgmt' && <AdminLectureManager users={users} />}
-                {activeTab === 'lectures' && <LecturerDashboard />}
+                {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser}/>}
                 {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
             </main>
         </div>
