@@ -26,7 +26,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     };
 
     return (
-        <div className="p-4 border rounded-xl bg-white shadow-sm">
+        <div className="p-4 border rounded-xl bg-white shadow-sm w-full">
             <div className="flex justify-between items-center mb-4">
                 <span className="font-bold text-lg">{currentDate.getMonth() + 1}월</span>
                 <div className="flex gap-1">
@@ -62,7 +62,8 @@ export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     
-    // [중요] studentIds를 빈 배열로 초기화하여 undefined 오류 방지
+    // Edit state
+    const [editingClassId, setEditingClassId] = useState(null); 
     const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
     const [studentSearch, setStudentSearch] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -72,30 +73,55 @@ export const AdminLectureManager = ({ users }) => {
         return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     }, []);
 
-    const handleCreateClass = async () => {
+    const handleOpenCreate = () => {
+        setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
+        setEditingClassId(null);
+        setIsModalOpen(true);
+    };
+
+    const handleOpenEdit = (cls) => {
+        setNewClass({
+            name: cls.name,
+            days: cls.days || [],
+            lecturerId: cls.lecturerId || '',
+            studentIds: cls.studentIds || []
+        });
+        setEditingClassId(cls.id);
+        setIsModalOpen(true);
+    };
+
+    const handleSaveClass = async () => {
         if (!newClass.name.trim()) return alert('반 이름을 입력하세요');
         if (!newClass.lecturerId) return alert('담당 강사를 선택하세요');
         if (newClass.days.length === 0) return alert('수업 요일을 최소 하나 선택하세요');
 
         setIsSaving(true);
         try {
-            // [중요] 명시적으로 데이터 구조를 잡아주어 저장 오류 방지
             const classPayload = {
                 name: newClass.name,
                 lecturerId: newClass.lecturerId,
                 days: newClass.days,
-                studentIds: newClass.studentIds || [], // 안전장치
-                createdAt: serverTimestamp()
+                studentIds: newClass.studentIds || [],
+                updatedAt: serverTimestamp()
             };
 
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), classPayload);
+            if (editingClassId) {
+                // Update existing class
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), classPayload);
+                alert('반 정보가 수정되었습니다.');
+            } else {
+                // Create new class
+                classPayload.createdAt = serverTimestamp();
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), classPayload);
+                alert('반이 생성되었습니다.');
+            }
             
-            alert('반이 생성되었습니다.');
             setIsModalOpen(false);
             setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
+            setEditingClassId(null);
             setStudentSearch('');
         } catch (error) {
-            console.error("Error creating class:", error);
+            console.error("Error saving class:", error);
             alert(`저장 중 오류가 발생했습니다: ${error.message}`);
         } finally {
             setIsSaving(false);
@@ -109,18 +135,25 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 w-full">
             <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold text-gray-900">반(Class) 관리</h2>
-                <Button onClick={() => setIsModalOpen(true)} icon={Plus}>반 생성</Button>
+                <Button onClick={handleOpenCreate} icon={Plus}>반 생성</Button>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
                 {classes.map(cls => (
-                    <Card key={cls.id}>
+                    <Card key={cls.id} className="w-full">
                         <div className="flex justify-between items-start mb-2">
                             <h3 className="font-bold text-lg">{cls.name}</h3>
-                            <button onClick={async () => { if(window.confirm('삭제 시 복구 불가합니다.')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="text-gray-400 hover:text-red-500"><Trash2 size={18}/></button>
+                            <div className="flex gap-1">
+                                <button onClick={() => handleOpenEdit(cls)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors">
+                                    <Edit2 size={18}/>
+                                </button>
+                                <button onClick={async () => { if(window.confirm('삭제 시 복구 불가합니다.')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="p-1 text-gray-400 hover:text-red-500 transition-colors">
+                                    <Trash2 size={18}/>
+                                </button>
+                            </div>
                         </div>
                         <div className="flex gap-1 mb-3">
                             {cls.days.map(d => <span key={d} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-bold">{d}</span>)}
@@ -131,7 +164,7 @@ export const AdminLectureManager = ({ users }) => {
                 ))}
             </div>
 
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="클래스 설정">
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingClassId ? "클래스 수정" : "클래스 생성"}>
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="반 이름 (예: 고1 수학 A반)" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
                     
@@ -174,8 +207,8 @@ export const AdminLectureManager = ({ users }) => {
                             })}
                         </div>
                     </div>
-                    <Button className="w-full" onClick={handleCreateClass} disabled={isSaving}>
-                        {isSaving ? <Loader className="animate-spin" /> : '저장하기'}
+                    <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>
+                        {isSaving ? <Loader className="animate-spin" /> : (editingClassId ? '수정하기' : '생성하기')}
                     </Button>
                 </div>
             </Modal>
@@ -258,9 +291,9 @@ export const LecturerDashboard = ({ currentUser }) => {
     const currentLectures = lectures.filter(l => l.date === selectedDate);
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="space-y-6">
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
+            <div className="space-y-6 w-full">
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 w-full">
                     <label className="block text-sm font-bold text-gray-500 mb-2">담당 반 선택</label>
                     <select className="w-full p-3 border rounded-xl bg-gray-50 font-bold text-gray-800 outline-none" value={selectedClass?.id || ''} onChange={e => setSelectedClass(classes.find(c => c.id === e.target.value))}>
                         {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -269,7 +302,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                 <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
             </div>
 
-            <div className="lg:col-span-2 space-y-4">
+            <div className="lg:col-span-2 space-y-4 w-full">
                 <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의 관리</h3>
                     <Button size="sm" icon={Plus} onClick={() => { setEditingLecture({ date: selectedDate }); setIsEditModalOpen(true); }}>강의 추가</Button>
@@ -279,7 +312,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                     <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200">등록된 강의가 없습니다.</div>
                 ) : (
                     currentLectures.map(lec => (
-                        <Card key={lec.id}>
+                        <Card key={lec.id} className="w-full">
                             <div className="flex justify-between items-start mb-4 border-b pb-3">
                                 <div>
                                     <h4 className="font-bold text-lg text-gray-900">진도: {lec.progress}</h4>
