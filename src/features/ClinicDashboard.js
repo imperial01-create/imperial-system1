@@ -63,8 +63,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
+    
+    // Check if user has selected this slot in other pending requests locally
+    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
+    
     return false;
   };
 
@@ -110,10 +113,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            const isSlotPast = new Date(`${selectedDateStr}T${t}`) < now;
             
+            // 학생은 과거 시간은 보이지 않음 / 오픈된 것만 보임
             if (isStudent) {
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
+                // 학생에게 보여줄 슬롯이 하나도 없으면 이 시간대는 렌더링하지 않음
                 if (availableSlots.length === 0) return null;
             }
             if (isLecturer && slots.length === 0) return null;
@@ -264,7 +268,8 @@ const ClinicDashboard = ({ currentUser, users }) => {
         let sessionQuery;
         if (currentUser.role === 'student') {
             const today = getLocalToday();
-            sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100));
+            // 학생은 오늘 이후의 모든 세션을 가져옴 (limit 100)
+            sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(200));
         } else {
             sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
         }
@@ -279,7 +284,15 @@ const ClinicDashboard = ({ currentUser, users }) => {
     }, [currentUser, currentDate]);
 
     useEffect(() => {
-        setSessions(Object.values(sessionMap).sort((a,b) => a.startTime.localeCompare(b.startTime)));
+        // [Safety Fix] 정렬 시 undefined 방지
+        const sorted = Object.values(sessionMap).sort((a,b) => {
+            const dateA = a.date || '';
+            const dateB = b.date || '';
+            const timeA = a.startTime || '';
+            const timeB = b.startTime || '';
+            return dateA.localeCompare(dateB) || timeA.localeCompare(timeB);
+        });
+        setSessions(sorted);
     }, [sessionMap]);
 
     const notify = (msg, type = 'success') => {
