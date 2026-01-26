@@ -3,7 +3,7 @@ import YouTube from 'react-youtube';
 import { X, CheckCircle, Video, BookOpen, PenTool, ChevronLeft, ChevronRight } from 'lucide-react';
 import { collection, doc, setDoc, onSnapshot, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card } from '../components/UI';
+import { Button, Card, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -83,10 +83,23 @@ const StudentClassroom = ({ currentUser }) => {
         return onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
     }, [myClasses]);
 
+    const dailyLectures = lectures.filter(l => l.date === selectedDate);
+
+    // [Optimization] Fetch completions ONLY for the dailyLectures (current view)
     useEffect(() => {
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('studentId', '==', currentUser.id));
+        if (dailyLectures.length === 0) {
+            setCompletions([]);
+            return;
+        }
+        
+        const lectureIds = dailyLectures.map(l => l.id);
+        const q = query(
+            collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), 
+            where('studentId', '==', currentUser.id),
+            where('lectureId', 'in', lectureIds)
+        );
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data().lectureId)));
-    }, [currentUser]);
+    }, [selectedDate, lectures.length]); // Re-run when date or lectures change
 
     const handleVideoEnd = async (lectureId) => {
         if(completions.includes(lectureId)) return; 
@@ -102,8 +115,6 @@ const StudentClassroom = ({ currentUser }) => {
         alert('🎉 학습을 완료했습니다!');
         setSelectedVideo(null);
     };
-
-    const dailyLectures = lectures.filter(l => l.date === selectedDate);
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
@@ -128,7 +139,6 @@ const StudentClassroom = ({ currentUser }) => {
                     dailyLectures.map(lecture => {
                         const cls = myClasses.find(c => c.id === lecture.classId);
                         const isCompleted = completions.includes(lecture.id);
-                        // 멀티 링크 지원
                         const links = lecture.youtubeLinks && lecture.youtubeLinks.length > 0 
                             ? lecture.youtubeLinks 
                             : (lecture.youtubeLink ? [lecture.youtubeLink] : []);
@@ -160,7 +170,6 @@ const StudentClassroom = ({ currentUser }) => {
                                     </div>
                                 </div>
                                 
-                                {/* 멀티 영상 버튼 */}
                                 <div className="flex flex-col gap-2">
                                     {links.length > 0 ? (
                                         links.map((link, idx) => {

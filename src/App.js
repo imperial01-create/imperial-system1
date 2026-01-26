@@ -11,7 +11,7 @@ import { Button, Card, Modal, LoadingSpinner } from './components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// Lazy Load Features (Code Splitting)
+// Lazy Load Features
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -169,7 +169,7 @@ export default function App() {
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                     {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'class_mgmt' && <AdminLectureManager users={users} />}
-                    {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser}/>}
+                    {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />} {/* users props 추가됨 */}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                 </Suspense>
             </main>

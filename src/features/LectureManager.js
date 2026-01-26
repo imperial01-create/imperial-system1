@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-// [수정] CheckCircle, X 아이콘 import 추가
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -210,19 +209,17 @@ export const AdminLectureManager = ({ users }) => {
 };
 
 // --- Lecturer Component ---
-export const LecturerDashboard = ({ currentUser }) => {
+export const LecturerDashboard = ({ currentUser, users }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    
-    // [기능 추가] youtubeLinks 배열 초기화
     const [editingLecture, setEditingLecture] = useState({ progress: '', homework: '', youtubeLinks: [''] });
-    
     const [completions, setCompletions] = useState([]);
     const [studentsInClass, setStudentsInClass] = useState([]);
 
+    // 1. 담당 반 목록 조회
     useEffect(() => {
         if (!currentUser) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('lecturerId', '==', currentUser.id));
@@ -233,36 +230,43 @@ export const LecturerDashboard = ({ currentUser }) => {
         });
     }, [currentUser]);
 
+    // 2. 선택된 반의 강의 목록 조회 및 학생 목록 설정 (DB 호출 없이 메모리에서 처리)
     useEffect(() => {
         if (!selectedClass) return;
+        
+        // 강의 목록
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsubLectures = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
         
-        if (selectedClass.studentIds?.length > 0) {
-            const fetchStudents = async () => {
-                const students = [];
-                const userQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('role', '==', 'student'));
-                const snap = await getDocs(userQ);
-                snap.forEach(d => {
-                    if (selectedClass.studentIds.includes(d.id)) students.push({ id: d.id, ...d.data() });
-                });
-                setStudentsInClass(students);
-            };
-            fetchStudents();
+        // 학생 목록 설정 (Optimized: No extra DB call)
+        if (selectedClass.studentIds?.length > 0 && users.length > 0) {
+            const filteredStudents = users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id));
+            setStudentsInClass(filteredStudents);
         } else {
             setStudentsInClass([]);
         }
 
         return () => unsubLectures();
-    }, [selectedClass]);
+    }, [selectedClass, users]);
 
+    // 3. 수강 현황 조회 (Optimized: 선택된 날짜의 강의에 대해서만 조회)
+    const currentLectures = lectures.filter(l => l.date === selectedDate);
+    
     useEffect(() => {
-        if(!lectures.length) return;
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'));
-        return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
-    }, [lectures]);
+        if (currentLectures.length === 0) {
+            setCompletions([]);
+            return;
+        }
 
-    // [기능 추가] 링크 관리 핸들러
+        const lectureIds = currentLectures.map(l => l.id);
+        const q = query(
+            collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), 
+            where('lectureId', 'in', lectureIds)
+        );
+        
+        return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
+    }, [selectedDate, lectures.length]); // lectures.length dependency ensures re-run if lectures update
+
     const handleAddLink = () => {
         setEditingLecture(prev => ({ ...prev, youtubeLinks: [...(prev.youtubeLinks || []), ''] }));
     };
@@ -279,7 +283,6 @@ export const LecturerDashboard = ({ currentUser }) => {
     };
 
     const handleOpenEdit = (lec) => {
-        // 기존 데이터 호환성 처리 (youtubeLink 문자열 -> youtubeLinks 배열)
         let links = lec.youtubeLinks || [];
         if (links.length === 0 && lec.youtubeLink) {
             links = [lec.youtubeLink];
@@ -299,7 +302,6 @@ export const LecturerDashboard = ({ currentUser }) => {
     };
 
     const handleSaveLecture = async () => {
-        // 빈 링크 필터링
         const validLinks = (editingLecture.youtubeLinks || []).filter(link => link.trim() !== '');
 
         const data = {
@@ -308,7 +310,7 @@ export const LecturerDashboard = ({ currentUser }) => {
             progress: editingLecture.progress || '',
             homework: editingLecture.homework || '',
             youtubeLinks: validLinks, 
-            youtubeLink: validLinks.length > 0 ? validLinks[0] : '', // 구버전 호환용 (첫번째 링크 저장)
+            youtubeLink: validLinks.length > 0 ? validLinks[0] : '', 
             updatedAt: serverTimestamp()
         };
 
@@ -323,8 +325,6 @@ export const LecturerDashboard = ({ currentUser }) => {
             alert('저장 실패: ' + e.message);
         }
     };
-
-    const currentLectures = lectures.filter(l => l.date === selectedDate);
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
@@ -363,7 +363,6 @@ export const LecturerDashboard = ({ currentUser }) => {
                                     </div>
                                     <div className="whitespace-pre-wrap text-gray-800 pl-1 border-l-2 border-purple-100">{lec.homework}</div>
                                     
-                                    {/* 멀티 링크 표시 */}
                                     {(lec.youtubeLinks && lec.youtubeLinks.length > 0) || lec.youtubeLink ? (
                                         <div className="mt-3 flex flex-wrap gap-2">
                                             {(lec.youtubeLinks || [lec.youtubeLink]).map((link, idx) => (
@@ -377,7 +376,6 @@ export const LecturerDashboard = ({ currentUser }) => {
                                 <button onClick={() => handleOpenEdit(lec)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg ml-2"><Edit2 size={18}/></button>
                             </div>
                             
-                            {/* CheckCircle 아이콘 사용 */}
                             <div>
                                 <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황</h5>
                                 <div className="flex flex-wrap gap-2">
@@ -419,7 +417,6 @@ export const LecturerDashboard = ({ currentUser }) => {
                         />
                     </div>
                     
-                    {/* [기능 추가] 멀티 링크 입력 */}
                     <div>
                         <label className="text-xs font-bold text-gray-500 mb-1 flex justify-between items-center">
                             유튜브 링크 
