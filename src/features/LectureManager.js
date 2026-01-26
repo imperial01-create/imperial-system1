@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader } from 'lucide-react';
+// [버그 수정] CheckCircle, X 아이콘 추가
+import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
@@ -61,8 +62,6 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    
-    // Edit state
     const [editingClassId, setEditingClassId] = useState(null); 
     const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
     const [studentSearch, setStudentSearch] = useState('');
@@ -106,11 +105,9 @@ export const AdminLectureManager = ({ users }) => {
             };
 
             if (editingClassId) {
-                // Update existing class
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), classPayload);
                 alert('반 정보가 수정되었습니다.');
             } else {
-                // Create new class
                 classPayload.createdAt = serverTimestamp();
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), classPayload);
                 alert('반이 생성되었습니다.');
@@ -147,12 +144,8 @@ export const AdminLectureManager = ({ users }) => {
                         <div className="flex justify-between items-start mb-2">
                             <h3 className="font-bold text-lg">{cls.name}</h3>
                             <div className="flex gap-1">
-                                <button onClick={() => handleOpenEdit(cls)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors">
-                                    <Edit2 size={18}/>
-                                </button>
-                                <button onClick={async () => { if(window.confirm('삭제 시 복구 불가합니다.')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="p-1 text-gray-400 hover:text-red-500 transition-colors">
-                                    <Trash2 size={18}/>
-                                </button>
+                                <button onClick={() => handleOpenEdit(cls)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors"><Edit2 size={18}/></button>
+                                <button onClick={async () => { if(window.confirm('삭제 시 복구 불가합니다.')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
                             </div>
                         </div>
                         <div className="flex gap-1 mb-3">
@@ -172,9 +165,7 @@ export const AdminLectureManager = ({ users }) => {
                         <label className="block text-sm font-bold text-gray-600 mb-2">담당 강사</label>
                         <select className="w-full border p-3 rounded-xl bg-white" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
                             <option value="">선택</option>
-                            {users.filter(u => u.role === 'lecturer').map(l => (
-                                <option key={l.id} value={l.id}>{l.name}</option>
-                            ))}
+                            {users.filter(u => u.role === 'lecturer').map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                         </select>
                     </div>
 
@@ -198,9 +189,7 @@ export const AdminLectureManager = ({ users }) => {
                                 const isSelected = newClass.studentIds.includes(u.id);
                                 return (
                                     <div key={u.id} className={`flex items-center p-2 hover:bg-gray-50 cursor-pointer ${isSelected ? 'bg-blue-50' : ''}`} onClick={() => toggleArrayItem('studentIds', u.id)}>
-                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
-                                            {isSelected && <Check size={14} className="text-white" />}
-                                        </div>
+                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>{isSelected && <Check size={14} className="text-white" />}</div>
                                         <span>{u.name} ({u.userId})</span>
                                     </div>
                                 );
@@ -208,7 +197,7 @@ export const AdminLectureManager = ({ users }) => {
                         </div>
                     </div>
                     <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>
-                        {isSaving ? <Loader className="animate-spin" /> : (editingClassId ? '수정하기' : '생성하기')}
+                        {isSaving ? <Loader className="animate-spin" /> : (editingClassId ? '수정하기' : '저장하기')}
                     </Button>
                 </div>
             </Modal>
@@ -223,7 +212,10 @@ export const LecturerDashboard = ({ currentUser }) => {
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    const [editingLecture, setEditingLecture] = useState({});
+    
+    // [기능 추가] youtubeLinks 배열 초기화
+    const [editingLecture, setEditingLecture] = useState({ progress: '', homework: '', youtubeLinks: [''] });
+    
     const [completions, setCompletions] = useState([]);
     const [studentsInClass, setStudentsInClass] = useState([]);
 
@@ -266,13 +258,53 @@ export const LecturerDashboard = ({ currentUser }) => {
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
     }, [lectures]);
 
+    // [기능 추가] 링크 관리 핸들러
+    const handleAddLink = () => {
+        setEditingLecture(prev => ({ ...prev, youtubeLinks: [...(prev.youtubeLinks || []), ''] }));
+    };
+
+    const handleLinkChange = (index, value) => {
+        const newLinks = [...(editingLecture.youtubeLinks || [''])];
+        newLinks[index] = value;
+        setEditingLecture(prev => ({ ...prev, youtubeLinks: newLinks }));
+    };
+
+    const handleRemoveLink = (index) => {
+        const newLinks = editingLecture.youtubeLinks.filter((_, i) => i !== index);
+        setEditingLecture(prev => ({ ...prev, youtubeLinks: newLinks }));
+    };
+
+    const handleOpenEdit = (lec) => {
+        // 기존 데이터 호환성 처리 (youtubeLink 문자열 -> youtubeLinks 배열)
+        let links = lec.youtubeLinks || [];
+        if (links.length === 0 && lec.youtubeLink) {
+            links = [lec.youtubeLink];
+        }
+        if (links.length === 0) links = [''];
+
+        setEditingLecture({
+            ...lec,
+            youtubeLinks: links
+        });
+        setIsEditModalOpen(true);
+    };
+
+    const handleOpenCreate = () => {
+        setEditingLecture({ date: selectedDate, progress: '', homework: '', youtubeLinks: [''] });
+        setIsEditModalOpen(true);
+    };
+
     const handleSaveLecture = async () => {
+        // 빈 링크 필터링
+        const validLinks = (editingLecture.youtubeLinks || []).filter(link => link.trim() !== '');
+
         const data = {
             classId: selectedClass.id,
             date: editingLecture.date || selectedDate,
             progress: editingLecture.progress || '',
             homework: editingLecture.homework || '',
-            youtubeLink: editingLecture.youtubeLink || '',
+            youtubeLinks: validLinks, 
+            youtubeLink: validLinks.length > 0 ? validLinks[0] : '', // 구버전 호환용 (첫번째 링크 저장)
             updatedAt: serverTimestamp()
         };
 
@@ -305,7 +337,7 @@ export const LecturerDashboard = ({ currentUser }) => {
             <div className="lg:col-span-2 space-y-4 w-full">
                 <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의 관리</h3>
-                    <Button size="sm" icon={Plus} onClick={() => { setEditingLecture({ date: selectedDate }); setIsEditModalOpen(true); }}>강의 추가</Button>
+                    <Button size="sm" icon={Plus} onClick={handleOpenCreate}>강의 추가</Button>
                 </div>
 
                 {currentLectures.length === 0 ? (
@@ -314,14 +346,34 @@ export const LecturerDashboard = ({ currentUser }) => {
                     currentLectures.map(lec => (
                         <Card key={lec.id} className="w-full">
                             <div className="flex justify-between items-start mb-4 border-b pb-3">
-                                <div>
-                                    <h4 className="font-bold text-lg text-gray-900">진도: {lec.progress}</h4>
-                                    <p className="text-sm text-gray-500">숙제: {lec.homework}</p>
+                                <div className="flex-1">
+                                    <div className="font-bold text-lg text-gray-900 mb-1 flex items-center gap-2">
+                                        <BookOpen size={18} className="text-blue-600"/> 
+                                        진도
+                                    </div>
+                                    <div className="whitespace-pre-wrap text-gray-800 mb-3 pl-1 border-l-2 border-blue-100">{lec.progress}</div>
+                                    
+                                    <div className="font-bold text-lg text-gray-900 mb-1 flex items-center gap-2">
+                                        <PenTool size={18} className="text-purple-600"/> 
+                                        숙제
+                                    </div>
+                                    <div className="whitespace-pre-wrap text-gray-800 pl-1 border-l-2 border-purple-100">{lec.homework}</div>
+                                    
+                                    {/* 멀티 링크 표시 */}
+                                    {(lec.youtubeLinks && lec.youtubeLinks.length > 0) || lec.youtubeLink ? (
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            {(lec.youtubeLinks || [lec.youtubeLink]).map((link, idx) => (
+                                                <a key={idx} href={link} target="_blank" rel="noreferrer" className="text-sm bg-red-50 text-red-600 px-3 py-1.5 rounded-lg font-medium hover:bg-red-100 transition-colors flex items-center gap-1">
+                                                    <Video size={14}/> 영상 {idx + 1}
+                                                </a>
+                                            ))}
+                                        </div>
+                                    ) : null}
                                 </div>
-                                <button onClick={() => { setEditingLecture(lec); setIsEditModalOpen(true); }} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg"><Edit2 size={18}/></button>
+                                <button onClick={() => handleOpenEdit(lec)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg ml-2"><Edit2 size={18}/></button>
                             </div>
                             
-                            {/* 수강 현황 */}
+                            {/* [버그 수정 완료] CheckCircle 아이콘 사용 */}
                             <div>
                                 <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황</h5>
                                 <div className="flex flex-wrap gap-2">
@@ -329,7 +381,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                                         const isDone = completions.some(c => c.lectureId === lec.id && c.studentId === std.id);
                                         return (
                                             <span key={std.id} className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 ${isDone ? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-400'}`}>
-                                                {std.name} {isDone && <Check size={10} strokeWidth={4}/>}
+                                                {std.name} {isDone && <CheckCircle size={10} strokeWidth={4}/>}
                                             </span>
                                         );
                                     })}
@@ -342,9 +394,53 @@ export const LecturerDashboard = ({ currentUser }) => {
 
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 정보 입력">
                 <div className="space-y-4">
-                    <div><label className="text-xs font-bold text-gray-500">진도 내용</label><input className="w-full border p-3 rounded-xl mt-1" value={editingLecture.progress || ''} onChange={e => setEditingLecture({...editingLecture, progress: e.target.value})} placeholder="예: 3단원 인수분해 완료"/></div>
-                    <div><label className="text-xs font-bold text-gray-500">숙제 내용</label><input className="w-full border p-3 rounded-xl mt-1" value={editingLecture.homework || ''} onChange={e => setEditingLecture({...editingLecture, homework: e.target.value})} placeholder="예: p.30~45 문제풀이"/></div>
-                    <div><label className="text-xs font-bold text-gray-500">유튜브 링크</label><input className="w-full border p-3 rounded-xl mt-1" value={editingLecture.youtubeLink || ''} onChange={e => setEditingLecture({...editingLecture, youtubeLink: e.target.value})} placeholder="https://youtu.be/..."/></div>
+                    {/* [기능 개선] Textarea로 변경 및 줄바꿈 지원 */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-500">진도 내용</label>
+                        <textarea 
+                            className="w-full border p-3 rounded-xl mt-1 resize-none focus:ring-2 focus:ring-blue-200 outline-none" 
+                            rows={3} 
+                            value={editingLecture.progress || ''} 
+                            onChange={e => setEditingLecture({...editingLecture, progress: e.target.value})} 
+                            placeholder="예: 3단원 인수분해 완료 (엔터로 줄바꿈)"
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-gray-500">숙제 내용</label>
+                        <textarea 
+                            className="w-full border p-3 rounded-xl mt-1 resize-none focus:ring-2 focus:ring-blue-200 outline-none" 
+                            rows={3} 
+                            value={editingLecture.homework || ''} 
+                            onChange={e => setEditingLecture({...editingLecture, homework: e.target.value})} 
+                            placeholder="예: p.30~45 문제풀이 (엔터로 줄바꿈)"
+                        />
+                    </div>
+                    
+                    {/* [기능 추가] 멀티 링크 입력 */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-500 mb-1 flex justify-between items-center">
+                            유튜브 링크 
+                            <button onClick={handleAddLink} className="text-blue-600 hover:bg-blue-50 px-2 py-0.5 rounded text-xs transition-colors">+ 추가</button>
+                        </label>
+                        <div className="space-y-2">
+                            {(editingLecture.youtubeLinks || ['']).map((link, index) => (
+                                <div key={index} className="flex gap-2">
+                                    <input 
+                                        className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none" 
+                                        value={link} 
+                                        onChange={e => handleLinkChange(index, e.target.value)} 
+                                        placeholder="https://youtu.be/..."
+                                    />
+                                    {(editingLecture.youtubeLinks || []).length > 1 && (
+                                        <button onClick={() => handleRemoveLink(index)} className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors">
+                                            <X size={20}/>
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
                     <Button className="w-full" onClick={handleSaveLecture}>저장하기</Button>
                 </div>
             </Modal>
