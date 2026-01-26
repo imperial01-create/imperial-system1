@@ -8,7 +8,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
-  onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence 
+  onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence, initializeFirestore, persistentLocalCache, persistentMultipleTabManager 
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -21,19 +21,17 @@ const firebaseConfig = {
   appId: "1:414889692060:web:9b6b89d0d918a74f8c1659"
 };
 
-// Initialize Firebase
+// Initialize Firebase with Persistence (Optimized)
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
-
-// [Optimization] Offline Persistence
-try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 
 // --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
-const SUBJECTS = ['수학', '영어', '국어', '과학', '기타']; // [New] 과목 목록
 
 const SEED_USERS = [
   { role: 'admin', userId: 'imperialsys01', password: '1', name: '행정직원' }, 
@@ -78,12 +76,12 @@ const generateTimeSlots = () => Array.from({ length: 14 }, (_, i) => `${String(i
 // --- UI Components ---
 const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md' }) => {
   const sizes = { 
-    sm: 'px-4 py-3 text-base md:text-sm md:px-3 md:py-2', 
-    md: 'px-6 py-4 text-lg md:text-base md:px-5 md:py-3', 
-    lg: 'px-8 py-5 text-xl md:text-lg md:px-8 md:py-4' 
+    sm: 'px-4 py-2 text-sm', 
+    md: 'px-5 py-3 text-base', 
+    lg: 'px-8 py-4 text-xl' 
   };
   const variants = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-md active:scale-95 active:bg-blue-800',
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95 active:bg-blue-800',
     secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',
     success: 'bg-green-600 text-white hover:bg-green-700 shadow-md active:scale-95',
     danger: 'bg-red-50 text-red-600 hover:bg-red-100 active:scale-95',
@@ -215,7 +213,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTa = currentUser.role === 'ta';
   const now = new Date();
 
-  // [Helper] Check if student already booked/selected this time slot
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
     
@@ -264,7 +261,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                  hasEvent = sessions.some(s => s.date === dStr);
             }
 
-            // [Fix 1] 달력 날짜 사각형 겹침 방지 (min-height, 비율 조정)
             return (
               <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
                 <span className={`text-base md:text-lg ${isSel?'font-bold':''}`}>{d.getDate()}</span>
@@ -296,8 +292,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             if(slots.length === 0) {
                  return isInteractive ? (
-                    <div key={i} className="flex gap-4 items-center group min-h-[80px]">
-                        <div className="w-14 text-right text-base font-bold text-gray-400 font-mono">{t}</div>
+                    <div key={i} className="flex gap-3 items-center group min-h-[70px]">
+                        <div className="w-14 text-right text-base font-bold text-gray-400 font-mono whitespace-nowrap">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
                             {((isTa || isAdmin) && new Date(`${selectedDateStr}T${t}`) >= now) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
@@ -312,29 +308,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             }
 
             return (
-              <div key={i} className="flex gap-3 md:gap-4 items-start">
-                {/* Time column */}
-                <div className="w-14 pt-4 text-right text-base font-bold text-gray-600 font-mono">{t}</div>
+              <div key={i} className="flex gap-3 md:gap-4 items-center md:items-start">
+                {/* [Fix 3] 모바일 가독성: 시간 줄바꿈 방지 및 중앙 정렬 */}
+                <div className="w-14 text-right text-base font-bold text-gray-600 font-mono whitespace-nowrap">{t}</div>
                 <div className="flex-1 space-y-3">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    // [Fix 2] 조교 담당 과목 찾기
-                    // 세션에는 taId가 있으므로 users 목록에서 해당 taId를 가진 유저를 찾아 subject를 가져옴
-                    // users prop은 CalendarView에 전달되어야 함 (현재 Admin만 users prop 가짐, TA/Student는 session에 taName만 있음)
-                    // 최적화: session 데이터 생성 시 subject를 포함하거나, 여기서 users를 조회해야 함.
-                    // 현재 구조상 users 배열은 Admin만 가지고 있음. Student/TA/Lecturer는 users 전체 목록을 모름.
-                    // 따라서, 간단하게 세션 생성 시점(addDoc)이 아니라, 표시 시점에 해결하려면 users 데이터가 필요함.
-                    // 하지만 Student에게 모든 Users 데이터를 주는 것은 보안/비용 낭비.
-                    // 타협안: Student 뷰에서는 과목을 보여주지 않거나, 세션 데이터에 subject 필드를 추가해야 함.
-                    // [Fix 2 Solution] -> 세션 데이터에 subject가 없으므로, Admin/Lecturer 뷰에서만 users 매핑으로 보여주거나
-                    // 가장 좋은 방법은 TA가 근무 신청할 때 자신의 과목 정보를 세션에 박아넣는 것임.
-                    // 여기서는 기존 데이터 호환성을 위해, Admin인 경우 users 목록에서 찾고, 아닌 경우 session에 저장된게 없으면 표시 안됨.
-                    // *중요*: 이 기능을 완벽히 하려면 TA가 근무 생성 시 subject 필드를 추가하도록 'add_request' 로직 수정 필요.
-                    
-                    // 여기서는 Admin/Lecturer 뷰에서 users prop을 이용해 매핑 시도
                     let taSubject = s.taSubject; 
                     if (!taSubject && users && users.length > 0) {
                         const taUser = users.find(u => u.id === s.taId);
@@ -347,12 +329,16 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
+                             // [Fix 3] 모바일에서 시간과 박스 가로 배치 (flex items-center 유지)
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
-                                <div>
-                                    <div className={`font-bold text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>{s.taName} TA</div>
-                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
-                                        {/* [Fix 2] 과목 표시 (데이터에 있다면) */}
-                                        {s.taSubject ? `[${s.taSubject}] ` : ''}개별 클리닉
+                                <div className="flex flex-col">
+                                    <div className={`font-bold text-base md:text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                        {/* [Fix 2] 학생 뷰에서도 과목 표시 */}
+                                        {s.taSubject ? <span className="text-blue-600 mr-1">[{s.taSubject}]</span> : ''}
+                                        {s.taName} TA
+                                    </div>
+                                    <div className={`text-xs md:text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
+                                        개별 클리닉
                                     </div>
                                 </div>
                                 <Button 
@@ -378,7 +364,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
-                                {/* [Fix 2] 과목 표시 */}
                                 {taSubject && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
@@ -443,7 +428,7 @@ export default function App() {
   const [modalState, setModalState] = useState({ type: null, data: null });
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDateStr, setSelectedDateStr] = useState(getLocalToday());
-  const [searchQuery, setSearchQuery] = useState(''); // [Fix 3] Search state
+  const [searchQuery, setSearchQuery] = useState('');
   
   const [studentSelectedSlots, setStudentSelectedSlots] = useState([]); 
   const [applicationItems, setApplicationItems] = useState([{ subject: '', workbook: '', range: '' }]); 
@@ -451,7 +436,6 @@ export default function App() {
   const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' }); 
   const [selectedTaIdForSchedule, setSelectedTaIdForSchedule] = useState(''); 
   const [manageTab, setManageTab] = useState('ta'); 
-  // [Fix 3] New User Form with Subject
   const [newUser, setNewUser] = useState({ name: '', userId: '', password: '', phone: '', subject: '' }); 
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [inputData, setInputData] = useState({});
@@ -460,7 +444,6 @@ export default function App() {
   const sessions = useMemo(() => Object.values(sessionMap), [sessionMap]);
   const sortedSessions = useMemo(() => sessions.sort((a,b) => a.startTime.localeCompare(b.startTime)), [sessions]);
 
-  // Auth Init
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -471,13 +454,8 @@ export default function App() {
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
-  // [Optimization] Data Sync Strategy (1: Users Cache)
   useEffect(() => {
     if (!authUser || !currentUser) return;
-    
-    // 강사(Lecturer)도 조교 정보를 알아야 과목을 표시할 수 있으므로 권한 추가 필요할 수 있음.
-    // 하지만 보안상 Admin만 User list를 봄.
-    // 차선책: Admin은 users를 가져오고 CalendarView에 prop으로 내림.
     
     if (currentUser.role === 'admin' || currentUser.role === 'lecturer') {
        const cachedUsers = localStorage.getItem('cached_users');
@@ -496,11 +474,9 @@ export default function App() {
     }
   }, [authUser, currentUser]);
 
-  // [Optimization] Data Sync Strategy (2: Sessions Sync)
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
-    // Sessions Sync (All Roles, Unified Pipeline)
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
@@ -509,9 +485,8 @@ export default function App() {
     let sessionQuery;
     if (currentUser.role === 'student') {
         const today = getLocalToday();
-        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100)); // Limit for student
+        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100));
     } else {
-        // Admin, TA, Lecturer load month range
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
     }
 
@@ -525,13 +500,12 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false); // Ensure loading state is cleared for everyone
+      setAppLoading(false);
     });
 
     return () => unsubCalendar();
   }, [authUser, currentUser, currentDate]);
 
-  // Session Persistence logic
   useEffect(() => {
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
@@ -716,7 +690,7 @@ export default function App() {
              }
         } else if (action === 'send_feedback_msg') { 
              setModalState({ type: 'message_preview_feedback', data: payload });
-        } else if (action === 'edit_user') { // [Fix 3] Edit User Action
+        } else if (action === 'edit_user') { 
              setNewUser({ ...payload, isEdit: true });
              setModalState({ type: 'user_manage' }); // Re-open user manage to edit
         }
@@ -959,11 +933,14 @@ export default function App() {
              <input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/>
              <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})} disabled={newUser.isEdit}/>
              <input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>
+             {/* [Fix 1] Subject Input Field */}
              {manageTab === 'ta' && (
-                 <select className="border rounded-lg p-2" value={newUser.subject || ''} onChange={e=>setNewUser({...newUser,subject:e.target.value})}>
-                     <option value="">담당 과목 (선택)</option>
-                     {SUBJECTS.map(s=><option key={s} value={s}>{s}</option>)}
-                 </select>
+                 <input 
+                    placeholder="담당 과목 (예: 수학, 영어)" 
+                    className="border rounded-lg p-2" 
+                    value={newUser.subject || ''} 
+                    onChange={e=>setNewUser({...newUser,subject:e.target.value})}
+                 />
              )}
              <Button size="sm" onClick={async ()=>{ 
                  try {
