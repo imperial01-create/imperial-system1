@@ -21,7 +21,7 @@ const firebaseConfig = {
   appId: "1:414889692060:web:9b6b89d0d918a74f8c1659"
 };
 
-// Initialize Firebase with Persistence (Optimized)
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = initializeFirestore(app, {
@@ -213,21 +213,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTa = currentUser.role === 'ta';
   const now = new Date();
 
-  // [Helper] Check if student already booked/selected this time slot
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
-    
     const alreadyBooked = sessions.some(s => 
-        s.studentName === currentUser.name && 
-        s.date === selectedDateStr && 
-        s.startTime === time && 
+        s.studentName === currentUser.name && s.date === selectedDateStr && s.startTime === time && 
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
     if (selectedSessionTimes.includes(time)) return true;
-
     return false;
   };
 
@@ -250,17 +244,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
-            
             let hasEvent = false;
-            if (isStudent) {
-                 if (dStr >= getLocalToday()) {
-                    hasEvent = sessions.some(s => s.date === dStr && s.status === 'open');
-                 }
-            } else if (isTa) {
-                 hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
-            } else {
-                 hasEvent = sessions.some(s => s.date === dStr);
-            }
+            if (isStudent) { if (dStr >= getLocalToday()) hasEvent = sessions.some(s => s.date === dStr && s.status === 'open'); }
+            else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id); }
+            else { hasEvent = sessions.some(s => s.date === dStr); }
 
             return (
               <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
@@ -272,7 +259,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
       </Card>
 
-      {/* Schedule List Area */}
+      {/* Schedule List Area (Mobile Optimized Layout) */}
       <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto p-0 md:p-6 overflow-hidden">
         <div className="p-5 md:p-0 border-b md:border-none bg-white sticky top-0 z-10">
            <h3 className="font-bold text-xl flex items-center gap-2">
@@ -288,30 +275,31 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
                 if (availableSlots.length === 0) return null;
             }
-
             if (isLecturer && slots.length === 0) return null;
 
             if(slots.length === 0) {
                  return isInteractive ? (
-                    <div key={i} className="flex gap-3 items-center group min-h-[70px]">
-                        <div className="w-14 text-right text-base font-bold text-gray-400 font-mono whitespace-nowrap">{t}</div>
-                        <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
+                    <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 group min-h-[80px]">
+                         {/* Time Label (Top on Mobile) */}
+                        <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
+                        <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
                             {((isTa || isAdmin) && new Date(`${selectedDateStr}T${t}`) >= now) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
-                    !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
-                         <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
-                         <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
+                    !isStudent ? <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start min-h-[60px] opacity-40">
+                         <div className="w-full md:w-14 text-left md:text-right text-sm font-bold text-gray-400 font-mono pl-1">{t}</div>
+                         <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm w-full">일정 없음</div>
                     </div> : null
                 );
             }
 
             return (
-              <div key={i} className="flex gap-3 md:gap-4 items-center md:items-start">
-                <div className="w-14 text-right text-base font-bold text-gray-600 font-mono whitespace-nowrap">{t}</div>
-                <div className="flex-1 space-y-3">
+              <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start">
+                {/* [Fix 1] Time Label: Top on Mobile, Left on Desktop */}
+                <div className="w-full md:w-14 text-left md:text-right text-lg md:text-base font-bold text-gray-800 md:text-gray-600 font-mono pl-1 mt-2 md:mt-4">{t}</div>
+                <div className="flex-1 space-y-3 w-full">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
@@ -323,42 +311,36 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         if (taUser) taSubject = taUser.subject;
                     }
 
-                    // Student View: Inline Button & Better Layout
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             // [Fix 3] Layout Improvement: Flex Row
-                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
-                                <div className="flex-1 flex flex-col justify-center">
-                                    <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {/* [Fix 2] 과목 표시 */}
-                                        {s.taSubject ? <span className="text-blue-600 mr-1.5">[{s.taSubject}]</span> : ''}
+                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                                <div className="flex flex-col">
+                                    <div className={`font-bold text-base md:text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                        {s.taSubject ? <span className="text-blue-600 mr-1">[{s.taSubject}]</span> : ''}
                                         {s.taName} TA
                                     </div>
                                     <div className={`text-xs md:text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
                                         개별 클리닉
                                     </div>
                                 </div>
-                                <div className="ml-3">
-                                  <Button 
-                                      size="sm" 
-                                      variant={isSelected ? "selected" : "outline"}
-                                      onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
-                                      icon={isSelected ? Check : Plus}
-                                      disabled={isBlocked}
-                                  >
-                                      {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
-                                  </Button>
-                                </div>
+                                <Button 
+                                    size="sm" 
+                                    variant={isSelected ? "selected" : "outline"}
+                                    onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
+                                    icon={isSelected ? Check : Plus}
+                                    disabled={isBlocked}
+                                >
+                                    {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
+                                </Button>
                             </div>
                         );
                     }
 
-                    // Admin & TA & Lecturer View
                     return (
-                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
+                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all w-full ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -646,8 +628,7 @@ export default function App() {
                 setStudentSelectedSlots(p => [...p, s.id]);
             }
         } else if (action === 'add_request') {
-            // Replaced by handleTaAddRequest wrapper but keep logic here for consistency if called directly
-             const h = parseInt(payload.time.split(':')[0]);
+            const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', // Subject added
@@ -869,7 +850,7 @@ export default function App() {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
                     </div>
-                    <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots}/>
+                    <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users}/>
                 </Card>
                 {studentSelectedSlots.length > 0 && (
                     <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
@@ -923,7 +904,7 @@ export default function App() {
          <div className="flex border-b mb-4">
             {['ta','student','lecturer'].map(t=><button key={t} className={`flex-1 py-3 font-bold text-lg capitalize ${manageTab===t?'text-blue-600 border-b-4 border-blue-600':'text-gray-400'}`} onClick={()=>setManageTab(t)}>{t}</button>)}
          </div>
-         {/* [Fix 3] User Search & Edit UI */}
+         {/* User Search & Edit UI */}
          <div className="mb-4">
              <div className="relative">
                  <input placeholder="이름 또는 ID 검색" className="w-full border rounded-lg p-3 pl-10" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/>
@@ -935,7 +916,7 @@ export default function App() {
              <input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/>
              <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})} disabled={newUser.isEdit}/>
              <input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>
-             {/* [Fix 1] Subject Input Field */}
+             {/* Subject Input Field */}
              {manageTab === 'ta' && (
                  <input 
                     placeholder="담당 과목 (예: 수학, 영어)" 
