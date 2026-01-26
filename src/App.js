@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, EyeOff, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw, ArrowRight
+  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, EyeOff, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw, ArrowRight, Search
 } from 'lucide-react';
 
 // --- Firebase Libraries ---
@@ -33,12 +33,13 @@ try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+const SUBJECTS = ['수학', '영어', '국어', '과학', '기타']; // [New] 과목 목록
 
 const SEED_USERS = [
   { role: 'admin', userId: 'imperialsys01', password: '1', name: '행정직원' }, 
-  { role: 'ta', userId: 'ta_kim', password: '1', name: '김민성' },
-  { role: 'ta', userId: 'ta_oh', password: '1', name: '오혜원' },
-  { role: 'ta', userId: 'ta_lee', password: '1', name: '이채연' },
+  { role: 'ta', userId: 'ta_kim', password: '1', name: '김민성', subject: '수학' },
+  { role: 'ta', userId: 'ta_oh', password: '1', name: '오혜원', subject: '영어' },
+  { role: 'ta', userId: 'ta_lee', password: '1', name: '이채연', subject: '과학' },
   { role: 'lecturer', userId: 'lec_kim', password: '1', name: '김강사' },
   { role: 'student', userId: 'lee12', password: '1', name: '이원준', phone: '010-1234-5678' },
 ];
@@ -200,7 +201,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
 };
 
 // --- Calendar View ---
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [] }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
         return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
@@ -263,6 +264,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                  hasEvent = sessions.some(s => s.date === dStr);
             }
 
+            // [Fix 1] 달력 날짜 사각형 겹침 방지 (min-height, 비율 조정)
             return (
               <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
                 <span className={`text-base md:text-lg ${isSel?'font-bold':''}`}>{d.getDate()}</span>
@@ -311,15 +313,35 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             return (
               <div key={i} className="flex gap-3 md:gap-4 items-start">
-                {/* [Fix 1] Time column */}
+                {/* Time column */}
                 <div className="w-14 pt-4 text-right text-base font-bold text-gray-600 font-mono">{t}</div>
                 <div className="flex-1 space-y-3">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
+                    
+                    // [Fix 2] 조교 담당 과목 찾기
+                    // 세션에는 taId가 있으므로 users 목록에서 해당 taId를 가진 유저를 찾아 subject를 가져옴
+                    // users prop은 CalendarView에 전달되어야 함 (현재 Admin만 users prop 가짐, TA/Student는 session에 taName만 있음)
+                    // 최적화: session 데이터 생성 시 subject를 포함하거나, 여기서 users를 조회해야 함.
+                    // 현재 구조상 users 배열은 Admin만 가지고 있음. Student/TA/Lecturer는 users 전체 목록을 모름.
+                    // 따라서, 간단하게 세션 생성 시점(addDoc)이 아니라, 표시 시점에 해결하려면 users 데이터가 필요함.
+                    // 하지만 Student에게 모든 Users 데이터를 주는 것은 보안/비용 낭비.
+                    // 타협안: Student 뷰에서는 과목을 보여주지 않거나, 세션 데이터에 subject 필드를 추가해야 함.
+                    // [Fix 2 Solution] -> 세션 데이터에 subject가 없으므로, Admin/Lecturer 뷰에서만 users 매핑으로 보여주거나
+                    // 가장 좋은 방법은 TA가 근무 신청할 때 자신의 과목 정보를 세션에 박아넣는 것임.
+                    // 여기서는 기존 데이터 호환성을 위해, Admin인 경우 users 목록에서 찾고, 아닌 경우 session에 저장된게 없으면 표시 안됨.
+                    // *중요*: 이 기능을 완벽히 하려면 TA가 근무 생성 시 subject 필드를 추가하도록 'add_request' 로직 수정 필요.
+                    
+                    // 여기서는 Admin/Lecturer 뷰에서 users prop을 이용해 매핑 시도
+                    let taSubject = s.taSubject; 
+                    if (!taSubject && users && users.length > 0) {
+                        const taUser = users.find(u => u.id === s.taId);
+                        if (taUser) taSubject = taUser.subject;
+                    }
 
-                    // Student View
+                    // Student View: Inline Button
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
@@ -327,9 +349,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         return (
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div>
-                                    {/* [Fix 1] Remove duplicate time display inside card */}
                                     <div className={`font-bold text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>{s.taName} TA</div>
-                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>개별 클리닉</div>
+                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
+                                        {/* [Fix 2] 과목 표시 (데이터에 있다면) */}
+                                        {s.taSubject ? `[${s.taSubject}] ` : ''}개별 클리닉
+                                    </div>
                                 </div>
                                 <Button 
                                     size="sm" 
@@ -353,7 +377,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <span className="font-bold text-lg text-gray-900">{s.studentName || s.taName}</span>
                                 <Badge status={s.status}/>
                             </div>
-                            <div className="text-sm text-gray-600 font-medium">{s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}</div>
+                            <div className="text-sm text-gray-600 font-medium">
+                                {/* [Fix 2] 과목 표시 */}
+                                {taSubject && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
+                                {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
+                            </div>
                             
                             {(isAdmin || isLecturer) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
@@ -415,6 +443,7 @@ export default function App() {
   const [modalState, setModalState] = useState({ type: null, data: null });
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDateStr, setSelectedDateStr] = useState(getLocalToday());
+  const [searchQuery, setSearchQuery] = useState(''); // [Fix 3] Search state
   
   const [studentSelectedSlots, setStudentSelectedSlots] = useState([]); 
   const [applicationItems, setApplicationItems] = useState([{ subject: '', workbook: '', range: '' }]); 
@@ -422,7 +451,8 @@ export default function App() {
   const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' }); 
   const [selectedTaIdForSchedule, setSelectedTaIdForSchedule] = useState(''); 
   const [manageTab, setManageTab] = useState('ta'); 
-  const [newUser, setNewUser] = useState({ name: '', userId: '', password: '', phone: '' }); 
+  // [Fix 3] New User Form with Subject
+  const [newUser, setNewUser] = useState({ name: '', userId: '', password: '', phone: '', subject: '' }); 
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [inputData, setInputData] = useState({});
   const [confirmConfig, setConfirmConfig] = useState(null);
@@ -445,7 +475,11 @@ export default function App() {
   useEffect(() => {
     if (!authUser || !currentUser) return;
     
-    if (currentUser.role === 'admin') {
+    // 강사(Lecturer)도 조교 정보를 알아야 과목을 표시할 수 있으므로 권한 추가 필요할 수 있음.
+    // 하지만 보안상 Admin만 User list를 봄.
+    // 차선책: Admin은 users를 가져오고 CalendarView에 prop으로 내림.
+    
+    if (currentUser.role === 'admin' || currentUser.role === 'lecturer') {
        const cachedUsers = localStorage.getItem('cached_users');
        if (cachedUsers) setUsers(JSON.parse(cachedUsers));
        
@@ -577,7 +611,8 @@ export default function App() {
           if (!isDuplicate) {
               const newRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'));
               batch.set(newRef, {
-                taId: targetTa.id, taName: targetTa.name, date: dStr, startTime: sT, endTime: eT, 
+                taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', // [Fix 2] Add subject to session
+                date: dStr, startTime: sT, endTime: eT, 
                 status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', classroom: ''
               });
               count++;
@@ -587,6 +622,19 @@ export default function App() {
     }
     await batch.commit();
     notify(`${count}개의 스케줄 생성 완료`);
+  };
+  
+  // [Fix 2] 조교가 직접 추가 신청할 때도 과목 정보 포함
+  const handleTaAddRequest = async (time) => {
+    const h = parseInt(time.split(':')[0]);
+    if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
+    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), {
+        taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', // Subject added
+        date: selectedDateStr, 
+        startTime: time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
+        status: 'addition_requested', source: 'system', classroom: ''
+    });
+    notify('근무 신청 완료');
   };
 
   const submitStudentApplication = async () => {
@@ -622,10 +670,12 @@ export default function App() {
                 setStudentSelectedSlots(p => [...p, s.id]);
             }
         } else if (action === 'add_request') {
-            const h = parseInt(payload.time.split(':')[0]);
+            // Replaced by handleTaAddRequest wrapper but keep logic here for consistency if called directly
+             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), {
-                taId: currentUser.id, taName: currentUser.name, date: selectedDateStr, 
+                taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', // Subject added
+                date: selectedDateStr, 
                 startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
                 status: 'addition_requested', source: 'system', classroom: ''
             });
@@ -666,6 +716,9 @@ export default function App() {
              }
         } else if (action === 'send_feedback_msg') { 
              setModalState({ type: 'message_preview_feedback', data: payload });
+        } else if (action === 'edit_user') { // [Fix 3] Edit User Action
+             setNewUser({ ...payload, isEdit: true });
+             setModalState({ type: 'user_manage' }); // Re-open user manage to edit
         }
     } catch (e) { notify('오류: ' + e.message, 'error'); }
   }, [currentUser, selectedDateStr, notify, studentSelectedSlots, sessions]);
@@ -749,7 +802,7 @@ export default function App() {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -806,7 +859,7 @@ export default function App() {
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}}/>
+              <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}} users={users}/>
            </div>
         )}
         {currentUser.role === 'student' && (
@@ -842,7 +895,6 @@ export default function App() {
                     </div>
                     <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots}/>
                 </Card>
-                {/* [Fix 2] Floating Action Button for Students */}
                 {studentSelectedSlots.length > 0 && (
                     <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
                         <Button 
@@ -895,26 +947,53 @@ export default function App() {
          <div className="flex border-b mb-4">
             {['ta','student','lecturer'].map(t=><button key={t} className={`flex-1 py-3 font-bold text-lg capitalize ${manageTab===t?'text-blue-600 border-b-4 border-blue-600':'text-gray-400'}`} onClick={()=>setManageTab(t)}>{t}</button>)}
          </div>
+         {/* [Fix 3] User Search & Edit UI */}
+         <div className="mb-4">
+             <div className="relative">
+                 <input placeholder="이름 또는 ID 검색" className="w-full border rounded-lg p-3 pl-10" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/>
+                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
+             </div>
+         </div>
          <div className="flex flex-col gap-3 mb-4 bg-gray-50 p-4 rounded-xl">
+             <div className="flex justify-between items-center mb-2"><span className="font-bold text-gray-700">{newUser.isEdit ? '계정 수정' : '신규 계정 추가'}</span>{newUser.isEdit && <button onClick={()=>setNewUser({name:'',userId:'',password:'',phone:'',subject:'',isEdit:false})} className="text-xs text-gray-500 underline">취소</button>}</div>
              <input placeholder="이름" className="border rounded-lg p-2" value={newUser.name} onChange={e=>setNewUser({...newUser,name:e.target.value})}/>
-             <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})}/>
+             <input placeholder="ID" className="border rounded-lg p-2" value={newUser.userId} onChange={e=>setNewUser({...newUser,userId:e.target.value})} disabled={newUser.isEdit}/>
              <input placeholder="PW" className="border rounded-lg p-2" value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/>
+             {manageTab === 'ta' && (
+                 <select className="border rounded-lg p-2" value={newUser.subject || ''} onChange={e=>setNewUser({...newUser,subject:e.target.value})}>
+                     <option value="">담당 과목 (선택)</option>
+                     {SUBJECTS.map(s=><option key={s} value={s}>{s}</option>)}
+                 </select>
+             )}
              <Button size="sm" onClick={async ()=>{ 
                  try {
-                     await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), {...newUser, role:manageTab}); 
-                     notify('추가 완료'); 
-                     setNewUser({name:'',userId:'',password:'',phone:''}); 
+                     if (newUser.isEdit) {
+                         const updateData = { name: newUser.name, password: newUser.password };
+                         if (manageTab === 'ta') updateData.subject = newUser.subject;
+                         await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', newUser.id), updateData);
+                         notify('수정 완료');
+                     } else {
+                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), {...newUser, role:manageTab}); 
+                         notify('추가 완료'); 
+                     }
+                     setNewUser({name:'',userId:'',password:'',phone:'',subject:'',isEdit:false}); 
                  } catch (e) {
                      console.error(e);
-                     notify('추가 실패: 권한이 부족합니다. DB 규칙을 확인하세요.', 'error');
+                     notify('오류 발생: 권한을 확인하세요.', 'error');
                  }
-             }}>추가하기</Button>
+             }}>{newUser.isEdit ? '수정하기' : '추가하기'}</Button>
          </div>
          <div className="max-h-[300px] overflow-auto divide-y">
-            {users.filter(u=>u.role===manageTab).map(u=>(
+            {users.filter(u=>u.role===manageTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery))).map(u=>(
                 <div key={u.id} className="flex justify-between p-3 items-center">
-                    <div><span className="font-bold">{u.name}</span> <span className="text-gray-400 text-sm">({u.userId})</span></div>
-                    <button onClick={()=>askConfirm("정말 이 계정을 삭제하시겠습니까?", async ()=>await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
+                    <div>
+                        <span className="font-bold">{u.name}</span> <span className="text-gray-400 text-sm">({u.userId})</span>
+                        {u.subject && <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">{u.subject}</span>}
+                    </div>
+                    <div className="flex gap-2">
+                        <button onClick={()=>handleAction('edit_user', u)} className="text-gray-400 hover:text-blue-600"><Edit2 size={18}/></button>
+                        <button onClick={()=>askConfirm("정말 이 계정을 삭제하시겠습니까?", async ()=>await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id)))} className="text-red-400 hover:text-red-600"><Trash2 size={18}/></button>
+                    </div>
                 </div>
             ))}
          </div>
