@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import YouTube from 'react-youtube';
-import { X, CheckCircle, Video } from 'lucide-react';
+import { X, CheckCircle, Video, BookOpen, PenTool, ChevronLeft, ChevronRight } from 'lucide-react';
 import { collection, doc, setDoc, onSnapshot, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card } from '../components/UI';
+import { Button, Card, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
+const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const getYouTubeID = (url) => {
     if(!url) return null;
@@ -14,17 +15,69 @@ const getYouTubeID = (url) => {
     return (match && match[2].length === 11) ? match[2] : null;
 };
 
+// --- Student Calendar ---
+const StudentCalendar = ({ lectures, selectedDate, onSelectDate }) => {
+    const [currentDate, setCurrentDate] = useState(new Date());
+
+    const getDays = () => {
+        const y = currentDate.getFullYear(), m = currentDate.getMonth();
+        const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
+        const days = [];
+        for (let i = 0; i < first.getDay(); i++) days.push(null);
+        for (let i = 1; i <= last.getDate(); i++) days.push(new Date(y, m, i));
+        return days;
+    };
+
+    return (
+        <Card className="p-4 md:p-6">
+            <div className="flex justify-between items-center mb-4">
+                <span className="font-bold text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth() + 1}월</span>
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() - 1)))} className="p-1 hover:bg-white rounded"><ChevronLeft size={20}/></button>
+                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() + 1)))} className="p-1 hover:bg-white rounded"><ChevronRight size={20}/></button>
+                </div>
+            </div>
+            <div className="grid grid-cols-7 text-center text-xs font-bold text-gray-400 mb-2">{DAYS.map(d => <div key={d}>{d}</div>)}</div>
+            <div className="grid grid-cols-7 gap-1">
+                {getDays().map((d, i) => {
+                    if (!d) return <div key={i} />;
+                    const dStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                    const dailyLectures = lectures.filter(l => l.date === dStr);
+                    const isSelected = dStr === selectedDate;
+                    
+                    return (
+                        <button key={i} onClick={() => onSelectDate(dStr)} 
+                            className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all 
+                            ${isSelected ? 'bg-blue-600 text-white shadow-md' : 'hover:bg-gray-50 text-gray-700'} 
+                            ${dailyLectures.length > 0 && !isSelected ? 'ring-1 ring-blue-100 bg-blue-50/50' : ''}`}>
+                            <span className="text-sm font-medium">{d.getDate()}</span>
+                            {dailyLectures.length > 0 && (
+                                <div className="flex gap-0.5 mt-1">
+                                    {dailyLectures.slice(0,3).map((_, idx) => <div key={idx} className={`w-1 h-1 rounded-full ${isSelected ? 'bg-white' : 'bg-blue-500'}`} />)}
+                                </div>
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+        </Card>
+    );
+};
+
 const StudentClassroom = ({ currentUser }) => {
     const [myClasses, setMyClasses] = useState([]);
     const [lectures, setLectures] = useState([]);
+    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedVideo, setSelectedVideo] = useState(null);
     const [completions, setCompletions] = useState([]);
 
+    // 1. 배정된 반 가져오기
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('studentIds', 'array-contains', currentUser.id));
         return onSnapshot(q, (s) => setMyClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     }, [currentUser]);
 
+    // 2. 해당 반들의 강의 목록 가져오기
     useEffect(() => {
         if (myClasses.length === 0) return;
         const classIds = myClasses.map(c => c.id);
@@ -32,12 +85,15 @@ const StudentClassroom = ({ currentUser }) => {
         return onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
     }, [myClasses]);
 
+    // 3. 내 수강 기록 가져오기
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('studentId', '==', currentUser.id));
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data().lectureId)));
     }, [currentUser]);
 
     const handleVideoEnd = async (lectureId) => {
+        if(completions.includes(lectureId)) return; // 이미 완료했다면 패스 (비용 절감)
+        
         const docId = `${lectureId}_${currentUser.id}`;
         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions', docId), {
             lectureId,
@@ -46,55 +102,84 @@ const StudentClassroom = ({ currentUser }) => {
             status: 'completed',
             completedAt: serverTimestamp()
         });
-        alert('학습 완료가 저장되었습니다!');
+        alert('🎉 학습을 완료했습니다!');
         setSelectedVideo(null);
     };
 
-    return (
-        <div className="space-y-6">
-            <h2 className="text-2xl font-bold text-gray-900">내 강의실</h2>
-            
-            <div className="space-y-4">
-                {lectures.map(lecture => {
-                    const cls = myClasses.find(c => c.id === lecture.classId);
-                    const isCompleted = completions.includes(lecture.id);
-                    const videoId = getYouTubeID(lecture.youtubeLink);
+    const dailyLectures = lectures.filter(l => l.date === selectedDate);
 
-                    return (
-                        <Card key={lecture.id} className={`border-l-4 ${isCompleted ? 'border-l-green-500' : 'border-l-gray-300'}`}>
-                            <div className="flex justify-between items-start mb-2">
-                                <div>
-                                    <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md mb-1 inline-block">{cls?.name}</span>
-                                    <div className="font-bold text-lg">{lecture.date} 수업</div>
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-1">
+                 <StudentCalendar lectures={lectures} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+                 <div className="mt-4 bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
+                    <p className="font-bold mb-1">💡 학습 안내</p>
+                    <p>날짜를 선택하면 해당 일자의 수업 내용과 숙제를 확인할 수 있습니다.</p>
+                 </div>
+            </div>
+            
+            <div className="lg:col-span-2 space-y-4">
+                <h3 className="font-bold text-xl text-gray-800 flex items-center gap-2">
+                    <span className="text-blue-600">{selectedDate.split('-')[2]}일</span> 수업 목록
+                </h3>
+                
+                {dailyLectures.length === 0 ? (
+                    <div className="text-center py-12 text-gray-400 bg-white rounded-2xl border border-gray-100 shadow-sm">
+                        수업 일정이 없습니다.
+                    </div>
+                ) : (
+                    dailyLectures.map(lecture => {
+                        const cls = myClasses.find(c => c.id === lecture.classId);
+                        const isCompleted = completions.includes(lecture.id);
+                        const videoId = getYouTubeID(lecture.youtubeLink);
+
+                        return (
+                            <Card key={lecture.id} className={`border-l-4 transition-all hover:shadow-md ${isCompleted ? 'border-l-green-500' : 'border-l-blue-500'}`}>
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md mb-2 inline-block">{cls?.name}</span>
+                                        <h4 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                                            {isCompleted ? <span className="text-green-600 flex items-center gap-1 text-sm bg-green-50 px-2 py-0.5 rounded-full"><CheckCircle size={14}/> 학습 완료</span> : <span className="text-red-500 text-sm bg-red-50 px-2 py-0.5 rounded-full">미완료</span>}
+                                        </h4>
+                                    </div>
                                 </div>
-                                {isCompleted ? (
-                                    <div className="flex items-center gap-1 text-green-600 font-bold text-sm"><CheckCircle size={16} /> 학습 완료</div>
+                                <div className="space-y-3 mb-5">
+                                    <div className="flex gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 shrink-0"><BookOpen size={16}/></div>
+                                        <div>
+                                            <div className="text-xs font-bold text-gray-400">진도</div>
+                                            <div className="text-gray-800 font-medium">{lecture.progress}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center text-purple-600 shrink-0"><PenTool size={16}/></div>
+                                        <div>
+                                            <div className="text-xs font-bold text-gray-400">숙제</div>
+                                            <div className="text-gray-800 font-medium">{lecture.homework}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {videoId ? (
+                                    <Button 
+                                        className={`w-full ${isCompleted ? 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50' : 'bg-blue-600 text-white hover:bg-blue-700'}`} 
+                                        icon={Video} 
+                                        onClick={() => setSelectedVideo({ id: videoId, lectureId: lecture.id })}
+                                    >
+                                        {isCompleted ? '다시 보기' : '영상 학습하기'}
+                                    </Button>
                                 ) : (
-                                    <span className="text-gray-400 text-sm font-medium">미완료</span>
+                                    <div className="w-full py-3 text-center text-gray-400 bg-gray-50 rounded-xl text-sm border border-gray-100">영상 없음</div>
                                 )}
-                            </div>
-                            <div className="space-y-2 mb-4 text-sm text-gray-700">
-                                <div className="bg-gray-50 p-3 rounded-lg"><span className="font-bold mr-2">진도:</span>{lecture.progress}</div>
-                                <div className="bg-purple-50 p-3 rounded-lg"><span className="font-bold mr-2">숙제:</span>{lecture.homework}</div>
-                            </div>
-                            {videoId && (
-                                <Button 
-                                    className={`w-full ${isCompleted ? 'bg-gray-100 text-gray-500 hover:bg-gray-200' : 'bg-red-600 text-white hover:bg-red-700'}`} 
-                                    icon={Video} 
-                                    onClick={() => setSelectedVideo({ id: videoId, lectureId: lecture.id })}
-                                >
-                                    {isCompleted ? '다시 보기' : '영상 학습하기'}
-                                </Button>
-                            )}
-                        </Card>
-                    );
-                })}
+                            </Card>
+                        );
+                    })
+                )}
             </div>
 
             {selectedVideo && (
-                <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col justify-center items-center p-4">
-                    <div className="w-full max-w-4xl aspect-video bg-black shadow-2xl relative">
-                        <button onClick={() => setSelectedVideo(null)} className="absolute -top-12 right-0 text-white p-2"><X size={32}/></button>
+                <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col justify-center items-center p-4 animate-in fade-in duration-200">
+                    <div className="w-full max-w-4xl aspect-video bg-black shadow-2xl relative rounded-2xl overflow-hidden">
+                        <button onClick={() => setSelectedVideo(null)} className="absolute top-4 right-4 text-white/80 hover:text-white p-2 bg-black/50 rounded-full backdrop-blur-sm transition-colors z-10"><X size={24}/></button>
                         <YouTube
                             videoId={selectedVideo.id}
                             opts={{ width: '100%', height: '100%', playerVars: { autoplay: 1 } }}
@@ -102,7 +187,7 @@ const StudentClassroom = ({ currentUser }) => {
                             onEnd={() => handleVideoEnd(selectedVideo.lectureId)}
                         />
                     </div>
-                    <p className="text-white mt-4 text-center">영상을 끝까지 시청하면 자동으로 완료 처리됩니다.</p>
+                    <p className="text-white/80 mt-6 text-center font-medium">영상을 끝까지 시청하면 자동으로 완료 처리됩니다.</p>
                 </div>
             )}
         </div>

@@ -6,14 +6,12 @@ import {
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
-// 수정된 부분: firebase.js에서 auth와 db를 가져옵니다.
 import { auth, db } from './firebase';
 import { Button, Card, Modal, LoadingSpinner } from './components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
 // Lazy Load Features (Code Splitting)
-// 주의: 아래 경로에 파일들이 실제로 존재해야 합니다.
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
