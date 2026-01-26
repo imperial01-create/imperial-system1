@@ -1,13 +1,16 @@
+// src/features/LectureManager.js
+
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, Calendar, X, ChevronLeft, ChevronRight } from 'lucide-react';
-import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs, getDoc } from 'firebase/firestore';
+// 필요한 아이콘과 Firestore 함수들을 모두 가져옵니다.
+import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Modal, Badge } from '../components/UI';
+import { Button, Card, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// --- Helper: Simple Calendar ---
+// --- Helper: Simple Calendar (기존 코드 유지) ---
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     
@@ -57,26 +60,55 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     );
 };
 
-// --- Admin Component ---
+// --- [수정됨] Admin Component ---
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    
+    // studentIds 초기값을 빈 배열로 명확히 지정
     const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
     const [studentSearch, setStudentSearch] = useState('');
+    const [isSaving, setIsSaving] = useState(false); // 저장 중 상태 추가
 
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
         return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     }, []);
 
+    // [핵심 수정] 에러 핸들링이 추가된 저장 함수
     const handleCreateClass = async () => {
-        if(!newClass.name) return alert('반 이름을 입력하세요');
-        if(!newClass.lecturerId) return alert('담당 강사를 선택하세요');
-        
-        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), {
-            ...newClass, createdAt: serverTimestamp()
-        });
-        setIsModalOpen(false); setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
+        // 1. 유효성 검사
+        if (!newClass.name.trim()) return alert('반 이름을 입력하세요.');
+        if (!newClass.lecturerId) return alert('담당 강사를 선택하세요.');
+        if (newClass.days.length === 0) return alert('수업 요일을 최소 하루 이상 선택하세요.');
+
+        setIsSaving(true); // 로딩 시작
+
+        try {
+            // 2. 데이터 준비 (undefined 방지)
+            const classData = {
+                name: newClass.name,
+                lecturerId: newClass.lecturerId,
+                days: newClass.days,
+                studentIds: newClass.studentIds || [], // 배열 보장
+                createdAt: serverTimestamp()
+            };
+
+            console.log("저장 시도 데이터:", classData); // 디버깅용 로그
+
+            // 3. Firestore 저장
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), classData);
+            
+            alert('반이 성공적으로 생성되었습니다.');
+            setIsModalOpen(false);
+            setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
+            
+        } catch (error) {
+            console.error("반 생성 실패:", error);
+            alert(`저장 중 오류가 발생했습니다.\n원인: ${error.message}`);
+        } finally {
+            setIsSaving(false); // 로딩 종료
+        }
     };
 
     const toggleArrayItem = (field, value) => {
@@ -143,14 +175,16 @@ export const AdminLectureManager = ({ users }) => {
                             })}
                         </div>
                     </div>
-                    <Button className="w-full" onClick={handleCreateClass}>저장하기</Button>
+                    <Button className="w-full" onClick={handleCreateClass} disabled={isSaving}>
+                        {isSaving ? '저장 중...' : '저장하기'}
+                    </Button>
                 </div>
             </Modal>
         </div>
     );
 };
 
-// --- Lecturer Component ---
+// --- Lecturer Component (기존 코드 유지) ---
 export const LecturerDashboard = ({ currentUser }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -178,19 +212,14 @@ export const LecturerDashboard = ({ currentUser }) => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsubLectures = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() }))));
         
-        // 학생 정보 조회 (수강 확인용)
         if (selectedClass.studentIds?.length > 0) {
-            // Firestore 'in' limit is 10, better to fetch all users and filter locally or use batch if many students
-            // Simplified: Fetch all users first (cached in App.js) or fetch specifically. 
-            // For efficiency here, we assume user data is available or we fetch explicitly.
-            // Let's just fetch relevant students for display.
             const fetchStudents = async () => {
-                // This part assumes we have a way to get student names. 
-                // In a real app with many students, we might need a better way.
-                // Here we simply query the users collection by IDs (chunked if needed)
                 const students = [];
-                // Simple workaround for demo: fetch all students and filter. 
-                // Production: Use 'in' queries with batches.
+                // Firestore 'in' 쿼리는 최대 10개 제한이 있으므로, 실제 서비스에서는 최적화 필요
+                // 여기서는 모든 학생을 가져와서 필터링하지 않고, 필요한 학생 데이터를 조회해야 함
+                // 하지만 현재 users collection을 props로 받지 않으므로, 직접 쿼리함.
+                // 성능 최적화를 위해선 App.js에서 users를 props로 내려주는게 좋음.
+                // 임시: users 컬렉션 전체 조회 후 필터링 (데이터가 적다는 가정)
                 const userQ = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('role', '==', 'student'));
                 const snap = await getDocs(userQ);
                 snap.forEach(d => {
@@ -206,11 +235,10 @@ export const LecturerDashboard = ({ currentUser }) => {
         return () => unsubLectures();
     }, [selectedClass]);
 
-    // 3. 수강 현황 조회 (해당 반의 모든 강의에 대한 완료 기록)
+    // 3. 수강 현황 조회
     useEffect(() => {
         if(!lectures.length) return;
-        // Optimization: Fetch completions only for displayed lectures or current view
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions')); // Broad for now, can be optimized
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'));
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
     }, [lectures]);
 
@@ -224,19 +252,24 @@ export const LecturerDashboard = ({ currentUser }) => {
             updatedAt: serverTimestamp()
         };
 
-        if (editingLecture.id) {
-            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', editingLecture.id), data);
-        } else {
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), data);
+        try {
+            if (editingLecture.id) {
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', editingLecture.id), data);
+            } else {
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), data);
+            }
+            alert('강의 내용이 저장되었습니다.');
+            setIsEditModalOpen(false);
+        } catch (error) {
+            console.error("강의 저장 실패:", error);
+            alert("저장 중 오류가 발생했습니다.");
         }
-        setIsEditModalOpen(false);
     };
 
     const currentLectures = lectures.filter(l => l.date === selectedDate);
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left: Class & Calendar */}
             <div className="space-y-6">
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <label className="block text-sm font-bold text-gray-500 mb-2">담당 반 선택</label>
@@ -247,7 +280,6 @@ export const LecturerDashboard = ({ currentUser }) => {
                 <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
             </div>
 
-            {/* Right: Lecture Details */}
             <div className="lg:col-span-2 space-y-4">
                 <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의 관리</h3>
@@ -266,8 +298,6 @@ export const LecturerDashboard = ({ currentUser }) => {
                                 </div>
                                 <button onClick={() => { setEditingLecture(lec); setIsEditModalOpen(true); }} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg"><Edit2 size={18}/></button>
                             </div>
-                            
-                            {/* 수강 현황 */}
                             <div>
                                 <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황</h5>
                                 <div className="flex flex-wrap gap-2">
