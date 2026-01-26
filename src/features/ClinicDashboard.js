@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
-  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search 
+  // [수정됨] ArrowRight, Eye 아이콘 추가
+  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, ArrowRight, Eye
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -63,8 +64,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
+    
+    // Check if user has selected this slot in other pending requests locally
+    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
+    
     return false;
   };
 
@@ -110,8 +114,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            
-            // [수정] isSlotPast 변수를 map 함수 내부 최상단에 선언하여 모든 분기에서 접근 가능하도록 수정
+            // [Bug Fix] isSlotPast 변수 선언 위치 확보 및 안정성 강화
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -553,6 +556,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
                     </div>
+                    {/* [Fix] Change sortedSessions to sessions */}
                     <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users}/>
                 </Card>
                 {studentSelectedSlots.length > 0 && (
@@ -570,7 +574,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
             </div>
         )}
 
-      {/* --- Modals --- */}
+      {/* --- Modals (Keep existing functionality, moved here) --- */}
       {confirmConfig && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">
