@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
+// [수정] Eye, ArrowRight 등 누락된 아이콘 모두 추가 (런타임 에러 방지)
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
-  // [수정됨] ArrowRight, Eye 아이콘 추가
-  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, ArrowRight, Eye
+  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight 
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -64,11 +64,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-    
-    // Check if user has selected this slot in other pending requests locally
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
-    
     return false;
   };
 
@@ -114,7 +111,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            // [Bug Fix] isSlotPast 변수 선언 위치 확보 및 안정성 강화
+            // [버그 수정] 변수 선언 위치 보장
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -130,6 +127,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
+                            {/* [버그 수정] isSlotPast가 올바르게 참조됨 */}
                             {((isTa || isAdmin) && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
@@ -219,7 +217,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                           <div className="flex flex-col gap-2 ml-2">
                             {isInteractive && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                            
+                            {/* [버그 수정] 철회 버튼의 onAction 페이로드를 명확히 지정 */}
                             {isInteractive && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
+                            
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
                           </div>
@@ -334,6 +335,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
         } else if (action === 'withdraw_add') {
+            // [버그 수정] 페이로드가 ID 스트링이므로 그대로 사용
             askConfirm("철회하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'approve_booking') {
             if (!payload.classroom) return notify('강의실을 배정해주세요.', 'error');
@@ -354,8 +356,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
              else if (payload.status === 'addition_requested') { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); notify('추가 요청 승인됨'); }
         } else if (action === 'send_feedback_msg') { 
              setSelectedSession(payload); setModalState({ type: 'message_preview_feedback' });
-        } else if (action === 'edit_user') { 
-             setNewUser({ ...payload, isEdit: true }); setModalState({ type: 'user_manage' }); 
         }
       } catch (e) { notify('오류: ' + e.message, 'error'); }
   };
@@ -574,7 +574,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
             </div>
         )}
 
-      {/* --- Modals (Keep existing functionality, moved here) --- */}
+      {/* --- Modals --- */}
       {confirmConfig && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">

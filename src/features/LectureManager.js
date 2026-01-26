@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+// [수정] CheckCircle, X, Loader 등 필요한 모든 아이콘 추가
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -57,11 +58,144 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     );
 };
 
-// --- Admin Component ---
+// --- Reusable Component: Lecture Management Panel ---
+// 관리자와 강사가 공통으로 사용하는 강의 관리 화면
+const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) => {
+    const [lectures, setLectures] = useState([]);
+    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+    const [editingLecture, setEditingLecture] = useState({ progress: '', homework: '', youtubeLinks: [''] });
+    const [completions, setCompletions] = useState([]);
+    const [studentsInClass, setStudentsInClass] = useState([]);
+
+    // 1. 강의 목록 및 학생 목록 조회
+    useEffect(() => {
+        if (!selectedClass) return;
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
+        const unsub = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
+        
+        if (selectedClass.studentIds?.length > 0 && users.length > 0) {
+            setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
+        } else {
+            setStudentsInClass([]);
+        }
+        return () => unsub();
+    }, [selectedClass, users]);
+
+    // 2. 수강 현황 조회
+    const currentLectures = lectures.filter(l => l.date === selectedDate);
+    useEffect(() => {
+        if (currentLectures.length === 0) {
+            setCompletions([]);
+            return;
+        }
+        const lectureIds = currentLectures.map(l => l.id);
+        // Firestore 'in' query limit is 10. Split if needed, but for daily view usually safe.
+        if(lectureIds.length > 10) { /* Handle batch if needed */ }
+        
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('lectureId', 'in', lectureIds));
+        return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
+    }, [selectedDate, lectures.length]); // lectures.length dep ensures update on add
+
+    const handleAddLink = () => setEditingLecture(p => ({ ...p, youtubeLinks: [...(p.youtubeLinks || []), ''] }));
+    const handleLinkChange = (i, v) => {
+        const n = [...(editingLecture.youtubeLinks || [''])];
+        n[i] = v;
+        setEditingLecture(p => ({ ...p, youtubeLinks: n }));
+    };
+    const handleRemoveLink = (i) => setEditingLecture(p => ({ ...p, youtubeLinks: p.youtubeLinks.filter((_, idx) => idx !== i) }));
+
+    const handleSave = async () => {
+        const validLinks = (editingLecture.youtubeLinks || []).filter(l => l.trim() !== '');
+        const data = {
+            classId: selectedClass.id,
+            date: editingLecture.date || selectedDate,
+            progress: editingLecture.progress,
+            homework: editingLecture.homework,
+            youtubeLinks: validLinks,
+            youtubeLink: validLinks[0] || '',
+            updatedAt: serverTimestamp()
+        };
+        try {
+            if (editingLecture.id) await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', editingLecture.id), data);
+            else await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), data);
+            setIsEditModalOpen(false);
+        } catch (e) { alert('Error: ' + e.message); }
+    };
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full animate-in fade-in">
+            <div className="space-y-6">
+                 {/* Calendar */}
+                 <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
+            </div>
+            
+            <div className="lg:col-span-2 space-y-4">
+                <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                    <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의</h3>
+                    <Button size="sm" icon={Plus} onClick={() => { setEditingLecture({ date: selectedDate, progress: '', homework: '', youtubeLinks: [''] }); setIsEditModalOpen(true); }}>강의 추가</Button>
+                </div>
+
+                {currentLectures.length === 0 ? <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed">등록된 강의 없음</div> : 
+                    currentLectures.map(lec => (
+                        <Card key={lec.id}>
+                            <div className="flex justify-between items-start mb-4 border-b pb-3">
+                                <div className="flex-1">
+                                    <div className="font-bold text-lg mb-1 flex items-center gap-2"><BookOpen size={18} className="text-blue-600"/> 진도</div>
+                                    <div className="whitespace-pre-wrap text-gray-800 mb-3 pl-2 border-l-2 border-blue-100">{lec.progress}</div>
+                                    <div className="font-bold text-lg mb-1 flex items-center gap-2"><PenTool size={18} className="text-purple-600"/> 숙제</div>
+                                    <div className="whitespace-pre-wrap text-gray-800 pl-2 border-l-2 border-purple-100">{lec.homework}</div>
+                                    {(lec.youtubeLinks || [lec.youtubeLink]).filter(Boolean).map((link, i) => (
+                                        <div key={i} className="mt-2 text-sm text-red-600 flex items-center gap-1 bg-red-50 w-fit px-2 py-1 rounded"><Video size={14}/> 영상 {i+1} 등록됨</div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-1">
+                                    <button onClick={() => { setEditingLecture({...lec, youtubeLinks: lec.youtubeLinks || (lec.youtubeLink ? [lec.youtubeLink] : [''])}); setIsEditModalOpen(true); }} className="p-2 bg-gray-50 rounded-lg text-gray-400 hover:text-blue-600"><Edit2 size={18}/></button>
+                                    <button onClick={async () => { if(window.confirm('삭제하시겠습니까?')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', lec.id)) }} className="p-2 bg-gray-50 rounded-lg text-gray-400 hover:text-red-600"><Trash2 size={18}/></button>
+                                </div>
+                            </div>
+                            <div>
+                                <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lec.id).length}/{studentsInClass.length})</h5>
+                                <div className="flex flex-wrap gap-2">
+                                    {studentsInClass.map(std => {
+                                        const isDone = completions.some(c => c.lectureId === lec.id && c.studentId === std.id);
+                                        return <span key={std.id} className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 ${isDone ? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-400'}`}>{std.name} {isDone && <CheckCircle size={10}/>}</span>
+                                    })}
+                                </div>
+                            </div>
+                        </Card>
+                    ))
+                }
+            </div>
+
+            <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 내용 수정">
+                <div className="space-y-4">
+                    <div><label className="text-xs font-bold text-gray-500">진도</label><textarea className="w-full border p-3 rounded-xl mt-1 h-20" value={editingLecture.progress} onChange={e => setEditingLecture({...editingLecture, progress: e.target.value})} /></div>
+                    <div><label className="text-xs font-bold text-gray-500">숙제</label><textarea className="w-full border p-3 rounded-xl mt-1 h-20" value={editingLecture.homework} onChange={e => setEditingLecture({...editingLecture, homework: e.target.value})} /></div>
+                    <div>
+                        <label className="text-xs font-bold text-gray-500 mb-1 flex justify-between">영상 링크 <button onClick={handleAddLink} className="text-blue-600">+추가</button></label>
+                        {editingLecture.youtubeLinks?.map((link, i) => (
+                            <div key={i} className="flex gap-2 mb-2">
+                                <input className="w-full border p-2 rounded-lg" value={link} onChange={e => handleLinkChange(i, e.target.value)} placeholder="https://youtu.be/..."/>
+                                {editingLecture.youtubeLinks.length > 1 && <button onClick={() => handleRemoveLink(i)} className="text-red-400"><X size={20}/></button>}
+                            </div>
+                        ))}
+                    </div>
+                    <Button className="w-full" onClick={handleSave}>저장하기</Button>
+                </div>
+            </Modal>
+        </div>
+    );
+};
+
+// --- Admin Unified Component ---
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
-    const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingClassId, setEditingClassId] = useState(null); 
+    const [selectedClass, setSelectedClass] = useState(null); // For Lecture Management
+    const [isClassModalOpen, setIsClassModalOpen] = useState(false);
+    
+    // Class Edit State
+    const [editingClassId, setEditingClassId] = useState(null);
     const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
     const [studentSearch, setStudentSearch] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -71,13 +205,14 @@ export const AdminLectureManager = ({ users }) => {
         return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     }, []);
 
-    const handleOpenCreate = () => {
+    const handleOpenCreateClass = () => {
         setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
         setEditingClassId(null);
-        setIsModalOpen(true);
+        setIsClassModalOpen(true);
     };
 
-    const handleOpenEdit = (cls) => {
+    const handleOpenEditClass = (e, cls) => {
+        e.stopPropagation(); // Prevent selecting the class for lecture view
         setNewClass({
             name: cls.name,
             days: cls.days || [],
@@ -85,141 +220,108 @@ export const AdminLectureManager = ({ users }) => {
             studentIds: cls.studentIds || []
         });
         setEditingClassId(cls.id);
-        setIsModalOpen(true);
+        setIsClassModalOpen(true);
     };
 
     const handleSaveClass = async () => {
         if (!newClass.name.trim()) return alert('반 이름을 입력하세요');
         if (!newClass.lecturerId) return alert('담당 강사를 선택하세요');
-        if (newClass.days.length === 0) return alert('수업 요일을 최소 하나 선택하세요');
-
+        
         setIsSaving(true);
         try {
-            const classPayload = {
-                name: newClass.name,
-                lecturerId: newClass.lecturerId,
-                days: newClass.days,
-                studentIds: newClass.studentIds || [],
-                updatedAt: serverTimestamp()
-            };
-
+            const payload = { ...newClass, updatedAt: serverTimestamp() };
             if (editingClassId) {
-                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), classPayload);
-                alert('반 정보가 수정되었습니다.');
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), payload);
             } else {
-                classPayload.createdAt = serverTimestamp();
-                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), classPayload);
-                alert('반이 생성되었습니다.');
+                payload.createdAt = serverTimestamp();
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
-            
-            setIsModalOpen(false);
-            setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
-            setEditingClassId(null);
-            setStudentSearch('');
-        } catch (error) {
-            console.error("Error saving class:", error);
-            alert(`저장 중 오류가 발생했습니다: ${error.message}`);
-        } finally {
-            setIsSaving(false);
-        }
+            setIsClassModalOpen(false);
+        } catch (e) { alert(e.message); } finally { setIsSaving(false); }
     };
 
     const toggleArrayItem = (field, value) => {
-        setNewClass(prev => ({
-            ...prev, [field]: prev[field].includes(value) ? prev[field].filter(v => v !== value) : [...prev[field], value]
-        }));
+        setNewClass(prev => ({ ...prev, [field]: prev[field].includes(value) ? prev[field].filter(v => v !== value) : [...prev[field], value] }));
     };
 
     return (
-        <div className="space-y-6 w-full">
-            <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-gray-900">반(Class) 관리</h2>
-                <Button onClick={handleOpenCreate} icon={Plus}>반 생성</Button>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
-                {classes.map(cls => (
-                    <Card key={cls.id} className="w-full">
-                        <div className="flex justify-between items-start mb-2">
-                            <h3 className="font-bold text-lg">{cls.name}</h3>
-                            <div className="flex gap-1">
-                                <button onClick={() => handleOpenEdit(cls)} className="p-1 text-gray-400 hover:text-blue-500 transition-colors"><Edit2 size={18}/></button>
-                                <button onClick={async () => { if(window.confirm('삭제 시 복구 불가합니다.')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+        <div className="space-y-8 w-full">
+            {/* 1. Class Management Section */}
+            <div>
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
+                    <Button onClick={handleOpenCreateClass} icon={Plus}>반 생성</Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
+                    {classes.map(cls => (
+                        <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                            <div className="flex justify-between items-start mb-2">
+                                <h3 className="font-bold text-lg">{cls.name}</h3>
+                                <div className="flex gap-1">
+                                    <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-1.5 hover:bg-gray-100 rounded text-gray-500"><Edit2 size={16}/></button>
+                                    <button onClick={async (e) => { e.stopPropagation(); if(window.confirm('삭제?')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', cls.id)) }} className="p-1.5 hover:bg-red-50 rounded text-red-400"><Trash2 size={16}/></button>
+                                </div>
                             </div>
+                            <div className="flex gap-1 mb-2 flex-wrap">
+                                {cls.days.map(d => <span key={d} className="bg-white border border-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{d}</span>)}
+                            </div>
+                            <div className="text-sm text-gray-500">강사: {users.find(u => u.id === cls.lecturerId)?.name}</div>
                         </div>
-                        <div className="flex gap-1 mb-3">
-                            {cls.days.map(d => <span key={d} className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-bold">{d}</span>)}
-                        </div>
-                        <div className="text-sm text-gray-500 flex items-center gap-1"><Users size={14}/> 학생 {cls.studentIds?.length || 0}명</div>
-                        <div className="text-sm text-gray-500 mt-1">강사: {users.find(u => u.id === cls.lecturerId)?.name || '미정'}</div>
-                    </Card>
-                ))}
+                    ))}
+                </div>
             </div>
 
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingClassId ? "클래스 수정" : "클래스 생성"}>
+            {/* 2. Lecture Management Section (Integrated) */}
+            {selectedClass ? (
+                <div className="border-t pt-8 animate-in slide-in-from-bottom-4">
+                    <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> {selectedClass.name} 강의 관리</h2>
+                    <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                </div>
+            ) : (
+                <div className="text-center py-12 bg-gray-50 rounded-2xl border border-dashed text-gray-400">
+                    관리할 반을 선택해주세요.
+                </div>
+            )}
+
+            {/* Create/Edit Class Modal */}
+            <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "반 수정" : "반 생성"}>
                 <div className="space-y-4">
-                    <input className="w-full border p-3 rounded-xl" placeholder="반 이름 (예: 고1 수학 A반)" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
-                    
+                    <input className="w-full border p-3 rounded-xl" placeholder="반 이름" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
                     <div>
-                        <label className="block text-sm font-bold text-gray-600 mb-2">담당 강사</label>
+                        <label className="text-xs font-bold text-gray-500">담당 강사</label>
                         <select className="w-full border p-3 rounded-xl bg-white" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
                             <option value="">선택</option>
-                            {users.filter(u => u.role === 'lecturer').map(l => (
-                                <option key={l.id} value={l.id}>{l.name}</option>
-                            ))}
+                            {users.filter(u => u.role === 'lecturer').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                         </select>
                     </div>
-
                     <div>
-                        <label className="block text-sm font-bold text-gray-600 mb-2">수업 요일</label>
-                        <div className="flex gap-2 flex-wrap">
-                            {DAYS.map(d => (
-                                <button key={d} onClick={() => toggleArrayItem('days', d)} className={`px-3 py-2 rounded-lg text-sm transition-colors ${newClass.days.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>{d}</button>
+                        <label className="text-xs font-bold text-gray-500 mb-1 block">요일</label>
+                        <div className="flex gap-2">{DAYS.map(d => <button key={d} onClick={() => toggleArrayItem('days', d)} className={`px-3 py-2 rounded-lg text-sm ${newClass.days.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{d}</button>)}</div>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-gray-500 mb-1 block">학생 배정</label>
+                        <input className="w-full border p-2 mb-2 rounded-lg text-sm" placeholder="이름 검색" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
+                        <div className="max-h-40 overflow-y-auto border rounded-xl divide-y">
+                            {users.filter(u => u.role === 'student' && u.name.includes(studentSearch)).map(u => (
+                                <div key={u.id} onClick={() => toggleArrayItem('studentIds', u.id)} className={`p-2 flex items-center cursor-pointer ${newClass.studentIds.includes(u.id) ? 'bg-blue-50' : ''}`}>
+                                    <div className={`w-4 h-4 border rounded mr-2 flex items-center justify-center ${newClass.studentIds.includes(u.id) ? 'bg-blue-600 border-blue-600' : ''}`}>{newClass.studentIds.includes(u.id) && <Check size={10} className="text-white"/>}</div>
+                                    <span className="text-sm">{u.name}</span>
+                                </div>
                             ))}
                         </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-bold text-gray-600 mb-2">학생 배정</label>
-                        <div className="relative mb-2">
-                             <input className="w-full border p-2 pl-8 rounded-lg text-sm" placeholder="학생 검색" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
-                             <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
-                        </div>
-
-                        <div className="max-h-40 overflow-y-auto border rounded-xl p-2 divide-y custom-scrollbar">
-                            {users.filter(u => u.role === 'student' && u.name.includes(studentSearch)).map(u => {
-                                const isSelected = newClass.studentIds.includes(u.id);
-                                return (
-                                    <div key={u.id} className={`flex items-center p-2 hover:bg-gray-50 cursor-pointer ${isSelected ? 'bg-blue-50' : ''}`} onClick={() => toggleArrayItem('studentIds', u.id)}>
-                                        <div className={`w-5 h-5 mr-3 rounded-full flex items-center justify-center border ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300'}`}>
-                                            {isSelected && <Check size={14} className="text-white" />}
-                                        </div>
-                                        <span>{u.name} ({u.userId})</span>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-                    <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>
-                        {isSaving ? <Loader className="animate-spin" /> : (editingClassId ? '수정하기' : '저장하기')}
-                    </Button>
+                    <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>{isSaving ? <Loader className="animate-spin"/> : '저장'}</Button>
                 </div>
             </Modal>
         </div>
     );
 };
 
-// --- Lecturer Component ---
+// --- Lecturer Component (Reusing Panel) ---
 export const LecturerDashboard = ({ currentUser, users }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
-    const [lectures, setLectures] = useState([]);
-    const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-    const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    const [editingLecture, setEditingLecture] = useState({ progress: '', homework: '', youtubeLinks: [''] });
-    const [completions, setCompletions] = useState([]);
-    const [studentsInClass, setStudentsInClass] = useState([]);
 
-    // 1. 담당 반 목록 조회
     useEffect(() => {
         if (!currentUser) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('lecturerId', '==', currentUser.id));
@@ -230,220 +332,20 @@ export const LecturerDashboard = ({ currentUser, users }) => {
         });
     }, [currentUser]);
 
-    // 2. 선택된 반의 강의 목록 조회 및 학생 목록 설정 (DB 호출 없이 메모리에서 처리)
-    useEffect(() => {
-        if (!selectedClass) return;
-        
-        // 강의 목록
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
-        const unsubLectures = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
-        
-        // 학생 목록 설정 (Optimized: No extra DB call)
-        if (selectedClass.studentIds?.length > 0 && users.length > 0) {
-            const filteredStudents = users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id));
-            setStudentsInClass(filteredStudents);
-        } else {
-            setStudentsInClass([]);
-        }
-
-        return () => unsubLectures();
-    }, [selectedClass, users]);
-
-    // 3. 수강 현황 조회 (Optimized: 선택된 날짜의 강의에 대해서만 조회)
-    const currentLectures = lectures.filter(l => l.date === selectedDate);
-    
-    useEffect(() => {
-        if (currentLectures.length === 0) {
-            setCompletions([]);
-            return;
-        }
-
-        const lectureIds = currentLectures.map(l => l.id);
-        const q = query(
-            collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), 
-            where('lectureId', 'in', lectureIds)
-        );
-        
-        return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
-    }, [selectedDate, lectures.length]); // lectures.length dependency ensures re-run if lectures update
-
-    const handleAddLink = () => {
-        setEditingLecture(prev => ({ ...prev, youtubeLinks: [...(prev.youtubeLinks || []), ''] }));
-    };
-
-    const handleLinkChange = (index, value) => {
-        const newLinks = [...(editingLecture.youtubeLinks || [''])];
-        newLinks[index] = value;
-        setEditingLecture(prev => ({ ...prev, youtubeLinks: newLinks }));
-    };
-
-    const handleRemoveLink = (index) => {
-        const newLinks = editingLecture.youtubeLinks.filter((_, i) => i !== index);
-        setEditingLecture(prev => ({ ...prev, youtubeLinks: newLinks }));
-    };
-
-    const handleOpenEdit = (lec) => {
-        let links = lec.youtubeLinks || [];
-        if (links.length === 0 && lec.youtubeLink) {
-            links = [lec.youtubeLink];
-        }
-        if (links.length === 0) links = [''];
-
-        setEditingLecture({
-            ...lec,
-            youtubeLinks: links
-        });
-        setIsEditModalOpen(true);
-    };
-
-    const handleOpenCreate = () => {
-        setEditingLecture({ date: selectedDate, progress: '', homework: '', youtubeLinks: [''] });
-        setIsEditModalOpen(true);
-    };
-
-    const handleSaveLecture = async () => {
-        const validLinks = (editingLecture.youtubeLinks || []).filter(link => link.trim() !== '');
-
-        const data = {
-            classId: selectedClass.id,
-            date: editingLecture.date || selectedDate,
-            progress: editingLecture.progress || '',
-            homework: editingLecture.homework || '',
-            youtubeLinks: validLinks, 
-            youtubeLink: validLinks.length > 0 ? validLinks[0] : '', 
-            updatedAt: serverTimestamp()
-        };
-
-        try {
-            if (editingLecture.id) {
-                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', editingLecture.id), data);
-            } else {
-                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), data);
-            }
-            setIsEditModalOpen(false);
-        } catch (e) {
-            alert('저장 실패: ' + e.message);
-        }
-    };
-
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
-            <div className="space-y-6 w-full">
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 w-full">
-                    <label className="block text-sm font-bold text-gray-500 mb-2">담당 반 선택</label>
-                    <select className="w-full p-3 border rounded-xl bg-gray-50 font-bold text-gray-800 outline-none" value={selectedClass?.id || ''} onChange={e => setSelectedClass(classes.find(c => c.id === e.target.value))}>
-                        {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                </div>
-                <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
+        <div className="space-y-6 w-full">
+            <div className="flex gap-2 overflow-x-auto pb-2">
+                {classes.map(c => (
+                    <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>
+                        {c.name}
+                    </button>
+                ))}
             </div>
-
-            <div className="lg:col-span-2 space-y-4 w-full">
-                <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
-                    <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의 관리</h3>
-                    <Button size="sm" icon={Plus} onClick={handleOpenCreate}>강의 추가</Button>
-                </div>
-
-                {currentLectures.length === 0 ? (
-                    <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200">등록된 강의가 없습니다.</div>
-                ) : (
-                    currentLectures.map(lec => (
-                        <Card key={lec.id} className="w-full">
-                            <div className="flex justify-between items-start mb-4 border-b pb-3">
-                                <div className="flex-1">
-                                    <div className="font-bold text-lg text-gray-900 mb-1 flex items-center gap-2">
-                                        <BookOpen size={18} className="text-blue-600"/> 
-                                        진도
-                                    </div>
-                                    <div className="whitespace-pre-wrap text-gray-800 mb-3 pl-1 border-l-2 border-blue-100">{lec.progress}</div>
-                                    
-                                    <div className="font-bold text-lg text-gray-900 mb-1 flex items-center gap-2">
-                                        <PenTool size={18} className="text-purple-600"/> 
-                                        숙제
-                                    </div>
-                                    <div className="whitespace-pre-wrap text-gray-800 pl-1 border-l-2 border-purple-100">{lec.homework}</div>
-                                    
-                                    {(lec.youtubeLinks && lec.youtubeLinks.length > 0) || lec.youtubeLink ? (
-                                        <div className="mt-3 flex flex-wrap gap-2">
-                                            {(lec.youtubeLinks || [lec.youtubeLink]).map((link, idx) => (
-                                                <a key={idx} href={link} target="_blank" rel="noreferrer" className="text-sm bg-red-50 text-red-600 px-3 py-1.5 rounded-lg font-medium hover:bg-red-100 transition-colors flex items-center gap-1">
-                                                    <Video size={14}/> 영상 {idx + 1}
-                                                </a>
-                                            ))}
-                                        </div>
-                                    ) : null}
-                                </div>
-                                <button onClick={() => handleOpenEdit(lec)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg ml-2"><Edit2 size={18}/></button>
-                            </div>
-                            
-                            <div>
-                                <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황</h5>
-                                <div className="flex flex-wrap gap-2">
-                                    {studentsInClass.map(std => {
-                                        const isDone = completions.some(c => c.lectureId === lec.id && c.studentId === std.id);
-                                        return (
-                                            <span key={std.id} className={`text-xs px-2 py-1 rounded-full border flex items-center gap-1 ${isDone ? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-400'}`}>
-                                                {std.name} {isDone && <CheckCircle size={10} strokeWidth={4}/>}
-                                            </span>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </Card>
-                    ))
-                )}
-            </div>
-
-            <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 정보 입력">
-                <div className="space-y-4">
-                    <div>
-                        <label className="text-xs font-bold text-gray-500">진도 내용</label>
-                        <textarea 
-                            className="w-full border p-3 rounded-xl mt-1 resize-none focus:ring-2 focus:ring-blue-200 outline-none" 
-                            rows={3} 
-                            value={editingLecture.progress || ''} 
-                            onChange={e => setEditingLecture({...editingLecture, progress: e.target.value})} 
-                            placeholder="예: 3단원 인수분해 완료 (엔터로 줄바꿈)"
-                        />
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-gray-500">숙제 내용</label>
-                        <textarea 
-                            className="w-full border p-3 rounded-xl mt-1 resize-none focus:ring-2 focus:ring-blue-200 outline-none" 
-                            rows={3} 
-                            value={editingLecture.homework || ''} 
-                            onChange={e => setEditingLecture({...editingLecture, homework: e.target.value})} 
-                            placeholder="예: p.30~45 문제풀이 (엔터로 줄바꿈)"
-                        />
-                    </div>
-                    
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 mb-1 flex justify-between items-center">
-                            유튜브 링크 
-                            <button onClick={handleAddLink} className="text-blue-600 hover:bg-blue-50 px-2 py-0.5 rounded text-xs transition-colors">+ 추가</button>
-                        </label>
-                        <div className="space-y-2">
-                            {(editingLecture.youtubeLinks || ['']).map((link, index) => (
-                                <div key={index} className="flex gap-2">
-                                    <input 
-                                        className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none" 
-                                        value={link} 
-                                        onChange={e => handleLinkChange(index, e.target.value)} 
-                                        placeholder="https://youtu.be/..."
-                                    />
-                                    {(editingLecture.youtubeLinks || []).length > 1 && (
-                                        <button onClick={() => handleRemoveLink(index)} className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors">
-                                            <X size={20}/>
-                                        </button>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    <Button className="w-full" onClick={handleSaveLecture}>저장하기</Button>
-                </div>
-            </Modal>
+            {selectedClass ? (
+                <LectureManagementPanel selectedClass={selectedClass} users={users} />
+            ) : (
+                <div className="text-center py-12 text-gray-500">담당하는 반이 없습니다.</div>
+            )}
         </div>
     );
 };

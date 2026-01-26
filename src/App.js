@@ -68,7 +68,8 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고<br/>피드백을 확인할 수 있습니다.</p>
                 </div>
                 {(currentUser.role === 'admin' || currentUser.role === 'lecturer' || currentUser.role === 'student') && (
-                    <div onClick={() => setActiveTab(currentUser.role === 'student' ? 'my_classes' : 'lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                    // [수정] 관리자는 lecture_mgmt, 강사는 lectures, 학생은 my_classes로 이동
+                    <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'lecture_mgmt' : (currentUser.role === 'student' ? 'my_classes' : 'lectures'))} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4"><div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'student' ? '내 강의실' : '강의 관리'}</h2></div>
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}</p>
                     </div>
@@ -143,7 +144,8 @@ export default function App() {
   const navItems = [
       { id: 'dashboard', label: '대시보드', icon: Home, roles: ['admin', 'ta', 'lecturer', 'student'] },
       { id: 'clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['admin', 'ta', 'lecturer', 'student'] },
-      { id: 'class_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
+      // [수정] 관리자의 강의 관리 탭 ID 변경 (class_mgmt -> lecture_mgmt)
+      { id: 'lecture_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
       { id: 'lectures', label: '강의 관리', icon: PenTool, roles: ['lecturer'] },
       { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student'] },
   ];
@@ -168,8 +170,9 @@ export default function App() {
                 <Suspense fallback={<LoadingSpinner />}>
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                     {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
-                    {activeTab === 'class_mgmt' && <AdminLectureManager users={users} />}
-                    {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />} {/* users props 추가됨 */}
+                    {/* [수정] 통합된 관리자 뷰 연결 */}
+                    {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
+                    {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                 </Suspense>
             </main>
