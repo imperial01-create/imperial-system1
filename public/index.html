@@ -20,6 +20,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" />
     
     <style>
+      /* 기본 설정 */
       body { font-family: 'Pretendard', sans-serif !important; margin: 0; padding: 0; background-color: #ffffff; }
       
       /* 스크롤바 커스텀 */
@@ -38,7 +39,6 @@
         align-items: center;
       }
 
-      /* 로딩 컨테이너가 화면 정중앙에 오도록 설정 */
       .loading-container {
         display: flex;
         flex-direction: column;
@@ -49,21 +49,10 @@
         max-width: 80%;
       }
 
-      /* 로고 이미지 스타일 (숨김 처리) */
-      .loading-logo {
-        display: none; /* 로고를 화면에서 숨김 */
-        width: 90px;
-        height: 90px;
-        margin-bottom: 30px;
-        border-radius: 20px;
-        /* 부드럽게 숨쉬는 듯한 애니메이션 */
-        animation: breathe 2s infinite ease-in-out;
-      }
-
       /* 텍스트 기본 스타일 (처음엔 안 보임) */
       .loading-text {
         opacity: 0;
-        transform: translateY(10px); /* 살짝 아래에서 위로 올라옴 */
+        transform: translateY(10px);
         animation: fadeInUp 0.8s ease-out forwards;
       }
 
@@ -71,7 +60,7 @@
       .text-step-1 {
         font-size: 1.2rem;
         font-weight: 700;
-        color: #111827; /* 진한 회색 */
+        color: #111827;
         margin-bottom: 15px;
         animation-delay: 0.2s;
       }
@@ -79,7 +68,7 @@
       /* 2. 로딩 지연 안내 (1.5초 뒤 등장) */
       .text-step-2 {
         font-size: 0.95rem;
-        color: #6b7280; /* 회색 */
+        color: #6b7280;
         margin-bottom: 5px;
         animation-delay: 1.5s;
         line-height: 1.5;
@@ -89,21 +78,15 @@
       .text-step-3 {
         font-size: 1.1rem;
         font-weight: 800;
-        color: #2563eb; /* 임페리얼 블루 */
+        color: #2563eb;
         animation-delay: 2.5s;
       }
 
-      /* 애니메이션 정의 */
       @keyframes fadeInUp {
         to {
           opacity: 1;
           transform: translateY(0);
         }
-      }
-
-      @keyframes breathe {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.05); }
       }
     </style>
   </head>
@@ -113,9 +96,6 @@
     <!-- React가 로드되기 전까지 이 내용이 보여집니다. -->
     <div id="root">
       <div class="loading-container">
-        <!-- 현재 설정된 앱 아이콘 사용 (숨김 처리됨) -->
-        <img src="%PUBLIC_URL%/logo192.png" alt="Imperial Logo" class="loading-logo" />
-        
         <!-- 순차적으로 뜨는 텍스트 -->
         <div class="loading-text text-step-1">
           임페리얼 시스템에 접속중입니다...

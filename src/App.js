@@ -5,13 +5,14 @@ import {
 
 // --- Firebase Libraries ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
   onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence, initializeFirestore, persistentLocalCache, persistentMultipleTabManager 
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
+// 주의: 실제 배포 시 환경 변수(process.env)를 사용하는 것이 보안상 좋습니다.
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
   authDomain: "imperial-system-1221c.firebaseapp.com",
@@ -213,15 +214,23 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTa = currentUser.role === 'ta';
   const now = new Date();
 
+  // [Helper] Check if student already booked/selected this time slot
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
+    
+    // 1. 이미 다른 조교에게 예약된 시간인지 확인 (Confirmed or Pending)
     const alreadyBooked = sessions.some(s => 
-        s.studentName === currentUser.name && s.date === selectedDateStr && s.startTime === time && 
+        s.studentName === currentUser.name && 
+        s.date === selectedDateStr && 
+        s.startTime === time && 
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
+
+    // 2. 현재 선택 목록에 같은 시간대가 있는지 확인 (다른 조교)
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
     if (selectedSessionTimes.includes(time)) return true;
+
     return false;
   };
 
@@ -244,10 +253,17 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
+            
             let hasEvent = false;
-            if (isStudent) { if (dStr >= getLocalToday()) hasEvent = sessions.some(s => s.date === dStr && s.status === 'open'); }
-            else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id); }
-            else { hasEvent = sessions.some(s => s.date === dStr); }
+            if (isStudent) {
+                 if (dStr >= getLocalToday()) {
+                    hasEvent = sessions.some(s => s.date === dStr && s.status === 'open');
+                 }
+            } else if (isTa) {
+                 hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id);
+            } else {
+                 hasEvent = sessions.some(s => s.date === dStr);
+            }
 
             return (
               <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
@@ -259,7 +275,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
       </Card>
 
-      {/* Schedule List Area (Mobile Optimized Layout) */}
+      {/* Schedule List Area */}
       <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto p-0 md:p-6 overflow-hidden">
         <div className="p-5 md:p-0 border-b md:border-none bg-white sticky top-0 z-10">
            <h3 className="font-bold text-xl flex items-center gap-2">
@@ -275,31 +291,30 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
                 if (availableSlots.length === 0) return null;
             }
+
             if (isLecturer && slots.length === 0) return null;
 
             if(slots.length === 0) {
                  return isInteractive ? (
-                    <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 group min-h-[80px]">
-                         {/* Time Label (Top on Mobile) */}
-                        <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
-                        <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
+                    <div key={i} className="flex gap-4 items-center group min-h-[80px]">
+                        <div className="w-14 text-right text-base font-bold text-gray-400 font-mono">{t}</div>
+                        <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
                             {((isTa || isAdmin) && new Date(`${selectedDateStr}T${t}`) >= now) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
-                    !isStudent ? <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start min-h-[60px] opacity-40">
-                         <div className="w-full md:w-14 text-left md:text-right text-sm font-bold text-gray-400 font-mono pl-1">{t}</div>
-                         <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm w-full">일정 없음</div>
+                    !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
+                         <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
+                         <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
                     </div> : null
                 );
             }
 
             return (
-              <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start">
-                {/* [Fix 1] Time Label: Top on Mobile, Left on Desktop */}
-                <div className="w-full md:w-14 text-left md:text-right text-lg md:text-base font-bold text-gray-800 md:text-gray-600 font-mono pl-1 mt-2 md:mt-4">{t}</div>
-                <div className="flex-1 space-y-3 w-full">
+              <div key={i} className="flex gap-3 md:gap-4 items-start">
+                <div className="w-14 pt-4 text-right text-base font-bold text-gray-600 font-mono whitespace-nowrap">{t}</div>
+                <div className="flex-1 space-y-3">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
@@ -316,31 +331,34 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
-                                <div className="flex flex-col">
-                                    <div className={`font-bold text-base md:text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {s.taSubject ? <span className="text-blue-600 mr-1">[{s.taSubject}]</span> : ''}
+                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                                <div className="flex-1 flex flex-col justify-center">
+                                    <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                        {taSubject ? <span className="text-blue-600 mr-1.5">[{taSubject}]</span> : ''}
                                         {s.taName} TA
                                     </div>
                                     <div className={`text-xs md:text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
                                         개별 클리닉
                                     </div>
                                 </div>
-                                <Button 
-                                    size="sm" 
-                                    variant={isSelected ? "selected" : "outline"}
-                                    onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
-                                    icon={isSelected ? Check : Plus}
-                                    disabled={isBlocked}
-                                >
-                                    {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
-                                </Button>
+                                <div className="ml-3">
+                                  <Button 
+                                      size="sm" 
+                                      variant={isSelected ? "selected" : "outline"}
+                                      onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
+                                      icon={isSelected ? Check : Plus}
+                                      disabled={isBlocked}
+                                  >
+                                      {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
+                                  </Button>
+                                </div>
                             </div>
                         );
                     }
 
+                    // Admin & TA & Lecturer View
                     return (
-                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all w-full ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
+                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -428,18 +446,25 @@ export default function App() {
   const sessions = useMemo(() => Object.values(sessionMap), [sessionMap]);
   const sortedSessions = useMemo(() => sessions.sort((a,b) => a.startTime.localeCompare(b.startTime)), [sessions]);
 
+  // Auth Init
   useEffect(() => {
     const initAuth = async () => {
       try {
-        await signInAnonymously(auth);
-      } catch (e) { console.error("Auth Error", e); }
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
+        else await signInAnonymously(auth);
+      } catch (e) { console.error(e); }
     };
     initAuth();
     return onAuthStateChanged(auth, setAuthUser);
   }, []);
 
+  // [Optimization] Data Sync Strategy (1: Users Cache)
   useEffect(() => {
     if (!authUser || !currentUser) return;
+    
+    // 강사(Lecturer)도 조교 정보를 알아야 과목을 표시할 수 있으므로 권한 추가 필요할 수 있음.
+    // 하지만 보안상 Admin만 User list를 봄.
+    // 차선책: Admin은 users를 가져오고 CalendarView에 prop으로 내림.
     
     if (currentUser.role === 'admin' || currentUser.role === 'lecturer') {
        const cachedUsers = localStorage.getItem('cached_users');
@@ -458,9 +483,11 @@ export default function App() {
     }
   }, [authUser, currentUser]);
 
+  // [Optimization] Data Sync Strategy (2: Sessions Sync)
   useEffect(() => {
     if (!authUser || !currentUser) return;
 
+    // Sessions Sync (All Roles, Unified Pipeline)
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth() + 1;
     const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
@@ -469,8 +496,9 @@ export default function App() {
     let sessionQuery;
     if (currentUser.role === 'student') {
         const today = getLocalToday();
-        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100));
+        sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(100)); // Limit for student
     } else {
+        // Admin, TA, Lecturer load month range
         sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
     }
 
@@ -484,12 +512,13 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false);
+      setAppLoading(false); // Ensure loading state is cleared for everyone
     });
 
     return () => unsubCalendar();
   }, [authUser, currentUser, currentDate]);
 
+  // Session Persistence logic
   useEffect(() => {
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
@@ -628,7 +657,8 @@ export default function App() {
                 setStudentSelectedSlots(p => [...p, s.id]);
             }
         } else if (action === 'add_request') {
-            const h = parseInt(payload.time.split(':')[0]);
+            // Replaced by handleTaAddRequest wrapper but keep logic here for consistency if called directly
+             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', // Subject added
