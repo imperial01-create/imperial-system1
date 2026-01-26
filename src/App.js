@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, EyeOff, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw
+  Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, AlertCircle, LogOut, Plus, X, Trash2, Settings, Edit2, Save, XCircle, PlusCircle, ClipboardList, Users, CheckSquare, BarChart2, AlertTriangle, Undo2, Eye, EyeOff, ChevronLeft, ChevronRight, Loader, PenTool, List, Bell, Send, Check, RefreshCw, ArrowRight
 } from 'lucide-react';
 
 // --- Firebase Libraries ---
@@ -8,7 +8,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, 
-  onSnapshot, writeBatch, query, where, getDocs, limit, initializeFirestore, persistentLocalCache, persistentMultipleTabManager 
+  onSnapshot, writeBatch, query, where, getDocs, limit, enableIndexedDbPersistence 
 } from 'firebase/firestore';
 
 // --- Firebase Configuration ---
@@ -21,12 +21,13 @@ const firebaseConfig = {
   appId: "1:414889692060:web:9b6b89d0d918a74f8c1659"
 };
 
-// Initialize Firebase with Persistence (Optimized)
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-});
+const db = getFirestore(app);
+
+// [Optimization] Offline Persistence
+try { enableIndexedDbPersistence(db).catch(() => {}); } catch(e) {}
 
 // --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
@@ -169,7 +170,6 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
         </div>
       </div>
 
-      {/* 로그인 실패 모달 */}
       <Modal isOpen={loginErrorModal.isOpen} onClose={() => setLoginErrorModal({ isOpen: false, msg: '' })} title="로그인 실패">
         <div className="flex flex-col items-center text-center space-y-4 pt-2">
           <div className="bg-red-50 p-4 rounded-full text-red-500 mb-2">
@@ -218,7 +218,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
     
-    // 1. 이미 다른 조교에게 예약된 시간인지 확인 (Confirmed or Pending)
     const alreadyBooked = sessions.some(s => 
         s.studentName === currentUser.name && 
         s.date === selectedDateStr && 
@@ -227,8 +226,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     );
     if (alreadyBooked) return true;
 
-    // 2. 현재 선택 목록에 같은 시간대가 있는지 확인 (다른 조교)
-    // 선택된 슬롯들의 ID를 기반으로 세션 정보를 찾아서 시간 비교
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime);
     if (selectedSessionTimes.includes(time)) return true;
 
@@ -267,8 +264,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             }
 
             return (
-              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
-                <span className={`text-base md:text-sm ${isSel?'font-bold':''}`}>{d.getDate()}</span>
+              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
+                <span className={`text-base md:text-lg ${isSel?'font-bold':''}`}>{d.getDate()}</span>
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-400'}`}/>}
               </button>
             );
@@ -286,7 +283,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            // [FIX] Define isSlotPast here before using it
             const isSlotPast = new Date(`${selectedDateStr}T${t}`) < now;
             
             if (isStudent) {
@@ -315,16 +311,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             return (
               <div key={i} className="flex gap-3 md:gap-4 items-start">
+                {/* [Fix 1] Time column */}
                 <div className="w-14 pt-4 text-right text-base font-bold text-gray-600 font-mono">{t}</div>
                 <div className="flex-1 space-y-3">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed';
                     const isSelected = selectedSlots.includes(s.id);
-                    
-                    // [Check] 동시간대 중복 신청 방지 로직
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
 
-                    // Student View: Inline Button
+                    // Student View
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
@@ -332,8 +327,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         return (
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div>
-                                    <div className={`font-bold text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>{s.startTime} ~ {s.endTime}</div>
-                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>{s.taName} 선생님</div>
+                                    {/* [Fix 1] Remove duplicate time display inside card */}
+                                    <div className={`font-bold text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>{s.taName} TA</div>
+                                    <div className={`text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>개별 클리닉</div>
                                 </div>
                                 <Button 
                                     size="sm" 
@@ -453,7 +449,6 @@ export default function App() {
        const cachedUsers = localStorage.getItem('cached_users');
        if (cachedUsers) setUsers(JSON.parse(cachedUsers));
        
-       // Use getDocs instead of onSnapshot for users to save reads, refresh manually or on load
        const fetchUsers = async () => {
          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
          const snapshot = await getDocs(q);
@@ -496,11 +491,19 @@ export default function App() {
           }));
           return { ...filteredPrev, ...newDocs };
       });
-      setAppLoading(false); // [Fix] Ensure loading state is cleared for everyone
+      setAppLoading(false); // Ensure loading state is cleared for everyone
     });
 
     return () => unsubCalendar();
   }, [authUser, currentUser, currentDate]);
+
+  // Session Persistence logic
+  useEffect(() => {
+    const savedUser = sessionStorage.getItem('imperial_user');
+    if (savedUser) {
+        setCurrentUser(JSON.parse(savedUser));
+    }
+  }, []);
 
   const notify = useCallback((msg, type = 'success') => {
     const id = Date.now();
@@ -526,6 +529,7 @@ export default function App() {
         
         if (!snapshot.empty) {
             const user = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
+            sessionStorage.setItem('imperial_user', JSON.stringify(user));
             setCurrentUser(user);
             notify(`${user.name}님 환영합니다!`);
         } else {
@@ -544,6 +548,14 @@ export default function App() {
             setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
         }
     } catch (e) { notify('로그인 오류', 'error'); } finally { setLoginProcessing(false); }
+  };
+
+  const handleLogout = () => {
+      sessionStorage.removeItem('imperial_user'); // 로그아웃 시 세션 정보 삭제
+      setCurrentUser(null);
+      setLoginForm({id:'',password:''});
+      setSessionMap({});
+      window.location.reload();
   };
 
   const handleSaveDefaultSchedule = async () => {
@@ -629,7 +641,7 @@ export default function App() {
         } else if (action === 'approve_booking') {
             if (!payload.classroom) return notify('강의실을 배정해주세요.', 'error');
             setModalState({ type: 'preview_confirm', data: payload });
-        } else if (action === 'cancel_booking_admin') { // [추가] 관리자 예약 취소 (초기화)
+        } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { 
                     status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system' 
@@ -676,14 +688,14 @@ export default function App() {
       <header className="bg-white border-b border-gray-100 px-6 py-4 flex justify-between items-center sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-3">
             <div className="bg-gradient-to-br from-blue-600 to-indigo-600 p-2 rounded-xl text-white shadow-lg shadow-blue-200"><CheckCircle size={20}/></div>
-            <h1 className="text-xl font-bold text-gray-900 tracking-tight hidden md:block">Imperial<span className="text-blue-600">Admin</span></h1>
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Imperial System</h1>
         </div>
         <div className="flex items-center gap-4">
-            <div className="text-right hidden sm:block">
+            <div className="text-right">
                 <div className="text-base font-bold text-gray-900">{currentUser.name}</div>
                 <div className="text-xs text-gray-500 uppercase font-medium tracking-wider">{currentUser.role}</div>
             </div>
-            <button onClick={() => window.location.reload()} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-xl transition-colors"><LogOut size={20}/></button>
+            <button onClick={handleLogout} className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-500 rounded-xl transition-colors"><LogOut size={20}/></button>
         </div>
       </header>
 
@@ -813,7 +825,7 @@ export default function App() {
                                         <Clock size={16} className="text-blue-500"/>
                                         <span className="font-medium">{s.startTime} ~ {s.endTime}</span>
                                         <span className="text-gray-300">|</span>
-                                        <span className="text-sm">{s.taName} 선생님</span>
+                                        <span className="text-sm">{s.taName} TA</span>
                                     </div>
                                     <div className="bg-gray-50 p-3 rounded-lg text-sm text-gray-600 border border-gray-100">
                                         <div className="flex gap-2 mb-1"><span className="font-bold text-gray-500 w-8 shrink-0">과목</span> <span>{s.topic}</span></div>
@@ -827,10 +839,22 @@ export default function App() {
                 <Card>
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
-                        {studentSelectedSlots.length > 0 && <Button size="sm" onClick={()=>setModalState({type:'student_apply'})}>{studentSelectedSlots.length}건 예약 진행</Button>}
                     </div>
                     <CalendarView isInteractive={false} sessions={sortedSessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots}/>
                 </Card>
+                {/* [Fix 2] Floating Action Button for Students */}
+                {studentSelectedSlots.length > 0 && (
+                    <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
+                        <Button 
+                            className="w-full max-w-md shadow-2xl bg-blue-600 hover:bg-blue-700 text-white border-none py-4 text-xl rounded-2xl flex items-center justify-center gap-3"
+                            onClick={()=>setModalState({type:'student_apply'})}
+                        >
+                            <span className="bg-white/20 px-3 py-1 rounded-lg text-base font-bold">{studentSelectedSlots.length}건</span>
+                            <span className="font-bold">예약 진행하기</span>
+                            <ArrowRight size={24} />
+                        </Button>
+                    </div>
+                )}
             </div>
         )}
       </main>
