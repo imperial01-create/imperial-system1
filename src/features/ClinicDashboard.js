@@ -539,6 +539,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청</h2>
                     </div>
+                    {/* [Fix] Change sortedSessions to sessions */}
                     <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users}/>
                 </Card>
                 {studentSelectedSlots.length > 0 && (
