@@ -4,7 +4,8 @@ import {
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search 
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot } from 'firebase/firestore';
+// [수정됨] limit 함수를 import 목록에 추가했습니다.
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
@@ -268,7 +269,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         let sessionQuery;
         if (currentUser.role === 'student') {
             const today = getLocalToday();
-            // 학생은 오늘 이후의 모든 세션을 가져옴 (limit 100)
             sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(200));
         } else {
             sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -284,7 +284,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
     }, [currentUser, currentDate]);
 
     useEffect(() => {
-        // [Safety Fix] 정렬 시 undefined 방지
         const sorted = Object.values(sessionMap).sort((a,b) => {
             const dateA = a.date || '';
             const dateB = b.date || '';
