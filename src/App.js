@@ -213,6 +213,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTa = currentUser.role === 'ta';
   const now = new Date();
 
+  // [Helper] Check if student already booked/selected this time slot
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
     
@@ -309,7 +310,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             return (
               <div key={i} className="flex gap-3 md:gap-4 items-center md:items-start">
-                {/* [Fix 3] 모바일 가독성: 시간 줄바꿈 방지 및 중앙 정렬 */}
                 <div className="w-14 text-right text-base font-bold text-gray-600 font-mono whitespace-nowrap">{t}</div>
                 <div className="flex-1 space-y-3">
                   {slots.map(s => {
@@ -323,33 +323,35 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         if (taUser) taSubject = taUser.subject;
                     }
 
-                    // Student View: Inline Button
+                    // Student View: Inline Button & Better Layout
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             // [Fix 3] 모바일에서 시간과 박스 가로 배치 (flex items-center 유지)
-                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
-                                <div className="flex flex-col">
-                                    <div className={`font-bold text-base md:text-lg ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {/* [Fix 2] 학생 뷰에서도 과목 표시 */}
-                                        {s.taSubject ? <span className="text-blue-600 mr-1">[{s.taSubject}]</span> : ''}
+                             // [Fix 3] Layout Improvement: Flex Row
+                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                                <div className="flex-1 flex flex-col justify-center">
+                                    <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                        {/* [Fix 2] 과목 표시 */}
+                                        {s.taSubject ? <span className="text-blue-600 mr-1.5">[{s.taSubject}]</span> : ''}
                                         {s.taName} TA
                                     </div>
                                     <div className={`text-xs md:text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
                                         개별 클리닉
                                     </div>
                                 </div>
-                                <Button 
-                                    size="sm" 
-                                    variant={isSelected ? "selected" : "outline"}
-                                    onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
-                                    icon={isSelected ? Check : Plus}
-                                    disabled={isBlocked}
-                                >
-                                    {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
-                                </Button>
+                                <div className="ml-3">
+                                  <Button 
+                                      size="sm" 
+                                      variant={isSelected ? "selected" : "outline"}
+                                      onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
+                                      icon={isSelected ? Check : Plus}
+                                      disabled={isBlocked}
+                                  >
+                                      {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
+                                  </Button>
+                                </div>
                             </div>
                         );
                     }
