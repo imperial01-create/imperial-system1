@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-// [수정] CheckCircle, X, Loader 등 필요한 모든 아이콘 추가
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -59,8 +58,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
 };
 
 // --- Reusable Component: Lecture Management Panel ---
-// 관리자와 강사가 공통으로 사용하는 강의 관리 화면
-const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) => {
+const LectureManagementPanel = ({ selectedClass, users }) => {
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -68,7 +66,6 @@ const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) =>
     const [completions, setCompletions] = useState([]);
     const [studentsInClass, setStudentsInClass] = useState([]);
 
-    // 1. 강의 목록 및 학생 목록 조회
     useEffect(() => {
         if (!selectedClass) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
@@ -82,20 +79,17 @@ const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) =>
         return () => unsub();
     }, [selectedClass, users]);
 
-    // 2. 수강 현황 조회
     const currentLectures = lectures.filter(l => l.date === selectedDate);
+    
     useEffect(() => {
         if (currentLectures.length === 0) {
             setCompletions([]);
             return;
         }
         const lectureIds = currentLectures.map(l => l.id);
-        // Firestore 'in' query limit is 10. Split if needed, but for daily view usually safe.
-        if(lectureIds.length > 10) { /* Handle batch if needed */ }
-        
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('lectureId', 'in', lectureIds));
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
-    }, [selectedDate, lectures.length]); // lectures.length dep ensures update on add
+    }, [selectedDate, lectures.length]);
 
     const handleAddLink = () => setEditingLecture(p => ({ ...p, youtubeLinks: [...(p.youtubeLinks || []), ''] }));
     const handleLinkChange = (i, v) => {
@@ -125,20 +119,19 @@ const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) =>
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full animate-in fade-in">
-            <div className="space-y-6">
-                 {/* Calendar */}
+            <div className="space-y-6 w-full">
                  <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
             </div>
             
-            <div className="lg:col-span-2 space-y-4">
-                <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+            <div className="lg:col-span-2 space-y-4 w-full">
+                <div className="flex justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 w-full">
                     <h3 className="font-bold text-xl text-gray-800">{selectedDate.split('-')[2]}일 강의</h3>
                     <Button size="sm" icon={Plus} onClick={() => { setEditingLecture({ date: selectedDate, progress: '', homework: '', youtubeLinks: [''] }); setIsEditModalOpen(true); }}>강의 추가</Button>
                 </div>
 
-                {currentLectures.length === 0 ? <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed">등록된 강의 없음</div> : 
+                {currentLectures.length === 0 ? <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200 w-full">등록된 강의 없음</div> : 
                     currentLectures.map(lec => (
-                        <Card key={lec.id}>
+                        <Card key={lec.id} className="w-full">
                             <div className="flex justify-between items-start mb-4 border-b pb-3">
                                 <div className="flex-1">
                                     <div className="font-bold text-lg mb-1 flex items-center gap-2"><BookOpen size={18} className="text-blue-600"/> 진도</div>
@@ -191,10 +184,8 @@ const LectureManagementPanel = ({ selectedClass, users, isReadOnly = false }) =>
 // --- Admin Unified Component ---
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
-    const [selectedClass, setSelectedClass] = useState(null); // For Lecture Management
+    const [selectedClass, setSelectedClass] = useState(null);
     const [isClassModalOpen, setIsClassModalOpen] = useState(false);
-    
-    // Class Edit State
     const [editingClassId, setEditingClassId] = useState(null);
     const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
     const [studentSearch, setStudentSearch] = useState('');
@@ -212,7 +203,7 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     const handleOpenEditClass = (e, cls) => {
-        e.stopPropagation(); // Prevent selecting the class for lecture view
+        e.stopPropagation();
         setNewClass({
             name: cls.name,
             days: cls.days || [],
@@ -245,7 +236,7 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-8 w-full">
+        <div className="space-y-8 w-full max-w-[1600px] mx-auto">
             {/* 1. Class Management Section */}
             <div>
                 <div className="flex justify-between items-center mb-4">
@@ -271,14 +262,14 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </div>
 
-            {/* 2. Lecture Management Section (Integrated) */}
+            {/* 2. Lecture Management Section */}
             {selectedClass ? (
-                <div className="border-t pt-8 animate-in slide-in-from-bottom-4">
+                <div className="border-t pt-8 animate-in slide-in-from-bottom-4 w-full">
                     <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> {selectedClass.name} 강의 관리</h2>
                     <LectureManagementPanel selectedClass={selectedClass} users={users} />
                 </div>
             ) : (
-                <div className="text-center py-12 bg-gray-50 rounded-2xl border border-dashed text-gray-400">
+                <div className="text-center py-12 bg-gray-50 rounded-2xl border border-dashed text-gray-400 w-full">
                     관리할 반을 선택해주세요.
                 </div>
             )}
@@ -317,7 +308,6 @@ export const AdminLectureManager = ({ users }) => {
     );
 };
 
-// --- Lecturer Component (Reusing Panel) ---
 export const LecturerDashboard = ({ currentUser, users }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -333,7 +323,7 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     }, [currentUser]);
 
     return (
-        <div className="space-y-6 w-full">
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto">
             <div className="flex gap-2 overflow-x-auto pb-2">
                 {classes.map(c => (
                     <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>

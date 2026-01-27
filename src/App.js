@@ -1,7 +1,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
-  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
@@ -16,6 +16,7 @@ const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
+const UserManager = React.lazy(() => import('./features/UserManager')); // [신규]
 
 // --- Login Component ---
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
@@ -67,11 +68,11 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                     <div className="flex items-center gap-4 mb-4"><div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div><h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2></div>
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고<br/>피드백을 확인할 수 있습니다.</p>
                 </div>
-                {(currentUser.role === 'admin' || currentUser.role === 'lecturer' || currentUser.role === 'student') && (
-                    // [수정] 관리자는 lecture_mgmt, 강사는 lectures, 학생은 my_classes로 이동
-                    <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'lecture_mgmt' : (currentUser.role === 'student' ? 'my_classes' : 'lectures'))} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4"><div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'student' ? '내 강의실' : '강의 관리'}</h2></div>
-                        <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}</p>
+                {/* [수정] 학부모(parent)도 강의실 접근 가능 (읽기 전용) */}
+                {(currentUser.role === 'admin' || currentUser.role === 'lecturer' || currentUser.role === 'student' || currentUser.role === 'parent') && (
+                    <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'lecture_mgmt' : (currentUser.role === 'student' || currentUser.role === 'parent' ? 'my_classes' : 'lectures'))} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4"><div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리'}</h2></div>
+                        <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' || currentUser.role === 'parent' ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}</p>
                     </div>
                 )}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -142,12 +143,12 @@ export default function App() {
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
   const navItems = [
-      { id: 'dashboard', label: '대시보드', icon: Home, roles: ['admin', 'ta', 'lecturer', 'student'] },
-      { id: 'clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['admin', 'ta', 'lecturer', 'student'] },
-      // [수정] 관리자의 강의 관리 탭 ID 변경 (class_mgmt -> lecture_mgmt)
+      { id: 'dashboard', label: '대시보드', icon: Home, roles: ['admin', 'ta', 'lecturer', 'student', 'parent'] },
+      { id: 'user_mgmt', label: '사용자 관리', icon: Users, roles: ['admin'] }, // [신규] 사용자 관리 메뉴
+      { id: 'clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['admin', 'ta', 'lecturer', 'student', 'parent'] },
       { id: 'lecture_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
       { id: 'lectures', label: '강의 관리', icon: PenTool, roles: ['lecturer'] },
-      { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student'] },
+      { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student', 'parent'] },
   ];
 
   return (
@@ -169,10 +170,12 @@ export default function App() {
             <main className="p-4 md:p-8 flex-1 overflow-y-auto">
                 <Suspense fallback={<LoadingSpinner />}>
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
+                    {activeTab === 'user_mgmt' && <UserManager currentUser={currentUser} />}
+                    {/* [수정] 학부모도 ClinicDashboard에 접근 가능 */}
                     {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
-                    {/* [수정] 통합된 관리자 뷰 연결 */}
                     {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
                     {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
+                    {/* [수정] 학부모도 StudentClassroom에 접근 가능 */}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                 </Suspense>
             </main>

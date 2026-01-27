@@ -71,11 +71,18 @@ const StudentClassroom = ({ currentUser }) => {
     const [selectedVideo, setSelectedVideo] = useState(null);
     const [completions, setCompletions] = useState([]);
 
-    useEffect(() => {
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('studentIds', 'array-contains', currentUser.id));
-        return onSnapshot(q, (s) => setMyClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    }, [currentUser]);
+    // [중요] 학부모일 경우 자녀 ID 사용
+    const targetStudentId = currentUser.role === 'parent' ? currentUser.childId : currentUser.id;
+    const isParent = currentUser.role === 'parent';
 
+    // 1. 배정된 반 가져오기 (타겟 학생 기준)
+    useEffect(() => {
+        if (!targetStudentId) return;
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('studentIds', 'array-contains', targetStudentId));
+        return onSnapshot(q, (s) => setMyClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    }, [targetStudentId]);
+
+    // 2. 해당 반들의 강의 목록 가져오기
     useEffect(() => {
         if (myClasses.length === 0) return;
         const classIds = myClasses.map(c => c.id);
@@ -85,9 +92,9 @@ const StudentClassroom = ({ currentUser }) => {
 
     const dailyLectures = lectures.filter(l => l.date === selectedDate);
 
-    // [Optimization] Fetch completions ONLY for the dailyLectures (current view)
+    // 3. 수강 기록 가져오기 (타겟 학생 기준)
     useEffect(() => {
-        if (dailyLectures.length === 0) {
+        if (dailyLectures.length === 0 || !targetStudentId) {
             setCompletions([]);
             return;
         }
@@ -95,14 +102,15 @@ const StudentClassroom = ({ currentUser }) => {
         const lectureIds = dailyLectures.map(l => l.id);
         const q = query(
             collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), 
-            where('studentId', '==', currentUser.id),
+            where('studentId', '==', targetStudentId),
             where('lectureId', 'in', lectureIds)
         );
         return onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data().lectureId)));
-    }, [selectedDate, lectures.length]); // Re-run when date or lectures change
+    }, [selectedDate, lectures.length, targetStudentId]);
 
     const handleVideoEnd = async (lectureId) => {
-        if(completions.includes(lectureId)) return; 
+        if (isParent) return; // 학부모는 시청 완료 처리 불가
+        if (completions.includes(lectureId)) return; 
         
         const docId = `${lectureId}_${currentUser.id}`;
         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions', docId), {
@@ -116,13 +124,17 @@ const StudentClassroom = ({ currentUser }) => {
         setSelectedVideo(null);
     };
 
+    if (isParent && !targetStudentId) {
+        return <div className="text-center py-20 text-gray-500">연결된 자녀 정보가 없습니다. 관리자에게 문의하세요.</div>;
+    }
+
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full animate-in fade-in">
             <div className="lg:col-span-1 space-y-4">
                  <StudentCalendar lectures={lectures} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
                  <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800 w-full">
-                    <p className="font-bold mb-1">💡 학습 안내</p>
-                    <p>날짜를 선택하면 해당 일자의 수업 내용과 숙제를 확인할 수 있습니다.</p>
+                    <p className="font-bold mb-1">💡 {isParent ? '자녀 학습 안내' : '학습 안내'}</p>
+                    <p>날짜를 선택하면 {isParent ? '자녀의' : ''} 수업 내용과 숙제를 확인할 수 있습니다.</p>
                  </div>
             </div>
             
@@ -182,7 +194,7 @@ const StudentClassroom = ({ currentUser }) => {
                                                     icon={Video} 
                                                     onClick={() => setSelectedVideo({ id: videoId, lectureId: lecture.id })}
                                                 >
-                                                    {isCompleted ? `다시 보기 (영상 ${idx + 1})` : `영상 ${idx + 1} 학습하기`}
+                                                    {isParent ? `영상 ${idx+1} 보기 (학부모 모드)` : (isCompleted ? `다시 보기 (영상 ${idx + 1})` : `영상 ${idx + 1} 학습하기`)}
                                                 </Button>
                                             );
                                         })
@@ -204,10 +216,12 @@ const StudentClassroom = ({ currentUser }) => {
                             videoId={selectedVideo.id}
                             opts={{ width: '100%', height: '100%', playerVars: { autoplay: 1 } }}
                             className="w-full h-full"
-                            onEnd={() => handleVideoEnd(selectedVideo.lectureId)}
+                            onEnd={() => !isParent && handleVideoEnd(selectedVideo.lectureId)}
                         />
                     </div>
-                    <p className="text-white/80 mt-6 text-center font-medium">영상을 끝까지 시청하면 자동으로 완료 처리됩니다.</p>
+                    <p className="text-white/80 mt-6 text-center font-medium">
+                        {isParent ? '학부모 모드: 시청 기록이 저장되지 않습니다.' : '영상을 끝까지 시청하면 자동으로 완료 처리됩니다.'}
+                    </p>
                 </div>
             )}
         </div>
