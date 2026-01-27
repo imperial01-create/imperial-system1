@@ -129,13 +129,14 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
-            <div className="flex justify-between items-center">
+        // [UI 개선] w-full 및 overflow-x-hidden으로 전체 레이아웃 보호
+        <div className="space-y-6 w-full overflow-x-hidden animate-in fade-in">
+            <div className="flex justify-between items-center px-1">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus}>사용자 추가</Button>
             </div>
 
-            <div className="flex border-b border-gray-200 bg-white rounded-t-xl overflow-hidden">
+            <div className="flex border-b border-gray-200 bg-white rounded-t-xl overflow-hidden w-full">
                 {['student', 'parent', 'ta', 'lecturer'].map(role => (
                     <button 
                         key={role}
@@ -150,7 +151,7 @@ const UserManager = ({ currentUser }) => {
                 ))}
             </div>
 
-            <Card className="min-h-[500px] overflow-hidden">
+            <Card className="min-h-[500px] overflow-hidden w-full">
                 <div className="mb-4 relative">
                     <input 
                         className="w-full border p-3 pl-10 rounded-xl bg-gray-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-blue-100" 
@@ -161,19 +162,19 @@ const UserManager = ({ currentUser }) => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
-                {/* [UI 개선] 모바일 가로 스크롤 및 고정 너비 적용 */}
-                <div className="overflow-x-auto w-full">
+                {/* [UI 개선] 모바일 가로 스크롤 허용 (테이블 짤림 방지) */}
+                <div className="overflow-x-auto w-full pb-4">
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
                             <tr className="border-b border-gray-100 text-gray-500 text-sm">
-                                <th className="p-4 w-[15%]">이름</th>
-                                <th className="p-4 w-[20%]">아이디</th>
-                                <th className="p-4 w-[20%]">비밀번호</th>
-                                <th className="p-4 w-[20%]">전화번호</th>
-                                <th className="p-4 w-[15%]">
+                                <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
+                                <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
+                                <th className="p-4 w-[20%] whitespace-nowrap">비밀번호</th>
+                                <th className="p-4 w-[20%] whitespace-nowrap">전화번호</th>
+                                <th className="p-4 w-[15%] whitespace-nowrap">
                                     {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '비고')}
                                 </th>
-                                <th className="p-4 w-[10%] text-right">관리</th>
+                                <th className="p-4 w-[10%] text-right whitespace-nowrap">관리</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">

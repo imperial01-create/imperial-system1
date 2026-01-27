@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 아이콘 및 라이브러리 완벽 확인 (Runtime Error 방지)
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -34,6 +34,7 @@ const getDaysInMonth = (d) => {
   for (let i = 1; i <= last.getDate(); i++) days.push(new Date(y, m, i));
   return days;
 };
+// [통계 수정용] 주차 계산 로직 보완
 const getWeekOfMonth = (date) => {
     const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
     const dayOfWeek = firstDay.getDay();
@@ -113,6 +114,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
             
+            // [방어적 코딩] 변수 스코프 확보
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -196,7 +198,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {taSubject && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
-                            {(isAdmin || isLecturer) && s.studentName && (
+                            {/* [수정 1] 조교(isTa)도 학생 신청 정보 볼 수 있도록 조건 추가 */}
+                            {(isAdmin || isLecturer || isTa) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
@@ -404,7 +407,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
   const pendingBookings = sessions.filter(s => s.status === 'pending');
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
-  // 학부모인 경우 자녀 이름으로 필터링
   const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
   const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
@@ -420,9 +422,8 @@ const ClinicDashboard = ({ currentUser, users }) => {
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
                   <h2 className="text-2xl font-bold text-gray-900">관리자 대시보드</h2>
-                  {/* [수정] 사용자 관리 버튼 삭제 (이제 메뉴에서 접근) */}
                   <div className="flex gap-2">
-                      <Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'stats'})}>통계</Button>
+                      <Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'admin_stats'})}>통계</Button>
                   </div>
               </div>
               <Card className="border-purple-200 bg-purple-50/30 w-full">
@@ -525,7 +526,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={()=>{}} users={users}/>
            </div>
        )}
-       {/* [수정] 학부모 또는 학생일 경우 예약 현황 표시 */}
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full">
@@ -557,7 +557,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-xl font-bold">클리닉 신청 (조회)</h2>
                     </div>
-                    {/* 학부모는 isInteractive=false로 주어 클릭 방지 처리도 가능하지만, 요구사항상 '신청 기능만 제외한 열람'이므로 interactive하게 두되 버튼을 비활성화하거나 액션을 막음 */}
                     <CalendarView 
                         isInteractive={currentUser.role === 'student'} 
                         sessions={sessions} 
@@ -599,7 +598,8 @@ const ClinicDashboard = ({ currentUser, users }) => {
       <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
-      {/* [수정] 통계 모달 로직 강화 */}
+      
+      {/* [수정 2] 통계 모달 로직 강화 (날짜 비교 오류 수정) */}
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
           <div className="space-y-6">
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl">
