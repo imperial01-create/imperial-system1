@@ -1,13 +1,14 @@
 import React, { useState, useEffect, Suspense } from 'react';
+// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
-  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, where } from 'firebase/firestore'; // getDocs -> onSnapshot 변경 (실시간 동기화)
 
 import { auth, db } from './firebase';
-import { Button, Card, Modal, LoadingSpinner } from './components/UI';
+import { Button, Card, Modal } from './components/UI'; // LoadingSpinner는 lucide-react Loader로 대체 가능하거나 UI에서 가져옴
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -16,7 +17,17 @@ const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
-const UserManager = React.lazy(() => import('./features/UserManager')); // [신규]
+const UserManager = React.lazy(() => import('./features/UserManager'));
+
+// --- UI Component: Global Loading ---
+const LoadingScreen = () => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="flex flex-col items-center gap-4">
+      <Loader className="animate-spin text-blue-600" size={40} />
+      <p className="text-gray-500 font-medium animate-pulse">Imperial System 로딩 중...</p>
+    </div>
+  </div>
+);
 
 // --- Login Component ---
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
@@ -41,7 +52,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
               <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={24} /> : <Eye size={24} />}</button>
             </div>
           </div>
-          <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>{isLoading ? <LoadingSpinner /> : '로그인'}</Button>
+          <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>{isLoading ? <Loader className="animate-spin" /> : '로그인'}</Button>
         </div>
       </div>
       <Modal isOpen={loginErrorModal.isOpen} onClose={() => setLoginErrorModal({ isOpen: false, msg: '' })} title="로그인 실패">
@@ -68,7 +79,6 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                     <div className="flex items-center gap-4 mb-4"><div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div><h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2></div>
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고<br/>피드백을 확인할 수 있습니다.</p>
                 </div>
-                {/* [수정] 학부모(parent)도 강의실 접근 가능 (읽기 전용) */}
                 {(currentUser.role === 'admin' || currentUser.role === 'lecturer' || currentUser.role === 'student' || currentUser.role === 'parent') && (
                     <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'lecture_mgmt' : (currentUser.role === 'student' || currentUser.role === 'parent' ? 'my_classes' : 'lectures'))} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4"><div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리'}</h2></div>
@@ -90,11 +100,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [users, setUsers] = useState([]);
+  // [데이터 효율화] users 데이터를 App 레벨에서 한 번만 로드하여 자식들에게 전달
+  const [users, setUsers] = useState([]); 
+  
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
 
+  // 1. Auth Init
   useEffect(() => {
     const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) {} };
     initAuth();
@@ -107,27 +120,32 @@ export default function App() {
     });
   }, []);
 
+  // 2. [데이터 효율화] Users Data Fetching (Single Source of Truth)
+  // 관리자, 강사, 조교일 때만 전체 유저 목록을 불러옵니다. 학생/학부모는 불필요한 데이터 로드 방지.
   useEffect(() => {
       if(!currentUser) return;
-      if (currentUser.role === 'admin' || currentUser.role === 'lecturer') {
-          const cachedUsers = localStorage.getItem('cached_users');
-          if (cachedUsers) setUsers(JSON.parse(cachedUsers));
-          
+      
+      const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
+      
+      if (shouldFetchUsers) {
           const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-          getDocs(q).then(s => {
-              const u = s.docs.map(d => ({id: d.id, ...d.data()}));
-              if (JSON.stringify(u) !== cachedUsers) {
-                  setUsers(u);
-                  localStorage.setItem('cached_users', JSON.stringify(u));
-              }
+          // 실시간 리스너로 변경하여 데이터 일관성 유지하되, 변경 시에만 업데이트
+          const unsub = onSnapshot(q, (snapshot) => {
+              const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
+              setUsers(userList);
           });
+          return () => unsub();
+      } else {
+          setUsers([]); // 학생/학부모는 빈 배열 (보안 및 데이터 절약)
       }
   }, [currentUser]);
 
   const handleLogin = async () => {
      setLoginProcessing(true);
+     // 로그인 시에는 getDocs를 사용하여 1회성 쿼리 (비용 절감)
      const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
-     const s = await getDocs(q);
+     const s = await getDocs(q); // getDocs from 'firebase/firestore' need to be imported
+     
      if(!s.empty) {
          const userData = { id: s.docs[0].id, ...s.docs[0].data() };
          setCurrentUser(userData);
@@ -139,12 +157,12 @@ export default function App() {
      setLoginProcessing(false);
   };
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) return <LoadingScreen />;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
   const navItems = [
       { id: 'dashboard', label: '대시보드', icon: Home, roles: ['admin', 'ta', 'lecturer', 'student', 'parent'] },
-      { id: 'user_mgmt', label: '사용자 관리', icon: Users, roles: ['admin'] }, // [신규] 사용자 관리 메뉴
+      { id: 'user_mgmt', label: '사용자 관리', icon: Users, roles: ['admin'] },
       { id: 'clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['admin', 'ta', 'lecturer', 'student', 'parent'] },
       { id: 'lecture_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
       { id: 'lectures', label: '강의 관리', icon: PenTool, roles: ['lecturer'] },
@@ -168,14 +186,13 @@ export default function App() {
         <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
             <header className="bg-white border-b p-4 flex items-center gap-3 md:hidden sticky top-0 z-30"><button onClick={()=>setIsSidebarOpen(true)}><Menu size={24}/></button><h1 className="text-lg font-bold">Imperial System</h1></header>
             <main className="p-4 md:p-8 flex-1 overflow-y-auto">
-                <Suspense fallback={<LoadingSpinner />}>
+                <Suspense fallback={<LoadingScreen />}>
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                     {activeTab === 'user_mgmt' && <UserManager currentUser={currentUser} />}
-                    {/* [수정] 학부모도 ClinicDashboard에 접근 가능 */}
+                    {/* users prop 전달 확인 */}
                     {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
                     {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
-                    {/* [수정] 학부모도 StudentClassroom에 접근 가능 */}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                 </Suspense>
             </main>

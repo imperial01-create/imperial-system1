@@ -1,15 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인 (Runtime Error 방지)
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
-  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight 
+  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader 
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
+import { Button, Card, Badge, Modal } from '../components/UI';
 
-// --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -18,7 +16,6 @@ const TEMPLATES = {
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
 };
 
-// --- Helper Functions ---
 const getLocalToday = () => {
   const d = new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -34,14 +31,12 @@ const getDaysInMonth = (d) => {
   for (let i = 1; i <= last.getDate(); i++) days.push(new Date(y, m, i));
   return days;
 };
-// [통계 수정용] 주차 계산 로직 보완
 const getWeekOfMonth = (date) => {
     const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
     const dayOfWeek = firstDay.getDay();
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// --- Calendar Sub-Component ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
@@ -65,7 +60,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
-    
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
     return false;
@@ -113,8 +107,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            
-            // [방어적 코딩] 변수 스코프 확보
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -198,7 +190,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {taSubject && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
-                            {/* [수정 1] 조교(isTa)도 학생 신청 정보 볼 수 있도록 조건 추가 */}
                             {(isAdmin || isLecturer || isTa) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
@@ -208,7 +199,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none bg-white ${!s.classroom ? 'border-red-300 text-red-700' : 'border-gray-200'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
+                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}>
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
@@ -238,7 +229,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   );
 });
 
-// --- Main Clinic Dashboard ---
 const ClinicDashboard = ({ currentUser, users }) => {
     const [sessionMap, setSessionMap] = useState({});
     const [sessions, setSessions] = useState([]);
@@ -276,10 +266,19 @@ const ClinicDashboard = ({ currentUser, users }) => {
             sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
         }
 
-        const unsub = onSnapshot(sessionQuery, (s) => {
-            const newDocs = {};
-            s.docs.forEach(d => { newDocs[d.id] = { id: d.id, ...d.data() }; });
-            setSessionMap(prev => ({ ...prev, ...newDocs }));
+        const unsub = onSnapshot(sessionQuery, (snapshot) => {
+            setSessionMap(prev => {
+                const next = { ...prev };
+                snapshot.docChanges().forEach(change => {
+                    if (change.type === 'added' || change.type === 'modified') {
+                        next[change.doc.id] = { id: change.doc.id, ...change.doc.data() };
+                    }
+                    if (change.type === 'removed') {
+                        delete next[change.doc.id];
+                    }
+                });
+                return next;
+            });
             setAppLoading(false);
         });
         return () => unsub();
@@ -337,11 +336,11 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'withdraw_add') {
             askConfirm("철회하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'approve_booking') {
-            if (!payload.classroom) return notify('강의실을 배정해주세요.', 'error');
+            // 강의실 미배정이어도 일단 모달 띄우고 모달에서 승인 시 강의실 체크
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system' });
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' });
                 notify('예약 신청이 취소되었습니다.');
             });
         } else if (action === 'update_classroom') {
@@ -355,8 +354,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
              else if (payload.status === 'addition_requested') { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); notify('추가 요청 승인됨'); }
         } else if (action === 'send_feedback_msg') { 
              setSelectedSession(payload); setModalState({ type: 'message_preview_feedback' });
-        } else if (action === 'edit_user') { 
-             setNewUser({ ...payload, isEdit: true }); setModalState({ type: 'user_manage' }); 
         }
       } catch (e) { notify('오류: ' + e.message, 'error'); }
   };
@@ -410,7 +407,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
   const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
   const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
-  if (appLoading) return <LoadingSpinner />;
+  if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
   return (
     <div className="space-y-6 w-full">
@@ -480,9 +477,19 @@ const ClinicDashboard = ({ currentUser, users }) => {
                                         <div className="font-bold text-xs text-green-700 mb-0.5">신청 상세</div>
                                         <div className="whitespace-pre-wrap">{s.topic} / {s.questionRange}</div>
                                     </div>
+                                    <div className="mt-2">
+                                        <select 
+                                            className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
+                                            value={s.classroom || ''} 
+                                            onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}
+                                        >
+                                            <option value="">강의실 미배정 (선택 필수)</option>
+                                            {CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                                        </select>
+                                    </div>
                                 </div>
                                 <div className="ml-2 flex flex-col gap-2">
-                                    <Button size="sm" onClick={()=>handleAction('approve_booking', s)}>승인</Button>
+                                    <Button size="sm" onClick={()=>handleAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>
                                     <Button size="sm" variant="danger" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
                                 </div>
                             </div>
@@ -585,21 +592,10 @@ const ClinicDashboard = ({ currentUser, users }) => {
             </div>
         )}
 
-      {/* --- Modals --- */}
-      {confirmConfig && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">
-                <h3 className="text-lg font-bold text-gray-900 mb-2">확인</h3><p className="text-gray-600 mb-6">{confirmConfig.message}</p>
-                <div className="flex gap-3"><Button variant="secondary" className="flex-1" onClick={() => setConfirmConfig(null)}>취소</Button><Button className="flex-1" onClick={() => { confirmConfig.onConfirm(); setConfirmConfig(null); }}>확인</Button></div>
-            </div>
-        </div>
-      )}
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 취소"><textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/><Button onClick={async()=>{ if(!requestData.reason) return notify('사유입력','error'); await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); setModalState({type:null}); notify('요청완료'); }} className="w-full py-4 text-lg">요청 전송</Button></Modal>
       <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
-      
-      {/* [수정 2] 통계 모달 로직 강화 (날짜 비교 오류 수정) */}
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
           <div className="space-y-6">
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl">

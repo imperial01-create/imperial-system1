@@ -129,8 +129,7 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        // [UI 개선] w-full 및 overflow-x-hidden으로 전체 레이아웃 보호
-        <div className="space-y-6 w-full overflow-x-hidden animate-in fade-in">
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
             <div className="flex justify-between items-center px-1">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus}>사용자 추가</Button>
@@ -162,7 +161,6 @@ const UserManager = ({ currentUser }) => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
-                {/* [UI 개선] 모바일 가로 스크롤 허용 (테이블 짤림 방지) */}
                 <div className="overflow-x-auto w-full pb-4">
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
