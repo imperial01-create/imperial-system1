@@ -1,18 +1,18 @@
 import React, { useState, useEffect, Suspense } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 사용된 모든 아이콘 및 라이브러리 검수 완료
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { collection, query, onSnapshot, where } from 'firebase/firestore'; // getDocs -> onSnapshot 변경 (실시간 동기화)
+import { collection, getDocs, query, where, onSnapshot } from 'firebase/firestore';
 
 import { auth, db } from './firebase';
-import { Button, Card, Modal } from './components/UI'; // LoadingSpinner는 lucide-react Loader로 대체 가능하거나 UI에서 가져옴
+import { Button, Card, Modal } from './components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// Lazy Load Features
+// Lazy Load Features (Code Splitting)
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -32,27 +32,58 @@ const LoadingScreen = () => (
 // --- Login Component ---
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
+  
+  // 엔터키 입력 시 로그인 트리거
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      onLogin();
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
         <div className="text-center mb-8">
-          <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200"><CheckCircle size={32}/></div>
+          <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
+            <CheckCircle size={32}/>
+          </div>
           <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
           <p className="text-gray-500 mt-2 text-base">학생과 학부모를 위한 프리미엄 관리</p>
         </div>
         <div className="space-y-5">
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
-            <input type="text" placeholder="ID를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+            <input 
+              type="text" 
+              placeholder="ID를 입력하세요" 
+              className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all" 
+              value={form.id} 
+              onChange={e=>setForm({...form, id:e.target.value})}
+            />
           </div>
           <div>
             <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
             <div className="relative">
-              <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all pr-12" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={e=>e.key==='Enter'&&onLogin()}/>
-              <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={24} /> : <Eye size={24} />}</button>
+              <input 
+                type={showPassword ? "text" : "password"} 
+                placeholder="비밀번호를 입력하세요" 
+                className="w-full border border-gray-200 rounded-xl p-4 text-lg bg-gray-50 focus:bg-white focus:border-blue-500 outline-none transition-all pr-12" 
+                value={form.password} 
+                onChange={e=>setForm({...form, password:e.target.value})} 
+                onKeyDown={handleKeyDown}
+              />
+              <button 
+                type="button" 
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600" 
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
+              </button>
             </div>
           </div>
-          <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>{isLoading ? <Loader className="animate-spin" /> : '로그인'}</Button>
+          <Button onClick={onLogin} className="w-full py-4 text-lg shadow-lg shadow-blue-200 mt-2" disabled={isLoading}>
+            {isLoading ? <Loader className="animate-spin" /> : '로그인'}
+          </Button>
         </div>
       </div>
       <Modal isOpen={loginErrorModal.isOpen} onClose={() => setLoginErrorModal({ isOpen: false, msg: '' })} title="로그인 실패">
@@ -100,28 +131,47 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  // [데이터 효율화] users 데이터를 App 레벨에서 한 번만 로드하여 자식들에게 전달
-  const [users, setUsers] = useState([]); 
   
+  // Data State
+  const [users, setUsers] = useState([]);
+  
+  // Login State
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
 
-  // 1. Auth Init
+  // 1. Authentication & Initialization
   useEffect(() => {
-    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) {} };
+    // 안전 장치: 5초 뒤에도 로딩이 안 끝나면 강제 종료 (네트워크 이슈 등)
+    const safetyTimeout = setTimeout(() => setLoading(false), 5000);
+
+    const initAuth = async () => { 
+        try { 
+            await signInAnonymously(auth); 
+        } catch (e) {
+            console.error("Auth Init Error:", e);
+            setLoading(false); // 에러 발생 시 로딩 해제
+        } 
+    };
     initAuth();
-    return onAuthStateChanged(auth, (user) => {
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+        clearTimeout(safetyTimeout); // 정상 로드 시 타임아웃 해제
         if(user) {
              const saved = sessionStorage.getItem('imperial_user');
              if(saved) setCurrentUser(JSON.parse(saved));
         }
         setLoading(false);
     });
+
+    return () => {
+        unsubscribe();
+        clearTimeout(safetyTimeout);
+    };
   }, []);
 
-  // 2. [데이터 효율화] Users Data Fetching (Single Source of Truth)
-  // 관리자, 강사, 조교일 때만 전체 유저 목록을 불러옵니다. 학생/학부모는 불필요한 데이터 로드 방지.
+  // 2. Users Data Fetching (Efficient & Centralized)
+  // 관리자/강사/조교인 경우에만 사용자 전체 목록을 구독하여 하위 컴포넌트에 전파
   useEffect(() => {
       if(!currentUser) return;
       
@@ -129,32 +179,53 @@ export default function App() {
       
       if (shouldFetchUsers) {
           const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-          // 실시간 리스너로 변경하여 데이터 일관성 유지하되, 변경 시에만 업데이트
           const unsub = onSnapshot(q, (snapshot) => {
               const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
               setUsers(userList);
+          }, (error) => {
+              console.error("Users Fetch Error:", error);
           });
           return () => unsub();
       } else {
-          setUsers([]); // 학생/학부모는 빈 배열 (보안 및 데이터 절약)
+          setUsers([]); // 학생/학부모는 데이터 비움 (보안 및 효율성)
       }
   }, [currentUser]);
 
+  // 3. Login Handler (Robust Error Handling)
   const handleLogin = async () => {
-     setLoginProcessing(true);
-     // 로그인 시에는 getDocs를 사용하여 1회성 쿼리 (비용 절감)
-     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
-     const s = await getDocs(q); // getDocs from 'firebase/firestore' need to be imported
-     
-     if(!s.empty) {
-         const userData = { id: s.docs[0].id, ...s.docs[0].data() };
-         setCurrentUser(userData);
-         sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-         setActiveTab('dashboard');
-     } else {
-         setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
+     // [방어적 코딩] 빈 값 입력 시 불필요한 DB 요청 방지
+     if (!loginForm.id || !loginForm.password) {
+         setLoginErrorModal({ isOpen: true, msg: '아이디와 비밀번호를 모두 입력해주세요.' });
+         return;
      }
-     setLoginProcessing(false);
+
+     setLoginProcessing(true);
+     
+     try {
+         // Firestore 쿼리 (Index 필요 가능성 있음, 없으면 콘솔에 링크 뜸)
+         const q = query(
+             collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), 
+             where('userId', '==', loginForm.id), 
+             where('password', '==', loginForm.password)
+         );
+         
+         const s = await getDocs(q);
+         
+         if (!s.empty) {
+             const userData = { id: s.docs[0].id, ...s.docs[0].data() };
+             setCurrentUser(userData);
+             sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+             setActiveTab('dashboard');
+         } else {
+             setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
+         }
+     } catch (e) {
+         console.error("Login Error:", e);
+         setLoginErrorModal({ isOpen: true, msg: '시스템 접속 중 오류가 발생했습니다.\n관리자에게 문의해주세요.' });
+     } finally {
+         // [핵심 수정] 성공/실패 여부와 관계없이 로딩 상태 해제 (무한 로딩 방지)
+         setLoginProcessing(false);
+     }
   };
 
   if (loading) return <LoadingScreen />;
@@ -171,6 +242,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
+        {/* Sidebar */}
         <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 ease-in-out md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
             <div className="p-6 border-b flex justify-between items-center"><h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1><button className="md:hidden" onClick={()=>setIsSidebarOpen(false)}><X size={24}/></button></div>
             <nav className="p-4 space-y-2">
@@ -183,13 +255,14 @@ export default function App() {
                 <button onClick={()=>{sessionStorage.removeItem('imperial_user'); window.location.reload();}} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-bold"><LogOut size={16}/> 로그아웃</button>
             </div>
         </aside>
+
+        {/* Main Content */}
         <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
             <header className="bg-white border-b p-4 flex items-center gap-3 md:hidden sticky top-0 z-30"><button onClick={()=>setIsSidebarOpen(true)}><Menu size={24}/></button><h1 className="text-lg font-bold">Imperial System</h1></header>
             <main className="p-4 md:p-8 flex-1 overflow-y-auto">
                 <Suspense fallback={<LoadingScreen />}>
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                     {activeTab === 'user_mgmt' && <UserManager currentUser={currentUser} />}
-                    {/* users prop 전달 확인 */}
                     {activeTab === 'clinic' && <ClinicDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
                     {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
