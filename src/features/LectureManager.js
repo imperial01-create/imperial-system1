@@ -236,7 +236,8 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-8 w-full max-w-[1600px] mx-auto">
+        // [UI 개선] w-full 적용하여 너비 확장
+        <div className="space-y-8 w-full">
             {/* 1. Class Management Section */}
             <div>
                 <div className="flex justify-between items-center mb-4">
@@ -323,7 +324,7 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     }, [currentUser]);
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto">
+        <div className="space-y-6 w-full">
             <div className="flex gap-2 overflow-x-auto pb-2">
                 {classes.map(c => (
                     <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>

@@ -11,7 +11,7 @@ const APP_ID = 'imperial-clinic-v1';
 const UserManager = ({ currentUser }) => {
     const [users, setUsers] = useState([]);
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeTab, setActiveTab] = useState('student'); // student, parent, ta, lecturer
+    const [activeTab, setActiveTab] = useState('student'); 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
     const [targetUserId, setTargetUserId] = useState(null);
@@ -27,7 +27,6 @@ const UserManager = ({ currentUser }) => {
     const [studentList, setStudentList] = useState([]);
     const [studentSearch, setStudentSearch] = useState('');
 
-    // 1. 사용자 데이터 조회 (실시간 리스너 대신 필요할 때 fetch하여 비용 절감)
     const fetchUsers = async () => {
         setLoading(true);
         try {
@@ -35,7 +34,6 @@ const UserManager = ({ currentUser }) => {
             const snap = await getDocs(q);
             const userList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             setUsers(userList);
-            // 학생 목록 별도 저장 (학부모 연결용)
             setStudentList(userList.filter(u => u.role === 'student'));
         } catch (e) {
             alert("데이터 로딩 실패: " + e.message);
@@ -48,7 +46,6 @@ const UserManager = ({ currentUser }) => {
         fetchUsers();
     }, []);
 
-    // 2. 핸들러
     const handleOpenCreate = () => {
         setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '' });
         setIsEditMode(false);
@@ -58,7 +55,7 @@ const UserManager = ({ currentUser }) => {
     const handleOpenEdit = (user) => {
         setFormData({ 
             ...user, 
-            password: user.password || '', // 보안상 비번은 보통 비우지만 편의상 표시
+            password: user.password || '', 
             childId: user.childId || '',
             childName: user.childName || ''
         });
@@ -68,8 +65,6 @@ const UserManager = ({ currentUser }) => {
 
     const handleSaveUser = async () => {
         if (!formData.name || !formData.userId || !formData.password) return alert('필수 정보를 입력하세요.');
-        
-        // 학부모인 경우 자녀 연결 확인
         if (activeTab === 'parent' && !formData.childId) return alert('학부모 계정은 자녀(학생)와 연결해야 합니다.');
 
         setLoading(true);
@@ -95,15 +90,13 @@ const UserManager = ({ currentUser }) => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id), payload);
                 alert('수정되었습니다.');
             } else {
-                // ID 중복 체크 (클라이언트 측 간이 체크)
                 if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
-                
                 payload.createdAt = serverTimestamp();
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), payload);
                 alert('생성되었습니다.');
             }
             setIsModalOpen(false);
-            fetchUsers(); // 목록 갱신
+            fetchUsers();
         } catch (e) {
             alert('저장 실패: ' + e.message);
         } finally {
@@ -130,7 +123,6 @@ const UserManager = ({ currentUser }) => {
         }
     };
 
-    // Filtered List
     const filteredUsers = users.filter(u => 
         u.role === activeTab && 
         (u.name.includes(searchQuery) || u.userId.includes(searchQuery))
@@ -143,7 +135,6 @@ const UserManager = ({ currentUser }) => {
                 <Button onClick={handleOpenCreate} icon={Plus}>사용자 추가</Button>
             </div>
 
-            {/* 탭 메뉴 */}
             <div className="flex border-b border-gray-200 bg-white rounded-t-xl overflow-hidden">
                 {['student', 'parent', 'ta', 'lecturer'].map(role => (
                     <button 
@@ -159,8 +150,7 @@ const UserManager = ({ currentUser }) => {
                 ))}
             </div>
 
-            <Card className="min-h-[500px]">
-                {/* 검색창 */}
+            <Card className="min-h-[500px] overflow-hidden">
                 <div className="mb-4 relative">
                     <input 
                         className="w-full border p-3 pl-10 rounded-xl bg-gray-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-blue-100" 
@@ -171,18 +161,19 @@ const UserManager = ({ currentUser }) => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
-                {/* 리스트 */}
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                {/* [UI 개선] 모바일 가로 스크롤 및 고정 너비 적용 */}
+                <div className="overflow-x-auto w-full">
+                    <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
                             <tr className="border-b border-gray-100 text-gray-500 text-sm">
-                                <th className="p-4">이름</th>
-                                <th className="p-4">아이디</th>
-                                <th className="p-4">비밀번호</th>
-                                <th className="p-4">전화번호</th>
-                                {activeTab === 'parent' && <th className="p-4">자녀</th>}
-                                {(activeTab === 'ta' || activeTab === 'lecturer') && <th className="p-4">담당 과목</th>}
-                                <th className="p-4 text-right">관리</th>
+                                <th className="p-4 w-[15%]">이름</th>
+                                <th className="p-4 w-[20%]">아이디</th>
+                                <th className="p-4 w-[20%]">비밀번호</th>
+                                <th className="p-4 w-[20%]">전화번호</th>
+                                <th className="p-4 w-[15%]">
+                                    {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '비고')}
+                                </th>
+                                <th className="p-4 w-[10%] text-right">관리</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -192,14 +183,14 @@ const UserManager = ({ currentUser }) => {
                                     <td className="p-4 text-gray-600">{u.userId}</td>
                                     <td className="p-4 text-gray-400 font-mono text-sm">{u.password}</td>
                                     <td className="p-4 text-gray-600">{u.phone || '-'}</td>
-                                    {activeTab === 'parent' && (
-                                        <td className="p-4">
+                                    <td className="p-4">
+                                        {activeTab === 'parent' && (
                                             <span className="bg-green-50 text-green-700 px-2 py-1 rounded-lg text-sm font-bold flex w-fit items-center gap-1">
                                                 <UserPlus size={14}/> {u.childName || '미지정'}
                                             </span>
-                                        </td>
-                                    )}
-                                    {(activeTab === 'ta' || activeTab === 'lecturer') && <td className="p-4">{u.subject || '-'}</td>}
+                                        )}
+                                        {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
+                                    </td>
                                     <td className="p-4 flex justify-end gap-2">
                                         <button onClick={() => handleOpenEdit(u)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600 hover:border-blue-200 transition-all"><Edit2 size={18}/></button>
                                         <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600 hover:border-red-200 transition-all"><Trash2 size={18}/></button>
@@ -212,7 +203,6 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </Card>
 
-            {/* 사용자 생성/수정 모달 */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${isEditMode ? '수정' : '추가'} - ${activeTab.toUpperCase()}`}>
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
@@ -224,7 +214,6 @@ const UserManager = ({ currentUser }) => {
                         <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
                     )}
 
-                    {/* 학부모 - 자녀 연결 UI */}
                     {activeTab === 'parent' && (
                         <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
                             <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2"><LinkIcon size={16}/> 연결할 자녀 선택</label>
@@ -264,7 +253,6 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 삭제 확인 모달 (Z-Index 문제 해결을 위해 별도 모달로 구현하거나 기존 Modal 재사용) */}
             <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="계정 삭제">
                 <div className="space-y-4">
                     <div className="bg-red-50 p-4 rounded-xl flex items-start gap-3">
