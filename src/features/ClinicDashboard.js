@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+// [Import Check] 사용되는 모든 아이콘 확인 완료
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -6,16 +7,18 @@ import {
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Badge, Modal } from '../components/UI';
+import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
+// --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const TEMPLATES = {
-  confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 예정 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 목동임페리얼학원 본관 ${d.classroom}\n내용 : [${d.topic}] 개별 Q&A 클리닉\n\n학생이 직접 시간을 선정하였으며 해당 시간은 선생님과의 개인적인 약속이므로 늦지 않도록 지도해주시면 감사하겠습니다.`,
+  confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 예정 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}\n내용 : [${d.topic}] 개별 Q&A 클리닉\n\n학생이 직접 시간을 선정하였으며 해당 시간은 선생님과의 개인적인 약속이므로 늦지 않도록 지도해주시면 감사하겠습니다.`,
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
 };
 
+// --- Helper Functions ---
 const getLocalToday = () => {
   const d = new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -37,6 +40,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
+// --- Calendar Sub-Component ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
@@ -60,6 +64,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         (s.status === 'confirmed' || s.status === 'pending')
     );
     if (alreadyBooked) return true;
+    
     const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
     return false;
@@ -107,6 +112,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
+            // [변수 스코프 확보]
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -190,6 +196,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {taSubject && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
+                            {/* [수정] 조교(isTa)도 학생 신청 정보 볼 수 있도록 조건 추가 */}
                             {(isAdmin || isLecturer || isTa) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
@@ -199,10 +206,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}>
+                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
+                                {/* [삭제 기능] 휴지통 버튼 -> 'delete' 액션 호출 */}
                                 <button onClick={()=>onAction('delete', s.id)} className="text-gray-500 hover:text-red-600 p-2"><Trash2 size={18}/></button>
                               </div>
                             )}
@@ -211,7 +219,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                           <div className="flex flex-col gap-2 ml-2">
                             {isInteractive && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                            {/* [철회 기능] ID 페이로드 전달 */}
                             {isInteractive && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
+                            
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
                           </div>
@@ -229,6 +239,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   );
 });
 
+// --- Main Clinic Dashboard ---
 const ClinicDashboard = ({ currentUser, users }) => {
     const [sessionMap, setSessionMap] = useState({});
     const [sessions, setSessions] = useState([]);
@@ -266,6 +277,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
             sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
         }
 
+        // [데이터 효율화 & 삭제 버그 수정] docChanges 사용하여 로컬 상태를 정확히 동기화
         const unsub = onSnapshot(sessionQuery, (snapshot) => {
             setSessionMap(prev => {
                 const next = { ...prev };
@@ -274,7 +286,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         next[change.doc.id] = { id: change.doc.id, ...change.doc.data() };
                     }
                     if (change.type === 'removed') {
-                        delete next[change.doc.id];
+                        delete next[change.doc.id]; // [핵심] 삭제된 문서를 로컬 상태에서도 제거
                     }
                 });
                 return next;
@@ -330,14 +342,17 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
+            // [수정] ID가 페이로드로 넘어옴
             askConfirm("정말 삭제하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
         } else if (action === 'withdraw_add') {
+            // [수정] ID가 페이로드로 넘어옴
             askConfirm("철회하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'approve_booking') {
-            // 강의실 미배정이어도 일단 모달 띄우고 모달에서 승인 시 강의실 체크
-            setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
+            // [수정] selectedSession 설정 (중요)
+            setSelectedSession(payload); 
+            setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' });
@@ -489,6 +504,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                                     </div>
                                 </div>
                                 <div className="ml-2 flex flex-col gap-2">
+                                    {/* [수정] 승인 시 selectedSession 설정 및 모달 오픈 */}
                                     <Button size="sm" onClick={()=>handleAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>
                                     <Button size="sm" variant="danger" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
                                 </div>
@@ -596,6 +612,8 @@ const ClinicDashboard = ({ currentUser, users }) => {
       <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
+      
+      {/* [수정] 통계 모달 */}
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
           <div className="space-y-6">
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl">
@@ -640,6 +658,21 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </table>
               </div>
           </div>
+      </Modal>
+      
+      {/* [수정] 예약 승인 시 문자 발송 프리뷰 및 확정 처리 모달 */}
+      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송">
+          <div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">
+              {selectedSession && TEMPLATES.confirmParent(selectedSession)}
+          </div>
+          <Button className="w-full py-4 text-lg" onClick={async ()=>{ 
+              // [버그 수정] selectedSession.id를 사용하여 승인(확정) 처리
+              await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); 
+              setModalState({type:null}); 
+              notify('확정 완료'); 
+          }}>
+              전송 및 확정
+          </Button>
       </Modal>
     </div>
   );
