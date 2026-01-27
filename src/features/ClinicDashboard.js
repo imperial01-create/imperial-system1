@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 사용되는 모든 아이콘 및 Firestore 함수 완벽 확인
+// [Import Check] 사용되는 모든 아이콘 및 라이브러리 완벽 확인
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -41,7 +41,7 @@ const getWeekOfMonth = (date) => {
 };
 
 // --- Calendar Sub-Component ---
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
         return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
@@ -112,7 +112,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            // [변수 스코프 확보]
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -148,11 +147,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    let taSubject = s.taSubject; 
-                    if (!taSubject && users && users.length > 0) {
-                        const taUser = users.find(u => u.id === s.taId);
-                        if (taUser) taSubject = taUser.subject;
-                    }
+                    // [최적화] O(1) 조회
+                    const taSubject = taSubjectMap[s.taId] || '';
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -162,11 +158,13 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div className="flex-1 flex flex-col justify-center">
                                     <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {taSubject ? <span className="text-blue-600 mr-1.5">[{taSubject}]</span> : ''}
+                                        {/* [수정] 학생 화면: TA 과목 표시 */}
+                                        {taSubject && <span className="text-blue-600 mr-1.5">[{taSubject}]</span>}
                                         {s.taName} TA
                                     </div>
-                                    <div className={`text-xs md:text-sm mt-0.5 ${isBlocked ? 'text-gray-400' : 'text-gray-500'}`}>
-                                        개별 클리닉
+                                    {/* [수정] 학생 화면: 하단 텍스트 변경 */}
+                                    <div className={`text-xs md:text-sm mt-0.5 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
+                                        {taSubject || '전과목'}
                                     </div>
                                 </div>
                                 <div className="ml-3">
@@ -205,11 +203,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}>
+                                {/* [수정] 관리자용 상세 스케줄 탭의 강의실 배정 수정 */}
+                                <select 
+                                    className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
+                                    value={s.classroom || ''} 
+                                    onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
+                                >
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
-                                {/* [버그 수정] e.stopPropagation() 추가로 클릭 이벤트 버블링 방지 */}
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2"><Trash2 size={18}/></button>
                               </div>
                             )}
@@ -260,6 +262,15 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
+    // [최적화] users 데이터를 기반으로 조교 과목 맵 생성 (O(1) 조회용)
+    const taSubjectMap = useMemo(() => {
+        const map = {};
+        users.forEach(u => {
+            if (u.role === 'ta') map[u.id] = u.subject;
+        });
+        return map;
+    }, [users]);
+
     useEffect(() => {
         if (!currentUser) return;
         const year = currentDate.getFullYear();
@@ -282,7 +293,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
                     if (change.type === 'added' || change.type === 'modified') {
                         next[change.doc.id] = { id: change.doc.id, ...change.doc.data() };
                     }
-                    // [데이터 효율화 & 삭제 버그 수정] 삭제된 문서를 로컬 상태에서 즉시 제거
                     if (change.type === 'removed') {
                         delete next[change.doc.id]; 
                     }
@@ -340,12 +350,10 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            // [버그 수정] payload가 유효한지 확인하고 확인창 띄움
             if(payload) askConfirm("정말 삭제하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
         } else if (action === 'withdraw_add') {
-             // [버그 수정] payload가 유효한지 확인하고 확인창 띄움
             if(payload) askConfirm("철회하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
         } else if (action === 'approve_booking') {
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
@@ -355,6 +363,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                 notify('예약 신청이 취소되었습니다.');
             });
         } else if (action === 'update_classroom') {
+            // [수정] 강의실 배정 즉시 DB 반영
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { classroom: payload.val });
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); setFeedbackData({clinicContent:payload.clinicContent||'', feedback:payload.feedback||'', improvement:payload.improvement||''}); setModalState({ type: 'feedback' });
@@ -474,7 +483,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -488,6 +497,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                                         <div className="font-bold text-xs text-green-700 mb-0.5">신청 상세</div>
                                         <div className="whitespace-pre-wrap">{s.topic} / {s.questionRange}</div>
                                     </div>
+                                    {/* [수정] 대기 리스트에서 강의실 배정 시 즉시 업데이트 호출 */}
                                     <div className="mt-2">
                                         <select 
                                             className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
@@ -533,7 +543,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => s.taId === currentUser.id && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
-                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction}/>
+                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
             </>
         )}
        {currentUser.role === 'lecturer' && (
@@ -541,7 +551,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={()=>{}} users={users}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap}/>
            </div>
        )}
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
@@ -586,6 +596,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         onAction={handleAction} 
                         selectedSlots={studentSelectedSlots} 
                         users={users}
+                        taSubjectMap={taSubjectMap}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
@@ -616,9 +627,64 @@ const ClinicDashboard = ({ currentUser, users }) => {
       <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
-      <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계"><div className="space-y-6"><div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div><div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div></div></Modal>
-      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송"><div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div><Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button></Modal>
-      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송"><div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed">{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div><Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button></Modal>
+      <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
+          <div className="space-y-6">
+              <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl">
+                  <span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span>
+                  <div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div>
+              </div>
+              <div className="overflow-x-auto">
+                  <table className="w-full text-base text-left border-collapse">
+                      <thead>
+                          <tr className="bg-gray-100 border-b">
+                              <th className="p-3 whitespace-nowrap">조교명</th>
+                              {[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}
+                              <th className="p-3 text-center font-bold whitespace-nowrap">합계</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {users.filter(u=>u.role==='ta').map(ta => {
+                              let tConf = 0, tSched = 0;
+                              return (
+                                  <tr key={ta.id} className="border-b">
+                                      <td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>
+                                      {[1,2,3,4,5].map(w => {
+                                          const weekSessions = sessions.filter(s => {
+                                              const [sy, sm, sd] = s.date.split('-').map(Number);
+                                              const sDate = new Date(sy, sm - 1, sd);
+                                              return s.taId === ta.id && 
+                                                     sy === currentDate.getFullYear() && 
+                                                     (sm - 1) === currentDate.getMonth() && 
+                                                     getWeekOfMonth(sDate) === w;
+                                          });
+                                          const conf = weekSessions.filter(s => s.status === 'confirmed' || s.status === 'completed').length;
+                                          const sched = weekSessions.filter(s => s.status === 'open' || s.status === 'confirmed' || s.status === 'completed').length;
+                                          tConf += conf;
+                                          tSched += sched;
+                                          return <td key={w} className="p-3 text-center text-sm">{sched > 0 ? <span className={conf > 0 ? 'text-blue-600 font-bold' : 'text-gray-400'}>{conf}/{sched}</span> : '-'}</td>
+                                      })}
+                                      <td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td>
+                                  </tr>
+                              );
+                          })}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+      </Modal>
+      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송">
+          <div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">
+              {selectedSession && TEMPLATES.confirmParent(selectedSession)}
+          </div>
+          <Button className="w-full py-4 text-lg" onClick={async ()=>{ 
+              // [버그 수정] selectedSession.id를 사용하여 승인(확정) 처리
+              await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); 
+              setModalState({type:null}); 
+              notify('확정 완료'); 
+          }}>
+              전송 및 확정
+          </Button>
+      </Modal>
     </div>
   );
 };
