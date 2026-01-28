@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 사용되는 모든 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -112,6 +112,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
+            // [변수 스코프 확인] 안전하게 선언
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -147,8 +148,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    // [데이터 효율화] O(1) 해시맵 조회 (taSubjectMap은 props로 전달됨)
-                    const taSubject = taSubjectMap?.[s.taId] || '개별 클리닉';
+                    // [핵심 수정] 1순위: DB내장 과목(효율적), 2순위: 맵조회(Admin용), 3순위: 기본값
+                    // 학생은 users 정보가 없으므로 taSubjectMap이 비어있음 -> s.taSubject(반정규화된 데이터)를 사용해야 함
+                    const taSubject = s.taSubject || taSubjectMap?.[s.taId] || '개별 클리닉';
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -158,10 +160,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div className="flex-1 flex flex-col justify-center">
                                     <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {/* 상단 이름 */}
+                                        {/* 조교 이름 */}
                                         {s.taName} TA
                                     </div>
-                                    {/* [수정 요청 반영] 하단 텍스트를 조교 담당 과목으로 변경 및 파란색 처리 */}
+                                    {/* [수정] 하단에 담당 과목 파란색으로 표시 */}
                                     <div className={`text-xs md:text-sm mt-0.5 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
                                         {taSubject}
                                     </div>
@@ -190,6 +192,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
+                                {/* 관리자/강사 뷰에서도 과목 표시 */}
                                 {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
@@ -260,8 +263,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // [최적화] users 데이터를 기반으로 조교 과목 맵 생성 (O(1) 조회)
-    // users가 변경되지 않으면 다시 계산하지 않음
+    // [최적화] users 데이터를 기반으로 조교 과목 맵 생성
     const taSubjectMap = useMemo(() => {
         const map = {};
         if (users && users.length > 0) {
@@ -483,7 +485,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
