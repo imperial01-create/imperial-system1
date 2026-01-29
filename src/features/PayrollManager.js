@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] 모든 아이콘 및 Firestore 함수 완벽 확인
+// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -99,8 +99,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const isManagementMode = viewMode === 'management';
 
+    // [방어적 코딩] users가 아직 로드되지 않았을 때 빈 배열 처리
     const targetUsers = isManagementMode 
-        ? users.filter(u => ['admin', 'lecturer', 'ta'].includes(u.role))
+        ? (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role))
         : [currentUser];
 
     // --- 1. Data Fetching with Cache Strategy ---
@@ -108,7 +109,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         if (!currentUser) return;
 
         setIsLoading(true);
-        const cacheKey = `imperial_payroll_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        // [수정] 캐시 키에 'v2'를 추가하여 이전 버전의 잘못된 캐시를 무시하도록 강제함
+        const cacheKey = `imperial_payroll_v2_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             // 1. 캐시 확인
@@ -117,14 +119,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 if (cached) {
                     try {
                         const parsed = JSON.parse(cached);
-                        if (Date.now() - parsed.timestamp < 3600000) { // 1시간 캐시
+                        // 1시간 유효
+                        if (Date.now() - parsed.timestamp < 3600000) { 
                             setPayrolls(parsed.data);
                             setLastUpdated(parsed.timestamp);
                             setIsLoading(false);
                             return; 
                         }
                     } catch (e) {
-                        console.warn("Cache parsing failed, fetching from DB");
                         localStorage.removeItem(cacheKey);
                     }
                 }
@@ -134,7 +136,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const fetchedData = {};
 
             if (isManagementMode) {
-                // [관리 모드] 해당 월 전체 데이터 (Query)
+                // [관리 모드] 해당 월 전체 데이터
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
                     where('yearMonth', '==', selectedMonth)
@@ -144,8 +146,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     fetchedData[doc.data().userId] = doc.data();
                 });
             } else {
-                // [개인 모드] 내 데이터 직접 조회 (getDoc - 효율적, 색인 불필요)
-                // [핵심 수정] 문서가 없을 수 있으므로 try-catch와 exists 체크로 조용히 처리
+                // [개인 모드] 내 데이터 직접 조회
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 const snapshot = await getDoc(docRef);
@@ -163,7 +164,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         } catch (e) {
             console.error("Payroll Fetch Error:", e);
-            // [수정] Alert 제거: 권한 오류나 데이터 없음은 빈 화면으로 처리하여 UX 개선
         } finally {
             setIsLoading(false);
         }
@@ -175,7 +175,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     }, [fetchPayrolls]);
 
 
-    // --- 2. Calculation Logic (On-Demand Fetching) ---
+    // --- 2. Calculation Logic ---
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         
@@ -191,7 +191,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             let weeklyHolidayPay = 0;
             let hourlyRate = 0;
 
-            // [최적화] 조교인 경우에만 해당 조교의 이번 달 세션을 DB에서 조회 (Lazy Fetch)
+            // [최적화] 조교인 경우에만 세션 조회
             if (targetUser.role === 'ta') {
                 const { startStr, endStr } = getMonthRange(selectedMonth);
                 const sessionQuery = query(
@@ -237,10 +237,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             // DB 저장
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData);
 
-            // [캐시 동기화]
+            // [캐시 동기화] v2 키 사용
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
-            const cacheKey = `imperial_payroll_${selectedMonth}_admin`;
+            const cacheKey = `imperial_payroll_v2_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) {
@@ -276,10 +276,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         try {
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), updatedData);
             
-            // [캐시 동기화]
+            // [캐시 동기화] v2 키 사용
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
-            const cacheKey = `imperial_payroll_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+            const cacheKey = `imperial_payroll_v2_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
 
             setIsEditModalOpen(false);
@@ -337,7 +337,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         setSelectedMonth(newMonthStr);
     };
 
-    // 타임스탬프 포맷팅
     const formatTime = (ts) => {
         if (!ts) return '';
         return new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
@@ -393,6 +392,13 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y">
+                                {targetUsers.length === 0 && (
+                                    <tr>
+                                        <td colSpan="8" className="p-8 text-center text-gray-400">
+                                            {users.length === 0 ? "사용자 데이터를 불러오는 중입니다..." : "표시할 직원이 없습니다."}
+                                        </td>
+                                    </tr>
+                                )}
                                 {targetUsers.map(user => {
                                     const payroll = payrolls[user.id];
                                     const roleLabel = user.role === 'ta' ? '조교' : (user.role === 'lecturer' ? '강사' : '관리자');
