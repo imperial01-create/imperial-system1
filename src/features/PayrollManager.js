@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] RefreshCcw 아이콘 추가 (새로고침 버튼용)
+// [Import Check] getDoc 추가 (단일 문서 조회용)
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
 } from 'lucide-react';
-import { collection, doc, setDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
@@ -82,20 +82,20 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
-    // 날짜 상태 관리 (문자열)
+    // 날짜 상태 관리
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
     
     const [payrolls, setPayrolls] = useState({});
-    const [isLoading, setIsLoading] = useState(false); // 전체 데이터 로딩
-    const [lastUpdated, setLastUpdated] = useState(null); // 캐시 시점 표시
+    const [isLoading, setIsLoading] = useState(false); 
+    const [lastUpdated, setLastUpdated] = useState(null); 
 
     // Admin Modal & Process State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
-    const [calcProcessing, setCalcProcessing] = useState(false); // 개별 계산 로딩
+    const [calcProcessing, setCalcProcessing] = useState(false); 
 
     const isManagementMode = viewMode === 'management';
 
@@ -105,45 +105,55 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     // --- 1. Data Fetching with Cache Strategy ---
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
+        if (!currentUser) return;
+
         setIsLoading(true);
         const cacheKey = `imperial_payroll_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
-            // 1. 캐시 확인 (강제 새로고침이 아닐 경우)
+            // 1. 캐시 확인
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
-                    const parsed = JSON.parse(cached);
-                    // 유효기간 1시간 (3600000ms) 설정 (필요시 조정 가능)
-                    if (Date.now() - parsed.timestamp < 3600000) {
-                        setPayrolls(parsed.data);
-                        setLastUpdated(parsed.timestamp);
-                        setIsLoading(false);
-                        return; // DB 요청 없이 종료 (Extreme Optimization)
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (Date.now() - parsed.timestamp < 3600000) { // 1시간 캐시
+                            setPayrolls(parsed.data);
+                            setLastUpdated(parsed.timestamp);
+                            setIsLoading(false);
+                            return; 
+                        }
+                    } catch (e) {
+                        console.warn("Cache parsing failed, fetching from DB");
+                        localStorage.removeItem(cacheKey);
                     }
                 }
             }
 
-            // 2. Firestore 요청 (캐시 없거나 만료, 또는 강제 새로고침 시)
-            let q;
+            // 2. Firestore 요청
+            const fetchedData = {};
+
             if (isManagementMode) {
-                q = query(
+                // [관리 모드] 해당 월 전체 데이터 (Query)
+                const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
                     where('yearMonth', '==', selectedMonth)
                 );
+                const snapshot = await getDocs(q);
+                snapshot.forEach(doc => {
+                    fetchedData[doc.data().userId] = doc.data();
+                });
             } else {
-                q = query(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
-                    where('yearMonth', '==', selectedMonth),
-                    where('userId', '==', currentUser.id)
-                );
+                // [개인 모드] 내 데이터 직접 조회 (getDoc - 효율적, 색인 불필요)
+                // 문서 ID 규칙: userId_yearMonth
+                const docId = `${currentUser.id}_${selectedMonth}`;
+                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
+                const snapshot = await getDoc(docRef);
+                
+                if (snapshot.exists()) {
+                    fetchedData[currentUser.id] = snapshot.data();
+                }
             }
-
-            const snapshot = await getDocs(q);
-            const fetchedData = {};
-            snapshot.forEach(doc => {
-                fetchedData[doc.data().userId] = doc.data();
-            });
 
             // 3. 상태 업데이트 및 캐시 저장
             setPayrolls(fetchedData);
@@ -153,13 +163,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         } catch (e) {
             console.error("Payroll Fetch Error:", e);
-            alert("데이터를 불러오는 중 오류가 발생했습니다.");
+            // 에러 상황을 사용자에게 알림 (단, 기존 데이터가 있으면 유지)
+            // alert("데이터를 불러오는 중 오류가 발생했습니다."); -> UX를 위해 콘솔만 찍고 넘어감
         } finally {
             setIsLoading(false);
         }
-    }, [selectedMonth, isManagementMode, currentUser.id]);
+    }, [selectedMonth, isManagementMode, currentUser]);
 
-    // 월이 바뀌거나 모드가 바뀌면 데이터 로드 시도
+    // 월이 바뀌거나 모드가 바뀌면 데이터 로드
     useEffect(() => {
         fetchPayrolls(false);
     }, [fetchPayrolls]);
@@ -181,8 +192,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             let weeklyHolidayPay = 0;
             let hourlyRate = 0;
 
-            // [최적화] 조교인 경우에만 해당 조교의 이번 달 근무 세션을 DB에서 조회 (Lazy Fetch)
-            // 기존: 들어오자마자 전체 세션 조회 (비효율) -> 변경: 버튼 누를 때 해당 조교 것만 조회 (효율)
+            // [최적화] 조교인 경우에만 해당 조교의 이번 달 세션을 DB에서 조회 (Lazy Fetch)
             if (targetUser.role === 'ta') {
                 const { startStr, endStr } = getMonthRange(selectedMonth);
                 const sessionQuery = query(
@@ -220,7 +230,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 deductions: initialDeductions,
                 netSalary: baseSalary + weeklyHolidayPay,
                 status: 'pending',
-                updatedAt: serverTimestamp() // Firestore 서버 타임스탬프
+                updatedAt: serverTimestamp() 
             };
 
             const docId = `${targetUser.id}_${selectedMonth}`;
@@ -228,13 +238,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             // DB 저장
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData);
 
-            // [캐시 동기화] DB 저장 후 로컬 상태와 캐시도 즉시 업데이트하여 불필요한 재조회 방지
+            // [캐시 동기화]
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
             const cacheKey = `imperial_payroll_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) {
+            console.error(e);
             alert("계산 중 오류 발생: " + e.message);
         } finally {
             setCalcProcessing(false);
@@ -343,7 +354,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </div>
                 
                 <div className="flex items-center gap-2">
-                    {/* 데이터 상태 표시 및 새로고침 */}
                     <div className="text-xs text-gray-400 mr-2 flex items-center gap-1">
                         {isLoading ? <span className="text-blue-500 flex items-center gap-1"><Loader size={12} className="animate-spin"/> 로딩 중</span> : 
                          (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
@@ -365,7 +375,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </div>
             </div>
 
-            {/* Content Area - 뷰 모드에 따라 분기 */}
+            {/* Content Area */}
             {isManagementMode ? (
                 <Card className="overflow-hidden w-full">
                     <div className="overflow-x-auto w-full">
@@ -417,7 +427,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     </div>
                 </Card>
             ) : (
-                // Personal View (Payslip)
                 <div className="max-w-2xl mx-auto w-full">
                     {payrolls[currentUser.id] ? (
                         <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
@@ -443,10 +452,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         <p className="text-xs text-gray-400 mb-1">공제 내역</p>
                                         {DEDUCTION_KEYS.map((key) => (
                                             <div key={key} className="flex justify-between text-sm mb-1 text-gray-600">
-                                                <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions[key])}</span>
+                                                <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span>
                                             </div>
                                         ))}
-                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold text-red-500"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions).reduce((a,b)=>a+(b||0),0))}</span></div>
+                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold text-red-500"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
                                     </div>
                                 </div>
                                 <div className="bg-blue-600 text-white p-4 rounded-xl flex justify-between items-center text-xl font-bold shadow-md">
@@ -496,7 +505,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         <input 
                                             type="number" 
                                             className="w-full border p-2 rounded text-right" 
-                                            value={editingPayroll.deductions[key] || 0} 
+                                            value={editingPayroll.deductions?.[key] || 0} 
                                             onChange={e => setEditingPayroll({
                                                 ...editingPayroll, 
                                                 deductions: { ...editingPayroll.deductions, [key]: Number(e.target.value) }
