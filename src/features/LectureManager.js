@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] CheckCircle 및 모든 아이콘 import 확인
+// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -27,16 +27,18 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     };
 
     return (
-        <div className="p-4 border rounded-xl bg-white shadow-sm w-full">
-            <div className="flex justify-between items-center mb-4">
-                <span className="font-bold text-lg">{currentDate.getMonth() + 1}월</span>
-                <div className="flex gap-1">
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() - 1)))} className="p-1 hover:bg-gray-100 rounded"><ChevronLeft size={20}/></button>
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() + 1)))} className="p-1 hover:bg-gray-100 rounded"><ChevronRight size={20}/></button>
+        // [UI 개선] 학생 캘린더와 동일한 여백(p-4 md:p-6) 및 둥근 모서리(rounded-2xl) 적용
+        <div className="p-4 md:p-6 border rounded-2xl bg-white shadow-sm w-full">
+            <div className="flex justify-between items-center mb-6">
+                <span className="font-bold text-lg md:text-xl text-gray-800">{currentDate.getMonth() + 1}월</span>
+                <div className="flex gap-1 bg-gray-50 rounded-lg p-1">
+                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() - 1)))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronLeft size={20}/></button>
+                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() + 1)))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronRight size={20}/></button>
                 </div>
             </div>
-            <div className="grid grid-cols-7 text-center text-xs font-bold text-gray-400 mb-2">{DAYS.map(d => <div key={d}>{d}</div>)}</div>
-            <div className="grid grid-cols-7 gap-1">
+            <div className="grid grid-cols-7 text-center text-xs md:text-sm font-bold text-gray-400 mb-2">{DAYS.map(d => <div key={d}>{d}</div>)}</div>
+            {/* [UI 개선] gap을 반응형으로 조정하여 시원한 느낌 제공 */}
+            <div className="grid grid-cols-7 gap-1 md:gap-2">
                 {getDays(currentDate).map((d, i) => {
                     if (!d) return <div key={i} />;
                     const dStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -45,11 +47,12 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
                     
                     return (
                         <button key={i} onClick={() => onDateChange(dStr)} 
-                            className={`h-10 rounded-lg flex flex-col items-center justify-center relative transition-all 
-                            ${isSelected ? 'bg-blue-600 text-white font-bold' : 'hover:bg-gray-50 text-gray-700'} 
-                            ${isToday(d) && !isSelected ? 'text-blue-600 font-bold' : ''}`}>
-                            <span>{d.getDate()}</span>
-                            {hasLecture && <div className={`w-1.5 h-1.5 rounded-full mt-0.5 ${isSelected ? 'bg-white' : 'bg-green-500'}`} />}
+                            // [핵심 수정] h-10 고정 높이를 aspect-square로 변경하여 비율 유지 (찌그러짐 방지)
+                            className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all 
+                            ${isSelected ? 'bg-blue-600 text-white font-bold shadow-md scale-105' : 'hover:bg-gray-50 text-gray-700'} 
+                            ${isToday(d) && !isSelected ? 'text-blue-600 font-bold bg-blue-50' : ''}`}>
+                            <span className="text-sm md:text-base">{d.getDate()}</span>
+                            {hasLecture && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-green-500'}`} />}
                         </button>
                     );
                 })}
@@ -72,7 +75,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsub = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
         
-        // [방어적 코딩] users 배열이 있을 때만 필터링 수행
+        // [방어적 코딩] users 배열 안전 접근
         if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
             setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
         } else {
@@ -131,7 +134,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                     <Button size="sm" icon={Plus} onClick={() => { setEditingLecture({ date: selectedDate, progress: '', homework: '', youtubeLinks: [''] }); setIsEditModalOpen(true); }}>강의 추가</Button>
                 </div>
 
-                {currentLectures.length === 0 ? <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200 w-full">등록된 강의 없음</div> : 
+                {currentLectures.length === 0 ? <div className="text-center py-12 text-gray-400 bg-gray-50 rounded-2xl border border-dashed border-gray-200 w-full">등록된 강의가 없습니다.</div> : 
                     currentLectures.map(lec => (
                         <Card key={lec.id} className="w-full">
                             <div className="flex justify-between items-start mb-4 border-b pb-3">
@@ -150,7 +153,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 </div>
                             </div>
                             <div>
-                                {/* [버그 수정 완료] CheckCircle 아이콘 렌더링 에러 방지 */}
                                 <h5 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider flex items-center gap-1"><CheckCircle size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lec.id).length}/{studentsInClass.length})</h5>
                                 <div className="flex flex-wrap gap-2">
                                     {studentsInClass.map(std => {
