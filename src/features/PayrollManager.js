@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] getDoc 추가 (단일 문서 조회용)
+// [Import Check] 모든 아이콘 및 Firestore 함수 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -145,7 +145,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 });
             } else {
                 // [개인 모드] 내 데이터 직접 조회 (getDoc - 효율적, 색인 불필요)
-                // 문서 ID 규칙: userId_yearMonth
+                // [핵심 수정] 문서가 없을 수 있으므로 try-catch와 exists 체크로 조용히 처리
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 const snapshot = await getDoc(docRef);
@@ -163,8 +163,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         } catch (e) {
             console.error("Payroll Fetch Error:", e);
-            // 에러 상황을 사용자에게 알림 (단, 기존 데이터가 있으면 유지)
-            // alert("데이터를 불러오는 중 오류가 발생했습니다."); -> UX를 위해 콘솔만 찍고 넘어감
+            // [수정] Alert 제거: 권한 오류나 데이터 없음은 빈 화면으로 처리하여 UX 개선
         } finally {
             setIsLoading(false);
         }
@@ -319,6 +318,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
     };
 
+    // [버그 수정] 불변성 유지 날짜 변경
     const handleMonthChange = (offset) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
         let year = parseInt(yearStr, 10);

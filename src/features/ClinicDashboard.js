@@ -55,6 +55,19 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isLecturer = currentUser.role === 'lecturer';
   const isTa = currentUser.role === 'ta';
 
+  // [버그 수정] 날짜 변경 시 불변성 유지 (새로운 객체 생성)
+  const handlePrevMonth = () => {
+      const newDate = new Date(currentDate);
+      newDate.setMonth(newDate.getMonth() - 1);
+      setCurrentDate(newDate);
+  };
+
+  const handleNextMonth = () => {
+      const newDate = new Date(currentDate);
+      newDate.setMonth(newDate.getMonth() + 1);
+      setCurrentDate(newDate);
+  };
+
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
     const alreadyBooked = sessions.some(s => 
@@ -76,9 +89,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex justify-between items-center mb-6">
           <h3 className="font-bold flex items-center gap-2 text-lg text-gray-800"><CalendarIcon size={20} className="text-blue-600"/> 일정 선택</h3>
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()-1)))} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronLeft size={20}/></button>
+            {/* [수정] 핸들러 함수 적용 */}
+            <button onClick={handlePrevMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronLeft size={20}/></button>
             <span className="font-bold text-lg w-20 text-center flex items-center justify-center">{currentDate.getMonth()+1}월</span>
-            <button onClick={()=>setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth()+1)))} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronRight size={20}/></button>
+            <button onClick={handleNextMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronRight size={20}/></button>
           </div>
         </div>
         <div className="grid grid-cols-7 text-center text-sm font-bold text-gray-400 mb-2">{DAYS.map(d=><div key={d} className="py-1">{d}</div>)}</div>
@@ -112,7 +126,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
             const slots = mySessions.filter(s => s.startTime === t);
-            // [변수 스코프 확인] 안전하게 선언
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -148,8 +161,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    // [핵심 수정] 1순위: DB내장 과목(효율적), 2순위: 맵조회(Admin용), 3순위: 기본값
-                    // 학생은 users 정보가 없으므로 taSubjectMap이 비어있음 -> s.taSubject(반정규화된 데이터)를 사용해야 함
                     const taSubject = s.taSubject || taSubjectMap?.[s.taId] || '개별 클리닉';
 
                     if (isStudent) {
@@ -160,10 +171,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div className="flex-1 flex flex-col justify-center">
                                     <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {/* 조교 이름 */}
                                         {s.taName} TA
                                     </div>
-                                    {/* [수정] 하단에 담당 과목 파란색으로 표시 */}
                                     <div className={`text-xs md:text-sm mt-0.5 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
                                         {taSubject}
                                     </div>
@@ -192,7 +201,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
-                                {/* 관리자/강사 뷰에서도 과목 표시 */}
                                 {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
@@ -263,7 +271,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // [최적화] users 데이터를 기반으로 조교 과목 맵 생성
     const taSubjectMap = useMemo(() => {
         const map = {};
         if (users && users.length > 0) {
@@ -485,7 +492,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -615,6 +622,15 @@ const ClinicDashboard = ({ currentUser, users }) => {
             </div>
         )}
 
+      {/* --- Modals --- */}
+      {confirmConfig && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl scale-100 animate-in zoom-in-95">
+                <h3 className="text-lg font-bold text-gray-900 mb-2">확인</h3><p className="text-gray-600 mb-6">{confirmConfig.message}</p>
+                <div className="flex gap-3"><Button variant="secondary" className="flex-1" onClick={() => setConfirmConfig(null)}>취소</Button><Button className="flex-1" onClick={() => { confirmConfig.onConfirm(); setConfirmConfig(null); }}>확인</Button></div>
+            </div>
+        </div>
+      )}
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 취소"><textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/><Button onClick={async()=>{ if(!requestData.reason) return notify('사유입력','error'); await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); setModalState({type:null}); notify('요청완료'); }} className="w-full py-4 text-lg">요청 전송</Button></Modal>
       <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
