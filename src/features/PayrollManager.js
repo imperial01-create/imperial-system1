@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] 모든 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 모든 아이콘 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -22,10 +22,8 @@ const getMonthRange = (yearMonth) => {
     const [y, m] = yearMonth.split('-').map(Number);
     const start = new Date(y, m - 1, 1);
     const end = new Date(y, m, 0);
-    
     const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
     const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
-    
     return { start, end, startStr, endStr };
 };
 
@@ -112,8 +110,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         if (!currentUser) return;
 
         setIsLoading(true);
-        // 캐시 키 버전 업 (v4)
-        const cacheKey = `imperial_payroll_v4_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        // 캐시 키 버전 업 (v5)
+        const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             // 1. 캐시 확인
@@ -138,6 +136,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const fetchedData = {};
 
             if (isManagementMode) {
+                // [관리 모드] 해당 월 전체 데이터
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
                     where('yearMonth', '==', selectedMonth)
@@ -147,6 +146,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     fetchedData[doc.data().userId] = doc.data();
                 });
             } else {
+                // [개인 모드] 내 데이터 직접 조회
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 const snapshot = await getDoc(docRef);
@@ -164,7 +164,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         } catch (e) {
             console.error("Payroll Fetch Error:", e);
-            // 에러 발생 시 빈 데이터로 초기화 (잔상 방지)
             setPayrolls({});
         } finally {
             setIsLoading(false);
@@ -200,14 +199,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     // 초기 로드 및 월 변경 시 실행
     useEffect(() => {
-        // [잔상 제거] 월 변경 시 일단 비움
+        // [잔상 제거] 월 변경 시 일단 비움 (필수)
         setPayrolls({});
         fetchPayrolls(false);
         fetchMonthlySessions();
     }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
 
-    // --- 3. Calculation Logic (Pure Memory Filtering) ---
+    // --- 3. Calculation Logic ---
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         
@@ -261,7 +260,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v4_${selectedMonth}_admin`;
+            const cacheKey = `imperial_payroll_v5_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) {
@@ -300,7 +299,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v4_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+            const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
 
             setIsEditModalOpen(false);
@@ -339,7 +338,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
     };
 
-    // [버그 수정] 불변성 유지 날짜 변경
     const handleMonthChange = (offset) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
         let year = parseInt(yearStr, 10);

@@ -52,20 +52,20 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const now = new Date();
   const isAdmin = currentUser.role === 'admin';
   const isStudent = currentUser.role === 'student';
+  const isParent = currentUser.role === 'parent'; // [추가] 학부모 구분
   const isLecturer = currentUser.role === 'lecturer';
   const isTa = currentUser.role === 'ta';
 
-  // [버그 수정] 날짜 오버플로우 방지 (1일로 설정 후 달 변경)
   const handlePrevMonth = () => {
       const newDate = new Date(currentDate);
-      newDate.setDate(1); // 31일 버그 방지
+      newDate.setDate(1); 
       newDate.setMonth(newDate.getMonth() - 1);
       setCurrentDate(newDate);
   };
 
   const handleNextMonth = () => {
       const newDate = new Date(currentDate);
-      newDate.setDate(1); // 31일 버그 방지
+      newDate.setDate(1); 
       newDate.setMonth(newDate.getMonth() + 1);
       setCurrentDate(newDate);
   };
@@ -164,6 +164,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     
                     const taSubject = s.taSubject || taSubjectMap?.[s.taId] || '개별 클리닉';
 
+                    // 1. 학생 뷰 (기존 로직)
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
@@ -193,6 +194,26 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         );
                     }
 
+                    // 2. [추가] 학부모 뷰 (Privacy Filter)
+                    if (isParent) {
+                        const isMyChild = s.studentName === currentUser.childName;
+                        const isBooked = s.status === 'confirmed' || s.status === 'pending';
+
+                        // 다른 학생이 예약한 경우 -> 정보 숨김
+                        if (isBooked && !isMyChild) {
+                            return (
+                                <div key={s.id} className="border rounded-2xl p-4 flex flex-col justify-center bg-gray-50 border-gray-200 opacity-70 w-full min-h-[80px]">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-gray-400 text-lg">예약 마감</span>
+                                        <div className="bg-gray-200 text-gray-500 text-xs px-2 py-1 rounded">불가</div>
+                                    </div>
+                                </div>
+                            );
+                        }
+                        // 내 자녀이거나 오픈된 슬롯인 경우 -> 아래의 공통 렌더링으로 진행 (정보 표시)
+                    }
+
+                    // 3. 공통 뷰 (관리자, 강사, 조교, 학부모-자녀/오픈슬롯)
                     return (
                       <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all w-full ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
@@ -202,6 +223,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
+                                {/* 조교 과목 표시 */}
                                 {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
@@ -228,12 +250,13 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
-                            {isInteractive && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
-                            {isInteractive && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
-                            {isInteractive && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
+                            {/* 학부모에게는 조작 버튼 숨김 */}
+                            {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
+                            {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                            {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
-                            {isInteractive && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
+                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
                           </div>
                         </div>
                       </div>
