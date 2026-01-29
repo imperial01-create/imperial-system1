@@ -1,11 +1,11 @@
-import React, { useState, useEffect, Suspense } from 'react';
-// [Import Check] Wallet 아이콘 추가
+import React, { useState, useEffect, Suspense, useCallback } from 'react';
+// [Import Check] Loader 등 아이콘 확인
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader, CircleDollarSign, Wallet
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { collection, getDocs, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
 import { auth, db } from './firebase';
 import { Button, Card, Modal } from './components/UI';
@@ -85,8 +85,6 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' || currentUser.role === 'parent' ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}</p>
                     </div>
                 )}
-                
-                {/* [수정] 월급 메뉴 바로가기 분기 */}
                 {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
                     <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'payroll_mgmt' : 'payroll')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4"><div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'admin' ? '월급 관리' : '월급 확인'}</h2></div>
@@ -124,16 +122,44 @@ export default function App() {
     return () => { unsubscribe(); clearTimeout(safetyTimeout); };
   }, []);
 
+  // [최적화] Users Data Caching (LocalStorage)
   useEffect(() => {
       if(!currentUser) return;
       const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
+      
       if (shouldFetchUsers) {
-          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-          const unsub = onSnapshot(q, (snapshot) => {
-              const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
-              setUsers(userList);
-          });
-          return () => unsub();
+          const CACHE_KEY = 'imperial_users_cache';
+          const CACHE_DURATION = 3600000; // 1시간
+
+          const fetchUsers = async () => {
+              // 1. 캐시 확인
+              const cached = localStorage.getItem(CACHE_KEY);
+              if (cached) {
+                  try {
+                      const { timestamp, data } = JSON.parse(cached);
+                      if (Date.now() - timestamp < CACHE_DURATION) {
+                          setUsers(data);
+                          return; // DB 읽기 없이 종료
+                      }
+                  } catch (e) {
+                      localStorage.removeItem(CACHE_KEY);
+                  }
+              }
+
+              // 2. 캐시 없거나 만료시 DB 조회
+              try {
+                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+                  const snapshot = await getDocs(q); // getDocs로 1회만 읽음 (onSnapshot 아님)
+                  const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
+                  
+                  setUsers(userList);
+                  localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: userList }));
+              } catch (e) {
+                  console.error("User Fetch Error", e);
+              }
+          };
+
+          fetchUsers();
       } else {
           setUsers([]);
       }
@@ -173,8 +199,6 @@ export default function App() {
       { id: 'lecture_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
       { id: 'lectures', label: '강의 관리', icon: PenTool, roles: ['lecturer'] },
       { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student', 'parent'] },
-      
-      // [수정] 관리자용 '월급 관리'와 직원용 '월급 확인' 분리
       { id: 'payroll_mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
       { id: 'payroll', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
@@ -203,8 +227,6 @@ export default function App() {
                     {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
                     {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
-                    
-                    {/* [수정] 뷰 모드에 따른 PayrollManager 호출 */}
                     {activeTab === 'payroll_mgmt' && <PayrollManager currentUser={currentUser} users={users} viewMode="management" />}
                     {activeTab === 'payroll' && <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />}
                 </Suspense>

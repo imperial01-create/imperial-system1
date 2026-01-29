@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] 모든 아이콘 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -15,7 +14,6 @@ const DEDUCTION_KEYS = [
     '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'
 ];
 
-// --- Helper Functions ---
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
 const getMonthRange = (yearMonth) => {
@@ -80,7 +78,6 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
-    // 날짜 상태 관리
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -89,11 +86,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [payrolls, setPayrolls] = useState({});
     const [isLoading, setIsLoading] = useState(false); 
     const [lastUpdated, setLastUpdated] = useState(null); 
-    
-    const [monthlySessions, setMonthlySessions] = useState([]);
-    const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
-    // Admin Modal & Process State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false); 
@@ -105,16 +98,15 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // --- 1. Data Fetching (Payrolls) ---
+    // [최적화] Payroll Data Fetching (Cache-First)
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
 
         setIsLoading(true);
-        // 캐시 키 버전 업 (v5)
         const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
-            // 1. 캐시 확인
+            // 1. 캐시 우선 확인
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -132,11 +124,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 }
             }
 
-            // 2. Firestore 요청
+            // 2. DB 조회 (캐시 없거나 강제 새로고침)
             const fetchedData = {};
 
             if (isManagementMode) {
-                // [관리 모드] 해당 월 전체 데이터
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
                     where('yearMonth', '==', selectedMonth)
@@ -146,17 +137,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     fetchedData[doc.data().userId] = doc.data();
                 });
             } else {
-                // [개인 모드] 내 데이터 직접 조회
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 const snapshot = await getDoc(docRef);
-                
                 if (snapshot.exists()) {
                     fetchedData[currentUser.id] = snapshot.data();
                 }
             }
 
-            // 3. 상태 업데이트 및 캐시 저장
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
@@ -170,43 +158,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    // --- 2. Fetch Monthly Sessions (Only for Admin Calculation) ---
-    const fetchMonthlySessions = useCallback(async () => {
-        if (!isManagementMode) {
-            setMonthlySessions([]);
-            return;
-        }
-
-        setIsSessionsLoading(true);
-        try {
-            const { startStr, endStr } = getMonthRange(selectedMonth);
-            
-            const q = query(
-                collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
-                where('date', '>=', startStr),
-                where('date', '<=', endStr)
-            );
-
-            const snapshot = await getDocs(q);
-            const sessions = snapshot.docs.map(d => d.data());
-            setMonthlySessions(sessions);
-        } catch (e) {
-            console.error("Session Fetch Error:", e);
-        } finally {
-            setIsSessionsLoading(false);
-        }
-    }, [selectedMonth, isManagementMode]);
-
-    // 초기 로드 및 월 변경 시 실행
     useEffect(() => {
-        // [잔상 제거] 월 변경 시 일단 비움 (필수)
-        setPayrolls({});
+        setPayrolls({}); // 잔상 제거
         fetchPayrolls(false);
-        fetchMonthlySessions();
-    }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
+    }, [fetchPayrolls]);
 
-
-    // --- 3. Calculation Logic ---
+    // [최적화] On-Demand Calculation (DB 읽기 최소화)
+    // 기존에 전체 세션을 미리 로드하던 로직을 제거하고,
+    // 정산 버튼 클릭 시 해당 조교의 데이터만 가져오도록 변경
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         
@@ -223,8 +182,19 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             let hourlyRate = 0;
 
             if (targetUser.role === 'ta') {
-                const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
+                const { startStr, endStr } = getMonthRange(selectedMonth);
                 
+                // [Lazy Loading] 필요할 때만 쿼리 실행
+                const sessionQuery = query(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
+                    where('taId', '==', targetUser.id),
+                    where('date', '>=', startStr),
+                    where('date', '<=', endStr)
+                );
+                
+                const sessionSnapshot = await getDocs(sessionQuery);
+                const userSessions = sessionSnapshot.docs.map(doc => doc.data());
+
                 hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
                 totalHours = calcResult.totalHours;
@@ -271,7 +241,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     };
 
-    // 4. Save Manual Edits
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
         
@@ -308,13 +277,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     };
 
-    // 5. Excel Export
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map(p => {
-            const roleName = p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자');
             const row = {
                 '이름': p.userName,
-                '직책': roleName,
+                '직책': p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자'),
                 '기본급/시급급여': p.baseSalary,
                 '주휴수당': p.weeklyHolidayPay,
                 '식대': p.mealAllowance,
@@ -380,11 +347,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         size="sm" 
                         variant="ghost" 
                         icon={RefreshCcw} 
-                        onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} 
-                        title="데이터 새로고침 (DB 읽기 발생)"
-                        disabled={isLoading || isSessionsLoading}
+                        onClick={() => fetchPayrolls(true)} 
+                        title="데이터 새로고침"
+                        disabled={isLoading}
                     />
-                    
                     {isManagementMode && (
                         <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">
                             엑셀 다운로드
@@ -411,13 +377,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 </tr>
                             </thead>
                             <tbody className="divide-y">
-                                {targetUsers.length === 0 && (
-                                    <tr>
-                                        <td colSpan="8" className="p-8 text-center text-gray-400">
-                                            {users && users.length === 0 ? "사용자 데이터를 불러오는 중입니다..." : "표시할 직원이 없습니다."}
-                                        </td>
-                                    </tr>
-                                )}
                                 {targetUsers.map(user => {
                                     const payroll = payrolls[user.id];
                                     const roleLabel = user.role === 'ta' ? '조교' : (user.role === 'lecturer' ? '강사' : '관리자');

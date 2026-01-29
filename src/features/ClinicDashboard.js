@@ -1,15 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 사용되는 모든 아이콘 및 라이브러리 완벽 확인
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+// [Import Check] Loader, RefreshCcw 추가
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
-  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader 
+  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
-// --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -18,7 +17,7 @@ const TEMPLATES = {
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
 };
 
-// --- Helper Functions ---
+// ... (Helper Functions 생략 - 기존과 동일) ...
 const getLocalToday = () => {
   const d = new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -40,8 +39,9 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// --- Calendar Sub-Component ---
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap }) => {
+// --- Calendar Sub-Component (기존과 동일, Refresh 버튼 추가) ---
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
+  // ... (이전 코드 유지) ...
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
         return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
@@ -52,7 +52,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const now = new Date();
   const isAdmin = currentUser.role === 'admin';
   const isStudent = currentUser.role === 'student';
-  const isParent = currentUser.role === 'parent'; // [추가] 학부모 구분
+  const isParent = currentUser.role === 'parent';
   const isLecturer = currentUser.role === 'lecturer';
   const isTa = currentUser.role === 'ta';
 
@@ -90,12 +90,17 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
       <Card className="lg:col-span-1 min-h-[420px] p-4 md:p-6 w-full">
         <div className="flex justify-between items-center mb-6">
           <h3 className="font-bold flex items-center gap-2 text-lg text-gray-800"><CalendarIcon size={20} className="text-blue-600"/> 일정 선택</h3>
-          <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            <button onClick={handlePrevMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronLeft size={20}/></button>
-            <span className="font-bold text-lg w-20 text-center flex items-center justify-center">{currentDate.getMonth()+1}월</span>
-            <button onClick={handleNextMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronRight size={20}/></button>
+          {/* [추가] 새로고침 버튼 */}
+          <div className="flex gap-1 items-center">
+             <button onClick={onRefresh} className="p-2 hover:bg-gray-100 rounded-full text-gray-500 mr-2" title="일정 새로고침"><RefreshCcw size={16}/></button>
+             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+                <button onClick={handlePrevMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronLeft size={20}/></button>
+                <span className="font-bold text-lg w-20 text-center flex items-center justify-center">{currentDate.getMonth()+1}월</span>
+                <button onClick={handleNextMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronRight size={20}/></button>
+             </div>
           </div>
         </div>
+        {/* ... (이하 캘린더 그리드 코드는 기존과 동일) ... */}
         <div className="grid grid-cols-7 text-center text-sm font-bold text-gray-400 mb-2">{DAYS.map(d=><div key={d} className="py-1">{d}</div>)}</div>
         <div className="grid grid-cols-7 gap-1.5">
           {getDaysInMonth(currentDate).map((d,i)=>{
@@ -119,6 +124,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
       </Card>
 
       <Card className="lg:col-span-2 flex flex-col h-[600px] lg:h-auto p-0 md:p-6 overflow-hidden w-full">
+        {/* ... (이하 상세 리스트 렌더링 코드는 기존과 동일) ... */}
+        {/* ... (CalendarView 내부 코드 생략 없이 그대로 유지) ... */}
         <div className="p-5 md:p-0 border-b md:border-none bg-white sticky top-0 z-10">
            <h3 className="font-bold text-xl flex items-center gap-2">
             <span className="text-blue-600">{selectedDateStr.split('-')[2]}일</span> 상세 스케줄
@@ -164,7 +171,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     
                     const taSubject = s.taSubject || taSubjectMap?.[s.taId] || '개별 클리닉';
 
-                    // 1. 학생 뷰 (기존 로직)
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
@@ -194,12 +200,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         );
                     }
 
-                    // 2. [추가] 학부모 뷰 (Privacy Filter)
                     if (isParent) {
                         const isMyChild = s.studentName === currentUser.childName;
                         const isBooked = s.status === 'confirmed' || s.status === 'pending';
-
-                        // 다른 학생이 예약한 경우 -> 정보 숨김
                         if (isBooked && !isMyChild) {
                             return (
                                 <div key={s.id} className="border rounded-2xl p-4 flex flex-col justify-center bg-gray-50 border-gray-200 opacity-70 w-full min-h-[80px]">
@@ -210,10 +213,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 </div>
                             );
                         }
-                        // 내 자녀이거나 오픈된 슬롯인 경우 -> 아래의 공통 렌더링으로 진행 (정보 표시)
                     }
 
-                    // 3. 공통 뷰 (관리자, 강사, 조교, 학부모-자녀/오픈슬롯)
                     return (
                       <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all w-full ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
                         <div className="flex justify-between items-start w-full">
@@ -223,7 +224,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <Badge status={s.status}/>
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
-                                {/* 조교 과목 표시 */}
                                 {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
                                 {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
                             </div>
@@ -236,11 +236,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select 
-                                    className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
-                                    value={s.classroom || ''} 
-                                    onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
-                                >
+                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
@@ -250,11 +246,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
-                            {/* 학부모에게는 조작 버튼 숨김 */}
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
-                            
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
                           </div>
@@ -305,38 +299,73 @@ const ClinicDashboard = ({ currentUser, users }) => {
         return map;
     }, [users]);
 
-    useEffect(() => {
-        if (!currentUser) return;
+    // [최적화] 세션 데이터 로드 (Cache-First)
+    const fetchSessions = useCallback(async (forceRefresh = false) => {
+        setAppLoading(true);
         const year = currentDate.getFullYear();
         const month = currentDate.getMonth() + 1;
-        const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
-        const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
+        const cacheKey = `imperial_sessions_${year}-${month}`;
 
-        let sessionQuery;
-        if (currentUser.role === 'student' || currentUser.role === 'parent') {
-            const today = getLocalToday();
-            sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(200));
-        } else {
-            sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
-        }
+        try {
+            // 1. 캐시 확인
+            if (!forceRefresh) {
+                const cached = localStorage.getItem(cacheKey);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        if (Date.now() - parsed.timestamp < 3600000) { // 1시간 유효
+                            setSessionMap(parsed.data);
+                            setAppLoading(false);
+                            return; 
+                        }
+                    } catch (e) {
+                        localStorage.removeItem(cacheKey);
+                    }
+                }
+            }
 
-        const unsub = onSnapshot(sessionQuery, (snapshot) => {
-            setSessionMap(prev => {
-                const next = { ...prev };
-                snapshot.docChanges().forEach(change => {
-                    if (change.type === 'added' || change.type === 'modified') {
-                        next[change.doc.id] = { id: change.doc.id, ...change.doc.data() };
-                    }
-                    if (change.type === 'removed') {
-                        delete next[change.doc.id]; 
-                    }
-                });
-                return next;
+            // 2. DB 조회 (캐시 없거나 강제 새로고침)
+            const startOfMonth = `${year}-${String(month).padStart(2,'0')}-01`;
+            const endOfMonth = `${year}-${String(month).padStart(2,'0')}-31`;
+            let sessionQuery;
+
+            if (currentUser.role === 'student' || currentUser.role === 'parent') {
+                const today = getLocalToday();
+                sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), limit(200));
+            } else {
+                sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
+            }
+
+            // [변경] getDocs로 1회성 로드 (onSnapshot 제거)
+            const snapshot = await getDocs(sessionQuery);
+            const fetchedData = {};
+            snapshot.forEach(doc => {
+                fetchedData[doc.id] = { id: doc.id, ...doc.data() };
             });
+
+            setSessionMap(fetchedData);
+            // 캐시 저장
+            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
+
+        } catch (e) {
+            console.error("Session Fetch Error:", e);
+        } finally {
             setAppLoading(false);
-        });
-        return () => unsub();
-    }, [currentUser, currentDate]);
+        }
+    }, [currentDate, currentUser]);
+
+    useEffect(() => {
+        fetchSessions(false);
+    }, [fetchSessions]);
+
+    // 로컬 상태와 캐시 동기화 헬퍼
+    const updateLocalAndCache = (newMap) => {
+        setSessionMap(newMap);
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth() + 1;
+        const cacheKey = `imperial_sessions_${year}-${month}`;
+        localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newMap }));
+    };
 
     useEffect(() => {
         const sorted = Object.values(sessionMap).sort((a,b) => {
@@ -349,6 +378,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
         setSessions(sorted);
     }, [sessionMap]);
 
+    // ... (notify, askConfirm 등 기존 함수 유지) ...
     const notify = (msg, type = 'success') => {
         const id = Date.now();
         setNotifications(prev => [...prev, { id, msg, type }]);
@@ -359,6 +389,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
 
     const handleDateChange = (dStr) => setSelectedDateStr(dStr);
 
+    // [최적화] 액션 수행 시 로컬 상태 즉시 반영 (Optimistic UI)
     const handleAction = async (action, payload) => {
       try {
         if (action === 'toggle_slot') {
@@ -375,36 +406,68 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'add_request') {
             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), {
+            const newSession = {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '',
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
                 status: 'addition_requested', source: 'system', classroom: ''
-            });
+            };
+            const ref = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), newSession);
+            
+            // 로컬 업데이트
+            updateLocalAndCache({ ...sessionMap, [ref.id]: { id: ref.id, ...newSession } });
             notify('근무 신청 완료');
+
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            if(payload) askConfirm("정말 삭제하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
+            if(payload) askConfirm("정말 삭제하시겠습니까?", async () => {
+                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
+                const next = { ...sessionMap };
+                delete next[payload];
+                updateLocalAndCache(next);
+            });
         } else if (action === 'withdraw_cancel') {
-            askConfirm("철회하시겠습니까?", async () => await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' }));
+            askConfirm("철회하시겠습니까?", async () => {
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' });
+                const next = { ...sessionMap, [payload.id]: { ...sessionMap[payload.id], status: 'open', cancelReason: '' } };
+                updateLocalAndCache(next);
+            });
         } else if (action === 'withdraw_add') {
-            if(payload) askConfirm("철회하시겠습니까?", async () => await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload)));
+            if(payload) askConfirm("철회하시겠습니까?", async () => {
+                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
+                const next = { ...sessionMap };
+                delete next[payload];
+                updateLocalAndCache(next);
+            });
         } else if (action === 'approve_booking') {
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' });
+                const resetData = { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' };
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
+                const next = { ...sessionMap, [payload.id]: { ...sessionMap[payload.id], ...resetData } };
+                updateLocalAndCache(next);
                 notify('예약 신청이 취소되었습니다.');
             });
         } else if (action === 'update_classroom') {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { classroom: payload.val });
+            const next = { ...sessionMap, [payload.id]: { ...sessionMap[payload.id], classroom: payload.val } };
+            updateLocalAndCache(next);
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); setFeedbackData({clinicContent:payload.clinicContent||'', feedback:payload.feedback||'', improvement:payload.improvement||''}); setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); setModalState({ type: 'admin_edit' });
         } else if (action === 'approve_schedule_change') { 
-             if (payload.status === 'cancellation_requested') { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); notify('취소 요청 승인됨 (삭제 완료)'); } 
-             else if (payload.status === 'addition_requested') { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); notify('추가 요청 승인됨'); }
+             if (payload.status === 'cancellation_requested') { 
+                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
+                 const next = { ...sessionMap }; delete next[payload.id]; updateLocalAndCache(next);
+                 notify('취소 요청 승인됨 (삭제 완료)'); 
+             } 
+             else if (payload.status === 'addition_requested') { 
+                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); 
+                 const next = { ...sessionMap, [payload.id]: { ...sessionMap[payload.id], status: 'open' } }; updateLocalAndCache(next);
+                 notify('추가 요청 승인됨'); 
+             }
         } else if (action === 'send_feedback_msg') { 
              setSelectedSession(payload); setModalState({ type: 'message_preview_feedback' });
         }
@@ -412,6 +475,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
   };
 
   const handleSaveDefaultSchedule = async () => {
+      // ... (배치 생성 로직은 복잡하므로 여기선 fetchSessions 호출로 갱신 유도)
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
       const batch = writeBatch(db);
@@ -435,24 +499,43 @@ const ClinicDashboard = ({ currentUser, users }) => {
           }
         }
       }
-      await batch.commit(); notify(`${count}개의 스케줄 생성 완료`);
+      await batch.commit(); 
+      notify(`${count}개의 스케줄 생성 완료`);
+      fetchSessions(true); // 강제 새로고침
   };
 
   const submitStudentApplication = async () => {
       const formattedTopic = applicationItems.map(i => i.subject).join(', ');
       const formattedRange = applicationItems.map(i => `${i.workbook} (${i.range})`).join('\n');
       const batch = writeBatch(db);
+      const updates = {};
       studentSelectedSlots.forEach(id => {
         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
-        batch.update(ref, { status: 'pending', studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' });
+        const updateData = { status: 'pending', studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' };
+        batch.update(ref, updateData);
+        updates[id] = updateData;
       });
-      await batch.commit(); setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
+      await batch.commit(); 
+      
+      const next = { ...sessionMap };
+      Object.keys(updates).forEach(id => {
+          next[id] = { ...next[id], ...updates[id] };
+      });
+      updateLocalAndCache(next);
+
+      setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
   };
 
   const handleAdminEditSubmit = async () => {
-    await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{studentName:adminEditData.studentName,topic:adminEditData.topic,questionRange:adminEditData.questionRange,status:adminEditData.studentName?'confirmed':'open'}); 
+    const updateData = {studentName:adminEditData.studentName,topic:adminEditData.topic,questionRange:adminEditData.questionRange,status:adminEditData.studentName?'confirmed':'open'};
+    await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
+    const next = { ...sessionMap, [selectedSession.id]: { ...sessionMap[selectedSession.id], ...updateData } };
+    updateLocalAndCache(next);
     setModalState({type:null}); notify('수정완료'); 
   };
+
+  // ... (나머지 렌더링 로직은 기존과 동일) ...
+  // ... CalendarView에 onRefresh={ () => fetchSessions(true) } 전달됨 ...
 
   const pendingBookings = sessions.filter(s => s.status === 'pending');
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
@@ -516,7 +599,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   </div>
                   <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
               </Card>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} onRefresh={() => fetchSessions(true)}/>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -575,7 +658,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => s.taId === currentUser.id && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
-                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap}/>
+                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
             </>
         )}
        {currentUser.role === 'lecturer' && (
@@ -583,7 +666,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap}/>
+              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={(d)=>setSelectedDateStr(d)} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
            </div>
        )}
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
@@ -629,6 +712,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         selectedSlots={studentSelectedSlots} 
                         users={users}
                         taSubjectMap={taSubjectMap}
+                        onRefresh={() => fetchSessions(true)}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
