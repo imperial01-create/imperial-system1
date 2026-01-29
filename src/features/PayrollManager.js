@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx'; // npm install xlsx
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
+// [Import Check] Wallet 아이콘 추가 (관리자용 아이콘)
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
-  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X
+  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet
 } from 'lucide-react';
 import { collection, doc, setDoc, getDocs, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -11,7 +11,6 @@ import { Button, Card, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// [수정] 공제 항목 리스트 한글화 (순서 고정)
 const DEDUCTION_KEYS = [
     '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'
 ];
@@ -20,35 +19,28 @@ const DEDUCTION_KEYS = [
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
 const getMonthRange = (yearMonth) => {
-    // yearMonth format: "YYYY-MM"
     const [y, m] = yearMonth.split('-').map(Number);
     const start = new Date(y, m - 1, 1);
     const end = new Date(y, m, 0);
     
-    // Firestore 쿼리용 문자열 (YYYY-MM-DD)
     const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
     const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
     
     return { start, end, startStr, endStr };
 };
 
-/**
- * 주휴수당 계산 로직 (일~토 기준 주 15시간 이상 근무 시)
- */
 const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     if (!sessions || sessions.length === 0) return { totalHours: 0, holidayPay: 0 };
 
-    // 1. 일별 근무 시간 집계
     const dailyHours = {};
     sessions.forEach(s => {
-        const date = s.date; // YYYY-MM-DD
+        const date = s.date; 
         const startH = parseInt(s.startTime.split(':')[0], 10);
         const endH = parseInt(s.endTime.split(':')[0], 10);
         const duration = endH - startH;
         dailyHours[date] = (dailyHours[date] || 0) + duration;
     });
 
-    // 2. 주 단위 그룹화 (일요일 ~ 토요일)
     const sortedDates = Object.keys(dailyHours).sort();
     if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
 
@@ -58,13 +50,11 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 
     const weeks = {}; 
 
-    // 월의 1일부터 말일까지 순회하며 주차별로 버킷팅
     for (let d = 1; d <= monthEnd.getDate(); d++) {
         const currentDate = new Date(y, m - 1, d);
         const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
         
-        // 해당 날짜가 속한 주의 "토요일" 날짜를 Key로 사용 (일~토 주기를 묶기 위함)
-        const dayOfWeek = currentDate.getDay(); // 0(일) ~ 6(토)
+        const dayOfWeek = currentDate.getDay(); 
         const distToSat = 6 - dayOfWeek;
         const saturdayDate = new Date(y, m - 1, d + distToSat);
         const weekKey = saturdayDate.toISOString().split('T')[0];
@@ -73,14 +63,12 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
         weeks[weekKey] += (dailyHours[dateStr] || 0);
     }
 
-    // 3. 주휴수당 계산
     let totalHolidayPay = 0;
     let grandTotalHours = 0;
 
     Object.values(weeks).forEach(hours => {
         grandTotalHours += hours;
         if (hours >= 15) {
-            // 공식: (1주일 총 근무시간 / 40시간) * 8 * 시급 (최대 40시간 한도)
             const cappedHours = Math.min(hours, 40);
             const pay = (cappedHours / 40) * 8 * hourlyRate;
             totalHolidayPay += pay;
@@ -93,8 +81,8 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     };
 };
 
-const PayrollManager = ({ currentUser, users }) => {
-    // [버그 수정] Date 객체 대신 문자열로 초기화하여 타임존 이슈 방지
+// [수정] viewMode Prop 추가 ('management' | 'personal')
+const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -104,25 +92,39 @@ const PayrollManager = ({ currentUser, users }) => {
     const [monthlySessions, setMonthlySessions] = useState([]); 
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
-    // Admin Modal State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false);
 
-    const isAdmin = currentUser.role === 'admin';
-    const targetUsers = isAdmin 
-        ? users.filter(u => u.role === 'lecturer' || u.role === 'ta')
+    const isManagementMode = viewMode === 'management';
+
+    // [수정] 타겟 유저 설정
+    // 관리 모드: 관리자, 강사, 조교 모두 포함 (admins included)
+    // 개인 모드: 나 자신만
+    const targetUsers = isManagementMode 
+        ? users.filter(u => ['admin', 'lecturer', 'ta'].includes(u.role))
         : [currentUser];
 
-    // 1. Fetch Payrolls (실시간 동기화)
+    // 1. Fetch Payrolls (데이터 효율화 적용)
     useEffect(() => {
-        // [데이터 효율화] selectedMonth가 변경될 때 기존 데이터를 비워 혼선 방지 (선택 사항이나 권장)
         setPayrolls({}); 
 
-        const q = query(
-            collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
-            where('yearMonth', '==', selectedMonth)
-        );
+        let q;
+        if (isManagementMode) {
+            // 관리 모드: 해당 월의 전체 급여 내역 조회
+            q = query(
+                collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
+                where('yearMonth', '==', selectedMonth)
+            );
+        } else {
+            // [최적화] 개인 모드: 내 급여 내역만 조회 (불필요한 데이터 수신 방지)
+            q = query(
+                collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
+                where('yearMonth', '==', selectedMonth),
+                where('userId', '==', currentUser.id)
+            );
+        }
+
         const unsub = onSnapshot(q, (snapshot) => {
             const data = {};
             snapshot.forEach(doc => {
@@ -131,23 +133,31 @@ const PayrollManager = ({ currentUser, users }) => {
             setPayrolls(data);
         });
         return () => unsub();
-    }, [selectedMonth]);
+    }, [selectedMonth, isManagementMode, currentUser.id]);
 
-    // 2. Fetch Sessions Once for the Month
+    // 2. Fetch Sessions (필요한 경우에만)
     useEffect(() => {
         const fetchMonthlySessions = async () => {
+            // 개인 모드이면서 조교가 아니면 세션 로드 불필요
+            if (!isManagementMode && currentUser.role !== 'ta') {
+                setMonthlySessions([]);
+                return;
+            }
+
             setIsSessionsLoading(true);
             try {
                 const { startStr, endStr } = getMonthRange(selectedMonth);
                 
                 let q;
-                if (isAdmin) {
+                if (isManagementMode) {
+                    // 관리 모드: 모든 세션 로드 (조교들 계산용)
                     q = query(
                         collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
                         where('date', '>=', startStr),
                         where('date', '<=', endStr)
                     );
                 } else if (currentUser.role === 'ta') {
+                    // 개인 모드(조교): 내 세션만 로드
                     q = query(
                         collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
                         where('taId', '==', currentUser.id),
@@ -172,11 +182,11 @@ const PayrollManager = ({ currentUser, users }) => {
         };
 
         fetchMonthlySessions();
-    }, [selectedMonth, isAdmin, currentUser]);
+    }, [selectedMonth, isManagementMode, currentUser]);
 
     // 3. Calculation Logic
     const handleCalculate = async (targetUser) => {
-        if (!isAdmin) return;
+        if (!isManagementMode) return;
         
         // 조교인데 시급 없으면 경고
         if (targetUser.role === 'ta' && !targetUser.hourlyRate) {
@@ -193,7 +203,7 @@ const PayrollManager = ({ currentUser, users }) => {
 
             if (targetUser.role === 'ta') {
                 hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
-                // [N+1 방지] 메모리 필터링
+                // 메모리 필터링
                 const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
                 
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
@@ -201,8 +211,11 @@ const PayrollManager = ({ currentUser, users }) => {
                 weeklyHolidayPay = calcResult.holidayPay;
                 baseSalary = Math.floor(totalHours * hourlyRate);
             } 
-            
-            // [수정] 공제 항목 초기값 한글 키로 설정
+            // [수정] 강사(lecturer) 또는 관리자(admin)는 시급/시간 계산 없이 0으로 초기화
+            else {
+                baseSalary = 0; 
+            }
+
             const initialDeductions = {};
             DEDUCTION_KEYS.forEach(key => initialDeductions[key] = 0);
 
@@ -210,7 +223,7 @@ const PayrollManager = ({ currentUser, users }) => {
                 userId: targetUser.id,
                 userName: targetUser.name,
                 userRole: targetUser.role,
-                yearMonth: selectedMonth, // [중요] 현재 선택된 월로 저장
+                yearMonth: selectedMonth, 
                 hourlyRate: hourlyRate,
                 baseSalary: baseSalary,
                 totalHours: totalHours,
@@ -224,7 +237,6 @@ const PayrollManager = ({ currentUser, users }) => {
                 updatedAt: serverTimestamp()
             };
 
-            // [중요] Document ID에 월(Month)을 포함하여 월별 데이터 격리
             const docId = `${targetUser.id}_${selectedMonth}`;
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), initialData);
             
@@ -263,9 +275,10 @@ const PayrollManager = ({ currentUser, users }) => {
     // 5. Excel Export
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map(p => {
+            const roleName = p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자');
             const row = {
                 '이름': p.userName,
-                '직책': p.userRole === 'ta' ? '조교' : '강사',
+                '직책': roleName,
                 '기본급/시급급여': p.baseSalary,
                 '주휴수당': p.weeklyHolidayPay,
                 '식대': p.mealAllowance,
@@ -273,7 +286,6 @@ const PayrollManager = ({ currentUser, users }) => {
                 '지급총액(세전)': p.totalGross,
             };
             
-            // [수정] 한글 키 매핑 (DB에 이미 한글로 저장됨)
             DEDUCTION_KEYS.forEach(key => {
                 row[key] = p.deductions[key] || 0;
             });
@@ -290,7 +302,6 @@ const PayrollManager = ({ currentUser, users }) => {
         XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
     };
 
-    // [버그 수정] 문자열 연산을 통한 안전한 날짜 변경
     const handleMonthChange = (offset) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
         let year = parseInt(yearStr, 10);
@@ -318,14 +329,16 @@ const PayrollManager = ({ currentUser, users }) => {
                     <h2 className="text-2xl font-bold text-gray-800">{selectedMonth.split('-')[0]}년 {selectedMonth.split('-')[1]}월 급여</h2>
                     <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
                 </div>
-                {isAdmin && (
+                {/* 엑셀 다운로드는 관리 모드에서만 노출 */}
+                {isManagementMode && (
                     <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50">
                         엑셀 다운로드
                     </Button>
                 )}
             </div>
 
-            {isAdmin ? (
+            {/* Content Area - 뷰 모드에 따라 분기 */}
+            {isManagementMode ? (
                 <Card className="overflow-hidden w-full">
                     {isSessionsLoading && <div className="p-4 text-center text-gray-500 text-sm flex items-center justify-center gap-2"><Loader className="animate-spin" size={16}/> 근무 데이터를 불러오는 중...</div>}
                     
@@ -346,10 +359,11 @@ const PayrollManager = ({ currentUser, users }) => {
                             <tbody className="divide-y">
                                 {targetUsers.map(user => {
                                     const payroll = payrolls[user.id];
+                                    const roleLabel = user.role === 'ta' ? '조교' : (user.role === 'lecturer' ? '강사' : '관리자');
                                     return (
                                         <tr key={user.id} className="hover:bg-gray-50">
                                             <td className="p-4 font-bold">{user.name}</td>
-                                            <td className="p-4 uppercase text-xs font-bold text-gray-400">{user.role}</td>
+                                            <td className="p-4 uppercase text-xs font-bold text-gray-400">{roleLabel}</td>
                                             <td className="p-4">
                                                 {user.role === 'ta' 
                                                     ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') 
@@ -364,7 +378,6 @@ const PayrollManager = ({ currentUser, users }) => {
                                                 {payroll ? (
                                                     <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }}>상세/공제</Button>
                                                 ) : (
-                                                    // [안전 장치] 데이터 로딩 중에는 계산 버튼 비활성화 (이전 달 데이터 사용 방지)
                                                     <Button size="sm" icon={Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing || isSessionsLoading}>
                                                         {calcProcessing ? <Loader className="animate-spin" size={14}/> : '정산 하기'}
                                                     </Button>
@@ -378,6 +391,7 @@ const PayrollManager = ({ currentUser, users }) => {
                     </div>
                 </Card>
             ) : (
+                // Personal View (Payslip)
                 <div className="max-w-2xl mx-auto w-full">
                     {payrolls[currentUser.id] ? (
                         <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
@@ -401,7 +415,6 @@ const PayrollManager = ({ currentUser, users }) => {
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 mb-1">공제 내역</p>
-                                        {/* [수정] 한글 키로 렌더링 */}
                                         {DEDUCTION_KEYS.map((key) => (
                                             <div key={key} className="flex justify-between text-sm mb-1 text-gray-600">
                                                 <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions[key])}</span>
@@ -425,6 +438,7 @@ const PayrollManager = ({ currentUser, users }) => {
                 </div>
             )}
 
+            {/* Admin Edit Modal */}
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="급여 상세 수정 (세무 입력)">
                 {editingPayroll && (
                     <div className="space-y-4">
@@ -450,7 +464,6 @@ const PayrollManager = ({ currentUser, users }) => {
                         <div className="border-t pt-4">
                             <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값)</h4>
                             <div className="grid grid-cols-2 gap-2">
-                                {/* [수정] 한글 키로 입력 필드 생성 */}
                                 {DEDUCTION_KEYS.map(key => (
                                     <div key={key}>
                                         <label className="block text-xs text-gray-500">{key}</label>

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, Suspense } from 'react';
-// [Import Check] CircleDollarSign 추가
+// [Import Check] Wallet 아이콘 추가
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
-  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader, CircleDollarSign
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader, CircleDollarSign, Wallet
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where, onSnapshot } from 'firebase/firestore';
@@ -18,10 +18,7 @@ const AdminLectureManager = React.lazy(() => import('./features/LectureManager')
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
 const UserManager = React.lazy(() => import('./features/UserManager'));
-const PayrollManager = React.lazy(() => import('./features/PayrollManager')); // [신규]
-
-// ... (LoginView, Dashboard components are same as before - omitting for brevity unless change needed. Assuming Dashboard needs update for Payroll button) ...
-// For brevity, I will include the full App component to be safe.
+const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 
 const LoadingScreen = () => (
   <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -88,11 +85,12 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' || currentUser.role === 'parent' ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}</p>
                     </div>
                 )}
-                {/* [추가] 월급 확인 바로가기 (관리자/강사/조교) */}
+                
+                {/* [수정] 월급 메뉴 바로가기 분기 */}
                 {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
-                    <div onClick={() => setActiveTab('payroll')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4"><div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div><h2 className="text-xl font-bold text-gray-800">월급 확인</h2></div>
-                        <p className="text-gray-500 leading-relaxed">이번 달 급여 명세서와<br/>정산 내역을 확인합니다.</p>
+                    <div onClick={() => setActiveTab(currentUser.role === 'admin' ? 'payroll_mgmt' : 'payroll')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4"><div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div><h2 className="text-xl font-bold text-gray-800">{currentUser.role === 'admin' ? '월급 관리' : '월급 확인'}</h2></div>
+                        <p className="text-gray-500 leading-relaxed">{currentUser.role === 'admin' ? '전체 직원의 급여를 정산하고\n관리합니다.' : '이번 달 급여 명세서와\n정산 내역을 확인합니다.'}</p>
                     </div>
                 )}
             </div>
@@ -175,7 +173,9 @@ export default function App() {
       { id: 'lecture_mgmt', label: '강의 관리', icon: Settings, roles: ['admin'] },
       { id: 'lectures', label: '강의 관리', icon: PenTool, roles: ['lecturer'] },
       { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student', 'parent'] },
-      // [신규] 월급 확인 메뉴
+      
+      // [수정] 관리자용 '월급 관리'와 직원용 '월급 확인' 분리
+      { id: 'payroll_mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
       { id: 'payroll', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
@@ -203,7 +203,10 @@ export default function App() {
                     {activeTab === 'lecture_mgmt' && <AdminLectureManager users={users} />}
                     {activeTab === 'lectures' && <LecturerDashboard currentUser={currentUser} users={users} />}
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
-                    {activeTab === 'payroll' && <PayrollManager currentUser={currentUser} users={users} />}
+                    
+                    {/* [수정] 뷰 모드에 따른 PayrollManager 호출 */}
+                    {activeTab === 'payroll_mgmt' && <PayrollManager currentUser={currentUser} users={users} viewMode="management" />}
+                    {activeTab === 'payroll' && <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />}
                 </Suspense>
             </main>
         </div>
