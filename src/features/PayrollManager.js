@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx'; // npm install xlsx
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader 
@@ -18,30 +17,23 @@ const getMonthRange = (yearMonth) => {
     const [y, m] = yearMonth.split('-').map(Number);
     const start = new Date(y, m - 1, 1);
     const end = new Date(y, m, 0);
-    // Firestore 쿼리용 문자열 (YYYY-MM-DD)
     const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
     const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
     return { start, end, startStr, endStr };
 };
 
-/**
- * 주휴수당 계산 로직 (일~토 기준 주 15시간 이상 근무 시)
- * - sessions: 해당 월의 모든 세션 중 특정 조교의 세션만 필터링된 배열
- */
 const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     if (!sessions || sessions.length === 0) return { totalHours: 0, holidayPay: 0 };
 
-    // 1. 일별 근무 시간 집계
     const dailyHours = {};
     sessions.forEach(s => {
-        const date = s.date; // YYYY-MM-DD
+        const date = s.date;
         const startH = parseInt(s.startTime.split(':')[0], 10);
         const endH = parseInt(s.endTime.split(':')[0], 10);
         const duration = endH - startH;
         dailyHours[date] = (dailyHours[date] || 0) + duration;
     });
 
-    // 2. 주 단위 그룹화 (일요일 ~ 토요일)
     const sortedDates = Object.keys(dailyHours).sort();
     if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
 
@@ -51,13 +43,10 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 
     const weeks = {}; 
 
-    // 월의 1일부터 말일까지 순회하며 주차별로 버킷팅
     for (let d = 1; d <= monthEnd.getDate(); d++) {
         const currentDate = new Date(y, m - 1, d);
         const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        
-        // 해당 날짜가 속한 주의 "토요일" 날짜를 Key로 사용 (일~토 주기를 묶기 위함)
-        const dayOfWeek = currentDate.getDay(); // 0(일) ~ 6(토)
+        const dayOfWeek = currentDate.getDay(); 
         const distToSat = 6 - dayOfWeek;
         const saturdayDate = new Date(y, m - 1, d + distToSat);
         const weekKey = saturdayDate.toISOString().split('T')[0];
@@ -66,14 +55,12 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
         weeks[weekKey] += (dailyHours[dateStr] || 0);
     }
 
-    // 3. 주휴수당 계산
     let totalHolidayPay = 0;
     let grandTotalHours = 0;
 
     Object.values(weeks).forEach(hours => {
         grandTotalHours += hours;
         if (hours >= 15) {
-            // 공식: (1주일 총 근무시간 / 40시간) * 8 * 시급 (최대 40시간 한도)
             const cappedHours = Math.min(hours, 40);
             const pay = (cappedHours / 40) * 8 * hourlyRate;
             totalHolidayPay += pay;
@@ -87,14 +74,12 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 };
 
 const PayrollManager = ({ currentUser, users }) => {
-    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); 
     const [payrolls, setPayrolls] = useState({});
     
-    // [데이터 효율화] 전체 세션을 한 번만 로드하여 캐싱
     const [monthlySessions, setMonthlySessions] = useState([]); 
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
-    // Admin Modal State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false);
@@ -104,7 +89,7 @@ const PayrollManager = ({ currentUser, users }) => {
         ? users.filter(u => u.role === 'lecturer' || u.role === 'ta')
         : [currentUser];
 
-    // 1. Fetch Payrolls (이미 정산된 내역)
+    // 1. Fetch Payrolls
     useEffect(() => {
         const q = query(
             collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
@@ -120,8 +105,7 @@ const PayrollManager = ({ currentUser, users }) => {
         return () => unsub();
     }, [selectedMonth]);
 
-    // 2. [효율화] Fetch Sessions Once for the Month
-    // [수정 사항] 상태(status) 필터를 제거하여 예정된 모든 근무(Open, Confirmed 등)를 가져옵니다.
+    // 2. Fetch Sessions
     useEffect(() => {
         const fetchMonthlySessions = async () => {
             setIsSessionsLoading(true);
@@ -134,7 +118,6 @@ const PayrollManager = ({ currentUser, users }) => {
                         collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
                         where('date', '>=', startStr),
                         where('date', '<=', endStr)
-                        // [수정] status 필터 삭제: 모든 세션 조회 (예정된 근무 포함)
                     );
                 } else if (currentUser.role === 'ta') {
                     q = query(
@@ -142,7 +125,6 @@ const PayrollManager = ({ currentUser, users }) => {
                         where('taId', '==', currentUser.id),
                         where('date', '>=', startStr),
                         where('date', '<=', endStr)
-                        // [수정] status 필터 삭제
                     );
                 } else {
                     setMonthlySessions([]);
@@ -164,10 +146,11 @@ const PayrollManager = ({ currentUser, users }) => {
         fetchMonthlySessions();
     }, [selectedMonth, isAdmin, currentUser]);
 
-    // 3. Calculation Logic (Memory-based, No DB Read)
+    // 3. Calculation Logic
     const handleCalculate = async (targetUser) => {
         if (!isAdmin) return;
         
+        // [수정] 강사는 시급 체크 건너뜀
         if (targetUser.role === 'ta' && !targetUser.hourlyRate) {
             alert(`${targetUser.name}님의 시급 정보가 없습니다. 사용자 관리에서 시급을 설정해주세요.`);
             return;
@@ -178,12 +161,10 @@ const PayrollManager = ({ currentUser, users }) => {
             let baseSalary = 0;
             let totalHours = 0;
             let weeklyHolidayPay = 0;
-            let hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
+            let hourlyRate = 0; // 강사는 0으로 초기화
 
-            // TA: Calculate from cached 'monthlySessions'
             if (targetUser.role === 'ta') {
-                // [수정] DB에 존재하는 해당 조교의 모든 세션을 근무 시간으로 인정
-                // (ClinicDashboard의 카운트 방식과 동일하게 taId만 체크)
+                hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
                 const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
                 
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
@@ -191,11 +172,8 @@ const PayrollManager = ({ currentUser, users }) => {
                 weeklyHolidayPay = calcResult.holidayPay;
                 baseSalary = Math.floor(totalHours * hourlyRate);
             } 
-            // Lecturer: Default 0 (Manual Entry)
-            else {
-                baseSalary = 0; 
-            }
-
+            
+            // [수정] 강사는 기본값 0으로 시작 (변동급)
             const initialData = {
                 userId: targetUser.id,
                 userName: targetUser.name,
@@ -226,7 +204,6 @@ const PayrollManager = ({ currentUser, users }) => {
         }
     };
 
-    // 4. Save Manual Edits
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
         
@@ -251,12 +228,11 @@ const PayrollManager = ({ currentUser, users }) => {
         setIsEditModalOpen(false);
     };
 
-    // 5. Excel Export
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map(p => ({
             '이름': p.userName,
             '직책': p.userRole === 'ta' ? '조교' : '강사',
-            '기본급(시급계산)': p.baseSalary,
+            '기본급': p.baseSalary,
             '주휴수당': p.weeklyHolidayPay,
             '식대': p.mealAllowance,
             '상여금': p.bonus,
@@ -285,7 +261,6 @@ const PayrollManager = ({ currentUser, users }) => {
 
     return (
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
-            {/* Header & Filter */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
                     <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -299,7 +274,6 @@ const PayrollManager = ({ currentUser, users }) => {
                 )}
             </div>
 
-            {/* Content Area */}
             {isAdmin ? (
                 <Card className="overflow-hidden w-full">
                     {isSessionsLoading && <div className="p-4 text-center text-gray-500 text-sm flex items-center justify-center gap-2"><Loader className="animate-spin" size={16}/> 근무 데이터를 불러오는 중...</div>}
@@ -325,7 +299,12 @@ const PayrollManager = ({ currentUser, users }) => {
                                         <tr key={user.id} className="hover:bg-gray-50">
                                             <td className="p-4 font-bold">{user.name}</td>
                                             <td className="p-4 uppercase text-xs font-bold text-gray-400">{user.role}</td>
-                                            <td className="p-4">{user.role === 'ta' ? `${formatCurrency(user.hourlyRate)}/hr` : '변동급'}</td>
+                                            <td className="p-4">
+                                                {user.role === 'ta' 
+                                                    ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') 
+                                                    : (payroll ? formatCurrency(payroll.baseSalary) : '미정')
+                                                }
+                                            </td>
                                             <td className="p-4">{payroll ? `${payroll.totalHours} hrs` : '-'}</td>
                                             <td className="p-4 text-blue-600">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
                                             <td className="p-4 font-bold">{payroll ? formatCurrency(payroll.totalGross) : '-'}</td>
@@ -347,7 +326,6 @@ const PayrollManager = ({ currentUser, users }) => {
                     </div>
                 </Card>
             ) : (
-                // Staff View
                 <div className="max-w-2xl mx-auto w-full">
                     {payrolls[currentUser.id] ? (
                         <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
@@ -394,7 +372,6 @@ const PayrollManager = ({ currentUser, users }) => {
                 </div>
             )}
 
-            {/* Admin Edit Modal */}
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="급여 상세 수정 (세무 입력)">
                 {editingPayroll && (
                     <div className="space-y-4">

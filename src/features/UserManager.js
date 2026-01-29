@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] DollarSign 아이콘 추가
+// [Import Check] DollarSign 아이콘 확인
 import { 
   Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign 
 } from 'lucide-react';
@@ -18,7 +18,6 @@ const UserManager = ({ currentUser }) => {
     const [targetUserId, setTargetUserId] = useState(null);
     const [loading, setLoading] = useState(false);
 
-    // Form State (hourlyRate 추가)
     const [formData, setFormData] = useState({ 
         name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: ''
     });
@@ -79,9 +78,11 @@ const UserManager = ({ currentUser }) => {
                 updatedAt: serverTimestamp()
             };
 
+            // [수정] 강사는 시급 제외, 조교만 시급 저장
             if (activeTab === 'ta' || activeTab === 'lecturer') {
                 payload.subject = formData.subject || '';
-                // [추가] 시급 정보 저장 (TA/Lecturer only)
+            }
+            if (activeTab === 'ta') {
                 payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
             }
             if (activeTab === 'parent') {
@@ -171,9 +172,8 @@ const UserManager = ({ currentUser }) => {
                                 <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
                                 <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
                                 <th className="p-4 w-[15%] whitespace-nowrap">전화번호</th>
-                                {/* [추가] 시급/비고 컬럼 */}
                                 <th className="p-4 w-[15%] whitespace-nowrap">
-                                    {(activeTab === 'ta' || activeTab === 'lecturer') ? '시급' : '비고'}
+                                    {(activeTab === 'ta' || activeTab === 'lecturer') ? (activeTab === 'ta' ? '시급' : '비고') : '비고'}
                                 </th>
                                 <th className="p-4 w-[15%] whitespace-nowrap">
                                     {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '')}
@@ -188,7 +188,8 @@ const UserManager = ({ currentUser }) => {
                                     <td className="p-4 text-gray-600">{u.userId}</td>
                                     <td className="p-4 text-gray-600">{u.phone || '-'}</td>
                                     <td className="p-4 font-mono text-blue-600">
-                                        {(activeTab === 'ta' || activeTab === 'lecturer') && u.hourlyRate ? `${u.hourlyRate.toLocaleString()}원` : '-'}
+                                        {/* [수정] 조교만 시급 표시 */}
+                                        {activeTab === 'ta' && u.hourlyRate ? `${Number(u.hourlyRate).toLocaleString()}원` : '-'}
                                     </td>
                                     <td className="p-4">
                                         {activeTab === 'parent' && (
@@ -218,20 +219,21 @@ const UserManager = ({ currentUser }) => {
                     <input className="w-full border p-3 rounded-xl" placeholder="전화번호 (선택)" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
                     
                     {(activeTab === 'ta' || activeTab === 'lecturer') && (
-                        <>
-                            <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
-                            {/* [추가] 시급 입력 필드 */}
-                            <div className="relative">
-                                <input 
-                                    type="number"
-                                    className="w-full border p-3 pl-10 rounded-xl" 
-                                    placeholder="시급 (숫자만 입력)" 
-                                    value={formData.hourlyRate} 
-                                    onChange={e => setFormData({...formData, hourlyRate: e.target.value})} 
-                                />
-                                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
-                            </div>
-                        </>
+                        <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                    )}
+
+                    {/* [수정] 조교(ta)일 때만 시급 입력 필드 노출 */}
+                    {activeTab === 'ta' && (
+                        <div className="relative">
+                            <input 
+                                type="number"
+                                className="w-full border p-3 pl-10 rounded-xl" 
+                                placeholder="시급 (숫자만 입력)" 
+                                value={formData.hourlyRate} 
+                                onChange={e => setFormData({...formData, hourlyRate: e.target.value})} 
+                            />
+                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
+                        </div>
                     )}
 
                     {activeTab === 'parent' && (
