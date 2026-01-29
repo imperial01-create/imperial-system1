@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx'; // npm install xlsx
+// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
-  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader 
+  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X
 } from 'lucide-react';
 import { collection, doc, setDoc, getDocs, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -10,30 +11,44 @@ import { Button, Card, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
+// [수정] 공제 항목 리스트 한글화 (순서 고정)
+const DEDUCTION_KEYS = [
+    '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'
+];
+
 // --- Helper Functions ---
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
 const getMonthRange = (yearMonth) => {
+    // yearMonth format: "YYYY-MM"
     const [y, m] = yearMonth.split('-').map(Number);
     const start = new Date(y, m - 1, 1);
     const end = new Date(y, m, 0);
+    
+    // Firestore 쿼리용 문자열 (YYYY-MM-DD)
     const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
     const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
+    
     return { start, end, startStr, endStr };
 };
 
+/**
+ * 주휴수당 계산 로직 (일~토 기준 주 15시간 이상 근무 시)
+ */
 const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     if (!sessions || sessions.length === 0) return { totalHours: 0, holidayPay: 0 };
 
+    // 1. 일별 근무 시간 집계
     const dailyHours = {};
     sessions.forEach(s => {
-        const date = s.date;
+        const date = s.date; // YYYY-MM-DD
         const startH = parseInt(s.startTime.split(':')[0], 10);
         const endH = parseInt(s.endTime.split(':')[0], 10);
         const duration = endH - startH;
         dailyHours[date] = (dailyHours[date] || 0) + duration;
     });
 
+    // 2. 주 단위 그룹화 (일요일 ~ 토요일)
     const sortedDates = Object.keys(dailyHours).sort();
     if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
 
@@ -43,10 +58,13 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 
     const weeks = {}; 
 
+    // 월의 1일부터 말일까지 순회하며 주차별로 버킷팅
     for (let d = 1; d <= monthEnd.getDate(); d++) {
         const currentDate = new Date(y, m - 1, d);
         const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        const dayOfWeek = currentDate.getDay(); 
+        
+        // 해당 날짜가 속한 주의 "토요일" 날짜를 Key로 사용 (일~토 주기를 묶기 위함)
+        const dayOfWeek = currentDate.getDay(); // 0(일) ~ 6(토)
         const distToSat = 6 - dayOfWeek;
         const saturdayDate = new Date(y, m - 1, d + distToSat);
         const weekKey = saturdayDate.toISOString().split('T')[0];
@@ -55,12 +73,14 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
         weeks[weekKey] += (dailyHours[dateStr] || 0);
     }
 
+    // 3. 주휴수당 계산
     let totalHolidayPay = 0;
     let grandTotalHours = 0;
 
     Object.values(weeks).forEach(hours => {
         grandTotalHours += hours;
         if (hours >= 15) {
+            // 공식: (1주일 총 근무시간 / 40시간) * 8 * 시급 (최대 40시간 한도)
             const cappedHours = Math.min(hours, 40);
             const pay = (cappedHours / 40) * 8 * hourlyRate;
             totalHolidayPay += pay;
@@ -74,12 +94,17 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 };
 
 const PayrollManager = ({ currentUser, users }) => {
-    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); 
-    const [payrolls, setPayrolls] = useState({});
+    // [버그 수정] Date 객체 대신 문자열로 초기화하여 타임존 이슈 방지
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
     
+    const [payrolls, setPayrolls] = useState({});
     const [monthlySessions, setMonthlySessions] = useState([]); 
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
+    // Admin Modal State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false);
@@ -89,8 +114,11 @@ const PayrollManager = ({ currentUser, users }) => {
         ? users.filter(u => u.role === 'lecturer' || u.role === 'ta')
         : [currentUser];
 
-    // 1. Fetch Payrolls
+    // 1. Fetch Payrolls (실시간 동기화)
     useEffect(() => {
+        // [데이터 효율화] selectedMonth가 변경될 때 기존 데이터를 비워 혼선 방지 (선택 사항이나 권장)
+        setPayrolls({}); 
+
         const q = query(
             collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
             where('yearMonth', '==', selectedMonth)
@@ -105,7 +133,7 @@ const PayrollManager = ({ currentUser, users }) => {
         return () => unsub();
     }, [selectedMonth]);
 
-    // 2. Fetch Sessions
+    // 2. Fetch Sessions Once for the Month
     useEffect(() => {
         const fetchMonthlySessions = async () => {
             setIsSessionsLoading(true);
@@ -150,7 +178,7 @@ const PayrollManager = ({ currentUser, users }) => {
     const handleCalculate = async (targetUser) => {
         if (!isAdmin) return;
         
-        // [수정] 강사는 시급 체크 건너뜀
+        // 조교인데 시급 없으면 경고
         if (targetUser.role === 'ta' && !targetUser.hourlyRate) {
             alert(`${targetUser.name}님의 시급 정보가 없습니다. 사용자 관리에서 시급을 설정해주세요.`);
             return;
@@ -161,10 +189,11 @@ const PayrollManager = ({ currentUser, users }) => {
             let baseSalary = 0;
             let totalHours = 0;
             let weeklyHolidayPay = 0;
-            let hourlyRate = 0; // 강사는 0으로 초기화
+            let hourlyRate = 0;
 
             if (targetUser.role === 'ta') {
                 hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
+                // [N+1 방지] 메모리 필터링
                 const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
                 
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
@@ -173,12 +202,15 @@ const PayrollManager = ({ currentUser, users }) => {
                 baseSalary = Math.floor(totalHours * hourlyRate);
             } 
             
-            // [수정] 강사는 기본값 0으로 시작 (변동급)
+            // [수정] 공제 항목 초기값 한글 키로 설정
+            const initialDeductions = {};
+            DEDUCTION_KEYS.forEach(key => initialDeductions[key] = 0);
+
             const initialData = {
                 userId: targetUser.id,
                 userName: targetUser.name,
                 userRole: targetUser.role,
-                yearMonth: selectedMonth,
+                yearMonth: selectedMonth, // [중요] 현재 선택된 월로 저장
                 hourlyRate: hourlyRate,
                 baseSalary: baseSalary,
                 totalHours: totalHours,
@@ -186,14 +218,13 @@ const PayrollManager = ({ currentUser, users }) => {
                 mealAllowance: 0, 
                 bonus: 0,         
                 totalGross: baseSalary + weeklyHolidayPay,
-                deductions: {
-                    national: 0, health: 0, employment: 0, care: 0, income: 0, localIncome: 0
-                },
+                deductions: initialDeductions,
                 netSalary: baseSalary + weeklyHolidayPay,
                 status: 'pending',
                 updatedAt: serverTimestamp()
             };
 
+            // [중요] Document ID에 월(Month)을 포함하여 월별 데이터 격리
             const docId = `${targetUser.id}_${selectedMonth}`;
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), initialData);
             
@@ -204,6 +235,7 @@ const PayrollManager = ({ currentUser, users }) => {
         }
     };
 
+    // 4. Save Manual Edits
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
         
@@ -228,24 +260,29 @@ const PayrollManager = ({ currentUser, users }) => {
         setIsEditModalOpen(false);
     };
 
+    // 5. Excel Export
     const handleDownloadExcel = () => {
-        const data = Object.values(payrolls).map(p => ({
-            '이름': p.userName,
-            '직책': p.userRole === 'ta' ? '조교' : '강사',
-            '기본급': p.baseSalary,
-            '주휴수당': p.weeklyHolidayPay,
-            '식대': p.mealAllowance,
-            '상여금': p.bonus,
-            '지급총액(세전)': p.totalGross,
-            '국민연금': p.deductions.national,
-            '건강보험': p.deductions.health,
-            '고용보험': p.deductions.employment,
-            '장기요양': p.deductions.care,
-            '소득세': p.deductions.income,
-            '지방소득세': p.deductions.localIncome,
-            '공제총액': Object.values(p.deductions).reduce((a, b) => a + b, 0),
-            '실수령액(세후)': p.netSalary
-        }));
+        const data = Object.values(payrolls).map(p => {
+            const row = {
+                '이름': p.userName,
+                '직책': p.userRole === 'ta' ? '조교' : '강사',
+                '기본급/시급급여': p.baseSalary,
+                '주휴수당': p.weeklyHolidayPay,
+                '식대': p.mealAllowance,
+                '상여금': p.bonus,
+                '지급총액(세전)': p.totalGross,
+            };
+            
+            // [수정] 한글 키 매핑 (DB에 이미 한글로 저장됨)
+            DEDUCTION_KEYS.forEach(key => {
+                row[key] = p.deductions[key] || 0;
+            });
+
+            row['공제총액'] = Object.values(p.deductions).reduce((a, b) => a + (b || 0), 0);
+            row['실수령액(세후)'] = p.netSalary;
+            
+            return row;
+        });
 
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -253,14 +290,28 @@ const PayrollManager = ({ currentUser, users }) => {
         XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
     };
 
+    // [버그 수정] 문자열 연산을 통한 안전한 날짜 변경
     const handleMonthChange = (offset) => {
-        const d = new Date(selectedMonth + "-01");
-        d.setMonth(d.getMonth() + offset);
-        setSelectedMonth(d.toISOString().slice(0, 7));
+        const [yearStr, monthStr] = selectedMonth.split('-');
+        let year = parseInt(yearStr, 10);
+        let month = parseInt(monthStr, 10);
+
+        month += offset;
+        if (month > 12) {
+            month = 1;
+            year += 1;
+        } else if (month < 1) {
+            month = 12;
+            year -= 1;
+        }
+
+        const newMonthStr = `${year}-${String(month).padStart(2, '0')}`;
+        setSelectedMonth(newMonthStr);
     };
 
     return (
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
+            {/* Header & Filter */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
                     <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -313,6 +364,7 @@ const PayrollManager = ({ currentUser, users }) => {
                                                 {payroll ? (
                                                     <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }}>상세/공제</Button>
                                                 ) : (
+                                                    // [안전 장치] 데이터 로딩 중에는 계산 버튼 비활성화 (이전 달 데이터 사용 방지)
                                                     <Button size="sm" icon={Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing || isSessionsLoading}>
                                                         {calcProcessing ? <Loader className="animate-spin" size={14}/> : '정산 하기'}
                                                     </Button>
@@ -349,12 +401,13 @@ const PayrollManager = ({ currentUser, users }) => {
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 mb-1">공제 내역</p>
-                                        {Object.entries(payrolls[currentUser.id].deductions).map(([key, val]) => (
+                                        {/* [수정] 한글 키로 렌더링 */}
+                                        {DEDUCTION_KEYS.map((key) => (
                                             <div key={key} className="flex justify-between text-sm mb-1 text-gray-600">
-                                                <span className="capitalize">{key}</span><span>{formatCurrency(val)}</span>
+                                                <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions[key])}</span>
                                             </div>
                                         ))}
-                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold text-red-500"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions).reduce((a,b)=>a+b,0))}</span></div>
+                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold text-red-500"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions).reduce((a,b)=>a+(b||0),0))}</span></div>
                                     </div>
                                 </div>
                                 <div className="bg-blue-600 text-white p-4 rounded-xl flex justify-between items-center text-xl font-bold shadow-md">
@@ -397,13 +450,14 @@ const PayrollManager = ({ currentUser, users }) => {
                         <div className="border-t pt-4">
                             <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값)</h4>
                             <div className="grid grid-cols-2 gap-2">
-                                {['national', 'health', 'employment', 'care', 'income', 'localIncome'].map(key => (
+                                {/* [수정] 한글 키로 입력 필드 생성 */}
+                                {DEDUCTION_KEYS.map(key => (
                                     <div key={key}>
-                                        <label className="block text-xs text-gray-500 capitalize">{key}</label>
+                                        <label className="block text-xs text-gray-500">{key}</label>
                                         <input 
                                             type="number" 
                                             className="w-full border p-2 rounded text-right" 
-                                            value={editingPayroll.deductions[key]} 
+                                            value={editingPayroll.deductions[key] || 0} 
                                             onChange={e => setEditingPayroll({
                                                 ...editingPayroll, 
                                                 deductions: { ...editingPayroll.deductions, [key]: Number(e.target.value) }
