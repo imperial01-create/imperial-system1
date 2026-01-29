@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] 모든 아이콘 및 라이브러리 확인 완료
+// [Import Check] 모든 아이콘 및 라이브러리 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -20,13 +20,13 @@ const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currenc
 
 const getMonthRange = (yearMonth) => {
     const [y, m] = yearMonth.split('-').map(Number);
-    // 해당 월의 1일
-    const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
-    // 해당 월의 마지막 날 계산
-    const lastDay = new Date(y, m, 0).getDate();
-    const endStr = `${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 0);
     
-    return { startStr, endStr };
+    const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
+    const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
+    
+    return { start, end, startStr, endStr };
 };
 
 const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
@@ -51,9 +51,9 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     const weeks = {}; 
 
     for (let d = 1; d <= monthEnd.getDate(); d++) {
+        const currentDate = new Date(y, m - 1, d);
         const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
         
-        const currentDate = new Date(y, m - 1, d);
         const dayOfWeek = currentDate.getDay(); 
         const distToSat = 6 - dayOfWeek;
         const saturdayDate = new Date(y, m - 1, d + distToSat);
@@ -92,7 +92,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [isLoading, setIsLoading] = useState(false); 
     const [lastUpdated, setLastUpdated] = useState(null); 
     
-    // [데이터 효율화] 이번 달 전체 세션 캐싱 (관리자용)
     const [monthlySessions, setMonthlySessions] = useState([]);
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
@@ -105,7 +104,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
-        // users가 로드되지 않았을 때 안전하게 빈 배열 반환
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
@@ -114,7 +112,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         if (!currentUser) return;
 
         setIsLoading(true);
-        const cacheKey = `imperial_payroll_v3_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        // 캐시 키 버전 업 (v4)
+        const cacheKey = `imperial_payroll_v4_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             // 1. 캐시 확인
@@ -139,7 +138,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const fetchedData = {};
 
             if (isManagementMode) {
-                // [관리 모드] 해당 월 전체 데이터
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'),
                     where('yearMonth', '==', selectedMonth)
@@ -149,7 +147,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     fetchedData[doc.data().userId] = doc.data();
                 });
             } else {
-                // [개인 모드] 내 데이터 직접 조회 (getDoc - 효율적)
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 const snapshot = await getDoc(docRef);
@@ -167,6 +164,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         } catch (e) {
             console.error("Payroll Fetch Error:", e);
+            // 에러 발생 시 빈 데이터로 초기화 (잔상 방지)
+            setPayrolls({});
         } finally {
             setIsLoading(false);
         }
@@ -174,7 +173,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     // --- 2. Fetch Monthly Sessions (Only for Admin Calculation) ---
     const fetchMonthlySessions = useCallback(async () => {
-        // 관리자가 아니면 전체 세션을 로드할 필요 없음
         if (!isManagementMode) {
             setMonthlySessions([]);
             return;
@@ -184,7 +182,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         try {
             const { startStr, endStr } = getMonthRange(selectedMonth);
             
-            // [핵심] taId 필터 없이 날짜로만 쿼리 -> 복합 색인 오류 방지
             const q = query(
                 collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
                 where('date', '>=', startStr),
@@ -203,9 +200,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     // 초기 로드 및 월 변경 시 실행
     useEffect(() => {
+        // [잔상 제거] 월 변경 시 일단 비움
+        setPayrolls({});
         fetchPayrolls(false);
         fetchMonthlySessions();
-    }, [fetchPayrolls, fetchMonthlySessions]);
+    }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
 
     // --- 3. Calculation Logic (Pure Memory Filtering) ---
@@ -224,8 +223,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             let weeklyHolidayPay = 0;
             let hourlyRate = 0;
 
-            // [핵심 수정] DB 조회 없이 미리 로드된 monthlySessions에서 필터링
-            // -> Index Error 원천 차단 + N+1 문제 해결
             if (targetUser.role === 'ta') {
                 const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
                 
@@ -259,14 +256,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
             const docId = `${targetUser.id}_${selectedMonth}`;
             
-            // DB 저장
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData);
 
-            // 캐시 및 로컬 상태 업데이트
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v3_${selectedMonth}_admin`;
+            const cacheKey = `imperial_payroll_v4_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) {
@@ -305,7 +300,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v3_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+            const cacheKey = `imperial_payroll_v4_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
 
             setIsEditModalOpen(false);
@@ -344,6 +339,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
     };
 
+    // [버그 수정] 불변성 유지 날짜 변경
     const handleMonthChange = (offset) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
         let year = parseInt(yearStr, 10);
@@ -445,7 +441,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                 {payroll ? (
                                                     <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }}>상세/공제</Button>
                                                 ) : (
-                                                    <Button size="sm" icon={Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing || isSessionsLoading}>
+                                                    <Button size="sm" icon={Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing}>
                                                         {calcProcessing ? <Loader className="animate-spin" size={14}/> : '정산 하기'}
                                                     </Button>
                                                 )}

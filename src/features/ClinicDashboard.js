@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 사용되는 모든 아이콘 및 라이브러리 완벽 확인
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -55,15 +55,17 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isLecturer = currentUser.role === 'lecturer';
   const isTa = currentUser.role === 'ta';
 
-  // [버그 수정] 날짜 변경 시 불변성 유지 (새로운 객체 생성)
+  // [버그 수정] 날짜 오버플로우 방지 (1일로 설정 후 달 변경)
   const handlePrevMonth = () => {
       const newDate = new Date(currentDate);
+      newDate.setDate(1); // 31일 버그 방지
       newDate.setMonth(newDate.getMonth() - 1);
       setCurrentDate(newDate);
   };
 
   const handleNextMonth = () => {
       const newDate = new Date(currentDate);
+      newDate.setDate(1); // 31일 버그 방지
       newDate.setMonth(newDate.getMonth() + 1);
       setCurrentDate(newDate);
   };
@@ -89,7 +91,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="flex justify-between items-center mb-6">
           <h3 className="font-bold flex items-center gap-2 text-lg text-gray-800"><CalendarIcon size={20} className="text-blue-600"/> 일정 선택</h3>
           <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
-            {/* [수정] 핸들러 함수 적용 */}
             <button onClick={handlePrevMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronLeft size={20}/></button>
             <span className="font-bold text-lg w-20 text-center flex items-center justify-center">{currentDate.getMonth()+1}월</span>
             <button onClick={handleNextMonth} className="p-2 hover:bg-white rounded-md transition-all shadow-sm"><ChevronRight size={20}/></button>
