@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+// [Import Check] DollarSign 아이콘 추가
 import { 
-  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield
+  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign 
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -17,13 +18,12 @@ const UserManager = ({ currentUser }) => {
     const [targetUserId, setTargetUserId] = useState(null);
     const [loading, setLoading] = useState(false);
 
-    // Form State
+    // Form State (hourlyRate 추가)
     const [formData, setFormData] = useState({ 
-        name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '' 
+        name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: ''
     });
     const [isEditMode, setIsEditMode] = useState(false);
     
-    // For Parent-Student Linking
     const [studentList, setStudentList] = useState([]);
     const [studentSearch, setStudentSearch] = useState('');
 
@@ -47,7 +47,7 @@ const UserManager = ({ currentUser }) => {
     }, []);
 
     const handleOpenCreate = () => {
-        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '' });
+        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '' });
         setIsEditMode(false);
         setIsModalOpen(true);
     };
@@ -57,7 +57,8 @@ const UserManager = ({ currentUser }) => {
             ...user, 
             password: user.password || '', 
             childId: user.childId || '',
-            childName: user.childName || ''
+            childName: user.childName || '',
+            hourlyRate: user.hourlyRate || ''
         });
         setIsEditMode(true);
         setIsModalOpen(true);
@@ -80,6 +81,8 @@ const UserManager = ({ currentUser }) => {
 
             if (activeTab === 'ta' || activeTab === 'lecturer') {
                 payload.subject = formData.subject || '';
+                // [추가] 시급 정보 저장 (TA/Lecturer only)
+                payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
             }
             if (activeTab === 'parent') {
                 payload.childId = formData.childId;
@@ -167,10 +170,13 @@ const UserManager = ({ currentUser }) => {
                             <tr className="border-b border-gray-100 text-gray-500 text-sm">
                                 <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
                                 <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
-                                <th className="p-4 w-[20%] whitespace-nowrap">비밀번호</th>
-                                <th className="p-4 w-[20%] whitespace-nowrap">전화번호</th>
+                                <th className="p-4 w-[15%] whitespace-nowrap">전화번호</th>
+                                {/* [추가] 시급/비고 컬럼 */}
                                 <th className="p-4 w-[15%] whitespace-nowrap">
-                                    {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '비고')}
+                                    {(activeTab === 'ta' || activeTab === 'lecturer') ? '시급' : '비고'}
+                                </th>
+                                <th className="p-4 w-[15%] whitespace-nowrap">
+                                    {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '')}
                                 </th>
                                 <th className="p-4 w-[10%] text-right whitespace-nowrap">관리</th>
                             </tr>
@@ -180,8 +186,10 @@ const UserManager = ({ currentUser }) => {
                                 <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                                     <td className="p-4 font-bold text-gray-800">{u.name}</td>
                                     <td className="p-4 text-gray-600">{u.userId}</td>
-                                    <td className="p-4 text-gray-400 font-mono text-sm">{u.password}</td>
                                     <td className="p-4 text-gray-600">{u.phone || '-'}</td>
+                                    <td className="p-4 font-mono text-blue-600">
+                                        {(activeTab === 'ta' || activeTab === 'lecturer') && u.hourlyRate ? `${u.hourlyRate.toLocaleString()}원` : '-'}
+                                    </td>
                                     <td className="p-4">
                                         {activeTab === 'parent' && (
                                             <span className="bg-green-50 text-green-700 px-2 py-1 rounded-lg text-sm font-bold flex w-fit items-center gap-1">
@@ -210,7 +218,20 @@ const UserManager = ({ currentUser }) => {
                     <input className="w-full border p-3 rounded-xl" placeholder="전화번호 (선택)" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
                     
                     {(activeTab === 'ta' || activeTab === 'lecturer') && (
-                        <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                        <>
+                            <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                            {/* [추가] 시급 입력 필드 */}
+                            <div className="relative">
+                                <input 
+                                    type="number"
+                                    className="w-full border p-3 pl-10 rounded-xl" 
+                                    placeholder="시급 (숫자만 입력)" 
+                                    value={formData.hourlyRate} 
+                                    onChange={e => setFormData({...formData, hourlyRate: e.target.value})} 
+                                />
+                                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
+                            </div>
+                        </>
                     )}
 
                     {activeTab === 'parent' && (
