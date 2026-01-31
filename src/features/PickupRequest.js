@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 // [Import Check] UI 컴포넌트 및 아이콘 로드
-import { Send, FileText, User, Clock, AlertCircle, CheckCircle } from 'lucide-react';
+import { Send, FileText, User, Clock, AlertCircle } from 'lucide-react';
 import { Card, Button, LoadingSpinner } from '../components/UI';
 
 const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
@@ -14,11 +14,11 @@ const PickupRequest = ({ currentUser }) => {
     });
     const [isLoading, setIsLoading] = useState(false);
 
-    // 날짜 포맷팅 (YYYY-MM-DD HH:mm)
+    // 날짜 포맷팅 (YYYY-MM-DD) - 시간 제외
     const formatDeadline = (dateString) => {
         if (!dateString) return '';
-        const date = new Date(dateString);
-        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        // input type="date"는 YYYY-MM-DD 형태의 문자열을 반환하므로 그대로 사용하거나 가공
+        return dateString; 
     };
 
     const handleSendMessage = async () => {
@@ -38,7 +38,7 @@ const PickupRequest = ({ currentUser }) => {
 <b>👨‍🏫 요청 강사:</b> ${currentUser.name}
 <b>🎓 학생 이름:</b> ${formData.studentName}
 <b>📄 프린트명:</b> ${formData.printName}
-<b>⏰ 픽업 기한:</b> ${formatDeadline(formData.deadline)}
+<b>📅 픽업 기한:</b> ${formatDeadline(formData.deadline)}
             `.trim();
 
             // 3. Telegram API 호출
@@ -79,7 +79,7 @@ const PickupRequest = ({ currentUser }) => {
                     </div>
                     <div>
                         <h2 className="text-2xl font-bold text-gray-800">픽업 데스크 신청</h2>
-                        <p className="text-gray-500 text-sm">자료 출력을 데스크에 요청합니다.</p>
+                        <p className="text-gray-500 text-sm">픽업데스크 안내 문자를 데스크에 요청합니다.</p>
                     </div>
                 </div>
 
@@ -109,21 +109,23 @@ const PickupRequest = ({ currentUser }) => {
                         <input
                             type="text"
                             className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all"
-                            placeholder="예: 2024 수능특강 3강 변형문제"
+                            placeholder="예: 2027 수능특강 변형문제 프린트"
                             value={formData.printName}
                             onChange={(e) => setFormData({ ...formData, printName: e.target.value })}
                             disabled={isLoading}
                         />
                     </div>
 
-                    {/* 픽업 기한 입력 */}
+                    {/* 픽업 기한 입력 (수정됨: Date Type) */}
                     <div className="space-y-2">
                         <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
                             <Clock size={16} className="text-red-500" />
-                            픽업 기한 (언제까지 준비할까요?)
+                            {/* [수정] 라벨 텍스트 변경 */}
+                            픽업 기한 (언제까지 픽업하게 할까요?)
                         </label>
                         <input
-                            type="datetime-local"
+                            // [수정] type="date"로 변경하여 날짜만 선택
+                            type="date"
                             className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all cursor-pointer"
                             value={formData.deadline}
                             onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
@@ -131,12 +133,13 @@ const PickupRequest = ({ currentUser }) => {
                         />
                     </div>
 
-                    {/* 안내 문구 */}
+                    {/* 안내 문구 (수정됨) */}
                     <div className="bg-blue-50 p-4 rounded-xl flex gap-3 items-start text-sm text-blue-700">
                         <AlertCircle size={20} className="shrink-0 mt-0.5" />
                         <p>
-                            신청 버튼을 누르면 데스크 텔레그램으로 즉시 전송됩니다.<br />
-                            파일은 별도 전달 혹은 미리 업로드된 파일을 기준으로 합니다.
+                            {/* [수정] 안내 멘트 변경 */}
+                            신청 버튼을 누르면 데스크로 신청됩니다.<br />
+                            자료는 픽업데스크에 준비 바랍니다.
                         </p>
                     </div>
 
