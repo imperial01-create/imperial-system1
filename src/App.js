@@ -1,8 +1,9 @@
 import React, { useState, useEffect, Suspense, useCallback } from 'react';
-// [Import Check] Loader 등 아이콘 확인
+// [Import Check] Printer 아이콘 추가 (픽업 요청 메뉴용)
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
-  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, Bell, Video, Users, Loader, CircleDollarSign, Wallet
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, RefreshCcw, Printer
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
@@ -19,6 +20,7 @@ const LecturerDashboard = React.lazy(() => import('./features/LectureManager').t
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
+const PickupRequest = React.lazy(() => import('./features/PickupRequest')); // [신규]
 
 const LoadingScreen = () => (
   <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -91,6 +93,13 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'admin' ? '전체 직원의 급여를 정산하고\n관리합니다.' : '이번 달 급여 명세서와\n정산 내역을 확인합니다.'}</p>
                     </div>
                 )}
+                {/* [신규] 픽업 데스크 신청 바로가기 (강사/관리자) */}
+                {['lecturer', 'admin'].includes(currentUser.role) && (
+                    <div onClick={() => setActiveTab('pickup_request')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4"><div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><Printer size={32} /></div><h2 className="text-xl font-bold text-gray-800">픽업 신청</h2></div>
+                        <p className="text-gray-500 leading-relaxed">데스크에 출력물 픽업을<br/>간편하게 신청하세요.</p>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -122,7 +131,7 @@ export default function App() {
     return () => { unsubscribe(); clearTimeout(safetyTimeout); };
   }, []);
 
-  // [최적화] Users Data Caching (LocalStorage)
+  // Users Data Caching
   useEffect(() => {
       if(!currentUser) return;
       const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
@@ -132,24 +141,22 @@ export default function App() {
           const CACHE_DURATION = 3600000; // 1시간
 
           const fetchUsers = async () => {
-              // 1. 캐시 확인
               const cached = localStorage.getItem(CACHE_KEY);
               if (cached) {
                   try {
                       const { timestamp, data } = JSON.parse(cached);
                       if (Date.now() - timestamp < CACHE_DURATION) {
                           setUsers(data);
-                          return; // DB 읽기 없이 종료
+                          return;
                       }
                   } catch (e) {
                       localStorage.removeItem(CACHE_KEY);
                   }
               }
 
-              // 2. 캐시 없거나 만료시 DB 조회
               try {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-                  const snapshot = await getDocs(q); // getDocs로 1회만 읽음 (onSnapshot 아님)
+                  const snapshot = await getDocs(q);
                   const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
                   
                   setUsers(userList);
@@ -201,6 +208,9 @@ export default function App() {
       { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student', 'parent'] },
       { id: 'payroll_mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
       { id: 'payroll', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
+      
+      // [신규] 픽업 데스크 신청
+      { id: 'pickup_request', label: '픽업 신청', icon: Printer, roles: ['lecturer', 'admin'] },
   ];
 
   return (
@@ -229,6 +239,8 @@ export default function App() {
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                     {activeTab === 'payroll_mgmt' && <PayrollManager currentUser={currentUser} users={users} viewMode="management" />}
                     {activeTab === 'payroll' && <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />}
+                    {/* [신규] 픽업 데스크 신청 */}
+                    {activeTab === 'pickup_request' && <PickupRequest currentUser={currentUser} />}
                 </Suspense>
             </main>
         </div>
