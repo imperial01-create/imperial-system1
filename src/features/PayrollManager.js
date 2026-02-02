@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -15,7 +14,6 @@ const DEDUCTION_KEYS = [
     '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'
 ];
 
-// --- Helper Functions ---
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
 const getMonthRange = (yearMonth) => {
@@ -80,7 +78,6 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
-    // 날짜 상태 관리
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -93,29 +90,24 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [monthlySessions, setMonthlySessions] = useState([]);
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
-    // Admin Modal & Process State
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false); 
 
     const isManagementMode = viewMode === 'management';
 
-    // [방어적 코딩] users 데이터 로딩 전 에러 방지
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // --- 1. Data Fetching (Payrolls) ---
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
 
         setIsLoading(true);
-        // 캐시 키 버전 v5
         const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
-            // 1. 캐시 확인
             if (!forceRefresh) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -127,13 +119,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             setIsLoading(false);
                             return; 
                         }
-                    } catch (e) {
-                        localStorage.removeItem(cacheKey);
-                    }
+                    } catch (e) { localStorage.removeItem(cacheKey); }
                 }
             }
 
-            // 2. Firestore 요청
             const fetchedData = {};
 
             if (isManagementMode) {
@@ -155,7 +144,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 }
             }
 
-            // 3. 상태 업데이트 및 캐시 저장
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
@@ -169,7 +157,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    // --- 2. Fetch Monthly Sessions (Only for Admin Calculation) ---
     const fetchMonthlySessions = useCallback(async () => {
         if (!isManagementMode) {
             setMonthlySessions([]);
@@ -179,7 +166,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         setIsSessionsLoading(true);
         try {
             const { startStr, endStr } = getMonthRange(selectedMonth);
-            // [최적화] 인덱스 오류 방지를 위해 date 범위로만 쿼리
             const q = query(
                 collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'),
                 where('date', '>=', startStr),
@@ -196,15 +182,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode]);
 
-    // 초기 로드 및 월 변경 시 실행
     useEffect(() => {
         setPayrolls({});
         fetchPayrolls(false);
         fetchMonthlySessions();
     }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
-
-    // --- 3. Calculation Logic (Pure Memory Filtering) ---
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         
@@ -221,9 +204,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             let hourlyRate = 0;
 
             if (targetUser.role === 'ta') {
-                // [핵심] 메모리 필터링으로 N+1 및 인덱스 에러 방지
                 const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
-                
                 hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
                 totalHours = calcResult.totalHours;
@@ -253,13 +234,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             };
 
             const docId = `${targetUser.id}_${selectedMonth}`;
-            
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData);
 
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
-            
-            // 캐시 동기화
             const cacheKey = `imperial_payroll_v5_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
@@ -271,18 +249,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     };
 
-    // 4. Save Manual Edits
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
-        
         const gross = parseInt(editingPayroll.baseSalary || 0) + 
                       parseInt(editingPayroll.weeklyHolidayPay || 0) + 
                       parseInt(editingPayroll.bonus || 0) + 
                       parseInt(editingPayroll.mealAllowance || 0);
-        
         const totalDeductions = Object.values(editingPayroll.deductions).reduce((a, b) => a + parseInt(b || 0), 0);
         const net = gross - totalDeductions;
-
         const updatedData = {
             ...editingPayroll,
             totalGross: gross,
@@ -290,48 +264,36 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             status: 'confirmed',
             updatedAt: serverTimestamp()
         };
-
         const docId = `${editingPayroll.userId}_${editingPayroll.yearMonth}`;
         
         try {
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), updatedData);
-            
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
-            
             const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
-
             setIsEditModalOpen(false);
         } catch(e) {
             alert('저장 실패: ' + e.message);
         }
     };
 
-    // 5. Excel Export
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map(p => {
-            const roleName = p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자');
             const row = {
                 '이름': p.userName,
-                '직책': roleName,
+                '직책': p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자'),
                 '기본급/시급급여': p.baseSalary,
                 '주휴수당': p.weeklyHolidayPay,
                 '식대': p.mealAllowance,
                 '상여금': p.bonus,
                 '지급총액(세전)': p.totalGross,
             };
-            
-            DEDUCTION_KEYS.forEach(key => {
-                row[key] = p.deductions[key] || 0;
-            });
-
+            DEDUCTION_KEYS.forEach(key => { row[key] = p.deductions[key] || 0; });
             row['공제총액'] = Object.values(p.deductions).reduce((a, b) => a + (b || 0), 0);
             row['실수령액(세후)'] = p.netSalary;
-            
             return row;
         });
-
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "Payroll");
@@ -342,16 +304,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
         let year = parseInt(yearStr, 10);
         let month = parseInt(monthStr, 10);
-
         month += offset;
-        if (month > 12) {
-            month = 1;
-            year += 1;
-        } else if (month < 1) {
-            month = 12;
-            year -= 1;
-        }
-
+        if (month > 12) { month = 1; year += 1; } else if (month < 1) { month = 12; year -= 1; }
         const newMonthStr = `${year}-${String(month).padStart(2, '0')}`;
         setSelectedMonth(newMonthStr);
     };
@@ -362,40 +316,30 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     };
 
     return (
+        // [UI 수정] 이중 패딩 제거 (App.js의 p-2 사용)
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
-            {/* Header & Filter */}
+            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
                     <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
                     <h2 className="text-2xl font-bold text-gray-800">{selectedMonth.split('-')[0]}년 {selectedMonth.split('-')[1]}월 급여</h2>
                     <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
                 </div>
-                
                 <div className="flex items-center gap-2">
                     <div className="text-xs text-gray-400 mr-2 flex items-center gap-1">
                         {isLoading ? <span className="text-blue-500 flex items-center gap-1"><Loader size={12} className="animate-spin"/> 로딩 중</span> : 
                          (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
                     </div>
-                    <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        icon={RefreshCcw} 
-                        onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} 
-                        title="데이터 새로고침"
-                        disabled={isLoading || isSessionsLoading}
-                    />
-                    {isManagementMode && (
-                        <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">
-                            엑셀 다운로드
-                        </Button>
-                    )}
+                    <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} title="데이터 새로고침" disabled={isLoading} />
+                    {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">엑셀 다운로드</Button>}
                 </div>
             </div>
 
             {/* Content Area */}
             {isManagementMode ? (
+                // [UI 수정] Card 패딩 0 및 overflow-hidden, 내부 w-full max-w-full overflow-x-auto
                 <Card className="overflow-hidden w-full p-0">
-                    <div className="w-full overflow-x-auto">
+                    <div className="w-full max-w-full overflow-x-auto">
                         <table className="w-full text-left text-sm min-w-[1000px]">
                             <thead className="bg-gray-50 border-b text-gray-500">
                                 <tr>
@@ -425,10 +369,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             <td className="p-4 font-bold">{user.name}</td>
                                             <td className="p-4 uppercase text-xs font-bold text-gray-400">{roleLabel}</td>
                                             <td className="p-4">
-                                                {user.role === 'ta' 
-                                                    ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') 
-                                                    : (payroll ? formatCurrency(payroll.baseSalary) : '미정')
-                                                }
+                                                {user.role === 'ta' ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}
                                             </td>
                                             <td className="p-4">{payroll ? `${payroll.totalHours} hrs` : '-'}</td>
                                             <td className="p-4 text-blue-600">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
@@ -454,6 +395,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 <div className="max-w-2xl mx-auto w-full px-4 md:px-0">
                     {payrolls[currentUser.id] ? (
                         <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
+                            {/* ... (개인 뷰 명세서 UI 기존과 동일) ... */}
                             <div className="text-center mb-6 border-b pb-4">
                                 <h3 className="text-2xl font-bold text-gray-800">급여 명세서</h3>
                                 <p className="text-gray-500">{selectedMonth} 귀속분</p>
@@ -497,8 +439,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </div>
             )}
 
-            {/* Admin Edit Modal */}
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="급여 상세 수정 (세무 입력)">
+                {/* ... (모달 내용 기존과 동일) ... */}
                 {editingPayroll && (
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
@@ -519,7 +461,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 <input type="number" className="w-full border p-2 rounded bg-gray-100" value={editingPayroll.weeklyHolidayPay} readOnly />
                             </div>
                         </div>
-                        
                         <div className="border-t pt-4">
                             <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값)</h4>
                             <div className="grid grid-cols-2 gap-2">

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] DollarSign 아이콘 확인
 import { 
   Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign 
 } from 'lucide-react';
@@ -148,13 +147,14 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        // [UI 수정] 최상위 여백 제거 및 모바일 패딩 조정 X (App.js의 p-4 사용)
+        // [수정] 이중 패딩 제거 (App.js의 p-2를 사용)
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
             </div>
 
+            {/* [수정] 탭 메뉴 가로 스크롤 허용 */}
             <div className="w-full overflow-x-auto">
                 <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
                     {['student', 'parent', 'ta', 'lecturer'].map(role => (
@@ -172,9 +172,8 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* [UI 수정] Card의 패딩을 0으로 하고 overflow hidden 적용 */}
-            <Card className="min-h-[500px] overflow-hidden w-full p-0">
-                {/* 검색창에만 별도 패딩 적용 */}
+            {/* [수정] 테이블 컨테이너 overflow 제어 및 max-w-full */}
+            <Card className="min-h-[500px] w-full p-0 overflow-hidden">
                 <div className="p-4 relative">
                     <input 
                         className="w-full border p-3 pl-10 rounded-xl bg-gray-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-blue-100" 
@@ -185,8 +184,8 @@ const UserManager = ({ currentUser }) => {
                     <Search className="absolute left-7 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
-                {/* 테이블 영역 스크롤 설정 */}
-                <div className="w-full overflow-x-auto">
+                {/* [핵심] 테이블 가로 스크롤 허용 */}
+                <div className="w-full max-w-full overflow-x-auto">
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
                             <tr className="border-b border-gray-100 text-gray-500 text-sm">
@@ -232,7 +231,6 @@ const UserManager = ({ currentUser }) => {
             </Card>
 
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${isEditMode ? '수정' : '추가'} - ${activeTab.toUpperCase()}`}>
-                {/* Modal Content - Existing Code */}
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                     <input className="w-full border p-3 rounded-xl" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />

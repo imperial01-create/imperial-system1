@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense, useCallback } from 'react';
-// [Import Check] Printer 아이콘 추가 (픽업 요청 메뉴용)
+// [Import Check] 모든 아이콘 확인
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
@@ -20,7 +20,7 @@ const LecturerDashboard = React.lazy(() => import('./features/LectureManager').t
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
-const PickupRequest = React.lazy(() => import('./features/PickupRequest')); // [신규]
+const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 
 const LoadingScreen = () => (
   <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -93,7 +93,6 @@ const Dashboard = ({ currentUser, setActiveTab }) => {
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'admin' ? '전체 직원의 급여를 정산하고\n관리합니다.' : '이번 달 급여 명세서와\n정산 내역을 확인합니다.'}</p>
                     </div>
                 )}
-                {/* [신규] 픽업 데스크 신청 바로가기 (강사/관리자) */}
                 {['lecturer', 'admin'].includes(currentUser.role) && (
                     <div onClick={() => setActiveTab('pickup_request')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4"><div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><Printer size={32} /></div><h2 className="text-xl font-bold text-gray-800">픽업 신청</h2></div>
@@ -208,8 +207,6 @@ export default function App() {
       { id: 'my_classes', label: '수강 강의', icon: GraduationCap, roles: ['student', 'parent'] },
       { id: 'payroll_mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
       { id: 'payroll', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
-      
-      // [신규] 픽업 데스크 신청
       { id: 'pickup_request', label: '픽업 신청', icon: Printer, roles: ['lecturer', 'admin'] },
   ];
 
@@ -227,9 +224,11 @@ export default function App() {
                 <button onClick={()=>{sessionStorage.removeItem('imperial_user'); window.location.reload();}} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-bold"><LogOut size={16}/> 로그아웃</button>
             </div>
         </aside>
+        
+        {/* [수정] main 태그에 min-w-0 추가 및 패딩 조정 */}
         <div className="flex-1 md:ml-64 flex flex-col min-h-screen">
             <header className="bg-white border-b p-4 flex items-center gap-3 md:hidden sticky top-0 z-30"><button onClick={()=>setIsSidebarOpen(true)}><Menu size={24}/></button><h1 className="text-lg font-bold">Imperial System</h1></header>
-            <main className="p-4 md:p-8 flex-1 overflow-y-auto">
+            <main className="flex-1 min-w-0 overflow-y-auto p-2 md:p-8">
                 <Suspense fallback={<LoadingScreen />}>
                     {activeTab === 'dashboard' && <Dashboard currentUser={currentUser} setActiveTab={setActiveTab} />}
                     {activeTab === 'user_mgmt' && <UserManager currentUser={currentUser} />}
@@ -239,7 +238,6 @@ export default function App() {
                     {activeTab === 'my_classes' && <StudentClassroom currentUser={currentUser} />}
                     {activeTab === 'payroll_mgmt' && <PayrollManager currentUser={currentUser} users={users} viewMode="management" />}
                     {activeTab === 'payroll' && <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />}
-                    {/* [신규] 픽업 데스크 신청 */}
                     {activeTab === 'pickup_request' && <PickupRequest currentUser={currentUser} />}
                 </Suspense>
             </main>
