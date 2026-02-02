@@ -1,7 +1,11 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, LogOut, User, DollarSign, BookOpen, LayoutDashboard, Send, X, Printer, GraduationCap, Calendar as CalendarIcon, Video, CircleDollarSign, Wallet, Eye, EyeOff, AlertCircle, CheckCircle, Loader } from 'lucide-react';
-// [수정] onAuthStateChanged 추가 Import
+// [Import Check] Home 아이콘 및 기타 필요한 아이콘 확인
+import { 
+  Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer 
+} from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
@@ -67,6 +71,81 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
+// --- Dashboard Component (Fixed Navigation) ---
+const Dashboard = ({ currentUser }) => {
+    const navigate = useNavigate(); // [수정] 페이지 이동 훅 사용
+
+    return (
+        <div className="space-y-6 animate-in fade-in duration-300">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white border-none p-8 rounded-3xl shadow-lg">
+                <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
+                <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* 1. 클리닉 센터 (공통) */}
+                <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                    <div className="flex items-center gap-4 mb-4">
+                        <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
+                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
+                    </div>
+                    <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고<br/>피드백을 확인할 수 있습니다.</p>
+                </div>
+
+                {/* 2. 강의 관리 / 수강 강의 */}
+                {(['admin', 'lecturer', 'student', 'parent'].includes(currentUser.role)) && (
+                    <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">
+                                {currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리'}
+                            </h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">
+                            {currentUser.role === 'student' || currentUser.role === 'parent' 
+                                ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' 
+                                : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}
+                        </p>
+                    </div>
+                )}
+
+                {/* 3. 월급 관리 (관리자) */}
+                {currentUser.role === 'admin' && (
+                    <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><Wallet size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">월급 관리</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">전체 직원의 급여를 정산하고<br/>관리합니다.</p>
+                    </div>
+                )}
+
+                {/* 4. 월급 확인 (관리자, 강사, 조교) */}
+                {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">월급 확인</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">이번 달 급여 명세서와<br/>정산 내역을 확인합니다.</p>
+                    </div>
+                )}
+
+                {/* 5. 픽업 신청 (강사, 관리자) */}
+                {['lecturer', 'admin'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-orange-100 p-3 rounded-xl text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors"><Printer size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">픽업 신청</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">데스크에 출력물 픽업을<br/>간편하게 신청하세요.</p>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const AppContent = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -82,18 +161,9 @@ const AppContent = () => {
 
   useEffect(() => {
     const safetyTimeout = setTimeout(() => setLoading(false), 5000);
-    
-    const initAuth = async () => { 
-        try { 
-            await signInAnonymously(auth); 
-        } catch (e) { 
-            console.error("Auth Init Error:", e);
-            setLoading(false); 
-        } 
-    };
+    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) { setLoading(false); } };
     initAuth();
     
-    // [핵심 수정] v9 Modular SDK 문법 적용: onAuthStateChanged(auth, callback)
     const unsubscribe = onAuthStateChanged(auth, (user) => {
         clearTimeout(safetyTimeout);
         if(user) {
@@ -160,7 +230,7 @@ const AppContent = () => {
              const userData = { id: s.docs[0].id, ...s.docs[0].data() };
              setCurrentUser(userData);
              sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-             navigate('/clinic'); 
+             navigate('/dashboard'); // [수정] 로그인 성공 시 대시보드로 이동
          } else {
              setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
          }
@@ -177,7 +247,6 @@ const AppContent = () => {
       navigate('/');
   };
 
-  // Loading Spinner
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center gap-4">
@@ -191,12 +260,18 @@ const AppContent = () => {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
   }
 
+  // [수정] 메뉴 아이템 구성 (대시보드 추가, 급여 메뉴 분리)
   const menuItems = [
+    { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] }, // 대시보드 복구
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
-    { path: '/payroll', label: currentUser.role === 'admin' ? '월급 관리' : '월급 확인', icon: currentUser.role === 'admin' ? Wallet : CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
+    
+    // [수정] 관리자용 월급 관리
+    { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
+    // [수정] 관리자도 볼 수 있는 월급 확인 (본인용)
+    { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
   return (
@@ -235,27 +310,38 @@ const AppContent = () => {
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
+        {/* [핵심 수정] 너비 통일을 위한 레이아웃 래퍼 적용 */}
         <main className="flex-1 overflow-y-auto bg-gray-50 p-3 md:p-8 w-full min-w-0">
+           {/* 모든 컴포넌트가 이 컨테이너(1600px) 안에서 렌더링되므로 너비가 통일됨 */}
            <div className="w-full max-w-[1600px] mx-auto">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
-                <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
-                <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                
-                <Route path="/lectures" element={
-                    currentUser.role === 'admin' ? <AdminLectureManager users={users} /> :
-                    currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> :
-                    <StudentClassroom currentUser={currentUser} />
-                } />
+                    {/* [수정] 대시보드 라우트 추가 */}
+                    <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                    
+                    <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
+                    <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
+                    
+                    <Route path="/lectures" element={
+                        currentUser.role === 'admin' ? <AdminLectureManager users={users} /> :
+                        currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> :
+                        <StudentClassroom currentUser={currentUser} />
+                    } />
 
-                <Route path="/users" element={<UserManager currentUser={currentUser} />} />
-                
-                <Route path="/payroll" element={
-                    currentUser.role === 'admin' ? <PayrollManager currentUser={currentUser} users={users} viewMode="management" /> :
-                    <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />
-                } />
-                
-                <Route path="/" element={<Navigate to="/clinic" replace />} />
+                    <Route path="/users" element={<UserManager currentUser={currentUser} />} />
+                    
+                    {/* [수정] 월급 관리 (관리자용 - 전체) */}
+                    <Route path="/payroll-mgmt" element={
+                        <PayrollManager currentUser={currentUser} users={users} viewMode="management" />
+                    } />
+                    
+                    {/* [수정] 월급 확인 (개인용 - 관리자 포함) */}
+                    <Route path="/payroll-check" element={
+                        <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />
+                    } />
+                    
+                    {/* 기본 경로를 대시보드로 리다이렉트 */}
+                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
             </Suspense>
            </div>
