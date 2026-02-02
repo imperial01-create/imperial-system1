@@ -1,10 +1,10 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-// [Import Check] BookOpen 아이콘 추가 (누락되었던 항목)
+// [Import Check] User 아이콘 추가 (누락되었던 항목 수정 완료)
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User 
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore'; 
@@ -272,7 +272,6 @@ const AppContent = () => {
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    // BookOpen is now correctly imported
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
