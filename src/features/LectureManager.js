@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
+// [Import Check] 아이콘 완벽 확인
 import { Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, ChevronLeft, ChevronRight, Loader, CheckCircle, X } from 'lucide-react';
 import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -8,10 +8,11 @@ import { Button, Card, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// --- Helper: Simple Calendar ---
+// LectureCalendar (Responsive Grid)
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     
+    // ... (getDays, isToday 등 기존 로직 동일) ...
     const getDays = (d) => {
         const y = d.getFullYear(), m = d.getMonth();
         const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
@@ -65,9 +66,8 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     );
 };
 
-// --- Reusable Component: Lecture Management Panel ---
 const LectureManagementPanel = ({ selectedClass, users }) => {
-    // ... (기존 로직 유지) ...
+    // ... (기존 로직 동일) ...
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -190,7 +190,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
     );
 };
 
-// --- Admin Unified Component ---
+// --- Admin Unified Component (Responsive Grid Fix) ---
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -245,7 +245,6 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        // [UI 수정] 이중 패딩 제거 (App.js의 p-2 사용)
         <div className="space-y-8 w-full max-w-[1600px] mx-auto animate-in fade-in">
             {/* 1. Class Management Section */}
             <div className="w-full">
@@ -253,7 +252,7 @@ export const AdminLectureManager = ({ users }) => {
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
                     <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
                 </div>
-                {/* [UI 수정] 모바일 grid-cols-1 강제 */}
+                {/* [UI 수정] 모바일 grid-cols-1 */}
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
                     {classes.map(cls => (
                         <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
@@ -334,7 +333,6 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     }, [currentUser]);
 
     return (
-        // [UI 수정] 이중 패딩 제거
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {classes.map(c => (

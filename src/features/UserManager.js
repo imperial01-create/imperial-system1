@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+// [Import Check] Phone, BookOpen 등 아이콘 추가
 import { 
-  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign 
+  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, query, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
@@ -28,7 +29,7 @@ const UserManager = ({ currentUser }) => {
     useEffect(() => {
         const fetchUsers = async () => {
             setLoading(true);
-            const cacheKey = 'imperial_users_manager_cache';
+            const cacheKey = 'imperial_users_manager_cache_v2';
             
             const cached = localStorage.getItem(cacheKey);
             if (cached) {
@@ -113,7 +114,7 @@ const UserManager = ({ currentUser }) => {
                 alert('생성되었습니다.');
             }
             setIsModalOpen(false);
-            localStorage.removeItem('imperial_users_manager_cache');
+            localStorage.removeItem('imperial_users_manager_cache_v2');
             window.location.reload(); 
         } catch (e) {
             alert('저장 실패: ' + e.message);
@@ -131,7 +132,7 @@ const UserManager = ({ currentUser }) => {
         try {
             await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
             alert('삭제되었습니다.');
-            localStorage.removeItem('imperial_users_manager_cache');
+            localStorage.removeItem('imperial_users_manager_cache_v2');
             window.location.reload();
         } catch (e) {
             alert('삭제 실패: ' + e.message);
@@ -147,14 +148,14 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        // [수정] 이중 패딩 제거 (App.js의 p-2를 사용)
         <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
+            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
             </div>
 
-            {/* [수정] 탭 메뉴 가로 스크롤 허용 */}
+            {/* Tabs */}
             <div className="w-full overflow-x-auto">
                 <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
                     {['student', 'parent', 'ta', 'lecturer'].map(role => (
@@ -172,64 +173,116 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* [수정] 테이블 컨테이너 overflow 제어 및 max-w-full */}
-            <Card className="min-h-[500px] w-full p-0 overflow-hidden">
-                <div className="p-4 relative">
-                    <input 
-                        className="w-full border p-3 pl-10 rounded-xl bg-gray-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-blue-100" 
-                        placeholder="이름 또는 아이디 검색"
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                    />
-                    <Search className="absolute left-7 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
-                </div>
+            {/* Search Input */}
+            <div className="relative">
+                <input 
+                    className="w-full border p-3 pl-10 rounded-xl bg-white shadow-sm focus:ring-2 focus:ring-blue-100 outline-none" 
+                    placeholder="이름 또는 아이디 검색"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
+            </div>
 
-                {/* [핵심] 테이블 가로 스크롤 허용 */}
-                <div className="w-full max-w-full overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[800px]">
-                        <thead>
-                            <tr className="border-b border-gray-100 text-gray-500 text-sm">
-                                <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
-                                <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
-                                <th className="p-4 w-[15%] whitespace-nowrap">전화번호</th>
-                                <th className="p-4 w-[15%] whitespace-nowrap">
-                                    {(activeTab === 'ta' || activeTab === 'lecturer') ? (activeTab === 'ta' ? '시급' : '비고') : '비고'}
-                                </th>
-                                <th className="p-4 w-[15%] whitespace-nowrap">
-                                    {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '')}
-                                </th>
-                                <th className="p-4 w-[10%] text-right whitespace-nowrap">관리</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                            {filteredUsers.map(u => (
-                                <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                                    <td className="p-4 font-bold text-gray-800">{u.name}</td>
-                                    <td className="p-4 text-gray-600">{u.userId}</td>
-                                    <td className="p-4 text-gray-600">{u.phone || '-'}</td>
-                                    <td className="p-4 font-mono text-blue-600">
-                                        {activeTab === 'ta' && u.hourlyRate ? `${Number(u.hourlyRate).toLocaleString()}원` : '-'}
-                                    </td>
-                                    <td className="p-4">
-                                        {activeTab === 'parent' && (
-                                            <span className="bg-green-50 text-green-700 px-2 py-1 rounded-lg text-sm font-bold flex w-fit items-center gap-1">
-                                                <UserPlus size={14}/> {u.childName || '미지정'}
-                                            </span>
-                                        )}
-                                        {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
-                                    </td>
-                                    <td className="p-4 flex justify-end gap-2">
-                                        <button onClick={() => handleOpenEdit(u)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600 hover:border-blue-200 transition-all"><Edit2 size={18}/></button>
-                                        <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600 hover:border-red-200 transition-all"><Trash2 size={18}/></button>
-                                    </td>
+            {/* --- View Switching --- */}
+            
+            {/* 1. Mobile Card View (< md) */}
+            <div className="md:hidden space-y-4">
+                {filteredUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
+                {filteredUsers.map(u => (
+                    <Card key={u.id} className="p-5 flex flex-col gap-3 relative overflow-hidden">
+                        <div className="flex justify-between items-start">
+                            <div className="flex items-center gap-2">
+                                <div className="bg-blue-100 p-2 rounded-full text-blue-600"><User size={18} /></div>
+                                <div>
+                                    <div className="font-bold text-lg text-gray-800">{u.name}</div>
+                                    <div className="text-xs text-gray-400">{u.userId}</div>
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleOpenEdit(u)} className="p-2 bg-gray-50 rounded-lg text-gray-500 hover:text-blue-600 border border-gray-200"><Edit2 size={16}/></button>
+                                <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-gray-50 rounded-lg text-gray-500 hover:text-red-600 border border-gray-200"><Trash2 size={16}/></button>
+                            </div>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm text-gray-600">
+                            <div className="flex items-center gap-2">
+                                <Phone size={14} className="text-gray-400"/>
+                                <span>{u.phone || '전화번호 없음'}</span>
+                            </div>
+                            {(activeTab === 'ta' || activeTab === 'lecturer') && (
+                                <div className="flex items-center gap-2">
+                                    <BookOpen size={14} className="text-gray-400"/>
+                                    <span>{u.subject || '과목 미설정'}</span>
+                                </div>
+                            )}
+                            {activeTab === 'ta' && u.hourlyRate && (
+                                <div className="flex items-center gap-2 font-bold text-blue-600">
+                                    <DollarSign size={14}/>
+                                    <span>시급: {Number(u.hourlyRate).toLocaleString()}원</span>
+                                </div>
+                            )}
+                            {activeTab === 'parent' && u.childName && (
+                                <div className="flex items-center gap-2 text-green-600 font-bold">
+                                    <UserPlus size={14}/>
+                                    <span>자녀: {u.childName}</span>
+                                </div>
+                            )}
+                        </div>
+                    </Card>
+                ))}
+            </div>
+
+            {/* 2. Desktop Table View (>= md) */}
+            <div className="hidden md:block">
+                <Card className="min-h-[500px] overflow-hidden w-full p-0">
+                    <div className="w-full overflow-x-auto">
+                        <table className="w-full text-left border-collapse min-w-[800px]">
+                            <thead>
+                                <tr className="border-b border-gray-100 text-gray-500 text-sm bg-gray-50">
+                                    <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
+                                    <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
+                                    <th className="p-4 w-[15%] whitespace-nowrap">전화번호</th>
+                                    <th className="p-4 w-[15%] whitespace-nowrap">
+                                        {(activeTab === 'ta' || activeTab === 'lecturer') ? (activeTab === 'ta' ? '시급' : '비고') : '비고'}
+                                    </th>
+                                    <th className="p-4 w-[15%] whitespace-nowrap">
+                                        {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '')}
+                                    </th>
+                                    <th className="p-4 w-[10%] text-right whitespace-nowrap">관리</th>
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                    {filteredUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
-                </div>
-            </Card>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {filteredUsers.map(u => (
+                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                                        <td className="p-4 font-bold text-gray-800">{u.name}</td>
+                                        <td className="p-4 text-gray-600">{u.userId}</td>
+                                        <td className="p-4 text-gray-600">{u.phone || '-'}</td>
+                                        <td className="p-4 font-mono text-blue-600">
+                                            {activeTab === 'ta' && u.hourlyRate ? `${Number(u.hourlyRate).toLocaleString()}원` : '-'}
+                                        </td>
+                                        <td className="p-4">
+                                            {activeTab === 'parent' && (
+                                                <span className="bg-green-50 text-green-700 px-2 py-1 rounded-lg text-sm font-bold flex w-fit items-center gap-1">
+                                                    <UserPlus size={14}/> {u.childName || '미지정'}
+                                                </span>
+                                            )}
+                                            {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
+                                        </td>
+                                        <td className="p-4 flex justify-end gap-2">
+                                            <button onClick={() => handleOpenEdit(u)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600 hover:border-blue-200 transition-all"><Edit2 size={18}/></button>
+                                            <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600 hover:border-red-200 transition-all"><Trash2 size={18}/></button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        {filteredUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
+                    </div>
+                </Card>
+            </div>
 
+            {/* Modals (No Changes Needed) */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${isEditMode ? '수정' : '추가'} - ${activeTab.toUpperCase()}`}>
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
