@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-// [Import Check] Calculator 등 아이콘 추가 확인
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
@@ -42,6 +41,7 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     const sortedDates = Object.keys(dailyHours).sort();
     if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
 
+    // ... (기존 로직 유지) ...
     const firstDateStr = sortedDates[0];
     const [y, m] = firstDateStr.split('-').map(Number);
     const monthEnd = new Date(y, m, 0);
@@ -233,8 +233,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     };
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
-            {/* Header */}
+        <div className="space-y-6 w-full animate-in fade-in">
+            {/* Header: [수정] 모바일 flex-col 대응 */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
                     <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -247,15 +247,15 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         {isLoading ? <span className="text-blue-500 flex items-center gap-1"><Loader size={12} className="animate-spin"/> 로딩 중</span> : 
                          (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
                     </div>
-                    <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} title="데이터 새로고침" disabled={isLoading} />
+                    <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} title="데이터 새로고침" disabled={isLoading || isSessionsLoading} />
                     {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">엑셀</Button>}
                 </div>
             </div>
 
-            {/* Content - Management Mode */}
+            {/* Content Area */}
             {isManagementMode ? (
                 <>
-                    {/* 1. Mobile Card View */}
+                    {/* [핵심 수정] 1. 모바일 카드 뷰 (md:hidden) */}
                     <div className="md:hidden space-y-4">
                         {targetUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
                         {targetUsers.map(user => {
@@ -291,7 +291,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         })}
                     </div>
 
-                    {/* 2. Desktop Table View */}
+                    {/* [핵심 수정] 2. PC 테이블 뷰 (hidden md:block) */}
                     <div className="hidden md:block">
                         <Card className="overflow-hidden w-full p-0">
                             <div className="w-full overflow-x-auto">
@@ -340,7 +340,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     </div>
                 </>
             ) : (
-                // Personal View (Already Responsive)
                 <div className="max-w-2xl mx-auto w-full">
                     {payrolls[currentUser.id] ? (
                         <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
@@ -387,11 +386,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </div>
             )}
 
-            {/* Admin Edit Modal (Responsive Layout already) */}
+            {/* Admin Edit Modal */}
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="급여 상세 수정 (세무 입력)">
                 {editingPayroll && (
                     <div className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> {/* [수정] 모바일 1열 */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-xs font-bold text-gray-500 mb-1">기본급 (수동 조정)</label>
                                 <input type="number" className="w-full border p-2 rounded" value={editingPayroll.baseSalary} onChange={e => setEditingPayroll({...editingPayroll, baseSalary: Number(e.target.value)})} />

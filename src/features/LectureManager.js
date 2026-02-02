@@ -8,11 +8,10 @@ import { Button, Card, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// LectureCalendar (Responsive Grid)
+// --- Helper: Simple Calendar ---
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     
-    // ... (getDays, isToday 등 기존 로직 동일) ...
     const getDays = (d) => {
         const y = d.getFullYear(), m = d.getMonth();
         const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
@@ -66,8 +65,8 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     );
 };
 
+// --- Reusable Component: Lecture Management Panel ---
 const LectureManagementPanel = ({ selectedClass, users }) => {
-    // ... (기존 로직 동일) ...
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -252,7 +251,7 @@ export const AdminLectureManager = ({ users }) => {
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
                     <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
                 </div>
-                {/* [UI 수정] 모바일 grid-cols-1 */}
+                {/* [핵심 수정] 모바일 grid-cols-1 강제 적용 */}
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
                     {classes.map(cls => (
                         <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
