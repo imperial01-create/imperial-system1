@@ -1,10 +1,10 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-// [Import Check] Home 아이콘 및 기타 필요한 아이콘 확인
+// [Import Check] BookOpen 아이콘 추가 (누락되었던 항목)
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen 
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore'; 
@@ -71,9 +71,9 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
-// --- Dashboard Component (Fixed Navigation) ---
+// --- Dashboard Component ---
 const Dashboard = ({ currentUser }) => {
-    const navigate = useNavigate(); // [수정] 페이지 이동 훅 사용
+    const navigate = useNavigate();
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
@@ -83,7 +83,7 @@ const Dashboard = ({ currentUser }) => {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* 1. 클리닉 센터 (공통) */}
+                {/* 1. 클리닉 센터 */}
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -161,7 +161,15 @@ const AppContent = () => {
 
   useEffect(() => {
     const safetyTimeout = setTimeout(() => setLoading(false), 5000);
-    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) { setLoading(false); } };
+    
+    const initAuth = async () => { 
+        try { 
+            await signInAnonymously(auth); 
+        } catch (e) { 
+            console.error("Auth Init Error:", e);
+            setLoading(false); 
+        } 
+    };
     initAuth();
     
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -230,7 +238,7 @@ const AppContent = () => {
              const userData = { id: s.docs[0].id, ...s.docs[0].data() };
              setCurrentUser(userData);
              sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-             navigate('/dashboard'); // [수정] 로그인 성공 시 대시보드로 이동
+             navigate('/dashboard'); 
          } else {
              setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
          }
@@ -260,17 +268,14 @@ const AppContent = () => {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
   }
 
-  // [수정] 메뉴 아이템 구성 (대시보드 추가, 급여 메뉴 분리)
   const menuItems = [
-    { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] }, // 대시보드 복구
+    { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
+    // BookOpen is now correctly imported
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
-    
-    // [수정] 관리자용 월급 관리
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
-    // [수정] 관리자도 볼 수 있는 월급 확인 (본인용)
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
@@ -310,13 +315,10 @@ const AppContent = () => {
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
-        {/* [핵심 수정] 너비 통일을 위한 레이아웃 래퍼 적용 */}
         <main className="flex-1 overflow-y-auto bg-gray-50 p-3 md:p-8 w-full min-w-0">
-           {/* 모든 컴포넌트가 이 컨테이너(1600px) 안에서 렌더링되므로 너비가 통일됨 */}
            <div className="w-full max-w-[1600px] mx-auto">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
-                    {/* [수정] 대시보드 라우트 추가 */}
                     <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                     
                     <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
@@ -330,17 +332,14 @@ const AppContent = () => {
 
                     <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                     
-                    {/* [수정] 월급 관리 (관리자용 - 전체) */}
                     <Route path="/payroll-mgmt" element={
                         <PayrollManager currentUser={currentUser} users={users} viewMode="management" />
                     } />
                     
-                    {/* [수정] 월급 확인 (개인용 - 관리자 포함) */}
                     <Route path="/payroll-check" element={
                         <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />
                     } />
                     
-                    {/* 기본 경로를 대시보드로 리다이렉트 */}
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
             </Suspense>
