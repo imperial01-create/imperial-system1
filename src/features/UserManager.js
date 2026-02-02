@@ -26,13 +26,11 @@ const UserManager = ({ currentUser }) => {
     const [studentList, setStudentList] = useState([]);
     const [studentSearch, setStudentSearch] = useState('');
 
-    // [최적화] App.js에서 캐싱된 데이터를 넘겨받지 못할 경우 대비하여 로컬 캐싱 적용
     useEffect(() => {
         const fetchUsers = async () => {
             setLoading(true);
             const cacheKey = 'imperial_users_manager_cache';
             
-            // 1. 캐시 확인
             const cached = localStorage.getItem(cacheKey);
             if (cached) {
                 try {
@@ -46,7 +44,6 @@ const UserManager = ({ currentUser }) => {
                 } catch(e) { localStorage.removeItem(cacheKey); }
             }
 
-            // 2. DB 조회
             try {
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
                 const snap = await getDocs(q);
@@ -117,7 +114,6 @@ const UserManager = ({ currentUser }) => {
                 alert('생성되었습니다.');
             }
             setIsModalOpen(false);
-            // 강제 새로고침 (캐시 무효화)
             localStorage.removeItem('imperial_users_manager_cache');
             window.location.reload(); 
         } catch (e) {
@@ -152,15 +148,13 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        // [수정] 모바일 패딩 및 너비
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto p-4 md:p-6 animate-in fade-in">
-            {/* [수정] 모바일 헤더 flex-col */}
+        // [UI 수정] 최상위 여백 제거 및 모바일 패딩 조정 X (App.js의 p-4 사용)
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
             </div>
 
-            {/* [수정] 탭 메뉴 overflow-x-auto */}
             <div className="w-full overflow-x-auto">
                 <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
                     {['student', 'parent', 'ta', 'lecturer'].map(role => (
@@ -178,18 +172,20 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* [수정] 테이블 컨테이너 overflow-hidden & inner overflow-x-auto */}
-            <Card className="min-h-[500px] overflow-hidden w-full">
-                <div className="mb-4 relative">
+            {/* [UI 수정] Card의 패딩을 0으로 하고 overflow hidden 적용 */}
+            <Card className="min-h-[500px] overflow-hidden w-full p-0">
+                {/* 검색창에만 별도 패딩 적용 */}
+                <div className="p-4 relative">
                     <input 
                         className="w-full border p-3 pl-10 rounded-xl bg-gray-50 focus:bg-white transition-all outline-none focus:ring-2 focus:ring-blue-100" 
                         placeholder="이름 또는 아이디 검색"
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
                     />
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
+                    <Search className="absolute left-7 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
+                {/* 테이블 영역 스크롤 설정 */}
                 <div className="w-full overflow-x-auto">
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
@@ -236,6 +232,7 @@ const UserManager = ({ currentUser }) => {
             </Card>
 
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${isEditMode ? '수정' : '추가'} - ${activeTab.toUpperCase()}`}>
+                {/* Modal Content - Existing Code */}
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                     <input className="w-full border p-3 rounded-xl" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />

@@ -26,7 +26,6 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
         return d && d.getDate() === today.getDate() && d.getMonth() === today.getMonth();
     };
 
-    // [버그 수정] 날짜 변경 불변성 유지
     const handlePrev = () => {
         const d = new Date(currentDate); d.setDate(1); d.setMonth(d.getMonth()-1); setCurrentDate(d);
     };
@@ -245,15 +244,14 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        // [수정] 모바일 패딩 및 너비 대응
-        <div className="space-y-8 w-full max-w-[1600px] mx-auto p-4 md:p-6">
+        // [UI 수정] 최상위 여백 제거 및 max-w 설정
+        <div className="space-y-8 w-full max-w-[1600px] mx-auto">
             {/* 1. Class Management Section */}
             <div className="w-full">
                 <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
                     <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
                 </div>
-                {/* [수정] 모바일 grid-cols-1 */}
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
                     {classes.map(cls => (
                         <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
@@ -285,7 +283,6 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             )}
 
-            {/* Create/Edit Class Modal */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "반 수정" : "반 생성"}>
                 <div className="space-y-4 w-full">
                     <input className="w-full border p-3 rounded-xl" placeholder="반 이름" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
@@ -334,7 +331,8 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     }, [currentUser]);
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto p-4 md:p-6">
+        // [UI 수정] 최상위 여백 제거 및 max-w 설정
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto">
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {classes.map(c => (
                     <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>
