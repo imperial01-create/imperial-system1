@@ -1,27 +1,24 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, LogOut, User, DollarSign, BookOpen, LayoutDashboard, Send, X, Printer, GraduationCap, Settings, Calendar as CalendarIcon, Video, CircleDollarSign, Wallet } from 'lucide-react';
-import { getAuth, signInAnonymously } from 'firebase/auth';
-import { collection, getDocs, query } from 'firebase/firestore'; 
-import { auth, db } from './firebase'; // Import db
+import { Menu, LogOut, User, DollarSign, BookOpen, LayoutDashboard, Send, X, Printer, GraduationCap, Calendar as CalendarIcon, Video, CircleDollarSign, Wallet, Eye, EyeOff, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+// [수정] onAuthStateChanged 추가 Import
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { collection, getDocs, query, where } from 'firebase/firestore'; 
+import { auth, db } from './firebase'; 
 import { LoadingSpinner } from './components/UI';
 
-// Lazy Load Pages
-// const Login = React.lazy(() => import('./pages/Login')); // Login 컴포넌트가 App.js 내부에 정의되어 있으므로 주석 처리
-const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
+// Lazy Load Features
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
-const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
-// LectureManager: named export 처리
-const LectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.default || module.LectureManager })));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
-
+const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
+const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- LoginView Component (App.js 내부 정의) ---
+// --- LoginView Component ---
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
@@ -31,7 +28,6 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 md:p-10 border border-gray-100">
         <div className="text-center mb-8">
           <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
-            {/* CheckCircle 대신 텍스트나 다른 아이콘 사용 가능 */}
             <span className="text-2xl font-bold">I</span>
           </div>
           <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
@@ -52,11 +48,10 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
             </div>
           </div>
           <button onClick={onLogin} className="w-full py-4 text-lg bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-200 mt-2 hover:bg-blue-700 transition-all disabled:opacity-50" disabled={isLoading}>
-            {isLoading ? <LoadingSpinner /> : '로그인'}
+            {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
           </button>
         </div>
       </div>
-      {/* Simple Modal for Error */}
       {loginErrorModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white p-6 rounded-xl max-w-sm w-full mx-4 shadow-2xl">
@@ -76,7 +71,7 @@ const AppContent = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [users, setUsers] = useState([]); // Shared Users Data
+  const [users, setUsers] = useState([]); 
 
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
@@ -84,14 +79,22 @@ const AppContent = () => {
 
   const location = useLocation();
   const navigate = useNavigate();
-  // const auth = getAuth(); // auth is imported from firebase.js
 
   useEffect(() => {
     const safetyTimeout = setTimeout(() => setLoading(false), 5000);
-    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) { setLoading(false); } };
+    
+    const initAuth = async () => { 
+        try { 
+            await signInAnonymously(auth); 
+        } catch (e) { 
+            console.error("Auth Init Error:", e);
+            setLoading(false); 
+        } 
+    };
     initAuth();
     
-    const unsubscribe = auth.onAuthStateChanged((user) => {
+    // [핵심 수정] v9 Modular SDK 문법 적용: onAuthStateChanged(auth, callback)
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
         clearTimeout(safetyTimeout);
         if(user) {
              const saved = sessionStorage.getItem('imperial_user');
@@ -102,34 +105,32 @@ const AppContent = () => {
     return () => { unsubscribe(); clearTimeout(safetyTimeout); };
   }, []);
 
-  // [최적화] Users Data Caching (LocalStorage)
+  // Users Data Caching (LocalStorage)
   useEffect(() => {
       if(!currentUser) return;
       const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
       
       if (shouldFetchUsers) {
           const CACHE_KEY = 'imperial_users_cache';
-          const CACHE_DURATION = 3600000; // 1시간
+          const CACHE_DURATION = 3600000; 
 
           const fetchUsers = async () => {
-              // 1. 캐시 확인
               const cached = localStorage.getItem(CACHE_KEY);
               if (cached) {
                   try {
                       const { timestamp, data } = JSON.parse(cached);
                       if (Date.now() - timestamp < CACHE_DURATION) {
                           setUsers(data);
-                          return; // DB 읽기 없이 종료
+                          return; 
                       }
                   } catch (e) {
                       localStorage.removeItem(CACHE_KEY);
                   }
               }
 
-              // 2. 캐시 없거나 만료시 DB 조회
               try {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-                  const snapshot = await getDocs(q); // getDocs로 1회만 읽음 (onSnapshot 아님)
+                  const snapshot = await getDocs(q); 
                   const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
                   
                   setUsers(userList);
@@ -152,8 +153,6 @@ const AppContent = () => {
      }
      setLoginProcessing(true);
      try {
-         // Query Firestore for user credentials
-         // Note: In production, use Firebase Auth's email/password or stricter security rules
          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
          const s = await getDocs(q);
          
@@ -161,7 +160,7 @@ const AppContent = () => {
              const userData = { id: s.docs[0].id, ...s.docs[0].data() };
              setCurrentUser(userData);
              sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-             navigate('/clinic'); // Default page after login
+             navigate('/clinic'); 
          } else {
              setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
          }
@@ -178,7 +177,15 @@ const AppContent = () => {
       navigate('/');
   };
 
-  if (loading) return <LoadingSpinner />;
+  // Loading Spinner
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-4">
+            <Loader className="animate-spin text-blue-600" size={40} />
+            <p className="text-gray-500 font-medium animate-pulse">Imperial System 로딩 중...</p>
+        </div>
+    </div>
+  );
 
   if (!currentUser) {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
@@ -187,10 +194,8 @@ const AppContent = () => {
   const menuItems = [
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    // Lecture Manager: Admin sees '강의 관리', Lecturer sees '강의 관리', Student/Parent see '수강 강의'
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
-    // Payroll: Admin sees '월급 관리', TA/Lecturer see '월급 확인'
     { path: '/payroll', label: currentUser.role === 'admin' ? '월급 관리' : '월급 확인', icon: currentUser.role === 'admin' ? Wallet : CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
@@ -225,23 +230,18 @@ const AppContent = () => {
 
       {/* Main Layout */}
       <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden">
-        {/* Mobile Header */}
         <header className="bg-white border-b p-3 flex items-center gap-3 md:hidden shrink-0">
           <button onClick={() => setIsSidebarOpen(true)} className="p-1"><Menu size={24} className="text-gray-700" /></button>
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
-        {/* [핵심 수정] 모바일 패딩 축소 (p-3) 및 overflow-y-auto */}
         <main className="flex-1 overflow-y-auto bg-gray-50 p-3 md:p-8 w-full min-w-0">
            <div className="w-full max-w-[1600px] mx-auto">
-            <Suspense fallback={<LoadingSpinner />}>
+            <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
-                {/* Dashboard is implicitly the default view, maybe ClinicDashboard? or separate Dashboard component */}
-                {/* For simplicity, mapping root to ClinicDashboard as in previous code */}
                 <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                 <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                 
-                {/* Lecture Manager Routing Logic */}
                 <Route path="/lectures" element={
                     currentUser.role === 'admin' ? <AdminLectureManager users={users} /> :
                     currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> :
@@ -250,7 +250,6 @@ const AppContent = () => {
 
                 <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                 
-                {/* Payroll Manager Routing Logic */}
                 <Route path="/payroll" element={
                     currentUser.role === 'admin' ? <PayrollManager currentUser={currentUser} users={users} viewMode="management" /> :
                     <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />
