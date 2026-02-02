@@ -26,18 +26,24 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
         return d && d.getDate() === today.getDate() && d.getMonth() === today.getMonth();
     };
 
+    // [버그 수정] 날짜 변경 불변성 유지
+    const handlePrev = () => {
+        const d = new Date(currentDate); d.setDate(1); d.setMonth(d.getMonth()-1); setCurrentDate(d);
+    };
+    const handleNext = () => {
+        const d = new Date(currentDate); d.setDate(1); d.setMonth(d.getMonth()+1); setCurrentDate(d);
+    };
+
     return (
-        // [UI 개선] 학생 캘린더와 동일한 여백(p-4 md:p-6) 및 둥근 모서리(rounded-2xl) 적용
         <div className="p-4 md:p-6 border rounded-2xl bg-white shadow-sm w-full">
             <div className="flex justify-between items-center mb-6">
                 <span className="font-bold text-lg md:text-xl text-gray-800">{currentDate.getMonth() + 1}월</span>
                 <div className="flex gap-1 bg-gray-50 rounded-lg p-1">
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() - 1)))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronLeft size={20}/></button>
-                    <button onClick={() => setCurrentDate(new Date(currentDate.setMonth(currentDate.getMonth() + 1)))} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronRight size={20}/></button>
+                    <button onClick={handlePrev} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronLeft size={20}/></button>
+                    <button onClick={handleNext} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronRight size={20}/></button>
                 </div>
             </div>
             <div className="grid grid-cols-7 text-center text-xs md:text-sm font-bold text-gray-400 mb-2">{DAYS.map(d => <div key={d}>{d}</div>)}</div>
-            {/* [UI 개선] gap을 반응형으로 조정하여 시원한 느낌 제공 */}
             <div className="grid grid-cols-7 gap-1 md:gap-2">
                 {getDays(currentDate).map((d, i) => {
                     if (!d) return <div key={i} />;
@@ -47,7 +53,6 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
                     
                     return (
                         <button key={i} onClick={() => onDateChange(dStr)} 
-                            // [핵심 수정] h-10 고정 높이를 aspect-square로 변경하여 비율 유지 (찌그러짐 방지)
                             className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all 
                             ${isSelected ? 'bg-blue-600 text-white font-bold shadow-md scale-105' : 'hover:bg-gray-50 text-gray-700'} 
                             ${isToday(d) && !isSelected ? 'text-blue-600 font-bold bg-blue-50' : ''}`}>
@@ -75,7 +80,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsub = onSnapshot(q, (s) => setLectures(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => b.date.localeCompare(a.date))));
         
-        // [방어적 코딩] users 배열 안전 접근
         if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
             setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
         } else {
@@ -138,16 +142,16 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                     currentLectures.map(lec => (
                         <Card key={lec.id} className="w-full">
                             <div className="flex justify-between items-start mb-4 border-b pb-3">
-                                <div className="flex-1">
+                                <div className="flex-1 w-full overflow-hidden">
                                     <div className="font-bold text-lg mb-1 flex items-center gap-2"><BookOpen size={18} className="text-blue-600"/> 진도</div>
-                                    <div className="whitespace-pre-wrap text-gray-800 mb-3 pl-2 border-l-2 border-blue-100">{lec.progress}</div>
+                                    <div className="whitespace-pre-wrap text-gray-800 mb-3 pl-2 border-l-2 border-blue-100 break-words">{lec.progress}</div>
                                     <div className="font-bold text-lg mb-1 flex items-center gap-2"><PenTool size={18} className="text-purple-600"/> 숙제</div>
-                                    <div className="whitespace-pre-wrap text-gray-800 pl-2 border-l-2 border-purple-100">{lec.homework}</div>
+                                    <div className="whitespace-pre-wrap text-gray-800 pl-2 border-l-2 border-purple-100 break-words">{lec.homework}</div>
                                     {(lec.youtubeLinks || [lec.youtubeLink]).filter(Boolean).map((link, i) => (
-                                        <div key={i} className="mt-2 text-sm text-red-600 flex items-center gap-1 bg-red-50 w-fit px-2 py-1 rounded"><Video size={14}/> 영상 {i+1} 등록됨</div>
+                                        <div key={i} className="mt-2 text-sm text-red-600 flex items-center gap-1 bg-red-50 w-fit px-2 py-1 rounded truncate max-w-full"><Video size={14}/> 영상 {i+1} 등록됨</div>
                                     ))}
                                 </div>
-                                <div className="flex gap-1">
+                                <div className="flex gap-1 ml-2">
                                     <button onClick={() => { setEditingLecture({...lec, youtubeLinks: lec.youtubeLinks || (lec.youtubeLink ? [lec.youtubeLink] : [''])}); setIsEditModalOpen(true); }} className="p-2 bg-gray-50 rounded-lg text-gray-400 hover:text-blue-600"><Edit2 size={18}/></button>
                                     <button onClick={async () => { if(window.confirm('삭제하시겠습니까?')) await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', lec.id)) }} className="p-2 bg-gray-50 rounded-lg text-gray-400 hover:text-red-600"><Trash2 size={18}/></button>
                                 </div>
@@ -167,7 +171,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
             </div>
 
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="강의 내용 수정">
-                <div className="space-y-4">
+                <div className="space-y-4 w-full">
                     <div><label className="text-xs font-bold text-gray-500">진도</label><textarea className="w-full border p-3 rounded-xl mt-1 h-20" value={editingLecture.progress} onChange={e => setEditingLecture({...editingLecture, progress: e.target.value})} /></div>
                     <div><label className="text-xs font-bold text-gray-500">숙제</label><textarea className="w-full border p-3 rounded-xl mt-1 h-20" value={editingLecture.homework} onChange={e => setEditingLecture({...editingLecture, homework: e.target.value})} /></div>
                     <div>
@@ -241,13 +245,15 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-8 w-full max-w-[1600px] mx-auto">
+        // [수정] 모바일 패딩 및 너비 대응
+        <div className="space-y-8 w-full max-w-[1600px] mx-auto p-4 md:p-6">
             {/* 1. Class Management Section */}
             <div className="w-full">
-                <div className="flex justify-between items-center mb-4">
+                <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
-                    <Button onClick={handleOpenCreateClass} icon={Plus}>반 생성</Button>
+                    <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
                 </div>
+                {/* [수정] 모바일 grid-cols-1 */}
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
                     {classes.map(cls => (
                         <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
@@ -281,7 +287,7 @@ export const AdminLectureManager = ({ users }) => {
 
             {/* Create/Edit Class Modal */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "반 수정" : "반 생성"}>
-                <div className="space-y-4">
+                <div className="space-y-4 w-full">
                     <input className="w-full border p-3 rounded-xl" placeholder="반 이름" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
                     <div>
                         <label className="text-xs font-bold text-gray-500">담당 강사</label>
@@ -292,7 +298,7 @@ export const AdminLectureManager = ({ users }) => {
                     </div>
                     <div>
                         <label className="text-xs font-bold text-gray-500 mb-1 block">요일</label>
-                        <div className="flex gap-2">{DAYS.map(d => <button key={d} onClick={() => toggleArrayItem('days', d)} className={`px-3 py-2 rounded-lg text-sm ${newClass.days.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{d}</button>)}</div>
+                        <div className="flex gap-2 flex-wrap">{DAYS.map(d => <button key={d} onClick={() => toggleArrayItem('days', d)} className={`px-3 py-2 rounded-lg text-sm ${newClass.days.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{d}</button>)}</div>
                     </div>
                     <div>
                         <label className="text-xs font-bold text-gray-500 mb-1 block">학생 배정</label>
@@ -328,8 +334,8 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     }, [currentUser]);
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto">
-            <div className="flex gap-2 overflow-x-auto pb-2">
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto p-4 md:p-6">
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 {classes.map(c => (
                     <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>
                         {c.name}

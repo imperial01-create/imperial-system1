@@ -26,22 +26,40 @@ const UserManager = ({ currentUser }) => {
     const [studentList, setStudentList] = useState([]);
     const [studentSearch, setStudentSearch] = useState('');
 
-    const fetchUsers = async () => {
-        setLoading(true);
-        try {
-            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-            const snap = await getDocs(q);
-            const userList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setUsers(userList);
-            setStudentList(userList.filter(u => u.role === 'student'));
-        } catch (e) {
-            alert("데이터 로딩 실패: " + e.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
+    // [최적화] App.js에서 캐싱된 데이터를 넘겨받지 못할 경우 대비하여 로컬 캐싱 적용
     useEffect(() => {
+        const fetchUsers = async () => {
+            setLoading(true);
+            const cacheKey = 'imperial_users_manager_cache';
+            
+            // 1. 캐시 확인
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    if (Date.now() - parsed.timestamp < 3600000) { 
+                        setUsers(parsed.data);
+                        setStudentList(parsed.data.filter(u => u.role === 'student'));
+                        setLoading(false);
+                        return;
+                    }
+                } catch(e) { localStorage.removeItem(cacheKey); }
+            }
+
+            // 2. DB 조회
+            try {
+                const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+                const snap = await getDocs(q);
+                const userList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                setUsers(userList);
+                setStudentList(userList.filter(u => u.role === 'student'));
+                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: userList }));
+            } catch (e) {
+                console.error("User Load Error", e);
+            } finally {
+                setLoading(false);
+            }
+        };
         fetchUsers();
     }, []);
 
@@ -78,7 +96,6 @@ const UserManager = ({ currentUser }) => {
                 updatedAt: serverTimestamp()
             };
 
-            // [수정] 강사는 시급 제외, 조교만 시급 저장
             if (activeTab === 'ta' || activeTab === 'lecturer') {
                 payload.subject = formData.subject || '';
             }
@@ -100,10 +117,11 @@ const UserManager = ({ currentUser }) => {
                 alert('생성되었습니다.');
             }
             setIsModalOpen(false);
-            fetchUsers();
+            // 강제 새로고침 (캐시 무효화)
+            localStorage.removeItem('imperial_users_manager_cache');
+            window.location.reload(); 
         } catch (e) {
             alert('저장 실패: ' + e.message);
-        } finally {
             setLoading(false);
         }
     };
@@ -118,7 +136,8 @@ const UserManager = ({ currentUser }) => {
         try {
             await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
             alert('삭제되었습니다.');
-            fetchUsers();
+            localStorage.removeItem('imperial_users_manager_cache');
+            window.location.reload();
         } catch (e) {
             alert('삭제 실패: ' + e.message);
         } finally {
@@ -133,27 +152,33 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
-            <div className="flex justify-between items-center px-1">
+        // [수정] 모바일 패딩 및 너비
+        <div className="space-y-6 w-full max-w-[1600px] mx-auto p-4 md:p-6 animate-in fade-in">
+            {/* [수정] 모바일 헤더 flex-col */}
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
-                <Button onClick={handleOpenCreate} icon={Plus}>사용자 추가</Button>
+                <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
             </div>
 
-            <div className="flex border-b border-gray-200 bg-white rounded-t-xl overflow-hidden w-full">
-                {['student', 'parent', 'ta', 'lecturer'].map(role => (
-                    <button 
-                        key={role}
-                        onClick={() => setActiveTab(role)}
-                        className={`flex-1 py-4 font-bold text-center capitalize transition-colors ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}
-                    >
-                        {role === 'student' && '학생'}
-                        {role === 'parent' && '학부모'}
-                        {role === 'ta' && '조교'}
-                        {role === 'lecturer' && '강사'}
-                    </button>
-                ))}
+            {/* [수정] 탭 메뉴 overflow-x-auto */}
+            <div className="w-full overflow-x-auto">
+                <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
+                    {['student', 'parent', 'ta', 'lecturer'].map(role => (
+                        <button 
+                            key={role}
+                            onClick={() => setActiveTab(role)}
+                            className={`flex-1 py-4 px-4 font-bold text-center capitalize transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}
+                        >
+                            {role === 'student' && '학생'}
+                            {role === 'parent' && '학부모'}
+                            {role === 'ta' && '조교'}
+                            {role === 'lecturer' && '강사'}
+                        </button>
+                    ))}
+                </div>
             </div>
 
+            {/* [수정] 테이블 컨테이너 overflow-hidden & inner overflow-x-auto */}
             <Card className="min-h-[500px] overflow-hidden w-full">
                 <div className="mb-4 relative">
                     <input 
@@ -165,7 +190,7 @@ const UserManager = ({ currentUser }) => {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                 </div>
 
-                <div className="overflow-x-auto w-full pb-4">
+                <div className="w-full overflow-x-auto">
                     <table className="w-full text-left border-collapse min-w-[800px]">
                         <thead>
                             <tr className="border-b border-gray-100 text-gray-500 text-sm">
@@ -188,7 +213,6 @@ const UserManager = ({ currentUser }) => {
                                     <td className="p-4 text-gray-600">{u.userId}</td>
                                     <td className="p-4 text-gray-600">{u.phone || '-'}</td>
                                     <td className="p-4 font-mono text-blue-600">
-                                        {/* [수정] 조교만 시급 표시 */}
                                         {activeTab === 'ta' && u.hourlyRate ? `${Number(u.hourlyRate).toLocaleString()}원` : '-'}
                                     </td>
                                     <td className="p-4">
@@ -222,7 +246,6 @@ const UserManager = ({ currentUser }) => {
                         <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
                     )}
 
-                    {/* [수정] 조교(ta)일 때만 시급 입력 필드 노출 */}
                     {activeTab === 'ta' && (
                         <div className="relative">
                             <input 
