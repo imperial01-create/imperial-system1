@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-// [Import Check] 모든 아이콘 및 라이브러리 완벽 확인
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -9,10 +8,14 @@ import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
-// --- Constants ---
 const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+// [추가] 텔레그램 설정
+const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
+const CHAT_ID = "8466973475";
+
 const TEMPLATES = {
   confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 예정 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}\n내용 : [${d.topic}] 개별 Q&A 클리닉\n\n학생이 직접 시간을 선정하였으며 해당 시간은 선생님과의 개인적인 약속이므로 늦지 않도록 지도해주시면 감사하겠습니다.`,
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
@@ -40,8 +43,9 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// --- Calendar Sub-Component ---
+// --- Calendar View (No changes) ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
+  // ... (기존 CalendarView 코드 유지 - 생략 없이 복사)
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
         return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
@@ -232,11 +236,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select 
-                                    className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
-                                    value={s.classroom || ''} 
-                                    onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
-                                >
+                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
@@ -275,14 +275,11 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [modalState, setModalState] = useState({ type: null, data: null });
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDateStr, setSelectedDateStr] = useState(getLocalToday());
-    const [searchQuery, setSearchQuery] = useState('');
     const [studentSelectedSlots, setStudentSelectedSlots] = useState([]); 
     const [applicationItems, setApplicationItems] = useState([{ subject: '', workbook: '', range: '' }]); 
     const [defaultSchedule, setDefaultSchedule] = useState({ 월: { start: '14:00', end: '22:00', active: false }, 화: { start: '14:00', end: '22:00', active: false }, 수: { start: '14:00', end: '22:00', active: false }, 목: { start: '14:00', end: '22:00', active: false }, 금: { start: '14:00', end: '22:00', active: false }, 토: { start: '10:00', end: '18:00', active: false }, 일: { start: '10:00', end: '18:00', active: false } }); 
     const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' }); 
     const [selectedTaIdForSchedule, setSelectedTaIdForSchedule] = useState(''); 
-    const [manageTab, setManageTab] = useState('ta'); 
-    const [newUser, setNewUser] = useState({ name: '', userId: '', password: '', phone: '', subject: '' }); 
     const [selectedSession, setSelectedSession] = useState(null);
     const [confirmConfig, setConfirmConfig] = useState(null);
     const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
@@ -299,7 +296,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         return map;
     }, [users]);
 
-    // [최적화] 세션 데이터 로드 (Cache-First)
     const fetchSessions = useCallback(async (forceRefresh = false) => {
         setAppLoading(true);
         const year = currentDate.getFullYear();
@@ -352,17 +348,13 @@ const ClinicDashboard = ({ currentUser, users }) => {
         fetchSessions(false);
     }, [fetchSessions]);
 
-    // 로컬 상태와 캐시 동기화 헬퍼 (함수형 업데이트 대응)
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
-            
-            // Side effect: Cache Update
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth() + 1;
             const cacheKey = `imperial_sessions_${year}-${month}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newState }));
-            
             return newState;
         });
     };
@@ -386,9 +378,52 @@ const ClinicDashboard = ({ currentUser, users }) => {
 
     const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
 
-    const handleDateChange = (dStr) => setSelectedDateStr(dStr);
+    // --- [추가] 텔레그램 발송 로직 ---
+    const sendClinicNotificationToTelegram = async (updates) => {
+        try {
+            const bookedSessions = Object.values(updates).map(s => {
+                // updates는 {id: data} 형태이므로 세션 맵에서 원본 찾아서 병합
+                const original = sessionMap[s.id] || sessions.find(sess => sess.id === s.id);
+                return { ...original, ...s };
+            });
 
-    // [최적화] 함수형 업데이트 적용
+            if (bookedSessions.length === 0) return;
+
+            const studentName = bookedSessions[0].studentName;
+            const topic = bookedSessions[0].topic;
+            
+            // 날짜/시간별 정렬
+            bookedSessions.sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+
+            let scheduleText = "";
+            bookedSessions.forEach(s => {
+                scheduleText += `- ${s.date} ${s.startTime} (${s.taName})\n`;
+            });
+
+            const messageText = `
+<b>🔔 클리닉 신청 알림</b>
+
+<b>학생:</b> ${studentName}
+<b>내용:</b> ${topic}
+
+<b>신청 일정:</b>
+${scheduleText}
+            `.trim();
+
+            await fetch(TELEGRAM_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: CHAT_ID,
+                    text: messageText,
+                    parse_mode: 'HTML'
+                })
+            });
+        } catch (e) {
+            console.error("Telegram Notification Error:", e);
+        }
+    };
+
     const handleAction = async (action, payload) => {
       try {
         if (action === 'toggle_slot') {
@@ -506,19 +541,28 @@ const ClinicDashboard = ({ currentUser, users }) => {
       const formattedRange = applicationItems.map(i => `${i.workbook} (${i.range})`).join('\n');
       const batch = writeBatch(db);
       const updates = {};
+      
+      // 1. Prepare Update Data
       studentSelectedSlots.forEach(id => {
         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
         const updateData = { status: 'pending', studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' };
         batch.update(ref, updateData);
-        updates[id] = updateData;
+        // Store for local update & telegram notification
+        updates[id] = { id, ...updateData }; 
       });
+
+      // 2. Commit Firestore Batch
       await batch.commit(); 
       
+      // 3. Update Local State
       updateLocalAndCacheState(prev => {
           const next = { ...prev };
           Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; });
           return next;
       });
+
+      // 4. [추가] Send Telegram Notification (Async)
+      sendClinicNotificationToTelegram(updates);
 
       setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
   };
