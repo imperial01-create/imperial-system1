@@ -1,6 +1,6 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-// [Import Check] User 아이콘 추가 (누락되었던 항목 수정 완료)
+// [Import Check] 아이콘 확인
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
@@ -83,7 +83,7 @@ const Dashboard = ({ currentUser }) => {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* 1. 클리닉 센터 */}
+                {/* 1. 클리닉 센터 (공통) */}
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -131,8 +131,8 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 5. 픽업 신청 (강사, 관리자) */}
-                {['lecturer', 'admin'].includes(currentUser.role) && (
+                {/* 5. 픽업 신청 (강사 전용) - [수정] 강사만 보이도록 변경 */}
+                {currentUser.role === 'lecturer' && (
                     <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
                             <div className="bg-orange-100 p-3 rounded-xl text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors"><Printer size={32} /></div>
@@ -268,10 +268,11 @@ const AppContent = () => {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
   }
 
+  // [수정] 메뉴 아이템 권한 재설정 (픽업 신청 -> lecturer only)
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
+    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] }, // [수정] 강사만 가능
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
