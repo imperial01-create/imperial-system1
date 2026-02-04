@@ -1,6 +1,6 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-// [Import Check] 아이콘 확인
+// [Import Check] 아이콘 확인 완료
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
@@ -131,7 +131,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 5. 픽업 신청 (강사 전용) - [수정] 강사만 보이도록 변경 */}
+                {/* 5. 픽업 신청 (강사 전용) */}
                 {currentUser.role === 'lecturer' && (
                     <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -268,11 +268,10 @@ const AppContent = () => {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
   }
 
-  // [수정] 메뉴 아이템 권한 재설정 (픽업 신청 -> lecturer only)
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] }, // [수정] 강사만 가능
+    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
@@ -315,7 +314,9 @@ const AppContent = () => {
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
-        <main className="flex-1 overflow-y-auto bg-gray-50 p-3 md:p-8 w-full min-w-0">
+        {/* [핵심 수정] overflow-y-scroll 강제 적용하여 점핑 방지 & min-w-0 */}
+        <main className="flex-1 overflow-y-scroll bg-gray-50 p-3 md:p-8 w-full min-w-0">
+           {/* [핵심 수정] 모든 페이지의 컨테이너 너비 통일 */}
            <div className="w-full max-w-[1600px] mx-auto">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>

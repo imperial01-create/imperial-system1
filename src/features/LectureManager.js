@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon 
@@ -104,7 +103,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
             setLectures(lectureList);
         });
         
-        // 학생 목록 필터링 (메모리 최적화)
         if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
             setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
         } else {
@@ -114,21 +112,18 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         return () => unsub();
     }, [selectedClass, users]);
 
-    // 선택된 날짜의 강의
     const currentLectures = lectures.filter(l => l.date === selectedDate);
 
-    // 완료 현황 로드
     useEffect(() => {
         if (currentLectures.length === 0) {
             setCompletions([]);
             return;
         }
         const lectureIds = currentLectures.map(l => l.id);
-        // Firestore 'in' 쿼리는 최대 10개 제한이 있으므로 주의. 여기선 날짜별이라 적을 것으로 가정.
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('lectureId', 'in', lectureIds));
         const unsub = onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
         return () => unsub();
-    }, [selectedDate, currentLectures.length]); // 의존성 수정
+    }, [selectedDate, currentLectures.length]);
 
     const handleOpenModal = (lecture = null) => {
         if (lecture) {
@@ -400,7 +395,9 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-8 w-full max-w-[1600px] mx-auto animate-in fade-in">
+        // [핵심 수정] 패딩 제거 및 w-full 적용
+        <div className="space-y-8 w-full animate-in fade-in">
+            {/* 1. Class Management Section */}
             <div className="w-full">
                 <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
@@ -425,6 +422,7 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </div>
 
+            {/* 2. Lecture Management Section */}
             {selectedClass ? (
                 <div className="border-t pt-8 animate-in slide-in-from-bottom-4 w-full">
                     <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> {selectedClass.name} 강의 관리</h2>
@@ -436,6 +434,7 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             )}
 
+            {/* Create/Edit Class Modal */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "반 수정" : "반 생성"}>
                 <div className="space-y-4 w-full">
                     <input className="w-full border p-3 rounded-xl" placeholder="반 이름" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
@@ -490,7 +489,8 @@ export const LecturerDashboard = ({ currentUser, users }) => {
     if (loading) return <div className="flex justify-center items-center h-64"><Loader className="animate-spin text-blue-600"/></div>;
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
+        // [핵심 수정] 패딩 제거 및 w-full 적용
+        <div className="space-y-6 w-full animate-in fade-in">
             {classes.length > 0 ? (
                 <>
                     <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
