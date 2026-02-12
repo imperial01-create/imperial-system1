@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
-    ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon 
+    ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
+    FileText // [FIX] 누락된 아이콘 추가하여 렌더링 에러 방지
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
@@ -223,6 +224,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 </div>
                                 <div className="space-y-2 text-sm">
                                     <div className="flex gap-2">
+                                        {/* [FIX] FileText 아이콘이 import 되어 이제 에러가 발생하지 않습니다. */}
                                         <div className="w-6 shrink-0 text-gray-400"><FileText size={16}/></div>
                                         <div className="text-gray-700 break-all"><span className="font-bold text-gray-500 text-xs block">진도</span>{lecture.progress}</div>
                                     </div>
@@ -395,7 +397,6 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        // [핵심 수정] 패딩 제거 및 w-full 적용
         <div className="space-y-8 w-full animate-in fade-in">
             {/* 1. Class Management Section */}
             <div className="w-full">
@@ -468,7 +469,6 @@ export const AdminLectureManager = ({ users }) => {
     );
 };
 
-// [수정] 강사 계정 뷰 복구 및 빈 화면 방지
 export const LecturerDashboard = ({ currentUser, users }) => {
     const [classes, setClasses] = useState([]);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -484,12 +484,11 @@ export const LecturerDashboard = ({ currentUser, users }) => {
             setLoading(false);
         });
         return () => unsub();
-    }, [currentUser]); // 의존성 단순화
+    }, [currentUser]); 
 
     if (loading) return <div className="flex justify-center items-center h-64"><Loader className="animate-spin text-blue-600"/></div>;
 
     return (
-        // [핵심 수정] 패딩 제거 및 w-full 적용
         <div className="space-y-6 w-full animate-in fade-in">
             {classes.length > 0 ? (
                 <>

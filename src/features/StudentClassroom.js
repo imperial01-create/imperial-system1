@@ -14,7 +14,7 @@ const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 // --- Helper Functions ---
 const getMonthRange = (date) => {
     const year = date.getFullYear();
-    const month = date.getMonth();
+    const month = date.getMonth(); // 0-indexed
     const start = new Date(year, month, 1);
     const end = new Date(year, month + 1, 0);
     return { 
@@ -46,26 +46,22 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
     const completedCount = lectures.filter(l => completions.includes(l.id)).length;
     const progress = total === 0 ? 0 : Math.round((completedCount / total) * 100);
     
-    // 주간 기간 계산 (데이터 기반)
     const sortedDates = lectures.map(l => l.date).sort();
     const rangeStr = sortedDates.length > 0 
         ? `${formatShortDate(sortedDates[0]).formatted} ~ ${formatShortDate(sortedDates[sortedDates.length-1]).formatted}`
         : '';
 
-    // 색상 결정 (100% 완료시 녹색 -> 성취감 부여)
     const isPerfect = progress === 100;
     const barColor = isPerfect ? 'bg-green-500' : 'bg-blue-600';
     const textColor = isPerfect ? 'text-green-600' : 'text-blue-600';
 
     return (
         <Card className="w-full overflow-hidden border border-gray-200 shadow-sm">
-            {/* Header: Week Title & Progress */}
             <div className="bg-gray-50 p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3">
                 <div>
                     <h3 className="text-lg font-bold text-gray-800">{weekNum}주차 <span className="text-sm font-normal text-gray-500 ml-2">({rangeStr})</span></h3>
                 </div>
                 <div className="flex items-center gap-3 w-full sm:w-auto">
-                    {/* Progress Bar: 시각적 피드백 제공 */}
                     <div className="flex-1 sm:w-32 h-2.5 bg-gray-200 rounded-full overflow-hidden">
                         <div className={`h-full transition-all duration-500 ${barColor}`} style={{ width: `${progress}%` }} />
                     </div>
@@ -73,7 +69,6 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
                 </div>
             </div>
 
-            {/* Table Content */}
             <div className="w-full overflow-x-auto">
                 <table className="w-full text-left text-sm min-w-[600px] md:min-w-0">
                     <thead className="bg-white border-b text-gray-500">
@@ -94,19 +89,16 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
                                         <div className="font-bold text-gray-800">{formatted} <span className="text-gray-400 font-normal">({day})</span></div>
                                     </td>
                                     <td className="p-4 align-top space-y-2">
-                                        {/* 진도 */}
                                         <div className="flex gap-2">
                                             <span className="shrink-0 bg-blue-50 text-blue-600 text-xs px-2 py-0.5 rounded font-bold h-fit mt-0.5">진도</span>
                                             <span className="text-gray-700 whitespace-pre-wrap">{lecture.progress}</span>
                                         </div>
-                                        {/* 숙제 */}
                                         <div className="flex gap-2">
                                             <span className="shrink-0 bg-purple-50 text-purple-600 text-xs px-2 py-0.5 rounded font-bold h-fit mt-0.5">숙제</span>
                                             <span className="text-gray-700 whitespace-pre-wrap">{lecture.homework}</span>
                                         </div>
                                     </td>
                                     <td className="p-4 align-top text-center">
-                                        {/* 인증 버튼 (이미지 링크가 있을 때만) */}
                                         {lecture.proofImageUrl ? (
                                             <a 
                                                 href={lecture.proofImageUrl} 
@@ -121,7 +113,6 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
                                         ) : (
                                             <span className="text-gray-300 text-xs">-</span>
                                         )}
-                                        {/* 완료 상태 표시 */}
                                         {isDone && <div className="mt-1 text-green-500 text-xs font-bold flex items-center justify-center gap-1"><CheckCircle size={10}/> 완료</div>}
                                     </td>
                                 </tr>
@@ -138,16 +129,12 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
 const StudentClassroom = ({ currentUser }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     const [groupedLectures, setGroupedLectures] = useState({});
-    const [completions, setCompletions] = useState([]); // Array of lecture IDs
+    const [completions, setCompletions] = useState([]); 
     const [isLoading, setIsLoading] = useState(false);
 
-    // [보안 & UX] 역할에 따른 대상 학생 ID 결정
-    // 학부모: 자녀의 ID를 추적 (불안 해소)
-    // 학생: 본인의 ID를 추적 (자기 주도 학습)
     const targetStudentId = currentUser.role === 'parent' ? currentUser.childId : currentUser.id;
     const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
 
-    // 데이터 로드
     useEffect(() => {
         if (!targetStudentId) return;
 
@@ -156,7 +143,7 @@ const StudentClassroom = ({ currentUser }) => {
             try {
                 const { startStr, endStr } = getMonthRange(currentDate);
 
-                // 1. 해당 학생이 속한 반(Class) 찾기 (학생 ID가 포함된 반)
+                // 1. 해당 학생이 속한 반(Class) 찾기
                 const classQuery = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'),
                     where('studentIds', 'array-contains', targetStudentId)
@@ -171,15 +158,19 @@ const StudentClassroom = ({ currentUser }) => {
                     return;
                 }
 
-                // 2. 해당 반들의 이번 달 강의 목록 가져오기 (읽기 최적화)
+                // 2. [CTO FIX] 복합 쿼리 대신 단순 IN 쿼리 실행 후 메모리 필터링
+                // 이유: Firestore Index 미생성으로 인한 데이터 미노출 방지 (Zero Runtime Error)
                 const lecturesQuery = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'),
-                    where('classId', 'in', myClassIds),
-                    where('date', '>=', startStr),
-                    where('date', '<=', endStr)
+                    where('classId', 'in', myClassIds) // 최대 10개 반까지만 지원됨에 유의
                 );
+                
                 const lecturesSnapshot = await getDocs(lecturesQuery);
-                const lecturesData = lecturesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                
+                // 메모리에서 날짜 필터링 수행 (NoSQL Optimization)
+                const lecturesData = lecturesSnapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(l => l.date >= startStr && l.date <= endStr); // 날짜 범위 필터링
 
                 // 3. 완료 기록 가져오기
                 const lectureIds = lecturesData.map(l => l.id);
@@ -196,7 +187,7 @@ const StudentClassroom = ({ currentUser }) => {
                         .map(c => c.lectureId);
                 }
 
-                // 4. 주차별 그룹핑 (Grouping by Week) - 클라이언트 사이드 연산으로 서버 부하 감소
+                // 4. 주차별 그룹핑 (Grouping by Week)
                 const grouping = {};
                 lecturesData.forEach(lec => {
                     const d = new Date(lec.date);
@@ -215,7 +206,7 @@ const StudentClassroom = ({ currentUser }) => {
 
             } catch (e) {
                 console.error("Student Classroom Fetch Error:", e);
-                // 에러 발생 시 UI가 깨지지 않도록 조용히 처리하거나 토스트 메시지 고려
+                // 에러 발생 시 사용자에게 빈 화면보다 안내 메시지가 나을 수 있음
             } finally {
                 setIsLoading(false);
             }
@@ -239,10 +230,8 @@ const StudentClassroom = ({ currentUser }) => {
     };
 
     return (
-        // [CTO 수정] max-w-[1000px] 제거 -> w-full로 변경하여 App.js의 컨테이너 정책(max-w-1600px)을 따름
-        // 이를 통해 대시보드 내 모든 페이지가 일관된 레이아웃 너비를 가집니다.
         <div className="space-y-6 w-full animate-in fade-in">
-            {/* Header: Student Info & Month Navigator */}
+            {/* Header */}
             <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
@@ -261,7 +250,7 @@ const StudentClassroom = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* Content: Weekly List */}
+            {/* Content */}
             {isLoading ? (
                 <div className="py-20 flex justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>
             ) : Object.keys(groupedLectures).length === 0 ? (
