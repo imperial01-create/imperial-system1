@@ -314,10 +314,17 @@ const AppContent = () => {
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
-        {/* [핵심 수정] overflow-y-scroll 강제 적용하여 점핑 방지 & min-w-0 */}
-        <main className="flex-1 overflow-y-scroll bg-gray-50 p-3 md:p-8 w-full min-w-0">
-           {/* [핵심 수정] 모든 페이지의 컨테이너 너비 통일 */}
-           <div className="w-full max-w-[1600px] mx-auto">
+        {/* [CTO 수정] 전체 컨테이너 및 레이아웃 정책 통일
+             - overflow-y-auto: 스크롤바가 필요할 때만 노출 (Native Feel)
+             - w-full min-w-0: Flexbox 자식 요소 오버플로우 방지
+        */}
+        <main className="flex-1 overflow-y-auto bg-gray-50 w-full min-w-0">
+           {/* [Center Container] 
+               - max-w-[1600px]: 와이드 모니터에서 콘텐츠 퍼짐 방지
+               - px-4 md:px-8: 디바이스별 최적화된 여백
+               - py-6: 상하 여백 확보 
+           */}
+           <div className="w-full max-w-[1600px] mx-auto px-4 md:px-8 py-6">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
                     <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />

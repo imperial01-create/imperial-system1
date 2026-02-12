@@ -14,10 +14,9 @@ const PickupRequest = ({ currentUser }) => {
     });
     const [isLoading, setIsLoading] = useState(false);
 
-    // 날짜 포맷팅 (YYYY-MM-DD) - 시간 제외
+    // 날짜 포맷팅 (YYYY-MM-DD)
     const formatDeadline = (dateString) => {
         if (!dateString) return '';
-        // input type="date"는 YYYY-MM-DD 형태의 문자열을 반환하므로 그대로 사용하거나 가공
         return dateString; 
     };
 
@@ -71,89 +70,98 @@ const PickupRequest = ({ currentUser }) => {
     };
 
     return (
-        <div className="w-full max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-            <Card className="p-6 md:p-8 shadow-lg border-t-4 border-t-blue-600">
-                <div className="flex items-center gap-3 mb-6 border-b pb-4">
-                    <div className="bg-blue-100 p-3 rounded-full text-blue-600">
-                        <Send size={24} />
-                    </div>
-                    <div>
-                        <h2 className="text-2xl font-bold text-gray-800">픽업 데스크 신청</h2>
-                        <p className="text-gray-500 text-sm">픽업데스크 안내 문자를 데스크에 요청합니다.</p>
-                    </div>
-                </div>
-
-                <div className="space-y-6">
-                    {/* 학생 이름 입력 */}
-                    <div className="space-y-2">
-                        <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <User size={16} className="text-blue-500" />
-                            학생 이름
-                        </label>
-                        <input
-                            type="text"
-                            className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all"
-                            placeholder="자료를 수령할 학생의 이름을 입력하세요"
-                            value={formData.studentName}
-                            onChange={(e) => setFormData({ ...formData, studentName: e.target.value })}
-                            disabled={isLoading}
-                        />
-                    </div>
-
-                    {/* 프린트명 입력 */}
-                    <div className="space-y-2">
-                        <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <FileText size={16} className="text-green-500" />
-                            프린트명 (자료 제목)
-                        </label>
-                        <input
-                            type="text"
-                            className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all"
-                            placeholder="예: 2027 수능특강 변형문제 프린트"
-                            value={formData.printName}
-                            onChange={(e) => setFormData({ ...formData, printName: e.target.value })}
-                            disabled={isLoading}
-                        />
-                    </div>
-
-                    {/* 픽업 기한 입력 (수정됨: Date Type) */}
-                    <div className="space-y-2">
-                        <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                            <Clock size={16} className="text-red-500" />
-                            {/* [수정] 라벨 텍스트 변경 */}
-                            픽업 기한 (언제까지 픽업하게 할까요?)
-                        </label>
-                        <input
-                            // [수정] type="date"로 변경하여 날짜만 선택
-                            type="date"
-                            className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all cursor-pointer"
-                            value={formData.deadline}
-                            onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
-                            disabled={isLoading}
-                        />
-                    </div>
-
-                    {/* 안내 문구 (수정됨) */}
-                    <div className="bg-blue-50 p-4 rounded-xl flex gap-3 items-start text-sm text-blue-700">
-                        <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                        <p>
-                            {/* [수정] 안내 멘트 변경 */}
-                            신청 버튼을 누르면 데스크로 신청됩니다.<br />
-                            자료는 픽업데스크에 준비 바랍니다.
+        // [CTO 수정] max-w-2xl 제거하고 전체 너비 사용. PC에서는 2열 그리드 적용.
+        <div className="w-full animate-in fade-in slide-in-from-bottom-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+                
+                {/* 좌측: 안내 및 헤더 섹션 (PC에서 1칸 차지) */}
+                <div className="lg:col-span-1 space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-blue-100">
+                        <div className="bg-blue-100 w-14 h-14 rounded-2xl flex items-center justify-center text-blue-600 mb-4 shadow-sm">
+                            <Send size={28} />
+                        </div>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-2">픽업 데스크 신청</h2>
+                        <p className="text-gray-500 leading-relaxed">
+                            학생들이 데스크에서 자료를 바로 수령할 수 있도록 미리 신청해주세요.
                         </p>
                     </div>
 
-                    {/* 전송 버튼 */}
-                    <Button 
-                        className="w-full py-4 text-lg font-bold shadow-md hover:shadow-lg transition-all" 
-                        onClick={handleSendMessage}
-                        disabled={isLoading}
-                        icon={isLoading ? null : Send}
-                    >
-                        {isLoading ? <span className="flex items-center gap-2"><LoadingSpinner size={20} /> 전송 중...</span> : '신청하기'}
-                    </Button>
+                    <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 text-blue-800">
+                        <h3 className="font-bold flex items-center gap-2 mb-3">
+                            <AlertCircle size={20}/> 이용 가이드
+                        </h3>
+                        <ul className="text-sm space-y-2 list-disc list-inside opacity-90">
+                            <li>학생이 학원에 도착하기 전에 신청해주세요.</li>
+                            <li>자료는 데스크 '픽업함'에 비치됩니다.</li>
+                            <li>픽업 기한이 지나면 자료가 정리될 수 있습니다.</li>
+                        </ul>
+                    </div>
                 </div>
-            </Card>
+
+                {/* 우측: 입력 폼 섹션 (PC에서 2칸 차지) */}
+                <Card className="lg:col-span-2 p-6 md:p-8 shadow-sm border-t-4 border-t-blue-600">
+                    <div className="space-y-6">
+                        {/* 학생 이름 입력 */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <User size={16} className="text-blue-500" />
+                                학생 이름
+                            </label>
+                            <input
+                                type="text"
+                                className="w-full border border-gray-300 p-4 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all bg-gray-50 focus:bg-white"
+                                placeholder="자료를 수령할 학생의 이름을 입력하세요"
+                                value={formData.studentName}
+                                onChange={(e) => setFormData({ ...formData, studentName: e.target.value })}
+                                disabled={isLoading}
+                            />
+                        </div>
+
+                        {/* 프린트명 입력 */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <FileText size={16} className="text-green-500" />
+                                프린트명 (자료 제목)
+                            </label>
+                            <input
+                                type="text"
+                                className="w-full border border-gray-300 p-4 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all bg-gray-50 focus:bg-white"
+                                placeholder="예: 2027 수능특강 변형문제 프린트"
+                                value={formData.printName}
+                                onChange={(e) => setFormData({ ...formData, printName: e.target.value })}
+                                disabled={isLoading}
+                            />
+                        </div>
+
+                        {/* 픽업 기한 입력 */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                <Clock size={16} className="text-red-500" />
+                                픽업 기한
+                            </label>
+                            <input
+                                type="date"
+                                className="w-full border border-gray-300 p-4 rounded-xl focus:ring-2 focus:ring-blue-200 focus:border-blue-500 outline-none transition-all bg-gray-50 focus:bg-white cursor-pointer"
+                                value={formData.deadline}
+                                onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
+                                disabled={isLoading}
+                            />
+                        </div>
+
+                        <hr className="border-gray-100 my-4"/>
+
+                        {/* 전송 버튼 */}
+                        <Button 
+                            className="w-full py-4 text-lg font-bold shadow-lg shadow-blue-100 hover:shadow-xl transition-all" 
+                            onClick={handleSendMessage}
+                            disabled={isLoading}
+                            icon={isLoading ? null : Send}
+                        >
+                            {isLoading ? <span className="flex items-center gap-2"><LoadingSpinner size={20} /> 전송 중...</span> : '데스크로 신청하기'}
+                        </Button>
+                    </div>
+                </Card>
+            </div>
         </div>
     );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] Image, ExternalLink 아이콘 추가
+// [Import Check] Image, ExternalLink 아이콘 확인
 import { 
   ChevronLeft, ChevronRight, BookOpen, PenTool, CheckCircle, 
   AlertCircle, Image, ExternalLink, Loader 
@@ -52,7 +52,7 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
         ? `${formatShortDate(sortedDates[0]).formatted} ~ ${formatShortDate(sortedDates[sortedDates.length-1]).formatted}`
         : '';
 
-    // 색상 결정 (100% 완료시 녹색)
+    // 색상 결정 (100% 완료시 녹색 -> 성취감 부여)
     const isPerfect = progress === 100;
     const barColor = isPerfect ? 'bg-green-500' : 'bg-blue-600';
     const textColor = isPerfect ? 'text-green-600' : 'text-blue-600';
@@ -65,6 +65,7 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
                     <h3 className="text-lg font-bold text-gray-800">{weekNum}주차 <span className="text-sm font-normal text-gray-500 ml-2">({rangeStr})</span></h3>
                 </div>
                 <div className="flex items-center gap-3 w-full sm:w-auto">
+                    {/* Progress Bar: 시각적 피드백 제공 */}
                     <div className="flex-1 sm:w-32 h-2.5 bg-gray-200 rounded-full overflow-hidden">
                         <div className={`h-full transition-all duration-500 ${barColor}`} style={{ width: `${progress}%` }} />
                     </div>
@@ -120,7 +121,7 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
                                         ) : (
                                             <span className="text-gray-300 text-xs">-</span>
                                         )}
-                                        {/* 완료 상태 표시 (옵션) */}
+                                        {/* 완료 상태 표시 */}
                                         {isDone && <div className="mt-1 text-green-500 text-xs font-bold flex items-center justify-center gap-1"><CheckCircle size={10}/> 완료</div>}
                                     </td>
                                 </tr>
@@ -140,7 +141,9 @@ const StudentClassroom = ({ currentUser }) => {
     const [completions, setCompletions] = useState([]); // Array of lecture IDs
     const [isLoading, setIsLoading] = useState(false);
 
-    // 대상 학생 ID 결정 (학부모인 경우 자녀 ID, 학생인 경우 본인 ID)
+    // [보안 & UX] 역할에 따른 대상 학생 ID 결정
+    // 학부모: 자녀의 ID를 추적 (불안 해소)
+    // 학생: 본인의 ID를 추적 (자기 주도 학습)
     const targetStudentId = currentUser.role === 'parent' ? currentUser.childId : currentUser.id;
     const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
 
@@ -168,8 +171,7 @@ const StudentClassroom = ({ currentUser }) => {
                     return;
                 }
 
-                // 2. 해당 반들의 이번 달 강의 목록 가져오기
-                // Firestore 'in' query limit is 10. Assuming student takes < 10 classes.
+                // 2. 해당 반들의 이번 달 강의 목록 가져오기 (읽기 최적화)
                 const lecturesQuery = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'),
                     where('classId', 'in', myClassIds),
@@ -183,10 +185,6 @@ const StudentClassroom = ({ currentUser }) => {
                 const lectureIds = lecturesData.map(l => l.id);
                 let completedIds = [];
                 if (lectureIds.length > 0) {
-                    // Split lectureIds into chunks of 10 for 'in' query if needed, 
-                    // but here we simplify by fetching completions for this student in date range?
-                    // Better: Fetch completions by studentId and filter in memory since collection might be large but student's records are manageable.
-                    // Actually, fetching all completions for student is safer than 'in' query with many IDs.
                     const compQuery = query(
                         collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'),
                         where('studentId', '==', targetStudentId)
@@ -198,7 +196,7 @@ const StudentClassroom = ({ currentUser }) => {
                         .map(c => c.lectureId);
                 }
 
-                // 4. 주차별 그룹핑 (Grouping by Week)
+                // 4. 주차별 그룹핑 (Grouping by Week) - 클라이언트 사이드 연산으로 서버 부하 감소
                 const grouping = {};
                 lecturesData.forEach(lec => {
                     const d = new Date(lec.date);
@@ -217,7 +215,7 @@ const StudentClassroom = ({ currentUser }) => {
 
             } catch (e) {
                 console.error("Student Classroom Fetch Error:", e);
-                // alert("데이터를 불러오는데 실패했습니다.");
+                // 에러 발생 시 UI가 깨지지 않도록 조용히 처리하거나 토스트 메시지 고려
             } finally {
                 setIsLoading(false);
             }
@@ -241,7 +239,9 @@ const StudentClassroom = ({ currentUser }) => {
     };
 
     return (
-        <div className="space-y-6 w-full max-w-[1000px] mx-auto animate-in fade-in">
+        // [CTO 수정] max-w-[1000px] 제거 -> w-full로 변경하여 App.js의 컨테이너 정책(max-w-1600px)을 따름
+        // 이를 통해 대시보드 내 모든 페이지가 일관된 레이아웃 너비를 가집니다.
+        <div className="space-y-6 w-full animate-in fade-in">
             {/* Header: Student Info & Month Navigator */}
             <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>

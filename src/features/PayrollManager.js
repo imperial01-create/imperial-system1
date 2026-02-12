@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
-  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw
+  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus
 } from 'lucide-react';
 import { collection, doc, setDoc, getDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -41,7 +41,6 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     const sortedDates = Object.keys(dailyHours).sort();
     if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
 
-    // ... (기존 로직 유지) ...
     const firstDateStr = sortedDates[0];
     const [y, m] = firstDateStr.split('-').map(Number);
     const monthEnd = new Date(y, m, 0);
@@ -103,7 +102,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // Data Fetching Logic (Same as v5)
+    // Data Fetching Logic
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
@@ -161,7 +160,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
-    // Calculation & Save Logic (Same as v5)
+    // Calculation & Save Logic
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         if (targetUser.role === 'ta' && !targetUser.hourlyRate) { alert(`${targetUser.name}님의 시급 정보가 없습니다.`); return; }
@@ -234,7 +233,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     return (
         <div className="space-y-6 w-full animate-in fade-in">
-            {/* Header: [수정] 모바일 flex-col 대응 */}
+            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
                     <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronLeft /></button>
@@ -255,7 +254,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             {/* Content Area */}
             {isManagementMode ? (
                 <>
-                    {/* [핵심 수정] 1. 모바일 카드 뷰 (md:hidden) */}
+                    {/* 모바일 카드 뷰 */}
                     <div className="md:hidden space-y-4">
                         {targetUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
                         {targetUsers.map(user => {
@@ -291,7 +290,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         })}
                     </div>
 
-                    {/* [핵심 수정] 2. PC 테이블 뷰 (hidden md:block) */}
+                    {/* PC 테이블 뷰 */}
                     <div className="hidden md:block">
                         <Card className="overflow-hidden w-full p-0">
                             <div className="w-full overflow-x-auto">
@@ -340,43 +339,59 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     </div>
                 </>
             ) : (
-                <div className="max-w-2xl mx-auto w-full">
+                // [CTO 수정] 개인 뷰 레이아웃 최적화 (2단/3단 그리드)
+                <div className="w-full animate-in fade-in">
                     {payrolls[currentUser.id] ? (
-                        <Card className="border-t-4 border-t-blue-600 shadow-lg w-full">
-                            <div className="text-center mb-6 border-b pb-4">
-                                <h3 className="text-2xl font-bold text-gray-800">급여 명세서</h3>
-                                <p className="text-gray-500">{selectedMonth} 귀속분</p>
-                            </div>
-                            <div className="space-y-4">
-                                <div className="flex justify-between items-center text-lg">
-                                    <span className="text-gray-600">성명</span>
-                                    <span className="font-bold">{currentUser.name}</span>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* 좌측: 요약 카드 (PC에서 1칸) */}
+                            <Card className="lg:col-span-1 border-t-4 border-t-blue-600 shadow-lg h-fit">
+                                <div className="text-center mb-6 border-b pb-4">
+                                    <h3 className="text-2xl font-bold text-gray-800">급여 명세서</h3>
+                                    <Badge status="confirmed" />
+                                    <p className="text-gray-500 mt-2">{selectedMonth} 귀속분</p>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
-                                    <div>
-                                        <p className="text-xs text-gray-400 mb-1">지급 내역</p>
-                                        <div className="flex justify-between text-sm mb-1"><span>기본급</span><span>{formatCurrency(payrolls[currentUser.id].baseSalary)}</span></div>
-                                        <div className="flex justify-between text-sm mb-1"><span>주휴수당</span><span>{formatCurrency(payrolls[currentUser.id].weeklyHolidayPay)}</span></div>
-                                        <div className="flex justify-between text-sm mb-1"><span>식대</span><span>{formatCurrency(payrolls[currentUser.id].mealAllowance)}</span></div>
-                                        <div className="flex justify-between text-sm font-bold text-blue-600"><span>상여금</span><span>{formatCurrency(payrolls[currentUser.id].bonus)}</span></div>
-                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold"><span>지급계</span><span>{formatCurrency(payrolls[currentUser.id].totalGross)}</span></div>
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-center text-lg p-3 bg-gray-50 rounded-xl">
+                                        <span className="text-gray-600">성명</span>
+                                        <span className="font-bold">{currentUser.name}</span>
                                     </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 mb-1">공제 내역</p>
-                                        {DEDUCTION_KEYS.map((key) => (
-                                            <div key={key} className="flex justify-between text-sm mb-1 text-gray-600">
-                                                <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span>
-                                            </div>
-                                        ))}
-                                        <div className="border-t mt-2 pt-2 flex justify-between font-bold text-red-500"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
+                                    <div className="bg-blue-600 text-white p-5 rounded-xl flex flex-col items-center justify-center shadow-md">
+                                        <span className="text-blue-100 text-sm mb-1">실수령액</span>
+                                        <span className="text-3xl font-bold">{formatCurrency(payrolls[currentUser.id].netSalary)}</span>
                                     </div>
                                 </div>
-                                <div className="bg-blue-600 text-white p-4 rounded-xl flex justify-between items-center text-xl font-bold shadow-md">
-                                    <span>실수령액</span>
-                                    <span>{formatCurrency(payrolls[currentUser.id].netSalary)}</span>
+                            </Card>
+
+                            {/* 우측: 상세 내역 (PC에서 2칸) */}
+                            <Card className="lg:col-span-2 h-fit">
+                                <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800">
+                                    <FileText className="text-gray-500"/> 상세 내역
+                                </h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
+                                        <p className="font-bold text-blue-600 mb-3 flex items-center gap-2"><Plus size={16}/> 지급 내역</p>
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-sm"><span>기본급</span><span>{formatCurrency(payrolls[currentUser.id].baseSalary)}</span></div>
+                                            <div className="flex justify-between text-sm"><span>주휴수당</span><span>{formatCurrency(payrolls[currentUser.id].weeklyHolidayPay)}</span></div>
+                                            <div className="flex justify-between text-sm"><span>식대</span><span>{formatCurrency(payrolls[currentUser.id].mealAllowance)}</span></div>
+                                            <div className="flex justify-between text-sm font-bold text-blue-600 bg-blue-50 p-1 rounded"><span>상여금</span><span>{formatCurrency(payrolls[currentUser.id].bonus)}</span></div>
+                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg"><span>지급계</span><span>{formatCurrency(payrolls[currentUser.id].totalGross)}</span></div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
+                                        <p className="font-bold text-red-500 mb-3 flex items-center gap-2"><DollarSign size={16}/> 공제 내역</p>
+                                        <div className="space-y-2">
+                                            {DEDUCTION_KEYS.map((key) => (
+                                                <div key={key} className="flex justify-between text-sm text-gray-600">
+                                                    <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span>
+                                                </div>
+                                            ))}
+                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg text-gray-700"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                        </Card>
+                            </Card>
+                        </div>
                     ) : (
                         <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400 w-full">
                             <AlertCircle className="mx-auto mb-2 opacity-50" size={48} />

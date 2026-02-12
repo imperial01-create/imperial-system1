@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] Phone, BookOpen 등 아이콘 추가
+// [Import Check] Phone, BookOpen 등 아이콘 확인
 import { 
   Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User
 } from 'lucide-react';
@@ -148,7 +148,8 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        <div className="space-y-6 w-full max-w-[1600px] mx-auto animate-in fade-in">
+        // [CTO 수정] max-w-[1600px] 및 mx-auto 제거 -> 상위 컨테이너(App.js)에 레이아웃 위임
+        <div className="space-y-6 w-full animate-in fade-in">
             {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
