@@ -102,16 +102,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // [CTO 핵심 개선] Data Fetching Logic (캐싱 최적화)
+    // [CTO 핵심 개선] Data Fetching Logic (강제 서버 갱신 및 캐시 우회)
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
-        const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        // 캐시 키 버전을 v6로 올려 기존의 꼬여있는 로컬 캐시를 강제로 무시합니다.
+        const cacheKey = `imperial_payroll_v6_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
-            // [서비스 가치] 개인 뷰(Personal)는 1건의 문서만 읽어 비용이 사실상 0원에 수렴합니다.
-            // 조교가 자신의 월급을 '실시간'으로 정확히 보는 것이 중요하므로 캐시를 무시(0초)합니다.
-            // 반면 관리자 뷰(Admin)는 전체 조회를 막기 위해 5분(300,000ms)의 캐시를 적용합니다.
             const cacheTTL = isManagementMode ? 300000 : 0;
 
             if (!forceRefresh && cacheTTL > 0) {
@@ -130,28 +128,44 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             }
 
             const fetchedData = {};
+            
             if (isManagementMode) {
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), where('yearMonth', '==', selectedMonth));
                 const snapshot = await getDocs(q);
                 snapshot.forEach(doc => { fetchedData[doc.data().userId] = doc.data(); });
             } else {
-                const docId = `${currentUser.id}_${selectedMonth}`;
-                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
-                const snapshot = await getDoc(docRef);
-                if (snapshot.exists()) { fetchedData[currentUser.id] = snapshot.data(); }
+                // [서비스 가치] getDoc 단일 조회 시 발생하는 Firestore 오프라인 캐시 고착 현상을 
+                // 강제로 우회하기 위해 getDocs(쿼리)를 사용합니다.
+                // 또한 Firebase 복합 인덱스(Composite Index) 생성 에러를 사전에 방지하기 위해 
+                // userId로만 불러온 뒤, 해당 월(yearMonth)은 메모리에서 필터링하여 무결성을 보장합니다.
+                const q = query(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), 
+                    where('userId', '==', currentUser.id)
+                );
+                const snapshot = await getDocs(q);
+                
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (data.yearMonth === selectedMonth) {
+                        fetchedData[currentUser.id] = data;
+                    }
+                });
             }
 
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
             
-            // 관리자 모드일 때만 브라우저 캐시에 저장합니다.
             if (cacheTTL > 0) {
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
             }
 
-        } catch (e) { console.error("Payroll Fetch Error:", e); setPayrolls({}); } 
-        finally { setIsLoading(false); }
+        } catch (e) { 
+            console.error("Payroll Fetch Error:", e); 
+            setPayrolls({}); 
+        } finally { 
+            setIsLoading(false); 
+        }
     }, [selectedMonth, isManagementMode, currentUser]);
 
     const fetchMonthlySessions = useCallback(async () => {
@@ -222,7 +236,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v5_${selectedMonth}_admin`;
+            const cacheKey = `imperial_payroll_v6_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) { 
@@ -266,7 +280,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+            const cacheKey = `imperial_payroll_v6_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
             setIsEditModalOpen(false);
