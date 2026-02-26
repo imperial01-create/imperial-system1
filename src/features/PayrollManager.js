@@ -4,7 +4,8 @@ import {
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus
 } from 'lucide-react';
-import { collection, doc, setDoc, getDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
+// [CTO FIX] getDocFromServer, getDocsFromServer를 추가하여 캐시를 강제로 뚫고 서버 최신 데이터를 가져옵니다.
+import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
@@ -102,16 +103,17 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // [CTO 핵심 개선] Data Fetching Logic (강제 서버 갱신 및 캐시 우회)
+    // [CTO 철벽 방어 로직] 캐시를 완전히 무시하고 서버의 진실된 데이터만 가져오도록 설계
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
-        // 캐시 키 버전을 v6로 올려 기존의 꼬여있는 로컬 캐시를 강제로 무시합니다.
-        const cacheKey = `imperial_payroll_v6_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        // 캐시 키 버전을 v7로 올려 이전 찌꺼기 데이터를 완벽히 폐기합니다.
+        const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             const cacheTTL = isManagementMode ? 300000 : 0;
 
+            // 관리자 모드(비용 절감)일 때만 로컬스토리지 캐시를 허용합니다.
             if (!forceRefresh && cacheTTL > 0) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -130,32 +132,43 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const fetchedData = {};
             
             if (isManagementMode) {
+                // [관리자 뷰]
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), where('yearMonth', '==', selectedMonth));
-                const snapshot = await getDocs(q);
+                let snapshot;
+                try {
+                    // 서버 강제 조회 시도
+                    snapshot = await getDocsFromServer(q);
+                } catch (err) {
+                    // 인터넷이 끊겼을 때 앱이 죽지 않도록 일반 조회(캐시 폴백) 수행
+                    snapshot = await getDocs(q);
+                }
                 snapshot.forEach(doc => { fetchedData[doc.data().userId] = doc.data(); });
             } else {
-                // [서비스 가치] getDoc 단일 조회 시 발생하는 Firestore 오프라인 캐시 고착 현상을 
-                // 강제로 우회하기 위해 getDocs(쿼리)를 사용합니다.
-                // 또한 Firebase 복합 인덱스(Composite Index) 생성 에러를 사전에 방지하기 위해 
-                // userId로만 불러온 뒤, 해당 월(yearMonth)은 메모리에서 필터링하여 무결성을 보장합니다.
-                const q = query(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), 
-                    where('userId', '==', currentUser.id)
-                );
-                const snapshot = await getDocs(q);
+                // [강사/조교 개인 뷰] - 문제가 발생했던 핵심 지점
+                const docId = `${currentUser.id}_${selectedMonth}`;
+                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    if (data.yearMonth === selectedMonth) {
-                        fetchedData[currentUser.id] = data;
-                    }
-                });
+                let snapshot;
+                try {
+                    // [핵심 해결책] 
+                    // 로컬 IndexedDB에 고착화된 '데이터 없음' 유령 캐시를 무시하고 
+                    // 무조건 Firebase 서버를 때려서 실제 저장된 정산 데이터를 가져옵니다.
+                    snapshot = await getDocFromServer(docRef);
+                } catch (err) {
+                    // 기기가 완전 오프라인 상태일 경우에만 최후의 수단으로 일반 조회를 사용합니다.
+                    snapshot = await getDoc(docRef);
+                }
+
+                if (snapshot.exists()) {
+                    fetchedData[currentUser.id] = snapshot.data();
+                }
             }
 
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
             
+            // 관리자 모드일 경우에만 갱신된 최신 데이터를 로컬스토리지에 저장해줍니다.
             if (cacheTTL > 0) {
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
             }
@@ -236,7 +249,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v6_${selectedMonth}_admin`;
+            const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) { 
@@ -280,7 +293,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
             setPayrolls(updatedPayrolls);
             
-            const cacheKey = `imperial_payroll_v6_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+            const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
             setIsEditModalOpen(false);
