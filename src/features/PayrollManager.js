@@ -102,19 +102,24 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
     }, [isManagementMode, users, currentUser]);
 
-    // Data Fetching Logic
+    // [CTO 핵심 개선] Data Fetching Logic (캐싱 최적화)
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
         const cacheKey = `imperial_payroll_v5_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
-            if (!forceRefresh) {
+            // [서비스 가치] 개인 뷰(Personal)는 1건의 문서만 읽어 비용이 사실상 0원에 수렴합니다.
+            // 조교가 자신의 월급을 '실시간'으로 정확히 보는 것이 중요하므로 캐시를 무시(0초)합니다.
+            // 반면 관리자 뷰(Admin)는 전체 조회를 막기 위해 5분(300,000ms)의 캐시를 적용합니다.
+            const cacheTTL = isManagementMode ? 300000 : 0;
+
+            if (!forceRefresh && cacheTTL > 0) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
                     try {
                         const parsed = JSON.parse(cached);
-                        if (Date.now() - parsed.timestamp < 3600000) { 
+                        if (Date.now() - parsed.timestamp < cacheTTL) { 
                             setPayrolls(parsed.data);
                             setLastUpdated(parsed.timestamp);
                             setIsLoading(false);
@@ -139,7 +144,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
-            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
+            
+            // 관리자 모드일 때만 브라우저 캐시에 저장합니다.
+            if (cacheTTL > 0) {
+                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
+            }
 
         } catch (e) { console.error("Payroll Fetch Error:", e); setPayrolls({}); } 
         finally { setIsLoading(false); }
@@ -160,7 +169,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
-    // [CTO 핵심 수정] Calculation & Save Logic 개선
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         if (targetUser.role === 'ta' && !targetUser.hourlyRate) { 
@@ -185,7 +193,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const initialDeductions = {}; 
             DEDUCTION_KEYS.forEach(key => initialDeductions[key] = 0);
             
-            // [방어적 코딩] 모든 값을 안전한 Number로 치환하여 Firestore 거부 방지
             const safeBaseSalary = Number(baseSalary) || 0;
             const safeHolidayPay = Number(weeklyHolidayPay) || 0;
             const safeTotalGross = safeBaseSalary + safeHolidayPay;
@@ -204,13 +211,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 totalGross: safeTotalGross, 
                 deductions: initialDeductions, 
                 netSalary: safeTotalGross, 
-                status: 'calculated', // 한 번 정산하면 상태를 'calculated'로 확정
+                status: 'calculated',
                 updatedAt: serverTimestamp() 
             };
             
             const docId = `${targetUser.id}_${selectedMonth}`;
             
-            // [데이터 무결성 확보] 서버 동기화가 완전히 완료될 때까지 대기하며, 기존 데이터를 덮어쓰지 않고 병합({merge:true})
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData, { merge: true });
             
             const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
@@ -221,7 +227,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             
         } catch (e) { 
             console.error("Calculation Sync Error:", e);
-            alert("서버와 동기화 중 오류가 발생했습니다. 인터넷 연결을 확인해주세요.\n" + e.message); 
+            alert("서버와 동기화 중 오류가 발생했습니다.\n" + e.message); 
         } finally { 
             setCalcProcessing(false); 
         }
@@ -230,7 +236,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
         
-        setCalcProcessing(true); // 저장 시에도 로딩 스피너 작동
+        setCalcProcessing(true);
         
         try {
             const safeBaseSalary = Number(editingPayroll.baseSalary) || 0;
@@ -465,9 +471,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             </Card>
                         </div>
                     ) : (
-                        <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400 w-full">
-                            <AlertCircle className="mx-auto mb-2 opacity-50" size={48} />
-                            해당 월의 급여 내역이 아직 정산되지 않았습니다.
+                        <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400 w-full flex flex-col items-center">
+                            <AlertCircle className="mb-2 opacity-50 text-gray-400" size={48} />
+                            <p className="text-lg">해당 월의 급여 내역이 아직 정산되지 않았습니다.</p>
+                            <p className="text-sm mt-2">관리자 정산 직후라면 우측 상단의 <strong className="text-gray-600">새로고침</strong> 버튼을 눌러주세요.</p>
                         </div>
                     )}
                 </div>
