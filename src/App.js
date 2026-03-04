@@ -19,7 +19,7 @@ const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'))
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
-// [CTO 추가] 기출문제 클라우드 컴포넌트 지연 로딩 추가
+// [CTO 추가] 기출 아카이브 지연 로딩 추가 (메모리 최적화)
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 
 const APP_ID = 'imperial-clinic-v1';
@@ -85,7 +85,6 @@ const Dashboard = ({ currentUser }) => {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* 1. 클리닉 센터 (공통) */}
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -94,7 +93,6 @@ const Dashboard = ({ currentUser }) => {
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고<br/>피드백을 확인할 수 있습니다.</p>
                 </div>
 
-                {/* 2. 강의 관리 / 수강 강의 */}
                 {(['admin', 'lecturer', 'student', 'parent'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -111,16 +109,15 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* [CTO 추가] 3. 기출문제 클라우드 (공통) - 대시보드 접근성 강화 */}
+                {/* [서비스 가치] 기출 아카이브 대시보드 접근 - 학생의 자율학습 동기 부여 */}
                 <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">기출문제 클라우드</h2>
+                        <h2 className="text-xl font-bold text-gray-800">기출 아카이브</h2>
                     </div>
                     <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를<br/>가장 빠르게 확인하세요.</p>
                 </div>
 
-                {/* 4. 월급 관리 (관리자) */}
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -131,7 +128,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 5. 월급 확인 (관리자, 강사, 조교) */}
                 {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -142,7 +138,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 6. 픽업 신청 (강사 전용) */}
                 {currentUser.role === 'lecturer' && (
                     <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -172,15 +167,7 @@ const AppContent = () => {
 
   useEffect(() => {
     const safetyTimeout = setTimeout(() => setLoading(false), 5000);
-    
-    const initAuth = async () => { 
-        try { 
-            await signInAnonymously(auth); 
-        } catch (e) { 
-            console.error("Auth Init Error:", e);
-            setLoading(false); 
-        } 
-    };
+    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) { console.error(e); setLoading(false); } };
     initAuth();
     
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -194,7 +181,6 @@ const AppContent = () => {
     return () => { unsubscribe(); clearTimeout(safetyTimeout); };
   }, []);
 
-  // Users Data Caching (LocalStorage)
   useEffect(() => {
       if(!currentUser) return;
       const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
@@ -202,37 +188,24 @@ const AppContent = () => {
       if (shouldFetchUsers) {
           const CACHE_KEY = 'imperial_users_cache';
           const CACHE_DURATION = 3600000; 
-
           const fetchUsers = async () => {
               const cached = localStorage.getItem(CACHE_KEY);
               if (cached) {
                   try {
                       const { timestamp, data } = JSON.parse(cached);
-                      if (Date.now() - timestamp < CACHE_DURATION) {
-                          setUsers(data);
-                          return; 
-                      }
-                  } catch (e) {
-                          localStorage.removeItem(CACHE_KEY);
-                  }
+                      if (Date.now() - timestamp < CACHE_DURATION) { setUsers(data); return; }
+                  } catch (e) { localStorage.removeItem(CACHE_KEY); }
               }
-
               try {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
                   const snapshot = await getDocs(q); 
                   const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
-                  
                   setUsers(userList);
                   localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: userList }));
-              } catch (e) {
-                  console.error("User Fetch Error", e);
-              }
+              } catch (e) { console.error("User Fetch Error", e); }
           };
-
           fetchUsers();
-      } else {
-          setUsers([]);
-      }
+      } else { setUsers([]); }
   }, [currentUser]);
 
   const handleLogin = async () => {
@@ -244,7 +217,6 @@ const AppContent = () => {
      try {
          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
          const s = await getDocs(q);
-         
          if(!s.empty) {
              const userData = { id: s.docs[0].id, ...s.docs[0].data() };
              setCurrentUser(userData);
@@ -253,18 +225,10 @@ const AppContent = () => {
          } else {
              setLoginErrorModal({ isOpen: true, msg: '아이디 또는 비밀번호가 일치하지 않습니다.' });
          }
-     } catch (e) {
-         setLoginErrorModal({ isOpen: true, msg: '오류 발생: ' + e.message });
-     } finally {
-         setLoginProcessing(false);
-     }
+     } catch (e) { setLoginErrorModal({ isOpen: true, msg: '오류 발생: ' + e.message }); } finally { setLoginProcessing(false); }
   };
 
-  const handleLogout = () => {
-      sessionStorage.removeItem('imperial_user');
-      setCurrentUser(null);
-      navigate('/');
-  };
+  const handleLogout = () => { sessionStorage.removeItem('imperial_user'); setCurrentUser(null); navigate('/'); };
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -275,17 +239,15 @@ const AppContent = () => {
     </div>
   );
 
-  if (!currentUser) {
-      return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
-  }
+  if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // [CTO 수정] 기출문제 클라우드 사이드바 메뉴 추가
+  // [CTO 수정] 메뉴명 '기출 아카이브'로 변경
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
-    { path: '/exams', label: '기출문제 클라우드', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'student', 'parent'] },
+    { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
@@ -293,12 +255,7 @@ const AppContent = () => {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* Mobile Sidebar Overlay */}
-      {isSidebarOpen && (
-        <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)}/>
-      )}
-
-      {/* Sidebar (PC) */}
+      {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)}/>}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="p-6 border-b flex justify-between items-center">
           <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
@@ -319,42 +276,23 @@ const AppContent = () => {
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-bold"><LogOut size={16}/> 로그아웃</button>
         </div>
       </aside>
-
-      {/* Main Layout */}
       <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden">
         <header className="bg-white border-b p-3 flex items-center gap-3 md:hidden shrink-0">
           <button onClick={() => setIsSidebarOpen(true)} className="p-1"><Menu size={24} className="text-gray-700" /></button>
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
-
         <main className="flex-1 overflow-y-auto bg-gray-50 w-full min-w-0">
            <div className="w-full max-w-[1600px] mx-auto px-4 md:px-8 py-6">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
                     <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                    
                     <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                     <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                    
-                    <Route path="/lectures" element={
-                        currentUser.role === 'admin' ? <AdminLectureManager users={users} /> :
-                        currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> :
-                        <StudentClassroom currentUser={currentUser} />
-                    } />
-
-                    {/* [CTO 추가] 기출문제 클라우드 라우팅 연결 */}
+                    <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
                     <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />
-
                     <Route path="/users" element={<UserManager currentUser={currentUser} />} />
-                    
-                    <Route path="/payroll-mgmt" element={
-                        <PayrollManager currentUser={currentUser} users={users} viewMode="management" />
-                    } />
-                    
-                    <Route path="/payroll-check" element={
-                        <PayrollManager currentUser={currentUser} users={users} viewMode="personal" />
-                    } />
-                    
+                    <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
+                    <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 </Routes>
             </Suspense>
@@ -364,6 +302,5 @@ const AppContent = () => {
     </div>
   );
 };
-
 const App = () => <Router><AppContent /></Router>;
 export default App;
