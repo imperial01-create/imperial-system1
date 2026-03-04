@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
-  FileQuestion, BookOpen, PenTool, ExternalLink, Plus 
+  FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash 
 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -18,19 +18,19 @@ const FILE_TYPES = [
 ];
 
 const ExamArchive = ({ currentUser }) => {
-    // [서비스 가치] 학년(grade) 필터 추가로 학생 관점의 탐색 비용을 최소화
     const [filters, setFilters] = useState({
         schoolType: '', district: '', schoolName: '', year: '', semester: '', term: '', subject: '', grade: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
     
-    // 조교 작업용 모달
+    // [서비스 가치] Alert 창 대신 Inline 에러 처리를 통해 UX 훼손(이탈률) 방지
+    const [errorMsg, setErrorMsg] = useState('');
+    
     const [modalState, setModalState] = useState({ type: null, exam: null, fileKey: null });
     const [uploadUrl, setUploadUrl] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
-    // [CTO 추가] 관리자 전용 신규 기출 업로드 모달 상태
     const [showAdminAddModal, setShowAdminAddModal] = useState(false);
     const [newExamForm, setNewExamForm] = useState({
         schoolType: '고등학교', schoolName: '', year: '2024', semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', examPaperUrl: ''
@@ -39,7 +39,6 @@ const ExamArchive = ({ currentUser }) => {
     const isAdmin = currentUser.role === 'admin';
     const isWorker = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
 
-    // 초기 로딩 시 최근 자료 몇 개를 보여주는 것도 UX에 좋습니다.
     useEffect(() => {
         handleSearch();
         // eslint-disable-next-line
@@ -47,8 +46,9 @@ const ExamArchive = ({ currentUser }) => {
 
     const handleSearch = async () => {
         setLoading(true);
+        setErrorMsg(''); // 검색 시작 시 에러 초기화
+        
         try {
-            // [보안/최적화] 최대 50건으로 제한하여 읽기 비용 폭탄 방어
             const examsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
             let q = query(examsRef, limit(50)); 
 
@@ -61,18 +61,21 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // 최신순 정렬
             results.sort((a, b) => b.year.localeCompare(a.year) || b.semester.localeCompare(a.semester));
             setExams(results);
         } catch (error) {
             console.error("Search Error:", error);
-            alert("검색 중 오류가 발생했습니다.");
+            // [방어적 코딩] 권한 에러와 일반 네트워크 에러를 구분하여 안내
+            if (error.code === 'permission-denied') {
+                setErrorMsg('데이터베이스 접근 권한이 차단되었습니다. Firebase 보안 규칙을 확인해주세요.');
+            } else {
+                setErrorMsg('데이터를 불러오는 중 문제가 발생했습니다. 네트워크 상태를 확인해주세요.');
+            }
         } finally {
             setLoading(false);
         }
     };
 
-    // [CTO 추가] 관리자가 직접 기출문제 컨테이너를 생성하고 링크를 등록하는 로직
     const handleAdminSubmitExam = async () => {
         if (!newExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
         setIsProcessing(true);
@@ -86,14 +89,13 @@ const ExamArchive = ({ currentUser }) => {
                 term: newExamForm.term,
                 subject: newExamForm.subject,
                 grade: newExamForm.grade,
-                region: '서울',   // 기본값
-                district: '양천구', // 기본값
+                region: '서울',   
+                district: '양천구', 
                 files: {},
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
             };
 
-            // 관리자가 드라이브 링크를 함께 넣은 경우 시험지(examPaper) 상태를 바로 발행(published)으로 설정
             if (newExamForm.examPaperUrl.trim()) {
                 docData.files.examPaper = {
                     status: 'published',
@@ -107,12 +109,17 @@ const ExamArchive = ({ currentUser }) => {
             
             alert("신규 기출자료가 성공적으로 등록되었습니다.");
             setShowAdminAddModal(false);
-            setNewExamForm({ ...newExamForm, schoolName: '', examPaperUrl: '' }); // 폼 초기화
+            setNewExamForm({ ...newExamForm, schoolName: '', examPaperUrl: '' });
             
-            // 즉각적인 피드백을 위해 상태 업데이트
             setExams([{ id: docRef.id, ...docData }, ...exams]);
+            setErrorMsg(''); // 등록 성공 시 에러 UI 해제
         } catch (error) {
-            alert("등록 실패: " + error.message);
+            // [방어적 코딩] 관리자 업로드 시 권한 에러 명확화
+            if (error.code === 'permission-denied') {
+                alert("보안 에러: 기출문제를 등록할 권한이 없습니다. Firebase 콘솔에서 Firestore 보안 규칙을 먼저 업데이트해주세요.");
+            } else {
+                alert("등록 실패: " + error.message);
+            }
         } finally {
             setIsProcessing(false);
         }
@@ -127,7 +134,6 @@ const ExamArchive = ({ currentUser }) => {
 
         try {
             let updatedFilesForState = null;
-            // [보안] 동시성 문제 방지 (N명의 조교가 동시 클릭 시 방어)
             await runTransaction(db, async (transaction) => {
                 const examDoc = await transaction.get(examRef);
                 if (!examDoc.exists()) throw new Error("문서를 찾을 수 없습니다.");
@@ -152,7 +158,11 @@ const ExamArchive = ({ currentUser }) => {
 
             alert(`${fileLabel} 작업이 배정되었습니다!`);
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFilesForState } : e));
-        } catch (error) { alert(error.message); } finally { setIsProcessing(false); }
+        } catch (error) { 
+            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert(error.message); 
+        } finally { 
+            setIsProcessing(false); 
+        }
     };
 
     const handleSubmitLink = async () => {
@@ -170,7 +180,11 @@ const ExamArchive = ({ currentUser }) => {
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
             setModalState({ type: null, exam: null, fileKey: null });
             setUploadUrl('');
-        } catch (error) { alert("제출 실패: " + error.message); } finally { setIsProcessing(false); }
+        } catch (error) { 
+            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert("제출 실패: " + error.message); 
+        } finally { 
+            setIsProcessing(false); 
+        }
     };
 
     const handleApprove = async (exam, fileKey) => {
@@ -185,7 +199,11 @@ const ExamArchive = ({ currentUser }) => {
             
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
             alert("승인 완료! 학생들에게 자료가 공개되었습니다.");
-        } catch (error) { alert("승인 실패: " + error.message); } finally { setIsProcessing(false); }
+        } catch (error) { 
+            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert("승인 실패: " + error.message); 
+        } finally { 
+            setIsProcessing(false); 
+        }
     };
 
     const renderFileBlock = (exam, ft) => {
@@ -247,7 +265,6 @@ const ExamArchive = ({ currentUser }) => {
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
                     <span className="text-sm text-gray-500 font-medium mt-1">학교별 세부 자료 현황 관리</span>
                 </div>
-                {/* [서비스 가치] 관리자의 원스텝 업로드 지원 */}
                 {isAdmin && (
                     <Button onClick={() => setShowAdminAddModal(true)} icon={Plus} variant="primary">
                         자료 신규 등록
@@ -255,7 +272,6 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 필터 바 */}
             <Card className="bg-white border border-gray-200 shadow-sm p-5">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
                     <select className="border p-3 rounded-xl bg-gray-50" value={filters.schoolType} onChange={e=>setFilters({...filters, schoolType: e.target.value})}>
@@ -268,7 +284,6 @@ const ExamArchive = ({ currentUser }) => {
                     <select className="border p-3 rounded-xl bg-gray-50" value={filters.term} onChange={e=>setFilters({...filters, term: e.target.value})}>
                         <option value="">시험 구분</option><option value="중간">중간고사</option><option value="기말">기말고사</option>
                     </select>
-                    {/* [CTO 추가] 학년 드롭다운 추가 */}
                     <select className="border p-3 rounded-xl bg-gray-50" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
                     </select>
@@ -278,7 +293,6 @@ const ExamArchive = ({ currentUser }) => {
                 </Button>
             </Card>
 
-            {/* 결과 테이블 */}
             <Card className="p-0 overflow-hidden bg-gray-50">
                 <div className="overflow-x-auto w-full">
                     <table className="w-full text-left text-sm min-w-[1000px]">
@@ -289,27 +303,39 @@ const ExamArchive = ({ currentUser }) => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                            {exams.length === 0 && !loading && (
-                                <tr><td colSpan="2" className="text-center py-12 text-gray-400 bg-white">조건에 맞는 자료가 없습니다.</td></tr>
-                            )}
-                            {exams.map(exam => (
-                                <tr key={exam.id} className="hover:bg-gray-100/50 transition-colors bg-white">
-                                    <td className="p-5 align-top border-r border-gray-100">
-                                        <div className="font-bold text-gray-900 text-lg">{exam.schoolName}</div>
-                                        <div className="text-sm text-gray-500 mb-3">{exam.region} {exam.district}</div>
-                                        
-                                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
-                                            <div className="font-bold text-gray-700">{exam.year} {exam.semester} {exam.term}</div>
-                                            <div className="text-sm font-bold text-blue-600 mt-1">{exam.subject} ({exam.grade})</div>
-                                        </div>
-                                    </td>
-                                    <td className="p-5">
-                                        <div className="grid grid-cols-5 gap-3 h-full">
-                                            {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
+                            {/* [서비스 가치] Error 상태일 때 친절한 UI 렌더링으로 학부모/학생 안심 유지 */}
+                            {errorMsg ? (
+                                <tr>
+                                    <td colSpan="2" className="text-center py-16 bg-white">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <div className="bg-red-50 p-4 rounded-full text-red-500"><ServerCrash size={32}/></div>
+                                            <p className="text-gray-800 font-bold text-lg">{errorMsg}</p>
+                                            <Button variant="outline" size="sm" onClick={handleSearch} className="mt-2">다시 시도하기</Button>
                                         </div>
                                     </td>
                                 </tr>
-                            ))}
+                            ) : exams.length === 0 && !loading ? (
+                                <tr><td colSpan="2" className="text-center py-12 text-gray-400 bg-white">조건에 맞는 자료가 없습니다.</td></tr>
+                            ) : (
+                                exams.map(exam => (
+                                    <tr key={exam.id} className="hover:bg-gray-100/50 transition-colors bg-white">
+                                        <td className="p-5 align-top border-r border-gray-100">
+                                            <div className="font-bold text-gray-900 text-lg">{exam.schoolName}</div>
+                                            <div className="text-sm text-gray-500 mb-3">{exam.region} {exam.district}</div>
+                                            
+                                            <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                                                <div className="font-bold text-gray-700">{exam.year} {exam.semester} {exam.term}</div>
+                                                <div className="text-sm font-bold text-blue-600 mt-1">{exam.subject} ({exam.grade})</div>
+                                            </div>
+                                        </td>
+                                        <td className="p-5">
+                                            <div className="grid grid-cols-5 gap-3 h-full">
+                                                {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
                         </tbody>
                     </table>
                 </div>
