@@ -11,7 +11,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from './firebase'; 
 import { LoadingSpinner } from './components/UI';
 
-// Lazy Load Features
+// Lazy Load Features (초기 로딩 속도 방어를 위한 코드 스플리팅)
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -19,6 +19,8 @@ const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'))
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
+// [CTO 추가] 기출문제 클라우드 컴포넌트 지연 로딩 추가
+const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -109,7 +111,16 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 3. 월급 관리 (관리자) */}
+                {/* [CTO 추가] 3. 기출문제 클라우드 (공통) - 대시보드 접근성 강화 */}
+                <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                    <div className="flex items-center gap-4 mb-4">
+                        <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
+                        <h2 className="text-xl font-bold text-gray-800">기출문제 클라우드</h2>
+                    </div>
+                    <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를<br/>가장 빠르게 확인하세요.</p>
+                </div>
+
+                {/* 4. 월급 관리 (관리자) */}
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -120,7 +131,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 4. 월급 확인 (관리자, 강사, 조교) */}
+                {/* 5. 월급 확인 (관리자, 강사, 조교) */}
                 {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -131,7 +142,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 5. 픽업 신청 (강사 전용) */}
+                {/* 6. 픽업 신청 (강사 전용) */}
                 {currentUser.role === 'lecturer' && (
                     <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -202,7 +213,7 @@ const AppContent = () => {
                           return; 
                       }
                   } catch (e) {
-                      localStorage.removeItem(CACHE_KEY);
+                          localStorage.removeItem(CACHE_KEY);
                   }
               }
 
@@ -268,11 +279,13 @@ const AppContent = () => {
       return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
   }
 
+  // [CTO 수정] 기출문제 클라우드 사이드바 메뉴 추가
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
+    { path: '/exams', label: '기출문제 클라우드', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'student', 'parent'] },
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
@@ -314,16 +327,7 @@ const AppContent = () => {
           <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
         </header>
 
-        {/* [CTO 수정] 전체 컨테이너 및 레이아웃 정책 통일
-             - overflow-y-auto: 스크롤바가 필요할 때만 노출 (Native Feel)
-             - w-full min-w-0: Flexbox 자식 요소 오버플로우 방지
-        */}
         <main className="flex-1 overflow-y-auto bg-gray-50 w-full min-w-0">
-           {/* [Center Container] 
-               - max-w-[1600px]: 와이드 모니터에서 콘텐츠 퍼짐 방지
-               - px-4 md:px-8: 디바이스별 최적화된 여백
-               - py-6: 상하 여백 확보 
-           */}
            <div className="w-full max-w-[1600px] mx-auto px-4 md:px-8 py-6">
             <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
@@ -337,6 +341,9 @@ const AppContent = () => {
                         currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> :
                         <StudentClassroom currentUser={currentUser} />
                     } />
+
+                    {/* [CTO 추가] 기출문제 클라우드 라우팅 연결 */}
+                    <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />
 
                     <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                     
