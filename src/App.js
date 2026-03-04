@@ -1,6 +1,5 @@
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-// [Import Check] 아이콘 확인 완료
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
@@ -11,7 +10,6 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from './firebase'; 
 import { LoadingSpinner } from './components/UI';
 
-// Lazy Load Features (초기 로딩 속도 방어를 위한 코드 스플리팅)
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -19,12 +17,10 @@ const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'))
 const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
-// [CTO 추가] 기출 아카이브 지연 로딩 추가 (메모리 최적화)
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- LoginView Component ---
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
@@ -73,7 +69,6 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
-// --- Dashboard Component ---
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
 
@@ -109,14 +104,16 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* [서비스 가치] 기출 아카이브 대시보드 접근 - 학생의 자율학습 동기 부여 */}
-                <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                    <div className="flex items-center gap-4 mb-4">
-                        <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">기출 아카이브</h2>
+                {/* 기출 아카이브 대시보드 노출도 직원(admin, lecturer, ta)에게만 보이도록 수정 */}
+                {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
+                    <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">기출 아카이브</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를<br/>가장 빠르게 확인하세요.</p>
                     </div>
-                    <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를<br/>가장 빠르게 확인하세요.</p>
-                </div>
+                )}
 
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
@@ -241,13 +238,13 @@ const AppContent = () => {
 
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // [CTO 수정] 메뉴명 '기출 아카이브'로 변경
+  // [CTO 수정] 학생과 학부모 계정에서는 보이지 않도록 roles에서 'student', 'parent' 제거
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
-    { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'student', 'parent'] },
+    { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
@@ -289,7 +286,12 @@ const AppContent = () => {
                     <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                     <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                     <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                    <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />
+                    
+                    {/* 접근 권한 강화 - 직원들만 컴포넌트 마운트 */}
+                    {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
+                        <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />
+                    )}
+
                     <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                     <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                     <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />

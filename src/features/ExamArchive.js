@@ -26,12 +26,10 @@ const ExamArchive = ({ currentUser }) => {
     const [loading, setLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     
-    // 모달 관리 상태 (업로드, 승인대기, 수정 공용)
     const [modalState, setModalState] = useState({ type: null, exam: null, fileKey: null });
     const [uploadUrl, setUploadUrl] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
-    // [CTO 개선] 신규 폼에 5가지 파일 링크 일괄 업로드 구조(urls) 추가
     const [showAdminAddModal, setShowAdminAddModal] = useState(false);
     const [newExamForm, setNewExamForm] = useState({
         schoolType: '고등학교', schoolName: '', year: '2024', semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
@@ -76,7 +74,6 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
-    // [서비스 가치] 반복 작업을 최소화하는 일괄 업로드 로직
     const handleAdminSubmitExam = async () => {
         if (!newExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
         setIsProcessing(true);
@@ -97,7 +94,6 @@ const ExamArchive = ({ currentUser }) => {
                 updatedAt: serverTimestamp()
             };
 
-            // 입력된 링크가 있는 파일만 'published' 상태로 전환. 빈칸은 자동 'open' (미작업) 처리됨.
             FILE_TYPES.forEach(ft => {
                 if (newExamForm.urls[ft.key]?.trim()) {
                     docData.files[ft.key] = {
@@ -164,7 +160,6 @@ const ExamArchive = ({ currentUser }) => {
         } finally { setIsProcessing(false); }
     };
 
-    // [CTO 개선] 작업 취소 기능 추가 (휴먼 에러 방어)
     const handleCancelTask = async (exam, fileKey) => {
         if (!window.confirm("작업을 취소하시겠습니까?")) return;
         setIsProcessing(true);
@@ -186,21 +181,35 @@ const ExamArchive = ({ currentUser }) => {
     };
 
     const handleSubmitLink = async () => {
-        if (!uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
-        setIsProcessing(true);
         const { exam, fileKey, type } = modalState;
+        
+        // 신규 등록일 때만 빈칸 검사 수행
+        if (type !== 'edit_link' && !uploadUrl.trim()) {
+            return alert("구글 드라이브 URL을 입력해주세요.");
+        }
+        
+        setIsProcessing(true);
         const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
             
             if (type === 'edit_link') {
-                // [CTO 개선] 링크 직접 수정 반영
-                updatedFiles[fileKey] = { ...updatedFiles[fileKey], url: uploadUrl };
-                await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                alert("링크가 성공적으로 수정되었습니다.");
+                if (!uploadUrl.trim()) {
+                    // [CTO 개선] 수정 시 빈칸으로 제출하면 작업 대기(open) 상태로 롤백
+                    delete updatedFiles[fileKey].workerId;
+                    delete updatedFiles[fileKey].workerName;
+                    delete updatedFiles[fileKey].url;
+                    updatedFiles[fileKey].status = 'open';
+                    
+                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
+                    alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
+                } else {
+                    updatedFiles[fileKey] = { ...updatedFiles[fileKey], url: uploadUrl };
+                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
+                    alert("링크가 성공적으로 수정되었습니다.");
+                }
             } else {
-                // 신규 링크 검수 요청
                 updatedFiles[fileKey] = { ...updatedFiles[fileKey], status: 'pending', url: uploadUrl };
                 await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
                 alert("관리자에게 최종 승인을 요청했습니다.");
@@ -236,7 +245,6 @@ const ExamArchive = ({ currentUser }) => {
         return (
             <div key={ft.key} className="flex flex-col items-center justify-between p-3 rounded-xl border border-gray-200 bg-white h-full w-full shadow-sm hover:shadow-md transition-all">
                 <div className="text-center mb-3 relative w-full">
-                    {/* [CTO 추가] 관리자 전용 수정 버튼 */}
                     {isAdmin && fileData.status === 'published' && (
                         <button onClick={() => { setUploadUrl(fileData.url); setModalState({ type: 'edit_link', exam, fileKey: ft.key }); }} className="absolute top-0 right-0 p-1 text-gray-400 hover:text-blue-600 transition-colors" title="링크 수정">
                             <Edit3 size={14} />
@@ -249,7 +257,6 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
 
                 <div className="w-full flex flex-col gap-1.5 mt-auto">
-                    {/* [CTO 변경] 제작하기 -> 작업하기 */}
                     {fileData.status === 'open' && isWorker && (
                         <Button size="sm" variant="outline" className="w-full text-[11px] py-1 px-0 border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400" onClick={() => handleClaimTask(exam, ft.key)} disabled={isProcessing}>
                             작업하기
@@ -298,7 +305,7 @@ const ExamArchive = ({ currentUser }) => {
             <div className="flex justify-between items-center mb-2">
                 <div className="flex flex-col">
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
-                    <span className="text-sm text-gray-500 font-medium mt-1">학교별 세부 자료 현황 관리</span>
+                    <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리</span>
                 </div>
                 {isAdmin && (
                     <Button onClick={() => setShowAdminAddModal(true)} icon={Plus} variant="primary">
@@ -307,7 +314,6 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* [CTO 변경] 모바일 반응형 필터 (Grid 활용) */}
             <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
                     <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.schoolType} onChange={e=>setFilters({...filters, schoolType: e.target.value})}>
@@ -329,7 +335,6 @@ const ExamArchive = ({ currentUser }) => {
                 </Button>
             </Card>
 
-            {/* [CTO 변경] 기존 Table을 버리고 완전한 반응형 Grid/List 구조로 리팩토링 (가로 스크롤 방지, 시인성 최적화) */}
             <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
                 {errorMsg ? (
                     <div className="p-10 flex flex-col items-center gap-3 bg-white">
@@ -343,17 +348,16 @@ const ExamArchive = ({ currentUser }) => {
                     <div className="divide-y divide-gray-100">
                         {exams.map(exam => (
                             <div key={exam.id} className="p-4 md:p-6 flex flex-col lg:flex-row gap-4 lg:gap-6 hover:bg-gray-50/50 transition-colors">
-                                {/* 좌측: 학교 및 시험 정보 (모바일에서는 위쪽, PC에서는 좌측) */}
                                 <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
                                     <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
-                                    <div className="text-xs md:text-sm text-gray-500 mb-2">{exam.region} {exam.district}</div>
-                                    <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit">
-                                        <div className="font-bold text-gray-700 text-sm">{exam.year} {exam.semester} {exam.term}</div>
-                                        <div className="text-sm font-bold text-blue-600 mt-0.5">{exam.subject} ({exam.grade})</div>
+                                    {/* [CTO 수정] 불필요한 지역명 삭제, 직관적인 짧은 포맷(예: 2024 1-1 중간 수학)으로 디자인 개선 */}
+                                    <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
+                                        <div className="font-bold text-gray-700 text-sm">
+                                            {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.term?.replace('고사', '')} {exam.subject}
+                                        </div>
                                     </div>
                                 </div>
                                 
-                                {/* 우측: 파일 블록들 (화면 크기에 따라 2열 -> 3열 -> 5열로 유연하게 반응) */}
                                 <div className="w-full lg:w-3/4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 md:gap-3">
                                     {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
                                 </div>
@@ -363,7 +367,6 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 관리자 신규 업로드 모달 */}
             <Modal isOpen={showAdminAddModal} onClose={() => setShowAdminAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
@@ -434,7 +437,6 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 링크 등록 및 수정 공용 모달 */}
             <Modal isOpen={['upload_link', 'edit_link'].includes(modalState.type)} onClose={() => { setModalState({ type: null, exam: null, fileKey: null }); setUploadUrl(''); }} title={modalState.type === 'edit_link' ? "자료 링크 수정" : "자료 링크 등록"}>
                 <div className="space-y-4">
                     {modalState.type === 'upload_link' && (
@@ -444,6 +446,14 @@ const ExamArchive = ({ currentUser }) => {
                         </div>
                     )}
                     
+                    {/* [CTO 추가] 수정 모드 시 빈칸 롤백 기능 안내 */}
+                    {modalState.type === 'edit_link' && (
+                        <div className="bg-orange-50 p-4 rounded-xl text-sm text-orange-800 mb-4">
+                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 링크 삭제 안내</p>
+                            <p>입력칸을 <strong>빈칸</strong>으로 비우고 완료를 누르면, 해당 자료는 다시 <strong>'작업 대기(오픈)'</strong> 상태로 돌아갑니다.</p>
+                        </div>
+                    )}
+
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
                             <LinkIcon size={16}/> {modalState.fileKey && FILE_TYPES.find(f => f.key === modalState.fileKey)?.label} URL
