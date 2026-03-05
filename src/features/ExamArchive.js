@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3
+  XCircle, Edit3, Trash2 // [CTO 추가] 삭제 아이콘 추가
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore'; // [CTO 추가] deleteDoc 함수 추가
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 
@@ -30,7 +30,7 @@ const ExamArchive = ({ currentUser }) => {
     const [uploadUrl, setUploadUrl] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
-    const [showAdminAddModal, setShowAdminAddModal] = useState(false);
+    const [showAddModal, setShowAddModal] = useState(false);
     const [newExamForm, setNewExamForm] = useState({
         schoolType: '고등학교', schoolName: '', year: '2024', semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
@@ -38,6 +38,8 @@ const ExamArchive = ({ currentUser }) => {
 
     const isAdmin = currentUser.role === 'admin';
     const isWorker = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
+    // [CTO 개선] 신규 자료 등록 권한에 'ta'(조교) 추가
+    const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
     useEffect(() => {
         handleSearch();
@@ -74,7 +76,7 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
-    const handleAdminSubmitExam = async () => {
+    const handleAddSubmitExam = async () => {
         if (!newExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
         setIsProcessing(true);
         
@@ -108,7 +110,7 @@ const ExamArchive = ({ currentUser }) => {
             const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive'), docData);
             
             alert("신규 기출자료가 성공적으로 등록되었습니다.");
-            setShowAdminAddModal(false);
+            setShowAddModal(false);
             setNewExamForm({ 
                 ...newExamForm, schoolName: '', 
                 urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
@@ -120,6 +122,23 @@ const ExamArchive = ({ currentUser }) => {
             error.code === 'permission-denied' 
                 ? alert("보안 에러: 기출문제를 등록할 권한이 없습니다.") 
                 : alert("등록 실패: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // [CTO 추가] 관리자 전용 기출자료 전체 삭제 기능
+    const handleDeleteExam = async (examId) => {
+        if (!isAdmin) return;
+        if (!window.confirm("정말로 이 기출자료 전체를 삭제하시겠습니까?\n(삭제 후에는 복구할 수 없습니다)")) return;
+        
+        setIsProcessing(true);
+        try {
+            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', examId));
+            setExams(prev => prev.filter(e => e.id !== examId));
+            alert("자료가 성공적으로 삭제되었습니다.");
+        } catch (error) {
+            alert("삭제 실패: " + error.message);
         } finally {
             setIsProcessing(false);
         }
@@ -183,7 +202,6 @@ const ExamArchive = ({ currentUser }) => {
     const handleSubmitLink = async () => {
         const { exam, fileKey, type } = modalState;
         
-        // 신규 등록일 때만 빈칸 검사 수행
         if (type !== 'edit_link' && !uploadUrl.trim()) {
             return alert("구글 드라이브 URL을 입력해주세요.");
         }
@@ -196,7 +214,6 @@ const ExamArchive = ({ currentUser }) => {
             
             if (type === 'edit_link') {
                 if (!uploadUrl.trim()) {
-                    // [CTO 개선] 수정 시 빈칸으로 제출하면 작업 대기(open) 상태로 롤백
                     delete updatedFiles[fileKey].workerId;
                     delete updatedFiles[fileKey].workerName;
                     delete updatedFiles[fileKey].url;
@@ -307,8 +324,9 @@ const ExamArchive = ({ currentUser }) => {
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리</span>
                 </div>
-                {isAdmin && (
-                    <Button onClick={() => setShowAdminAddModal(true)} icon={Plus} variant="primary">
+                {/* [CTO 수정] 조교(ta)와 관리자(admin) 모두 신규 등록 버튼 활성화 */}
+                {canAddExam && (
+                    <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
                         <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
                     </Button>
                 )}
@@ -349,8 +367,15 @@ const ExamArchive = ({ currentUser }) => {
                         {exams.map(exam => (
                             <div key={exam.id} className="p-4 md:p-6 flex flex-col lg:flex-row gap-4 lg:gap-6 hover:bg-gray-50/50 transition-colors">
                                 <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
-                                    <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
-                                    {/* [CTO 수정] 불필요한 지역명 삭제, 직관적인 짧은 포맷(예: 2024 1-1 중간 수학)으로 디자인 개선 */}
+                                    <div className="flex justify-between items-start">
+                                        <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
+                                        {/* [CTO 수정] 관리자 전용 전체 삭제 버튼 UI 추가 */}
+                                        {isAdmin && (
+                                            <button onClick={() => handleDeleteExam(exam.id)} className="text-red-400 hover:text-red-600 transition-colors mt-1" title="기출자료 전체 삭제">
+                                                <Trash2 size={18} />
+                                            </button>
+                                        )}
+                                    </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
                                         <div className="font-bold text-gray-700 text-sm">
                                             {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.term?.replace('고사', '')} {exam.subject}
@@ -367,7 +392,7 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            <Modal isOpen={showAdminAddModal} onClose={() => setShowAdminAddModal(false)} title="기출자료 신규 등록">
+            <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
                         <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원</p>
@@ -431,7 +456,7 @@ const ExamArchive = ({ currentUser }) => {
                         </div>
                     ))}
 
-                    <Button className="w-full mt-6 py-4 text-base md:text-lg shadow-md" onClick={handleAdminSubmitExam} disabled={isProcessing}>
+                    <Button className="w-full mt-6 py-4 text-base md:text-lg shadow-md" onClick={handleAddSubmitExam} disabled={isProcessing}>
                         {isProcessing ? <Loader className="animate-spin mx-auto" /> : '아카이브 생성 및 배포'}
                     </Button>
                 </div>
@@ -446,7 +471,6 @@ const ExamArchive = ({ currentUser }) => {
                         </div>
                     )}
                     
-                    {/* [CTO 추가] 수정 모드 시 빈칸 롤백 기능 안내 */}
                     {modalState.type === 'edit_link' && (
                         <div className="bg-orange-50 p-4 rounded-xl text-sm text-orange-800 mb-4">
                             <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 링크 삭제 안내</p>
