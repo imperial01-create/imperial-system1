@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2 // [CTO 추가] 삭제 아이콘 추가
+  XCircle, Edit3, Trash2
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore'; // [CTO 추가] deleteDoc 함수 추가
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 
@@ -17,6 +17,10 @@ const FILE_TYPES = [
     { key: 'solution', label: '해설', icon: BookOpen },
     { key: 'analysis', label: '시험분석', icon: PenTool }
 ];
+
+// [CTO 최적화] 매년 코드를 수정할 필요가 없도록 동적 배열 생성 (올해 연도 ~ 2000년)
+const currentYear = new Date().getFullYear();
+const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (currentYear - i).toString());
 
 const ExamArchive = ({ currentUser }) => {
     const [filters, setFilters] = useState({
@@ -31,14 +35,14 @@ const ExamArchive = ({ currentUser }) => {
     const [isProcessing, setIsProcessing] = useState(false);
 
     const [showAddModal, setShowAddModal] = useState(false);
+    // [CTO 수정] 초기 폼 연도를 하드코딩된 '2024'가 아닌 시스템의 '올해 연도'로 자동 세팅
     const [newExamForm, setNewExamForm] = useState({
-        schoolType: '고등학교', schoolName: '', year: '2024', semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
+        schoolType: '고등학교', schoolName: '', year: currentYear.toString(), semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
     const isAdmin = currentUser.role === 'admin';
     const isWorker = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
-    // [CTO 개선] 신규 자료 등록 권한에 'ta'(조교) 추가
     const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
     useEffect(() => {
@@ -52,6 +56,7 @@ const ExamArchive = ({ currentUser }) => {
         
         try {
             const examsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
+            // 검색 한도를 약간 넉넉하게 하여 과거 데이터를 충분히 불러오도록 조정할 수 있습니다. (현재 50개 유지)
             let q = query(examsRef, limit(50)); 
 
             Object.keys(filters).forEach(key => {
@@ -63,6 +68,7 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
+            // 최신순 정렬 (연도 역순)
             results.sort((a, b) => b.year.localeCompare(a.year) || b.semester.localeCompare(a.semester));
             setExams(results);
         } catch (error) {
@@ -127,7 +133,6 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
-    // [CTO 추가] 관리자 전용 기출자료 전체 삭제 기능
     const handleDeleteExam = async (examId) => {
         if (!isAdmin) return;
         if (!window.confirm("정말로 이 기출자료 전체를 삭제하시겠습니까?\n(삭제 후에는 복구할 수 없습니다)")) return;
@@ -324,7 +329,6 @@ const ExamArchive = ({ currentUser }) => {
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리</span>
                 </div>
-                {/* [CTO 수정] 조교(ta)와 관리자(admin) 모두 신규 등록 버튼 활성화 */}
                 {canAddExam && (
                     <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
                         <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
@@ -338,11 +342,15 @@ const ExamArchive = ({ currentUser }) => {
                         <option value="">학교급</option><option value="중학교">중학교</option><option value="고등학교">고등학교</option>
                     </select>
                     <input className="border p-3 rounded-xl bg-gray-50 w-full" placeholder="학교명 (예: 목동고)" value={filters.schoolName} onChange={e=>setFilters({...filters, schoolName: e.target.value})} />
+                    
+                    {/* [CTO 수정] 하드코딩된 연도 대신 자동 생성된 YEARS 배열을 순회하여 렌더링 */}
                     <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
-                        <option value="">연도</option><option value="2024">2024년</option><option value="2023">2023년</option>
+                        <option value="">연도 전체</option>
+                        {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                     </select>
+
                     <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.term} onChange={e=>setFilters({...filters, term: e.target.value})}>
-                        <option value="">시험</option><option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
+                        <option value="">시험 전체</option><option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
                     </select>
                     <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
@@ -369,7 +377,6 @@ const ExamArchive = ({ currentUser }) => {
                                 <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
                                     <div className="flex justify-between items-start">
                                         <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
-                                        {/* [CTO 수정] 관리자 전용 전체 삭제 버튼 UI 추가 */}
                                         {isAdmin && (
                                             <button onClick={() => handleDeleteExam(exam.id)} className="text-red-400 hover:text-red-600 transition-colors mt-1" title="기출자료 전체 삭제">
                                                 <Trash2 size={18} />
@@ -420,12 +427,15 @@ const ExamArchive = ({ currentUser }) => {
                             <label className="block text-sm font-bold text-gray-700 mb-1">과목</label>
                             <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}/>
                         </div>
+                        
                         <div className="col-span-1">
                             <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
+                            {/* [CTO 수정] YEARS 배열 렌더링으로 변경 */}
                             <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
-                                <option value="2024">2024년</option><option value="2023">2023년</option>
+                                {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                             </select>
                         </div>
+                        
                         <div className="col-span-1">
                             <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
                             <div className="flex gap-1">
