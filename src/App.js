@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavig
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore'; 
@@ -18,6 +18,7 @@ const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
+const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -80,6 +81,14 @@ const Dashboard = ({ currentUser }) => {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div onClick={() => navigate('/strategy')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
+                    <div className="flex items-center gap-4 mb-4">
+                        <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><Brain size={32} /></div>
+                        <h2 className="text-xl font-bold text-gray-800">내신 전략 리포트</h2>
+                    </div>
+                    <p className="text-gray-500 leading-relaxed">학교별 맞춤형 출제 경향과<br/>분석 리포트를 확인하세요.</p>
+                </div>
+
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -101,47 +110,6 @@ const Dashboard = ({ currentUser }) => {
                                 ? '배정된 강의 진도를 확인하고\n영상 학습을 진행하세요.' 
                                 : '수업 진도와 숙제를 관리하고\n강의 영상을 업로드하세요.'}
                         </p>
-                    </div>
-                )}
-
-                {/* 기출 아카이브 대시보드 노출도 직원(admin, lecturer, ta)에게만 보이도록 수정 */}
-                {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
-                    <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">기출 아카이브</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를<br/>가장 빠르게 확인하세요.</p>
-                    </div>
-                )}
-
-                {currentUser.role === 'admin' && (
-                    <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><Wallet size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">월급 관리</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">전체 직원의 급여를 정산하고<br/>관리합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">월급 확인</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">이번 달 급여 명세서와<br/>정산 내역을 확인합니다.</p>
-                    </div>
-                )}
-
-                {currentUser.role === 'lecturer' && (
-                    <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-orange-100 p-3 rounded-xl text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors"><Printer size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">픽업 신청</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">데스크에 출력물 픽업을<br/>간편하게 신청하세요.</p>
                     </div>
                 )}
             </div>
@@ -183,26 +151,16 @@ const AppContent = () => {
       const shouldFetchUsers = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
       
       if (shouldFetchUsers) {
-          const CACHE_KEY = 'imperial_users_cache';
-          const CACHE_DURATION = 3600000; 
           const fetchUsers = async () => {
-              const cached = localStorage.getItem(CACHE_KEY);
-              if (cached) {
-                  try {
-                      const { timestamp, data } = JSON.parse(cached);
-                      if (Date.now() - timestamp < CACHE_DURATION) { setUsers(data); return; }
-                  } catch (e) { localStorage.removeItem(CACHE_KEY); }
-              }
               try {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
                   const snapshot = await getDocs(q); 
                   const userList = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
                   setUsers(userList);
-                  localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), data: userList }));
               } catch (e) { console.error("User Fetch Error", e); }
           };
           fetchUsers();
-      } else { setUsers([]); }
+      }
   }, [currentUser]);
 
   const handleLogin = async () => {
@@ -229,18 +187,15 @@ const AppContent = () => {
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="flex flex-col items-center gap-4">
-            <Loader className="animate-spin text-blue-600" size={40} />
-            <p className="text-gray-500 font-medium animate-pulse">Imperial System 로딩 중...</p>
-        </div>
+        <Loader className="animate-spin text-blue-600" size={40} />
     </div>
   );
 
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // [CTO 수정] 학생과 학부모 계정에서는 보이지 않도록 roles에서 'student', 'parent' 제거
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
+    { path: '/strategy', label: '내신 전략 리포트', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리', icon: currentUser.role === 'student' || currentUser.role === 'parent' ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
@@ -260,38 +215,25 @@ const AppContent = () => {
         </div>
         <nav className="p-4 space-y-2">
            {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
-              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-medium ${location.pathname === item.path ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}>
+              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium ${location.pathname === item.path ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-100'}`}>
                 <item.icon size={20} /> {item.label}
               </button>
            ))}
         </nav>
         <div className="absolute bottom-0 w-full p-4 border-t">
-            <div className="flex items-center gap-3 mb-4 px-2">
-                <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-500">{currentUser.name[0]}</div>
-                <div><div className="font-bold text-sm">{currentUser.name}</div><div className="text-xs text-gray-500 uppercase">{currentUser.role}</div></div>
-            </div>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 px-4 py-2 rounded-lg text-sm font-bold"><LogOut size={16}/> 로그아웃</button>
         </div>
       </aside>
-      <div className="flex-1 flex flex-col h-full w-full relative overflow-hidden">
-        <header className="bg-white border-b p-3 flex items-center gap-3 md:hidden shrink-0">
-          <button onClick={() => setIsSidebarOpen(true)} className="p-1"><Menu size={24} className="text-gray-700" /></button>
-          <h1 className="text-lg font-bold text-gray-900">{menuItems.find(i => i.path === location.pathname)?.label || 'Imperial'}</h1>
-        </header>
-        <main className="flex-1 overflow-y-auto bg-gray-50 w-full min-w-0">
-           <div className="w-full max-w-[1600px] mx-auto px-4 md:px-8 py-6">
-            <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
+      <main className="flex-1 overflow-y-auto w-full min-w-0">
+           <div className="max-w-[1600px] mx-auto px-4 md:px-8 py-6">
+            <Suspense fallback={<Loader className="animate-spin text-blue-600" />}>
                 <Routes>
                     <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                    <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                     <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                     <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                     <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                    
-                    {/* 접근 권한 강화 - 직원들만 컴포넌트 마운트 */}
-                    {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
-                        <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />
-                    )}
-
+                    {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
                     <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                     <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                     <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
@@ -299,8 +241,7 @@ const AppContent = () => {
                 </Routes>
             </Suspense>
            </div>
-        </main>
-      </div>
+      </main>
     </div>
   );
 };

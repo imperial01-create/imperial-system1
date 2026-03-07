@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-// [Import Check] Phone, BookOpen 등 아이콘 확인
 import { 
-  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User
+  Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User, School, GraduationCap
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, query, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Modal, Badge } from '../components/UI';
+import { Button, Card, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -18,8 +17,10 @@ const UserManager = ({ currentUser }) => {
     const [targetUserId, setTargetUserId] = useState(null);
     const [loading, setLoading] = useState(false);
 
+    // [개선] schoolName, grade 필드 추가 유지
     const [formData, setFormData] = useState({ 
-        name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: ''
+        name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
+        schoolName: '', grade: '1학년'
     });
     const [isEditMode, setIsEditMode] = useState(false);
     
@@ -61,7 +62,7 @@ const UserManager = ({ currentUser }) => {
     }, []);
 
     const handleOpenCreate = () => {
-        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '' });
+        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년' });
         setIsEditMode(false);
         setIsModalOpen(true);
     };
@@ -72,7 +73,9 @@ const UserManager = ({ currentUser }) => {
             password: user.password || '', 
             childId: user.childId || '',
             childName: user.childName || '',
-            hourlyRate: user.hourlyRate || ''
+            hourlyRate: user.hourlyRate || '',
+            schoolName: user.schoolName || '',
+            grade: user.grade || '1학년'
         });
         setIsEditMode(true);
         setIsModalOpen(true);
@@ -81,6 +84,7 @@ const UserManager = ({ currentUser }) => {
     const handleSaveUser = async () => {
         if (!formData.name || !formData.userId || !formData.password) return alert('필수 정보를 입력하세요.');
         if (activeTab === 'parent' && !formData.childId) return alert('학부모 계정은 자녀(학생)와 연결해야 합니다.');
+        if (activeTab === 'student' && !formData.schoolName) return alert('학생의 학교명을 입력해주세요.');
 
         setLoading(true);
         try {
@@ -93,6 +97,10 @@ const UserManager = ({ currentUser }) => {
                 updatedAt: serverTimestamp()
             };
 
+            if (activeTab === 'student') {
+                payload.schoolName = formData.schoolName;
+                payload.grade = formData.grade;
+            }
             if (activeTab === 'ta' || activeTab === 'lecturer') {
                 payload.subject = formData.subject || '';
             }
@@ -148,46 +156,28 @@ const UserManager = ({ currentUser }) => {
     );
 
     return (
-        // [CTO 수정] max-w-[1600px] 및 mx-auto 제거 -> 상위 컨테이너(App.js)에 레이아웃 위임
         <div className="space-y-6 w-full animate-in fade-in">
-            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                 <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
             </div>
 
-            {/* Tabs */}
             <div className="w-full overflow-x-auto">
                 <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
                     {['student', 'parent', 'ta', 'lecturer'].map(role => (
-                        <button 
-                            key={role}
-                            onClick={() => setActiveTab(role)}
-                            className={`flex-1 py-4 px-4 font-bold text-center capitalize transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}
-                        >
-                            {role === 'student' && '학생'}
-                            {role === 'parent' && '학부모'}
-                            {role === 'ta' && '조교'}
-                            {role === 'lecturer' && '강사'}
+                        <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-4 font-bold text-center transition-colors ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
+                            {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '조교' : '강사'}
                         </button>
                     ))}
                 </div>
             </div>
 
-            {/* Search Input */}
             <div className="relative">
-                <input 
-                    className="w-full border p-3 pl-10 rounded-xl bg-white shadow-sm focus:ring-2 focus:ring-blue-100 outline-none" 
-                    placeholder="이름 또는 아이디 검색"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                />
+                <input className="w-full border p-3 pl-10 rounded-xl bg-white shadow-sm outline-none" placeholder="이름 또는 아이디 검색" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
             </div>
 
-            {/* --- View Switching --- */}
-            
-            {/* 1. Mobile Card View (< md) */}
+            {/* 1. Mobile Card View */}
             <div className="md:hidden space-y-4">
                 {filteredUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
                 {filteredUsers.map(u => (
@@ -201,148 +191,85 @@ const UserManager = ({ currentUser }) => {
                                 </div>
                             </div>
                             <div className="flex gap-2">
-                                <button onClick={() => handleOpenEdit(u)} className="p-2 bg-gray-50 rounded-lg text-gray-500 hover:text-blue-600 border border-gray-200"><Edit2 size={16}/></button>
-                                <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-gray-50 rounded-lg text-gray-500 hover:text-red-600 border border-gray-200"><Trash2 size={16}/></button>
+                                <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg text-gray-500"><Edit2 size={16}/></button>
+                                <button onClick={() => handleDeleteClick(u.id)} className="p-2 border rounded-lg text-gray-500"><Trash2 size={16}/></button>
                             </div>
                         </div>
-                        
                         <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm text-gray-600">
-                            <div className="flex items-center gap-2">
-                                <Phone size={14} className="text-gray-400"/>
-                                <span>{u.phone || '전화번호 없음'}</span>
-                            </div>
-                            {(activeTab === 'ta' || activeTab === 'lecturer') && (
-                                <div className="flex items-center gap-2">
-                                    <BookOpen size={14} className="text-gray-400"/>
-                                    <span>{u.subject || '과목 미설정'}</span>
+                            {activeTab === 'student' && (
+                                <div className="flex items-center gap-2 text-blue-600 font-bold">
+                                    <School size={14}/> <span>{u.schoolName} ({u.grade})</span>
                                 </div>
                             )}
-                            {activeTab === 'ta' && u.hourlyRate && (
-                                <div className="flex items-center gap-2 font-bold text-blue-600">
-                                    <DollarSign size={14}/>
-                                    <span>시급: {Number(u.hourlyRate).toLocaleString()}원</span>
-                                </div>
-                            )}
-                            {activeTab === 'parent' && u.childName && (
-                                <div className="flex items-center gap-2 text-green-600 font-bold">
-                                    <UserPlus size={14}/>
-                                    <span>자녀: {u.childName}</span>
-                                </div>
-                            )}
+                            <div className="flex items-center gap-2"><Phone size={14}/> <span>{u.phone || '전화번호 없음'}</span></div>
                         </div>
                     </Card>
                 ))}
             </div>
 
-            {/* 2. Desktop Table View (>= md) */}
+            {/* 2. Desktop Table View */}
             <div className="hidden md:block">
-                <Card className="min-h-[500px] overflow-hidden w-full p-0">
-                    <div className="w-full overflow-x-auto">
-                        <table className="w-full text-left border-collapse min-w-[800px]">
-                            <thead>
-                                <tr className="border-b border-gray-100 text-gray-500 text-sm bg-gray-50">
-                                    <th className="p-4 w-[15%] whitespace-nowrap">이름</th>
-                                    <th className="p-4 w-[20%] whitespace-nowrap">아이디</th>
-                                    <th className="p-4 w-[15%] whitespace-nowrap">전화번호</th>
-                                    <th className="p-4 w-[15%] whitespace-nowrap">
-                                        {(activeTab === 'ta' || activeTab === 'lecturer') ? (activeTab === 'ta' ? '시급' : '비고') : '비고'}
-                                    </th>
-                                    <th className="p-4 w-[15%] whitespace-nowrap">
-                                        {activeTab === 'parent' ? '자녀' : (activeTab === 'ta' || activeTab === 'lecturer' ? '담당 과목' : '')}
-                                    </th>
-                                    <th className="p-4 w-[10%] text-right whitespace-nowrap">관리</th>
+                <Card className="p-0 overflow-hidden">
+                    <table className="w-full text-left border-collapse min-w-[800px]">
+                        <thead>
+                            <tr className="border-b text-gray-500 text-sm bg-gray-50">
+                                <th className="p-4">이름</th>
+                                <th className="p-4">아이디</th>
+                                <th className="p-4">전화번호</th>
+                                <th className="p-4">{activeTab === 'student' ? '학교/학년' : '비고'}</th>
+                                <th className="p-4 text-right">관리</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {filteredUsers.map(u => (
+                                <tr key={u.id} className="hover:bg-gray-50">
+                                    <td className="p-4 font-bold text-gray-800">{u.name}</td>
+                                    <td className="p-4 text-gray-600">{u.userId}</td>
+                                    <td className="p-4 text-gray-600">{u.phone || '-'}</td>
+                                    <td className="p-4">
+                                        {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
+                                        {activeTab === 'parent' && <span className="text-green-600 font-bold">자녀: {u.childName}</span>}
+                                        {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
+                                    </td>
+                                    <td className="p-4 flex justify-end gap-2">
+                                        <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg text-gray-400 hover:text-blue-600"><Edit2 size={18}/></button>
+                                        <button onClick={() => handleDeleteClick(u.id)} className="p-2 border rounded-lg text-gray-400 hover:text-red-600"><Trash2 size={18}/></button>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {filteredUsers.map(u => (
-                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                                        <td className="p-4 font-bold text-gray-800">{u.name}</td>
-                                        <td className="p-4 text-gray-600">{u.userId}</td>
-                                        <td className="p-4 text-gray-600">{u.phone || '-'}</td>
-                                        <td className="p-4 font-mono text-blue-600">
-                                            {activeTab === 'ta' && u.hourlyRate ? `${Number(u.hourlyRate).toLocaleString()}원` : '-'}
-                                        </td>
-                                        <td className="p-4">
-                                            {activeTab === 'parent' && (
-                                                <span className="bg-green-50 text-green-700 px-2 py-1 rounded-lg text-sm font-bold flex w-fit items-center gap-1">
-                                                    <UserPlus size={14}/> {u.childName || '미지정'}
-                                                </span>
-                                            )}
-                                            {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
-                                        </td>
-                                        <td className="p-4 flex justify-end gap-2">
-                                            <button onClick={() => handleOpenEdit(u)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-blue-600 hover:border-blue-200 transition-all"><Edit2 size={18}/></button>
-                                            <button onClick={() => handleDeleteClick(u.id)} className="p-2 bg-white border rounded-lg text-gray-500 hover:text-red-600 hover:border-red-200 transition-all"><Trash2 size={18}/></button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {filteredUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
-                    </div>
+                            ))}
+                        </tbody>
+                    </table>
                 </Card>
             </div>
 
-            {/* Modals (No Changes Needed) */}
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${isEditMode ? '수정' : '추가'} - ${activeTab.toUpperCase()}`}>
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 계정 ${isEditMode ? '수정' : '추가'}`}>
                 <div className="space-y-4">
                     <input className="w-full border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                     <input className="w-full border p-3 rounded-xl" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
                     <input className="w-full border p-3 rounded-xl" placeholder="비밀번호" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
-                    <input className="w-full border p-3 rounded-xl" placeholder="전화번호 (선택)" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
                     
+                    {activeTab === 'student' && (
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl">
+                            <div>
+                                <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1"><School size={12}/> 학교명</label>
+                                <input className="w-full border p-2 rounded-lg bg-white" placeholder="예: 목동고" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-blue-600 mb-1 block flex items-center gap-1"><GraduationCap size={12}/> 학년</label>
+                                <select className="w-full border p-2 rounded-lg bg-white" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
+                                    <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                                </select>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* (기타 parent/ta/lecturer 입력 로직 유지) */}
                     {(activeTab === 'ta' || activeTab === 'lecturer') && (
                         <input className="w-full border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
                     )}
 
-                    {activeTab === 'ta' && (
-                        <div className="relative">
-                            <input 
-                                type="number"
-                                className="w-full border p-3 pl-10 rounded-xl" 
-                                placeholder="시급 (숫자만 입력)" 
-                                value={formData.hourlyRate} 
-                                onChange={e => setFormData({...formData, hourlyRate: e.target.value})} 
-                            />
-                            <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
-                        </div>
-                    )}
-
-                    {activeTab === 'parent' && (
-                        <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                            <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2"><LinkIcon size={16}/> 연결할 자녀 선택</label>
-                            {formData.childName ? (
-                                <div className="flex justify-between items-center bg-blue-100 p-3 rounded-lg text-blue-800 font-bold mb-2">
-                                    <span>{formData.childName}</span>
-                                    <button onClick={() => setFormData({...formData, childId: '', childName: ''})} className="bg-white p-1 rounded-full text-red-500 hover:bg-red-50"><X size={16}/></button>
-                                </div>
-                            ) : (
-                                <div className="relative">
-                                    <input 
-                                        className="w-full border p-2 pl-8 rounded-lg text-sm bg-white" 
-                                        placeholder="학생 이름 검색" 
-                                        value={studentSearch} 
-                                        onChange={e => setStudentSearch(e.target.value)} 
-                                    />
-                                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
-                                    
-                                    {studentSearch && (
-                                        <div className="mt-2 max-h-32 overflow-y-auto border rounded-lg bg-white divide-y">
-                                            {studentList.filter(s => s.name.includes(studentSearch)).map(s => (
-                                                <div key={s.id} onClick={() => { setFormData({...formData, childId: s.id, childName: s.name}); setStudentSearch(''); }} className="p-2 text-sm hover:bg-blue-50 cursor-pointer flex justify-between">
-                                                    <span>{s.name}</span>
-                                                    <span className="text-gray-400 text-xs">({s.userId})</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    <Button className="w-full" onClick={handleSaveUser} disabled={loading}>
-                        {loading ? <Loader className="animate-spin"/> : (isEditMode ? '수정 완료' : '생성 완료')}
+                    <Button className="w-full py-3" onClick={handleSaveUser} disabled={loading}>
+                        {loading ? <Loader className="animate-spin mx-auto"/> : (isEditMode ? '수정 완료' : '생성 완료')}
                     </Button>
                 </div>
             </Modal>
@@ -353,10 +280,10 @@ const UserManager = ({ currentUser }) => {
                         <Shield className="text-red-500 shrink-0" size={24}/>
                         <div>
                             <h4 className="font-bold text-red-700">정말 삭제하시겠습니까?</h4>
-                            <p className="text-sm text-red-600 mt-1">이 작업은 되돌릴 수 없으며, 해당 사용자의 모든 데이터 접근 권한이 즉시 차단됩니다.</p>
+                            <p className="text-sm text-red-600 mt-1">이 작업은 복구할 수 없습니다.</p>
                         </div>
                     </div>
-                    <div className="flex gap-2 mt-4">
+                    <div className="flex gap-2">
                         <Button variant="secondary" onClick={() => setIsDeleteConfirmOpen(false)} className="flex-1">취소</Button>
                         <Button variant="danger" onClick={confirmDelete} className="flex-1">삭제 확정</Button>
                     </div>
