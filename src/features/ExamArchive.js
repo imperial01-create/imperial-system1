@@ -23,21 +23,26 @@ const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (currentYear - i).toString());
 
 const ExamArchive = ({ currentUser }) => {
+    // [UI/UX 최적화] 검색 필터에서 학기와 시험을 combinedTerm으로 통합
     const [filters, setFilters] = useState({
-        schoolType: '', district: '', schoolName: '', year: '', semester: '', term: '', subject: '', grade: ''
+        schoolType: '', district: '', schoolName: '', year: '', combinedTerm: '', subject: '', grade: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
+    
+    // [서비스 가치] 초기 렌더링 시 빈 화면 상태를 명확히 안내하여 학부모/강사의 혼란 방지
+    const [hasSearched, setHasSearched] = useState(false);
     
     const [modalState, setModalState] = useState({ type: null, exam: null, fileKey: null });
     const [uploadUrl, setUploadUrl] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
     const [showAddModal, setShowAddModal] = useState(false);
-    // [CTO 수정] 초기 폼 연도를 하드코딩된 '2024'가 아닌 시스템의 '올해 연도'로 자동 세팅
+    
+    // [UI/UX 최적화] 신규 폼에서도 combinedTerm으로 직관적 통합
     const [newExamForm, setNewExamForm] = useState({
-        schoolType: '고등학교', schoolName: '', year: currentYear.toString(), semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
+        schoolType: '고등학교', schoolName: '', year: currentYear.toString(), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
@@ -46,21 +51,26 @@ const ExamArchive = ({ currentUser }) => {
     const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
     useEffect(() => {
-        handleSearch();
+        // [비용 효율화] 컴포넌트 마운트 시 최초 검색 로직을 제거하여 
+        // 불필요한 Firebase Read 과금을 방지합니다. (월간 DB 읽기 비용 대폭 감소)
         // eslint-disable-next-line
     }, []);
 
     const handleSearch = async () => {
         setLoading(true);
         setErrorMsg('');
+        setHasSearched(true); // 검색 시도 기록
         
         try {
             const examsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
-            // 검색 한도를 약간 넉넉하게 하여 과거 데이터를 충분히 불러오도록 조정할 수 있습니다. (현재 50개 유지)
             let q = query(examsRef, limit(50)); 
 
             Object.keys(filters).forEach(key => {
-                if (filters[key] && filters[key].trim() !== '') {
+                if (key === 'combinedTerm' && filters.combinedTerm) {
+                    // [백엔드 호환성] UI에서는 합쳐져 있지만, DB 검색 시에는 기존 스키마에 맞게 분리하여 쿼리
+                    const [sem, tm] = filters.combinedTerm.split(' ');
+                    q = query(q, where('semester', '==', sem), where('term', '==', tm));
+                } else if (key !== 'combinedTerm' && filters[key] && filters[key].trim() !== '') {
                     q = query(q, where(key, '==', filters[key].trim()));
                 }
             });
@@ -87,12 +97,38 @@ const ExamArchive = ({ currentUser }) => {
         setIsProcessing(true);
         
         try {
+            // [데이터 무결성] UI의 '1학기 중간고사'를 데이터베이스 저장 규칙에 맞게 분할
+            const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
+
+            // [운영자 관점 방어적 코딩] 중복 데이터 등록 방지 (N+1 문제 방지를 위해 1차 필터링 후 클라이언트 검증)
+            const checkRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
+            const checkQ = query(checkRef,
+                where('schoolName', '==', newExamForm.schoolName.trim()),
+                where('year', '==', newExamForm.year)
+            );
+            const checkSnapshot = await getDocs(checkQ);
+            
+            // O(n) 복잡도로 메모리에서 세부 조건 매칭 확인
+            const isDuplicate = checkSnapshot.docs.some(doc => {
+                const data = doc.data();
+                return data.semester === parsedSemester && 
+                       data.term === parsedTerm && 
+                       data.subject === newExamForm.subject &&
+                       data.grade === newExamForm.grade;
+            });
+
+            if (isDuplicate) {
+                alert("⚠️ 이미 동일한 기출자료(학교, 연도, 학기, 시험, 과목, 학년)가 등록되어 있습니다.\n목록을 먼저 확인해주세요.");
+                setIsProcessing(false);
+                return;
+            }
+
             const docData = {
                 schoolType: newExamForm.schoolType,
-                schoolName: newExamForm.schoolName,
+                schoolName: newExamForm.schoolName.trim(),
                 year: newExamForm.year,
-                semester: newExamForm.semester,
-                term: newExamForm.term,
+                semester: parsedSemester,
+                term: parsedTerm,
                 subject: newExamForm.subject,
                 grade: newExamForm.grade,
                 region: '서울',   
@@ -343,17 +379,23 @@ const ExamArchive = ({ currentUser }) => {
                     </select>
                     <input className="border p-3 rounded-xl bg-gray-50 w-full" placeholder="학교명 (예: 목동고)" value={filters.schoolName} onChange={e=>setFilters({...filters, schoolName: e.target.value})} />
                     
-                    {/* [CTO 수정] 하드코딩된 연도 대신 자동 생성된 YEARS 배열을 순회하여 렌더링 */}
                     <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
                         <option value="">연도 전체</option>
                         {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                     </select>
 
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.term} onChange={e=>setFilters({...filters, term: e.target.value})}>
-                        <option value="">시험 전체</option><option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
-                    </select>
-                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
+                    {/* [인지 심리학 반영] 사고 흐름에 맞게 학년을 시험 종류보다 앞으로 배치 */}
+                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                    </select>
+                    
+                    {/* [인지 부하 감소] 학기와 시험을 하나로 합쳐 탐색 깊이를 줄임 */}
+                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
+                        <option value="">시험 전체</option>
+                        <option value="1학기 중간고사">1학기 중간고사</option>
+                        <option value="1학기 기말고사">1학기 기말고사</option>
+                        <option value="2학기 중간고사">2학기 중간고사</option>
+                        <option value="2학기 기말고사">2학기 기말고사</option>
                     </select>
                 </div>
                 <Button className="w-full py-3 md:py-4 text-base md:text-lg shadow-md" icon={Search} onClick={handleSearch} disabled={loading}>
@@ -369,7 +411,10 @@ const ExamArchive = ({ currentUser }) => {
                         <Button variant="outline" size="sm" onClick={handleSearch} className="mt-2">다시 시도하기</Button>
                     </div>
                 ) : exams.length === 0 && !loading ? (
-                    <div className="text-center py-16 text-gray-400">조건에 맞는 기출 자료가 없습니다.</div>
+                    <div className="text-center py-16 text-gray-400">
+                        {/* [UX 개선] 검색 전과 검색 후 결과 없음을 구분하여 출력 */}
+                        {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : "조건에 맞는 기출 자료가 없습니다."}
+                    </div>
                 ) : (
                     <div className="divide-y divide-gray-100">
                         {exams.map(exam => (
@@ -430,7 +475,6 @@ const ExamArchive = ({ currentUser }) => {
                         
                         <div className="col-span-1">
                             <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
-                            {/* [CTO 수정] YEARS 배열 렌더링으로 변경 */}
                             <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
                                 {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                             </select>
@@ -438,14 +482,13 @@ const ExamArchive = ({ currentUser }) => {
                         
                         <div className="col-span-1">
                             <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
-                            <div className="flex gap-1">
-                                <select className="w-1/2 border p-2.5 rounded-xl bg-gray-50 text-xs sm:text-sm" value={newExamForm.semester} onChange={e => setNewExamForm({...newExamForm, semester: e.target.value})}>
-                                    <option value="1학기">1학기</option><option value="2학기">2학기</option>
-                                </select>
-                                <select className="w-1/2 border p-2.5 rounded-xl bg-gray-50 text-xs sm:text-sm" value={newExamForm.term} onChange={e => setNewExamForm({...newExamForm, term: e.target.value})}>
-                                    <option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
-                                </select>
-                            </div>
+                            {/* [UI 최적화] 입력 폼에서도 통합된 셀렉트 박스 사용 */}
+                            <select className="w-full border p-2.5 rounded-xl bg-gray-50 text-sm" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
+                                <option value="1학기 중간고사">1학기 중간고사</option>
+                                <option value="1학기 기말고사">1학기 기말고사</option>
+                                <option value="2학기 중간고사">2학기 중간고사</option>
+                                <option value="2학기 기말고사">2학기 기말고사</option>
+                            </select>
                         </div>
                     </div>
 
