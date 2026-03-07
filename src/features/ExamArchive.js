@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
-  FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2
+  FileQuestion, BookOpen, PenTool, ExternalLink, ShieldCheck, Plus
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Modal } from '../components/UI';
+import { Button, Card, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -18,46 +17,97 @@ const FILE_TYPES = [
     { key: 'analysis', label: '시험분석', icon: PenTool }
 ];
 
-// [CTO 최적화] 매년 코드를 수정할 필요가 없도록 동적 배열 생성 (올해 연도 ~ 2000년)
-const currentYear = new Date().getFullYear();
-const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (currentYear - i).toString());
+const EXAM_TYPES = ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'];
+const GRADES = ['1학년', '2학년', '3학년'];
 
 const ExamArchive = ({ currentUser }) => {
+    // 1. 명시적 검색을 위한 필터 상태
     const [filters, setFilters] = useState({
-        schoolType: '', district: '', schoolName: '', year: '', semester: '', term: '', subject: '', grade: ''
+        schoolType: '', schoolName: '', year: '', examType: '', grade: '', subject: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [errorMsg, setErrorMsg] = useState('');
+    const [hasSearched, setHasSearched] = useState(false); // [비용 최적화] 초기 진입 시 로딩 방지용
     
+    // 모달 관리
     const [modalState, setModalState] = useState({ type: null, exam: null, fileKey: null });
     const [uploadUrl, setUploadUrl] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
 
-    const [showAddModal, setShowAddModal] = useState(false);
-    // [CTO 수정] 초기 폼 연도를 하드코딩된 '2024'가 아닌 시스템의 '올해 연도'로 자동 세팅
-    const [newExamForm, setNewExamForm] = useState({
-        schoolType: '고등학교', schoolName: '', year: currentYear.toString(), semester: '1학기', term: '중간고사', subject: '수학', grade: '1학년', 
-        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
+    // 신규 자료 등록 폼 상태
+    const [newExam, setNewExam] = useState({
+        region: '서울특별시', district: '양천구', schoolType: '', schoolName: '', 
+        year: '', examType: '', grade: '', subject: ''
     });
 
     const isAdmin = currentUser.role === 'admin';
     const isWorker = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
-    const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
-    useEffect(() => {
-        handleSearch();
-        // eslint-disable-next-line
-    }, []);
+    // --- 1. 신규 기출자료 등록 (중복 검사 포함) ---
+    const handleCreateExam = async () => {
+        if (!newExam.schoolName || !newExam.year || !newExam.examType || !newExam.grade || !newExam.subject) {
+            return alert("필수 항목(학교, 연도, 시험, 학년, 과목)을 모두 입력해주세요.");
+        }
+        
+        setIsProcessing(true);
+        try {
+            const archiveRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
+            
+            // [서비스 가치] 복합 쿼리를 통한 완벽한 중복 등록 방지 (DB 오염 방지)
+            const duplicateQuery = query(archiveRef, 
+                where('schoolName', '==', newExam.schoolName.trim()),
+                where('year', '==', newExam.year),
+                where('examType', '==', newExam.examType),
+                where('grade', '==', newExam.grade),
+                where('subject', '==', newExam.subject.trim())
+            );
+            
+            const snapshot = await getDocs(duplicateQuery);
+            if (!snapshot.empty) {
+                alert(`⚠️ 중복 등록 방지\n이미 동일한 자료(${newExam.schoolName} ${newExam.year} ${newExam.examType} ${newExam.grade} ${newExam.subject})가 시스템에 등록되어 있습니다.\n목록에서 검색하여 파일 작업을 진행해주세요.`);
+                setIsProcessing(false);
+                return;
+            }
 
+            // 신규 데이터 구조화 (초기 상태는 모두 'open')
+            const payload = {
+                ...newExam,
+                schoolName: newExam.schoolName.trim(),
+                subject: newExam.subject.trim(),
+                files: {
+                    studentWork: { status: 'open' },
+                    examPaper: { status: 'open' },
+                    quickAnswer: { status: 'open' },
+                    solution: { status: 'open' },
+                    analysis: { status: 'open' }
+                },
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+            };
+
+            await addDoc(archiveRef, payload);
+            alert("신규 기출자료 베이스가 성공적으로 생성되었습니다. 이제 검색을 통해 작업을 시작할 수 있습니다.");
+            setModalState({ type: null });
+            
+            // 폼 초기화
+            setNewExam(prev => ({ ...prev, schoolName: '', subject: '' })); 
+            
+        } catch (error) {
+            console.error(error);
+            alert("등록 중 오류가 발생했습니다: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // --- 2. 명시적 검색 로직 (비용 최적화) ---
     const handleSearch = async () => {
         setLoading(true);
-        setErrorMsg('');
+        setHasSearched(true); // 첫 검색 실행 마킹
         
         try {
             const examsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
-            // 검색 한도를 약간 넉넉하게 하여 과거 데이터를 충분히 불러오도록 조정할 수 있습니다. (현재 50개 유지)
-            let q = query(examsRef, limit(50)); 
+            let q = query(examsRef, limit(50)); // 최대 50건 제한으로 요금 폭탄 방지
 
             Object.keys(filters).forEach(key => {
                 if (filters[key] && filters[key].trim() !== '') {
@@ -68,87 +118,20 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // 최신순 정렬 (연도 역순)
-            results.sort((a, b) => b.year.localeCompare(a.year) || b.semester.localeCompare(a.semester));
+            // 프론트엔드 정렬 (연도 최신순)
+            results.sort((a, b) => b.year.localeCompare(a.year) || b.examType.localeCompare(a.examType));
             setExams(results);
+            
+            if(results.length === 0) alert('검색 조건에 맞는 기출자료가 없습니다.');
         } catch (error) {
-            if (error.code === 'permission-denied') {
-                setErrorMsg('데이터베이스 접근 권한이 차단되었습니다. Firebase 보안 규칙을 확인해주세요.');
-            } else {
-                setErrorMsg('데이터를 불러오는 중 문제가 발생했습니다. 네트워크 상태를 확인해주세요.');
-            }
+            console.error("Search Error:", error);
+            alert("검색 중 오류가 발생했습니다.");
         } finally {
             setLoading(false);
         }
     };
 
-    const handleAddSubmitExam = async () => {
-        if (!newExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
-        setIsProcessing(true);
-        
-        try {
-            const docData = {
-                schoolType: newExamForm.schoolType,
-                schoolName: newExamForm.schoolName,
-                year: newExamForm.year,
-                semester: newExamForm.semester,
-                term: newExamForm.term,
-                subject: newExamForm.subject,
-                grade: newExamForm.grade,
-                region: '서울',   
-                district: '양천구', 
-                files: {},
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
-            };
-
-            FILE_TYPES.forEach(ft => {
-                if (newExamForm.urls[ft.key]?.trim()) {
-                    docData.files[ft.key] = {
-                        status: 'published',
-                        url: newExamForm.urls[ft.key].trim(),
-                        workerId: currentUser.id,
-                        workerName: currentUser.name
-                    };
-                }
-            });
-
-            const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive'), docData);
-            
-            alert("신규 기출자료가 성공적으로 등록되었습니다.");
-            setShowAddModal(false);
-            setNewExamForm({ 
-                ...newExamForm, schoolName: '', 
-                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
-            });
-            
-            setExams([{ id: docRef.id, ...docData }, ...exams]);
-            setErrorMsg('');
-        } catch (error) {
-            error.code === 'permission-denied' 
-                ? alert("보안 에러: 기출문제를 등록할 권한이 없습니다.") 
-                : alert("등록 실패: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleDeleteExam = async (examId) => {
-        if (!isAdmin) return;
-        if (!window.confirm("정말로 이 기출자료 전체를 삭제하시겠습니까?\n(삭제 후에는 복구할 수 없습니다)")) return;
-        
-        setIsProcessing(true);
-        try {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', examId));
-            setExams(prev => prev.filter(e => e.id !== examId));
-            alert("자료가 성공적으로 삭제되었습니다.");
-        } catch (error) {
-            alert("삭제 실패: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
+    // --- 3. 동시성 제어 및 파일별 중복 방지 (Transaction) ---
     const handleClaimTask = async (exam, fileKey) => {
         const fileLabel = FILE_TYPES.find(f => f.key === fileKey).label;
         if (!window.confirm(`[${fileLabel}] 작업을 시작하시겠습니까?`)) return;
@@ -158,6 +141,7 @@ const ExamArchive = ({ currentUser }) => {
 
         try {
             let updatedFilesForState = null;
+
             await runTransaction(db, async (transaction) => {
                 const examDoc = await transaction.get(examRef);
                 if (!examDoc.exists()) throw new Error("문서를 찾을 수 없습니다.");
@@ -166,7 +150,9 @@ const ExamArchive = ({ currentUser }) => {
                 const files = data.files || {};
                 const currentFile = files[fileKey] || { status: 'open' };
 
-                if (currentFile.status !== 'open') throw new Error(`이미 ${currentFile.workerName || '다른 사람'}님이 작업 중이거나 완료된 건입니다.`);
+                if (currentFile.status !== 'open') {
+                    throw new Error(`이미 ${currentFile.workerName || '다른 사람'}님이 작업 중이거나 완료된 건입니다.`);
+                }
 
                 files[fileKey] = {
                     ...currentFile,
@@ -174,77 +160,51 @@ const ExamArchive = ({ currentUser }) => {
                     workerId: currentUser.id,
                     workerName: currentUser.name
                 };
+
                 updatedFilesForState = files;
                 transaction.update(examRef, { files, updatedAt: serverTimestamp() });
             });
 
+            alert(`${fileLabel} 작업이 배정되었습니다! 자료 제작 후 링크를 등록해주세요.`);
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFilesForState } : e));
-        } catch (error) { 
-            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert(error.message); 
-        } finally { setIsProcessing(false); }
-    };
-
-    const handleCancelTask = async (exam, fileKey) => {
-        if (!window.confirm("작업을 취소하시겠습니까?")) return;
-        setIsProcessing(true);
-        const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
-
-        try {
-            const updatedFiles = { ...(exam.files || {}) };
-            delete updatedFiles[fileKey].workerId;
-            delete updatedFiles[fileKey].workerName;
-            updatedFiles[fileKey].status = 'open';
-
-            await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
+            
         } catch (error) {
-            alert("취소 실패: " + error.message);
+            alert(error.message);
         } finally {
             setIsProcessing(false);
         }
     };
 
+    // --- 4. 개별 파일 링크 제출 (용량 최적화) ---
     const handleSubmitLink = async () => {
-        const { exam, fileKey, type } = modalState;
-        
-        if (type !== 'edit_link' && !uploadUrl.trim()) {
-            return alert("구글 드라이브 URL을 입력해주세요.");
-        }
+        if (!uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
         
         setIsProcessing(true);
+        const { exam, fileKey } = modalState;
         const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
-            
-            if (type === 'edit_link') {
-                if (!uploadUrl.trim()) {
-                    delete updatedFiles[fileKey].workerId;
-                    delete updatedFiles[fileKey].workerName;
-                    delete updatedFiles[fileKey].url;
-                    updatedFiles[fileKey].status = 'open';
-                    
-                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                    alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
-                } else {
-                    updatedFiles[fileKey] = { ...updatedFiles[fileKey], url: uploadUrl };
-                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                    alert("링크가 성공적으로 수정되었습니다.");
-                }
-            } else {
-                updatedFiles[fileKey] = { ...updatedFiles[fileKey], status: 'pending', url: uploadUrl };
-                await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                alert("관리자에게 최종 승인을 요청했습니다.");
-            }
+            updatedFiles[fileKey] = {
+                ...updatedFiles[fileKey],
+                status: 'pending',
+                url: uploadUrl
+            };
 
+            await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
+            
+            alert("관리자에게 최종 승인을 요청했습니다.");
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
             setModalState({ type: null, exam: null, fileKey: null });
             setUploadUrl('');
-        } catch (error) { 
-            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert("요청 실패: " + error.message); 
-        } finally { setIsProcessing(false); }
+        } catch (error) {
+            alert("제출 실패: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
+    // --- 5. 관리자 개별 파일 승인 ---
     const handleApprove = async (exam, fileKey) => {
         if (!isAdmin) return;
         setIsProcessing(true);
@@ -252,26 +212,30 @@ const ExamArchive = ({ currentUser }) => {
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
-            updatedFiles[fileKey] = { ...updatedFiles[fileKey], status: 'published' };
+            updatedFiles[fileKey] = {
+                ...updatedFiles[fileKey],
+                status: 'published'
+            };
+
             await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
             
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
-            alert("승인 완료! 학생들에게 자료가 공개되었습니다.");
-        } catch (error) { alert("승인 실패: " + error.message); } finally { setIsProcessing(false); }
+            alert("승인 완료! 자료가 공식적으로 등록되었습니다.");
+        } catch (error) {
+            alert("승인 실패: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
+    // --- 6. 보조 컴포넌트: 파일 상태별 UI 렌더링 ---
     const renderFileBlock = (exam, ft) => {
         const fileData = exam.files?.[ft.key] || { status: 'open' };
         const Icon = ft.icon;
         
         return (
             <div key={ft.key} className="flex flex-col items-center justify-between p-3 rounded-xl border border-gray-200 bg-white h-full w-full shadow-sm hover:shadow-md transition-all">
-                <div className="text-center mb-3 relative w-full">
-                    {isAdmin && fileData.status === 'published' && (
-                        <button onClick={() => { setUploadUrl(fileData.url); setModalState({ type: 'edit_link', exam, fileKey: ft.key }); }} className="absolute top-0 right-0 p-1 text-gray-400 hover:text-blue-600 transition-colors" title="링크 수정">
-                            <Edit3 size={14} />
-                        </button>
-                    )}
+                <div className="text-center mb-3">
                     <div className={`mx-auto w-10 h-10 rounded-full flex items-center justify-center mb-2 ${fileData.status === 'published' ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>
                         <Icon size={20} />
                     </div>
@@ -281,27 +245,28 @@ const ExamArchive = ({ currentUser }) => {
                 <div className="w-full flex flex-col gap-1.5 mt-auto">
                     {fileData.status === 'open' && isWorker && (
                         <Button size="sm" variant="outline" className="w-full text-[11px] py-1 px-0 border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400" onClick={() => handleClaimTask(exam, ft.key)} disabled={isProcessing}>
-                            작업하기
+                            제작하기
                         </Button>
                     )}
+                    
                     {fileData.status === 'working' && (
                         <>
-                            <div className="bg-yellow-50 text-yellow-700 text-[10px] font-bold py-1 px-2 rounded text-center truncate w-full border border-yellow-200" title={`${fileData.workerName} 작업중`}>{fileData.workerName}</div>
+                            <div className="bg-yellow-50 text-yellow-700 text-[10px] font-bold py-1 px-2 rounded text-center truncate w-full border border-yellow-200" title={`${fileData.workerName} 작업중`}>
+                                {fileData.workerName} 작업중
+                            </div>
                             {fileData.workerId === currentUser.id && (
-                                <div className="flex gap-1 w-full">
-                                    <Button size="sm" variant="secondary" className="flex-1 text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => { setUploadUrl(''); setModalState({ type: 'upload_link', exam, fileKey: ft.key }); }}>
-                                        등록
-                                    </Button>
-                                    <Button size="sm" variant="outline" className="px-2 py-1 border-gray-300 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => handleCancelTask(exam, ft.key)} title="작업 취소">
-                                        <XCircle size={14}/>
-                                    </Button>
-                                </div>
+                                <Button size="sm" variant="secondary" className="w-full text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => setModalState({ type: 'upload_link', exam, fileKey: ft.key })}>
+                                    링크 등록
+                                </Button>
                             )}
                         </>
                     )}
+
                     {fileData.status === 'pending' && (
                         <>
-                            <div className="bg-purple-50 text-purple-700 text-[10px] font-bold py-1 px-2 rounded text-center w-full border border-purple-200">검수 대기</div>
+                            <div className="bg-purple-50 text-purple-700 text-[10px] font-bold py-1 px-2 rounded text-center w-full border border-purple-200">
+                                검수 대기중
+                            </div>
                             {isAdmin && (
                                 <Button size="sm" variant="success" className="w-full text-[11px] py-1 px-0" onClick={() => handleApprove(exam, ft.key)} disabled={isProcessing}>
                                     승인
@@ -309,11 +274,15 @@ const ExamArchive = ({ currentUser }) => {
                             )}
                         </>
                     )}
+
                     {fileData.status === 'published' && (
                         <a href={fileData.url} target="_blank" rel="noopener noreferrer" className="w-full block">
-                            <Button size="sm" variant="primary" className="w-full text-[11px] py-1.5 px-0 flex items-center justify-center gap-1 shadow-sm"><ExternalLink size={12}/> 보기</Button>
+                            <Button size="sm" variant="primary" className="w-full text-[11px] py-1.5 px-0 flex items-center justify-center gap-1 shadow-sm">
+                                <ExternalLink size={12}/> 자료 보기
+                            </Button>
                         </a>
                     )}
+
                     {fileData.status === 'open' && !isWorker && (
                          <div className="text-[11px] text-gray-400 text-center py-1">미등록</div>
                     )}
@@ -323,179 +292,176 @@ const ExamArchive = ({ currentUser }) => {
     };
 
     return (
-        <div className="space-y-6 w-full animate-in fade-in pb-20">
+        <div className="space-y-6 w-full animate-in fade-in">
             <div className="flex justify-between items-center mb-2">
-                <div className="flex flex-col">
-                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
-                    <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리</span>
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출문제 클라우드</h2>
+                    <span className="text-sm text-gray-500 font-medium mt-1 inline-block">학교별 세부 자료 현황 관리</span>
                 </div>
-                {canAddExam && (
-                    <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
-                        <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
+                {/* [서비스 가치] 스태프 전용 '신규 자료 등록' 버튼 노출 */}
+                {isWorker && (
+                    <Button onClick={() => setModalState({ type: 'create_exam' })} icon={Plus} variant="primary">
+                        신규 자료 등록
                     </Button>
                 )}
             </div>
 
-            <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.schoolType} onChange={e=>setFilters({...filters, schoolType: e.target.value})}>
+            {/* 필터 바 */}
+            <Card className="bg-white border border-gray-200 shadow-sm p-5">
+                {/* [CTO 반영] 요청하신 [학교 - 연도 - 시험 - 학년 - 과목] 순서 재배치 */}
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+                    <select className="border p-3 rounded-xl bg-gray-50" value={filters.schoolType} onChange={e=>setFilters({...filters, schoolType: e.target.value})}>
                         <option value="">학교급</option><option value="중학교">중학교</option><option value="고등학교">고등학교</option>
                     </select>
-                    <input className="border p-3 rounded-xl bg-gray-50 w-full" placeholder="학교명 (예: 목동고)" value={filters.schoolName} onChange={e=>setFilters({...filters, schoolName: e.target.value})} />
+                    <input className="border p-3 rounded-xl bg-gray-50" placeholder="학교명 (예: 목동고)" value={filters.schoolName} onChange={e=>setFilters({...filters, schoolName: e.target.value})} />
                     
-                    {/* [CTO 수정] 하드코딩된 연도 대신 자동 생성된 YEARS 배열을 순회하여 렌더링 */}
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
-                        <option value="">연도 전체</option>
-                        {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
+                    <select className="border p-3 rounded-xl bg-gray-50" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
+                        <option value="">연도</option><option value="2024">2024년</option><option value="2023">2023년</option>
+                    </select>
+                    
+                    {/* [CTO 반영] 1학기 중간고사 형태 통합 */}
+                    <select className="border p-3 rounded-xl bg-gray-50" value={filters.examType} onChange={e=>setFilters({...filters, examType: e.target.value})}>
+                        <option value="">시험 종류</option>
+                        {EXAM_TYPES.map(ex => <option key={ex} value={ex}>{ex}</option>)}
                     </select>
 
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.term} onChange={e=>setFilters({...filters, term: e.target.value})}>
-                        <option value="">시험 전체</option><option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
+                    <select className="border p-3 rounded-xl bg-gray-50" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
+                        <option value="">학년</option>
+                        {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
                     </select>
-                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
-                        <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-                    </select>
+
+                    <input className="border p-3 rounded-xl bg-gray-50" placeholder="과목 (예: 수학)" value={filters.subject} onChange={e=>setFilters({...filters, subject: e.target.value})} />
                 </div>
-                <Button className="w-full py-3 md:py-4 text-base md:text-lg shadow-md" icon={Search} onClick={handleSearch} disabled={loading}>
-                    {loading ? '검색 중...' : '조건 검색하기'}
+                <Button className="w-full py-4 text-lg shadow-md" icon={Search} onClick={handleSearch} disabled={loading}>
+                    {loading ? '데이터 불러오는 중...' : '조건 검색하기'}
                 </Button>
             </Card>
 
-            <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
-                {errorMsg ? (
-                    <div className="p-10 flex flex-col items-center gap-3 bg-white">
-                        <div className="bg-red-50 p-4 rounded-full text-red-500"><ServerCrash size={32}/></div>
-                        <p className="text-gray-800 font-bold text-center text-sm md:text-lg">{errorMsg}</p>
-                        <Button variant="outline" size="sm" onClick={handleSearch} className="mt-2">다시 시도하기</Button>
-                    </div>
-                ) : exams.length === 0 && !loading ? (
-                    <div className="text-center py-16 text-gray-400">조건에 맞는 기출 자료가 없습니다.</div>
-                ) : (
-                    <div className="divide-y divide-gray-100">
-                        {exams.map(exam => (
-                            <div key={exam.id} className="p-4 md:p-6 flex flex-col lg:flex-row gap-4 lg:gap-6 hover:bg-gray-50/50 transition-colors">
-                                <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
-                                    <div className="flex justify-between items-start">
-                                        <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
-                                        {isAdmin && (
-                                            <button onClick={() => handleDeleteExam(exam.id)} className="text-red-400 hover:text-red-600 transition-colors mt-1" title="기출자료 전체 삭제">
-                                                <Trash2 size={18} />
-                                            </button>
-                                        )}
-                                    </div>
-                                    <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
-                                        <div className="font-bold text-gray-700 text-sm">
-                                            {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.term?.replace('고사', '')} {exam.subject}
+            {/* 결과 테이블 */}
+            <Card className="p-0 overflow-hidden bg-gray-50 min-h-[400px]">
+                <div className="overflow-x-auto w-full">
+                    <table className="w-full text-left text-sm min-w-[1000px]">
+                        <thead className="bg-white border-b text-gray-500">
+                            <tr>
+                                <th className="p-5 w-[25%]">학교 및 시험 정보</th>
+                                <th className="p-5 w-[75%]">자료별 현황 및 관리</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                            {/* [CTO 반영] 첫 진입 시 아무 데이터도 불러오지 않고 안내 문구만 렌더링 */}
+                            {!hasSearched && !loading && (
+                                <tr>
+                                    <td colSpan="2" className="text-center py-20 bg-white">
+                                        <div className="flex flex-col items-center justify-center text-gray-400">
+                                            <Search size={48} className="mb-3 opacity-20" />
+                                            <p className="text-lg font-bold text-gray-600">상단에서 검색 조건을 설정하고 검색하기 버튼을 눌러주세요.</p>
+                                            <p className="text-sm mt-1">서버 부하와 데이터 과금을 방지하기 위해 초기에는 자료를 표시하지 않습니다.</p>
                                         </div>
-                                    </div>
-                                </div>
-                                
-                                <div className="w-full lg:w-3/4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 md:gap-3">
-                                    {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
+                                    </td>
+                                </tr>
+                            )}
+                            
+                            {hasSearched && exams.length === 0 && !loading && (
+                                <tr><td colSpan="2" className="text-center py-12 text-gray-400 bg-white">조건에 맞는 기출자료가 없습니다.</td></tr>
+                            )}
 
-            <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
-                <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
-                    <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
-                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원</p>
-                        <p>링크가 준비된 항목만 입력하세요. <strong>빈칸으로 둔 항목은 '작업 대기(오픈)' 상태로 자동 등록</strong>됩니다.</p>
-                    </div>
+                            {exams.map(exam => (
+                                <tr key={exam.id} className="hover:bg-gray-100/50 transition-colors bg-white">
+                                    <td className="p-5 align-top border-r border-gray-100">
+                                        <div className="font-bold text-gray-900 text-lg">{exam.schoolName}</div>
+                                        <div className="text-sm text-gray-500 mb-3">{exam.region} {exam.district}</div>
+                                        
+                                        <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                                            <div className="font-bold text-gray-700">{exam.year} {exam.examType}</div>
+                                            <div className="text-sm font-bold text-blue-600 mt-1">{exam.subject} ({exam.grade})</div>
+                                        </div>
+                                    </td>
+                                    <td className="p-5">
+                                        <div className="grid grid-cols-5 gap-3 h-full">
+                                            {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </Card>
 
-                    <div className="grid grid-cols-2 gap-3 md:gap-4">
-                        <div className="col-span-2 sm:col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학교명</label>
-                            <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" placeholder="목동고" value={newExamForm.schoolName} onChange={e => setNewExamForm({...newExamForm, schoolName: e.target.value})}/>
-                        </div>
-                        <div className="col-span-2 sm:col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학교급</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.schoolType} onChange={e => setNewExamForm({...newExamForm, schoolType: e.target.value})}>
-                                <option value="중학교">중학교</option><option value="고등학교">고등학교</option>
+            {/* 신규 자료 등록 모달 */}
+            <Modal isOpen={modalState.type === 'create_exam'} onClose={() => setModalState({ type: null })} title="신규 기출자료 베이스 생성">
+                <div className="space-y-4">
+                    <div className="bg-yellow-50 p-4 rounded-xl text-sm text-yellow-800 mb-4 border border-yellow-200">
+                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 중복 방지 시스템 가동중</p>
+                        <p>새로운 자료를 생성하기 전, 시스템이 자동으로 중복(동일 학교, 연도, 시험, 과목 등) 여부를 검사합니다.</p>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">학교급</label>
+                            <select className="w-full border p-3 rounded-xl" value={newExam.schoolType} onChange={e=>setNewExam({...newExam, schoolType: e.target.value})}>
+                                <option value="">선택</option><option value="중학교">중학교</option><option value="고등학교">고등학교</option>
                             </select>
                         </div>
-                        <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학년</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.grade} onChange={e => setNewExamForm({...newExamForm, grade: e.target.value})}>
-                                <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">학교명</label>
+                            <input className="w-full border p-3 rounded-xl" placeholder="예: 목동고" value={newExam.schoolName} onChange={e=>setNewExam({...newExam, schoolName: e.target.value})} />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">연도</label>
+                            <select className="w-full border p-3 rounded-xl" value={newExam.year} onChange={e=>setNewExam({...newExam, year: e.target.value})}>
+                                <option value="">선택</option><option value="2024">2024년</option><option value="2023">2023년</option>
                             </select>
                         </div>
-                        <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">과목</label>
-                            <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}/>
-                        </div>
-                        
-                        <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
-                            {/* [CTO 수정] YEARS 배열 렌더링으로 변경 */}
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
-                                {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">시험 종류</label>
+                            <select className="w-full border p-3 rounded-xl" value={newExam.examType} onChange={e=>setNewExam({...newExam, examType: e.target.value})}>
+                                <option value="">선택</option>
+                                {EXAM_TYPES.map(ex => <option key={ex} value={ex}>{ex}</option>)}
                             </select>
                         </div>
-                        
-                        <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
-                            <div className="flex gap-1">
-                                <select className="w-1/2 border p-2.5 rounded-xl bg-gray-50 text-xs sm:text-sm" value={newExamForm.semester} onChange={e => setNewExamForm({...newExamForm, semester: e.target.value})}>
-                                    <option value="1학기">1학기</option><option value="2학기">2학기</option>
-                                </select>
-                                <select className="w-1/2 border p-2.5 rounded-xl bg-gray-50 text-xs sm:text-sm" value={newExamForm.term} onChange={e => setNewExamForm({...newExamForm, term: e.target.value})}>
-                                    <option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
-                                </select>
-                            </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">학년</label>
+                            <select className="w-full border p-3 rounded-xl" value={newExam.grade} onChange={e=>setNewExam({...newExam, grade: e.target.value})}>
+                                <option value="">선택</option>
+                                {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-500 mb-1">과목</label>
+                            <input className="w-full border p-3 rounded-xl" placeholder="예: 수학" value={newExam.subject} onChange={e=>setNewExam({...newExam, subject: e.target.value})} />
                         </div>
                     </div>
-
-                    <hr className="my-4 border-gray-200" />
-                    <h3 className="font-bold text-gray-800">자료 링크 일괄 등록 (선택 사항)</h3>
-
-                    {FILE_TYPES.map(ft => (
-                        <div key={ft.key} className="pt-2">
-                            <label className="block text-xs font-bold text-gray-600 mb-1.5 flex items-center gap-1.5">
-                                <LinkIcon size={14}/> {ft.label} URL
-                            </label>
-                            <input 
-                                className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50 text-sm" 
-                                placeholder="링크가 없으면 비워두세요" 
-                                value={newExamForm.urls[ft.key]} 
-                                onChange={e => setNewExamForm({...newExamForm, urls: { ...newExamForm.urls, [ft.key]: e.target.value }})}
-                            />
-                        </div>
-                    ))}
-
-                    <Button className="w-full mt-6 py-4 text-base md:text-lg shadow-md" onClick={handleAddSubmitExam} disabled={isProcessing}>
-                        {isProcessing ? <Loader className="animate-spin mx-auto" /> : '아카이브 생성 및 배포'}
+                    
+                    <Button className="w-full mt-4 py-4 text-lg shadow-md" onClick={handleCreateExam} disabled={isProcessing}>
+                        {isProcessing ? <Loader className="animate-spin mx-auto" /> : '베이스 생성하기'}
                     </Button>
                 </div>
             </Modal>
 
-            <Modal isOpen={['upload_link', 'edit_link'].includes(modalState.type)} onClose={() => { setModalState({ type: null, exam: null, fileKey: null }); setUploadUrl(''); }} title={modalState.type === 'edit_link' ? "자료 링크 수정" : "자료 링크 등록"}>
+            {/* 링크 제출 모달 */}
+            <Modal isOpen={modalState.type === 'upload_link'} onClose={() => { setModalState({ type: null, exam: null, fileKey: null }); setUploadUrl(''); }} title="자료 링크 등록">
                 <div className="space-y-4">
-                    {modalState.type === 'upload_link' && (
-                        <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800 mb-4">
-                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 용량 절약을 위한 정책</p>
-                            <p>파일을 직접 업로드하지 않고, <strong>구글 드라이브 공유 링크(URL)</strong>를 붙여넣어 주세요.</p>
-                        </div>
-                    )}
+                    <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800 mb-4">
+                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 용량 절약을 위한 정책</p>
+                        <p>파일을 직접 업로드하지 않고, <strong>구글 드라이브 공유 링크(URL)</strong>를 붙여넣어 주세요.</p>
+                    </div>
                     
-                    {modalState.type === 'edit_link' && (
-                        <div className="bg-orange-50 p-4 rounded-xl text-sm text-orange-800 mb-4">
-                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 링크 삭제 안내</p>
-                            <p>입력칸을 <strong>빈칸</strong>으로 비우고 완료를 누르면, 해당 자료는 다시 <strong>'작업 대기(오픈)'</strong> 상태로 돌아갑니다.</p>
-                        </div>
-                    )}
-
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
-                            <LinkIcon size={16}/> {modalState.fileKey && FILE_TYPES.find(f => f.key === modalState.fileKey)?.label} URL
+                            <LinkIcon size={16}/> 
+                            {modalState.fileKey && FILE_TYPES.find(f => f.key === modalState.fileKey)?.label} 구글 드라이브 URL
                         </label>
-                        <input className="w-full border p-4 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50 text-base" placeholder="https://drive.google.com/file/d/..." value={uploadUrl} onChange={e => setUploadUrl(e.target.value)}/>
+                        <input 
+                            className="w-full border p-4 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50 focus:bg-white transition-colors text-base" 
+                            placeholder="https://drive.google.com/file/d/..." 
+                            value={uploadUrl} 
+                            onChange={e => setUploadUrl(e.target.value)}
+                        />
                     </div>
-                    <Button className="w-full mt-4 py-3 md:py-4 text-base md:text-lg shadow-md" onClick={handleSubmitLink} disabled={isProcessing}>
-                        {isProcessing ? <Loader className="animate-spin mx-auto" /> : modalState.type === 'edit_link' ? '수정 완료' : '승인 요청하기'}
+                    
+                    <Button className="w-full mt-4 py-4 text-lg shadow-md" onClick={handleSubmitLink} disabled={isProcessing}>
+                        {isProcessing ? <Loader className="animate-spin mx-auto" /> : '승인 요청하기'}
                     </Button>
                 </div>
             </Modal>
