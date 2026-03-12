@@ -1,6 +1,6 @@
 /* [서비스 가치] 
-   1. 사용자의 ID/PW 인증과 Firebase Auth UID를 동기화하여 보안 구멍을 원천 봉쇄합니다. (Zero Trust Security)
-   2. 모바일 환경에서 1-Click 네비게이션을 제공하여 학부모와 학생의 서비스 체류 시간을 늘리고 이탈률을 방어합니다. (Conversion Driven)
+   1. Flexbox 기반 레이아웃 분리로 모바일 네비게이션을 최상단에 영구 고정합니다.
+   2. signOut 명시 호출과 DB Update 로직을 통해 보안 사고 방지 및 Firebase 과금을 최소화합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
@@ -9,7 +9,9 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+// [수정됨] signOut 추가
+import { signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
+// [수정됨] updateDoc 추가로 데이터 중복 생성(비용 증가) 방지
 import { collection, getDocs, query, where, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 
@@ -25,7 +27,6 @@ const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-/* [UI/UX] 학부모가 처음 만나는 화면이므로 신뢰감을 주는 깔끔한 디자인과 에러 핸들링 적용 */
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
@@ -151,22 +152,33 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // [수정됨] 앱 초기화 및 세션 복구 로직 강화
   useEffect(() => {
     const initAuth = async () => {
       try {
         const userCredential = await signInAnonymously(auth);
         const uid = userCredential.user.uid;
-        const userDoc = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uid));
-        if (userDoc.exists()) {
+        
+        // CTO 패치: uid를 문서 ID로 직접 찾지 않고, authUid 필드로 쿼리하여 원본 데이터를 찾습니다.
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('authUid', '==', uid));
+        const s = await getDocs(q);
+        const saved = sessionStorage.getItem('imperial_user');
+
+        // DB에 연동된 authUid가 존재하고, 브라우저 세션도 살아있을 때만 로그인 유지
+        if (!s.empty && saved) {
+          const userDoc = s.docs[0];
           const userData = { id: userDoc.id, ...userDoc.data() };
           setCurrentUser(userData);
-          sessionStorage.setItem('imperial_user', JSON.stringify(userData));
         } else {
-          const saved = sessionStorage.getItem('imperial_user');
-          if (saved) setCurrentUser(JSON.parse(saved));
+          // 보안 조치: 세션 정보가 일치하지 않으면 쓰레기 값 청소 및 강제 로그아웃 상태 유지
+          setCurrentUser(null);
+          sessionStorage.removeItem('imperial_user');
         }
-      } catch (e) { console.error("Auth Init Error", e); }
-      finally { setLoading(false); }
+      } catch (e) { 
+        console.error("Auth Init Error", e); 
+      } finally { 
+        setLoading(false); 
+      }
     };
     initAuth();
   }, []);
@@ -185,6 +197,7 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
+  // [수정됨] 비용 최적화 및 로직 개선
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
@@ -196,17 +209,17 @@ const AppContent = () => {
          
          if(!s.empty) {
              const foundDoc = s.docs[0];
+             const originalDocId = foundDoc.id; // 기존 문서의 고유 ID
              const userData = { ...foundDoc.data() };
-             const authUid = auth.currentUser.uid;
+             const authUid = auth.currentUser.uid; // 현재 발급된 익명 세션 토큰
 
-             // CTO 중요 로직: 현재 Auth UID로 유저 문서를 다시 생성/업데이트 (보안 연결)
-             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authUid), {
-                 ...userData,
+             // [CTO 최적화] setDoc으로 새 문서를 무한 생성하지 않고, 원본 문서를 updateDoc으로 덮어씁니다.
+             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId), {
                  authUid: authUid,
                  lastLogin: new Date().toISOString()
              });
 
-             const finalUser = { id: authUid, ...userData, authUid };
+             const finalUser = { id: originalDocId, ...userData, authUid };
              setCurrentUser(finalUser);
              sessionStorage.setItem('imperial_user', JSON.stringify(finalUser));
              navigate('/dashboard'); 
@@ -215,7 +228,17 @@ const AppContent = () => {
      finally { setLoginProcessing(false); }
   };
 
-  const handleLogout = () => { sessionStorage.removeItem('imperial_user'); setCurrentUser(null); navigate('/'); };
+  // [수정됨] 자동 로그인 버그 해결 (보안 강화)
+  const handleLogout = async () => { 
+      try {
+          await signOut(auth); // 핵심 조치: Firebase Auth 세션을 강제로 파괴합니다.
+      } catch (error) {
+          console.error("Logout Error:", error);
+      }
+      sessionStorage.removeItem('imperial_user'); 
+      setCurrentUser(null); 
+      navigate('/'); 
+  };
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
@@ -234,17 +257,16 @@ const AppContent = () => {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* [UX 최적화] 모바일에서 메뉴 열릴 때 배경을 어둡게 처리하여 사이드바에 시선 집중 */}
+      {/* 사이드바 오픈 시 오버레이 */}
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
       
-      {/* 좌측 사이드바 메뉴 */}
+      {/* 좌측 사이드바 */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
         <div className="p-6 border-b flex justify-between items-center shrink-0">
           <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><X /></button>
         </div>
         
-        {/* 메뉴 리스트 - 스크롤 가능한 영역으로 분리 */}
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
            {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
               <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === item.path ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
@@ -253,7 +275,6 @@ const AppContent = () => {
            ))}
         </nav>
         
-        {/* 하단 유저 프로필 및 로그아웃 버튼 영역 */}
         <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
             <div className="flex items-center gap-3 mb-4 px-2">
                 <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser.name?.[0]}</div>
@@ -262,17 +283,18 @@ const AppContent = () => {
                     <span className="text-xs text-gray-500 uppercase">{currentUser.role}</span>
                 </div>
             </div>
+            {/* 로그아웃 버튼 */}
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 p-2 rounded-lg font-bold transition-colors">
                 <LogOut size={16}/> 로그아웃
             </button>
         </div>
       </aside>
 
-      {/* 우측 메인 콘텐츠 및 모바일 헤더 영역 */}
-      <main className="flex-1 overflow-y-auto flex flex-col relative">
+      {/* [구조 대폭 수정됨] 컨텐츠 래퍼 분리로 모바일 헤더 영구 고정 보장 */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative">
         
-        {/* [모바일 문제 해결] 모바일 전용 글로벌 헤더 (상단 고정) */}
-        <header className="md:hidden sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm">
+        {/* 모바일 글로벌 헤더 (스크롤 영향을 받지 않는 독립된 영역) */}
+        <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
             <div className="flex items-center gap-2">
                 <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center shadow-sm">
                     <span className="text-base font-bold">I</span>
@@ -289,24 +311,26 @@ const AppContent = () => {
             </button>
         </header>
 
-        {/* 메인 라우팅 영역 */}
-        <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 py-6 flex-1">
-            <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
-                <Routes>
-                    <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                    <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
-                    <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
-                    <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                    <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                    {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
-                    <Route path="/users" element={<UserManager currentUser={currentUser} />} />
-                    <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
-                    <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
-                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                </Routes>
-            </Suspense>
-        </div>
-      </main>
+        {/* 메인 라우팅 스크롤 영역 (모바일 헤더 아래에서만 스크롤됨) */}
+        <main className="flex-1 overflow-y-auto">
+            <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 py-6">
+                <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
+                    <Routes>
+                        <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
+                        <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
+                        <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
+                        <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
+                        <Route path="/users" element={<UserManager currentUser={currentUser} />} />
+                        <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
+                        <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                    </Routes>
+                </Suspense>
+            </div>
+        </main>
+      </div>
     </div>
   );
 };
