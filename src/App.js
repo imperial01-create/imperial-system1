@@ -1,6 +1,7 @@
 /* [서비스 가치] 
-   1. Flexbox 기반 레이아웃 분리로 모바일 네비게이션을 최상단에 영구 고정합니다.
-   2. signOut 명시 호출과 DB Update 로직을 통해 보안 사고 방지 및 Firebase 과금을 최소화합니다.
+   1. Firebase Security Rules와의 구조적 동기화를 통해 보안 에러(Permission Denied)를 해결합니다.
+   2. 세션 교차 검증(Cross-Validation)을 적용하여 로그아웃 후 비정상적인 유령 로그인을 원천 차단합니다.
+   3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
@@ -9,10 +10,9 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
-// [수정됨] signOut 추가
 import { signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
-// [수정됨] updateDoc 추가로 데이터 중복 생성(비용 증가) 방지
-import { collection, getDocs, query, where, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'; 
+// [수정됨] updateDoc 대신 규칙과 호환되는 setDoc 사용 복구
+import { collection, getDocs, query, where, doc, setDoc, getDoc } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -152,27 +152,33 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // [수정됨] 앱 초기화 및 세션 복구 로직 강화
+  // [보안 패치 1] 유령 로그인 방지 및 세션 교차 검증 로직 적용
   useEffect(() => {
     const initAuth = async () => {
       try {
         const userCredential = await signInAnonymously(auth);
         const uid = userCredential.user.uid;
         
-        // CTO 패치: uid를 문서 ID로 직접 찾지 않고, authUid 필드로 쿼리하여 원본 데이터를 찾습니다.
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('authUid', '==', uid));
-        const s = await getDocs(q);
-        const saved = sessionStorage.getItem('imperial_user');
-
-        // DB에 연동된 authUid가 존재하고, 브라우저 세션도 살아있을 때만 로그인 유지
-        if (!s.empty && saved) {
-          const userDoc = s.docs[0];
+        // Firebase Rule (allow read: if isSignedIn)에 따라 문서 탐색
+        const userDoc = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uid));
+        
+        if (userDoc.exists()) {
           const userData = { id: userDoc.id, ...userDoc.data() };
           setCurrentUser(userData);
+          sessionStorage.setItem('imperial_user', JSON.stringify(userData));
         } else {
-          // 보안 조치: 세션 정보가 일치하지 않으면 쓰레기 값 청소 및 강제 로그아웃 상태 유지
-          setCurrentUser(null);
-          sessionStorage.removeItem('imperial_user');
+          // 문서가 없는 경우 (새 익명 접속), 브라우저 세션을 확인하되 반드시 서버 UID와 교차 검증
+          const saved = sessionStorage.getItem('imperial_user');
+          if (saved) {
+             const parsedUser = JSON.parse(saved);
+             if (parsedUser.authUid === uid) {
+                setCurrentUser(parsedUser);
+             } else {
+                // UID가 다르면 과거 세션이므로 폐기하여 보안 침해 원천 방지
+                sessionStorage.removeItem('imperial_user');
+                setCurrentUser(null);
+             }
+          }
         }
       } catch (e) { 
         console.error("Auth Init Error", e); 
@@ -197,7 +203,7 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // [수정됨] 비용 최적화 및 로직 개선
+  // [보안 패치 2] Firebase Rule (request.auth.uid == userId) 완전 충족을 위한 로직 복구
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
@@ -209,17 +215,18 @@ const AppContent = () => {
          
          if(!s.empty) {
              const foundDoc = s.docs[0];
-             const originalDocId = foundDoc.id; // 기존 문서의 고유 ID
              const userData = { ...foundDoc.data() };
-             const authUid = auth.currentUser.uid; // 현재 발급된 익명 세션 토큰
+             const authUid = auth.currentUser.uid;
 
-             // [CTO 최적화] setDoc으로 새 문서를 무한 생성하지 않고, 원본 문서를 updateDoc으로 덮어씁니다.
-             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId), {
+             // CTO 로직: Rule 파일의 isAdmin 함수와 write 규칙이 정상 동작하도록, 
+             // 발급된 익명 UID를 문서 ID 자체로 사용하여 새로 세팅합니다.
+             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authUid), {
+                 ...userData,
                  authUid: authUid,
                  lastLogin: new Date().toISOString()
              });
 
-             const finalUser = { id: originalDocId, ...userData, authUid };
+             const finalUser = { id: authUid, ...userData, authUid };
              setCurrentUser(finalUser);
              sessionStorage.setItem('imperial_user', JSON.stringify(finalUser));
              navigate('/dashboard'); 
@@ -228,10 +235,10 @@ const AppContent = () => {
      finally { setLoginProcessing(false); }
   };
 
-  // [수정됨] 자동 로그인 버그 해결 (보안 강화)
   const handleLogout = async () => { 
       try {
-          await signOut(auth); // 핵심 조치: Firebase Auth 세션을 강제로 파괴합니다.
+          // 명시적 Firebase 세션 파기로 기존 연결 완전 단절
+          await signOut(auth); 
       } catch (error) {
           console.error("Logout Error:", error);
       }
@@ -257,10 +264,8 @@ const AppContent = () => {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* 사이드바 오픈 시 오버레이 */}
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
       
-      {/* 좌측 사이드바 */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
         <div className="p-6 border-b flex justify-between items-center shrink-0">
           <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
@@ -283,17 +288,13 @@ const AppContent = () => {
                     <span className="text-xs text-gray-500 uppercase">{currentUser.role}</span>
                 </div>
             </div>
-            {/* 로그아웃 버튼 */}
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 p-2 rounded-lg font-bold transition-colors">
                 <LogOut size={16}/> 로그아웃
             </button>
         </div>
       </aside>
 
-      {/* [구조 대폭 수정됨] 컨텐츠 래퍼 분리로 모바일 헤더 영구 고정 보장 */}
       <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative">
-        
-        {/* 모바일 글로벌 헤더 (스크롤 영향을 받지 않는 독립된 영역) */}
         <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
             <div className="flex items-center gap-2">
                 <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center shadow-sm">
@@ -301,7 +302,6 @@ const AppContent = () => {
                 </div>
                 <h1 className="text-lg font-bold text-gray-900">Imperial</h1>
             </div>
-            {/* 햄버거 메뉴 버튼 */}
             <button 
                 onClick={() => setIsSidebarOpen(true)} 
                 className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-all active:scale-95"
@@ -311,7 +311,6 @@ const AppContent = () => {
             </button>
         </header>
 
-        {/* 메인 라우팅 스크롤 영역 (모바일 헤더 아래에서만 스크롤됨) */}
         <main className="flex-1 overflow-y-auto">
             <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 py-6">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
