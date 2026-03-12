@@ -1,12 +1,13 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
-   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. */
+   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
+   (Updated: 반정규화를 통한 Firebase 비용 최소화 및 Toast 알림 도입으로 UX 개선) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User, School, GraduationCap
    } from 'lucide-react';
    import { collection, doc, addDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
    import { db } from '../firebase';
-   import { Button, Card, Modal } from '../components/UI';
+   import { Button, Card, Modal, Toast } from '../components/UI'; // Toast 컴포넌트 추가
    
    const APP_ID = 'imperial-clinic-v1';
    
@@ -18,21 +19,26 @@
        const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
        const [targetUserId, setTargetUserId] = useState(null);
        const [loading, setLoading] = useState(true);
+       
+       // [UX 개선] Toast 상태 관리
+       const [toast, setToast] = useState({ message: '', type: 'info' });
    
        const [formData, setFormData] = useState({ 
            name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
-           schoolName: '', grade: '1학년', authUid: ''
+           schoolName: '', grade: '1학년', authUid: '', childSnapshot: null
        });
        const [isEditMode, setIsEditMode] = useState(false);
        
        const [studentList, setStudentList] = useState([]);
        const [studentSearch, setStudentSearch] = useState('');
    
+       // 공통 Toast 호출 함수
+       const showToast = (message, type = 'error') => setToast({ message, type });
+   
        // [CTO 최적화] getDocs + 수동 localStorage 제거 후 Firebase SDK 기본 캐시 및 실시간 리스너 활용
        useEffect(() => {
            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
            
-           // includeMetadataChanges를 통해 캐시 로드 시 즉시 렌더링 (TBT 감소)
            const unsubscribe = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
                const userList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                setUsers(userList);
@@ -40,6 +46,7 @@
                setLoading(false);
            }, (error) => {
                console.error("User Sync Error:", error);
+               showToast('데이터 동기화 중 오류가 발생했습니다.', 'error');
                setLoading(false);
            });
    
@@ -47,7 +54,7 @@
        }, []);
    
        const handleOpenCreate = () => {
-           setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '' });
+           setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null });
            setIsEditMode(false);
            setIsModalOpen(true);
        };
@@ -58,6 +65,7 @@
                password: user.password || '', 
                childId: user.childId || '',
                childName: user.childName || '',
+               childSnapshot: user.childSnapshot || null, // 반정규화 데이터 로드
                hourlyRate: user.hourlyRate || '',
                schoolName: user.schoolName || '',
                grade: user.grade || '1학년',
@@ -68,9 +76,10 @@
        };
    
        const handleSaveUser = async () => {
-           if (!formData.name || !formData.userId || !formData.password) return alert('필수 정보를 입력하세요.');
-           if (activeTab === 'parent' && !formData.childId) return alert('학부모 계정은 자녀(학생)와 연결해야 합니다.');
-           if (activeTab === 'student' && !formData.schoolName) return alert('학생의 학교명을 입력해주세요.');
+           // Validation Alert 대체
+           if (!formData.name || !formData.userId || !formData.password) return showToast('필수 정보를 모두 입력해주세요.', 'error');
+           if (activeTab === 'parent' && !formData.childId) return showToast('학부모 계정은 반드시 자녀(학생)와 연결해야 합니다.', 'error');
+           if (activeTab === 'student' && !formData.schoolName) return showToast('학생의 학교명을 입력해주세요.', 'error');
    
            setLoading(true);
            try {
@@ -81,18 +90,29 @@
                if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
                if (activeTab === 'ta' || activeTab === 'lecturer') payload.subject = formData.subject || '';
                if (activeTab === 'ta') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
-               if (activeTab === 'parent') { payload.childId = formData.childId; payload.childName = formData.childName; }
+               
+               // [CTO 최적화] 데이터 반정규화 (Denormalization)
+               if (activeTab === 'parent') { 
+                   payload.childId = formData.childId; 
+                   payload.childName = formData.childName; // 레거시 호환 유지
+                   payload.childSnapshot = formData.childSnapshot; // O(1) 조회를 위한 스냅샷 저장
+               }
    
                if (isEditMode) {
                    await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id), payload);
+                   showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    payload.createdAt = serverTimestamp();
                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), payload);
+                   showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
                }
                setIsModalOpen(false);
-               // [UX 개선] 실시간 리스너 덕분에 reload() 불필요
-           } catch (e) { alert('저장 실패: ' + e.message); } finally { setLoading(false); }
+           } catch (e) { 
+               showToast(e.message || '저장에 실패했습니다.', 'error'); 
+           } finally { 
+               setLoading(false); 
+           }
        };
    
        const handleDeleteUser = async () => {
@@ -100,14 +120,22 @@
            setLoading(true);
            try {
                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
+               showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
                setIsDeleteConfirmOpen(false);
-           } catch (e) { alert('삭제 실패: ' + e.message); } finally { setLoading(false); }
+           } catch (e) { 
+               showToast('삭제 실패: ' + e.message, 'error'); 
+           } finally { 
+               setLoading(false); 
+           }
        };
    
        const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
    
        return (
            <div className="space-y-6 w-full animate-in fade-in">
+               {/* 글로벌 Toast 렌더링 */}
+               <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
+
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
@@ -128,7 +156,6 @@
                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
                </div>
    
-               {/* [기능 유지] 모바일 뷰 카드 레이아웃 */}
                <div className="md:hidden space-y-4">
                    {filteredUsers.map(u => (
                        <Card key={u.id} className="p-5 flex flex-col gap-3">
@@ -144,13 +171,14 @@
                            </div>
                            <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm">
                                {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
+                               {/* 모바일 뷰: 반정규화된 스냅샷 데이터 활용 */}
+                               {activeTab === 'parent' && <div className="flex items-center gap-2 font-bold text-green-600"><User size={14}/> 자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName})` : u.childName}</div>}
                                <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
                            </div>
                        </Card>
                    ))}
                </div>
    
-               {/* [기능 유지] 데스크톱 뷰 테이블 레이아웃 */}
                <div className="hidden md:block">
                    <Card className="p-0 overflow-hidden shadow-sm">
                        <table className="w-full text-left border-collapse">
@@ -164,7 +192,12 @@
                                        <td className="p-4 text-gray-500">{u.phone || '-'}</td>
                                        <td className="p-4">
                                            {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
-                                           {activeTab === 'parent' && <span className="text-green-600 font-bold">자녀: {u.childName}</span>}
+                                           {/* 데스크톱 뷰: 반정규화된 스냅샷 데이터 활용 (O(1) 성능 최적화 완료) */}
+                                           {activeTab === 'parent' && (
+                                                <span className="text-green-600 font-bold">
+                                                    자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName} ${u.childSnapshot.grade})` : u.childName}
+                                                </span>
+                                           )}
                                            {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
                                        </td>
                                        <td className="p-4 flex justify-end gap-2">
@@ -196,14 +229,16 @@
                            </div>
                        )}
    
-                       {/* [기능 유지] 학부모-자녀 검색 연결 로직 */}
+                       {/* [CTO 로직] 스냅샷 저장을 위한 자녀 선택 핸들러 수정 */}
                        {activeTab === 'parent' && (
                            <div className="bg-gray-50 p-4 border rounded-xl space-y-3">
                                 <label className="text-xs font-bold text-gray-500">연결된 자녀(학생)</label>
                                 {formData.childName ? (
                                    <div className="flex justify-between items-center font-bold bg-white p-2 rounded-lg border">
-                                       <span className="text-blue-600">{formData.childName}</span>
-                                       <button onClick={()=>setFormData({...formData, childId:'', childName:''})}><X size={16}/></button>
+                                       <span className="text-blue-600">
+                                            {formData.childSnapshot ? `${formData.childSnapshot.name} (${formData.childSnapshot.schoolName})` : formData.childName}
+                                       </span>
+                                       <button onClick={()=>setFormData({...formData, childId:'', childName:'', childSnapshot: null})}><X size={16}/></button>
                                    </div>
                                 ) : (
                                    <div className="space-y-2">
@@ -211,8 +246,18 @@
                                        {studentSearch && (
                                            <div className="border bg-white max-h-32 overflow-y-auto rounded-lg shadow-inner">
                                                {studentList.filter(s=>s.name.includes(studentSearch)).map(s=> (
-                                                   <div key={s.id} onClick={()=>{setFormData({...formData, childId:s.id, childName:s.name}); setStudentSearch('');}} className="p-2 hover:bg-blue-50 cursor-pointer text-sm border-b last:border-0">
-                                                       {s.name} ({s.schoolName})
+                                                   <div key={s.id} onClick={()=>{
+                                                       // 선택 시 childSnapshot 객체 전체를 formData에 담음
+                                                       setFormData({
+                                                           ...formData, 
+                                                           childId: s.id, 
+                                                           childName: s.name,
+                                                           childSnapshot: { name: s.name, schoolName: s.schoolName, grade: s.grade }
+                                                       }); 
+                                                       setStudentSearch('');
+                                                   }} className="p-2 hover:bg-blue-50 cursor-pointer text-sm border-b last:border-0 flex justify-between">
+                                                       <span>{s.name}</span>
+                                                       <span className="text-gray-400 text-xs">{s.schoolName} ({s.grade})</span>
                                                    </div>
                                                ))}
                                            </div>
@@ -235,7 +280,6 @@
                    </div>
                </Modal>
    
-               {/* [기능 유지] 삭제 확인 모달 */}
                <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="사용자 계정 삭제">
                    <div className="text-center space-y-6 p-4">
                        <div className="bg-red-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto text-red-500">
