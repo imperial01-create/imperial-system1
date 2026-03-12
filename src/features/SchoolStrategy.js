@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase'; 
-import { collection, onSnapshot, doc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, addDoc, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -9,55 +9,73 @@ const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height
 const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
 const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>;
 const IconArrowLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>;
+const IconSettings = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>;
+const IconEdit = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
+const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 // 통합 DB 경로 상수 설정
 const APP_ID = 'imperial-clinic-v1';
 const DB_COLLECTION = `artifacts/${APP_ID}/public/data/school_strategies`;
+const SETTINGS_DOC = `artifacts/${APP_ID}/public/data/settings/school_strategy`;
 
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
   
-  // 관리자 설정: 현재 활성화된 내신 기간
-  const currentActiveTerm = "1-1 중간고사"; 
-
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
+  
+  // 글로벌 설정 (관리자 필터링 로직)
+  const [activeTerm, setActiveTerm] = useState("1-1 중간고사");
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [tempActiveTerm, setTempActiveTerm] = useState("");
+
+  // viewState.view: 'list' | 'detail' | 'form'
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
+  const [formData, setFormData] = useState(null); // 리포트 작성/수정 폼 데이터
 
-  // App.js 기준 직급명으로 권한 확인 (instructor, assistant -> lecturer, ta 로 수정)
   const isStaff = ['admin', 'lecturer', 'ta'].includes(user.role);
   const isAdmin = user.role === 'admin';
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
-  // Firestore 데이터 실시간 구독 (에러 핸들링 포함)
+  // 1. 활성 학기 설정 가져오기
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const docSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
+        if (docSnap.exists() && docSnap.data().activeTerm) {
+          setActiveTerm(docSnap.data().activeTerm);
+        }
+      } catch (e) {
+        console.error("설정 불러오기 실패:", e);
+      }
+    };
+    fetchSettings();
+  }, []);
+
+  // 2. 리포트 데이터 실시간 구독
   useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, DB_COLLECTION), 
       (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // 인메모리 필터링
         const filteredData = data.filter(report => {
           if (isStudentOrParent) {
             // 학생/학부모: 본인 학교 + 현재 활성 학기 + 삭제되지 않은 리포트만
-            return !report.isDeleted && 
-                   report.term === currentActiveTerm && 
-                   report.school === user.school;
+            return !report.isDeleted && report.term === activeTerm && report.school === user.school;
           } else if (isAdmin) {
-            // 관리자: 전부 볼 수 있음 (삭제된 것도 복구를 위해 노출)
-            return true;
+            return true; // 관리자: 전부 볼 수 있음
           } else {
-            // 강사/조교: 삭제되지 않은 리포트만
-            return !report.isDeleted;
+            return !report.isDeleted; // 강사/조교: 삭제되지 않은 리포트만
           }
         });
 
-        // 정렬: 경향 분석(trend)이 항상 위로, 그 다음 최신순
         filteredData.sort((a, b) => {
           if (a.type === 'trend' && b.type !== 'trend') return -1;
           if (a.type !== 'trend' && b.type === 'trend') return 1;
-          return b.createdAt - a.createdAt; 
+          return new Date(b.createdAt) - new Date(a.createdAt); 
         });
 
         setReports(filteredData);
@@ -66,64 +84,147 @@ export default function SchoolStrategy({ currentUser }) {
       (error) => {
         console.error("Firestore 데이터 불러오기 에러:", error);
         alert("데이터를 불러오는데 실패했습니다. 권한을 확인해주세요.");
-        setLoading(false); // 무한 로딩 방지
+        setLoading(false);
       }
     );
-
     return () => unsubscribe();
-  }, [user, isStudentOrParent, isAdmin]);
+  }, [user, isStudentOrParent, isAdmin, activeTerm]);
 
-  // Soft Delete 로직
-  const handleSoftDelete = async (id) => {
-    if (window.confirm('이 리포트를 삭제하시겠습니까? (관리자만 복구 가능)')) {
-      await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: true });
+  // --- 관리자 활성 학기 설정 ---
+  const handleSaveActiveTerm = async () => {
+    try {
+      await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'), { activeTerm: tempActiveTerm }, { merge: true });
+      setActiveTerm(tempActiveTerm);
+      setIsSettingsModalOpen(false);
+      alert('활성 학기 설정이 저장되었습니다.');
+    } catch (e) {
+      alert('설정 저장 실패: 권한을 확인하세요.');
     }
   };
 
-  // 관리자 복구 로직
+  // --- 삭제 및 복구 로직 ---
+  const handleSoftDelete = async (id) => {
+    if (window.confirm('이 리포트를 휴지통으로 이동하시겠습니까? (관리자만 복구 가능)')) {
+      await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: true });
+      if(viewState.view === 'detail') setViewState({ view: 'list', selectedId: null, selectedQuestion: null });
+    }
+  };
+
   const handleRestore = async (id) => {
     if (window.confirm('이 리포트를 다시 복구하시겠습니까?')) {
       await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: false });
     }
   };
 
-  // 교직원 전용 메모 저장
+  const handleHardDelete = async (id) => {
+    if (window.confirm('정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+      await deleteDoc(doc(db, DB_COLLECTION, id));
+      if(viewState.view === 'detail') setViewState({ view: 'list', selectedId: null, selectedQuestion: null });
+    }
+  };
+
+  // --- 폼(Form) 핸들링 로직 ---
+  const openForm = (existingReport = null) => {
+    if (existingReport) {
+      setFormData({ ...existingReport });
+    } else {
+      setFormData({
+        type: 'individual', school: '', grade: '1학년', term: activeTerm, subject: '', 
+        teacher: '', difficulty: '중', mcCount: 0, saCount: 0, essayCount: 0, 
+        suppBook: '', print: '', scope: '', review: '', specialNotes: '', 
+        gradeCuts: { grade1: '', grade2: '' }, questions: [],
+        trendData: [], scopeChanges: [], teacherStyles: [], isDeleted: false
+      });
+    }
+    setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
+  };
+
+  const handleSaveReport = async () => {
+    if(!formData.school || !formData.subject) {
+      alert("학교명과 과목은 필수 입력입니다."); return;
+    }
+    setLoading(true);
+    try {
+      const payload = { ...formData, updatedAt: new Date().toISOString() };
+      if (viewState.selectedId) {
+        await updateDoc(doc(db, DB_COLLECTION, viewState.selectedId), payload);
+        alert('성공적으로 수정되었습니다.');
+        setViewState({ view: 'detail', selectedId: viewState.selectedId, selectedQuestion: null });
+      } else {
+        payload.createdAt = new Date().toISOString();
+        const newDoc = await addDoc(collection(db, DB_COLLECTION), payload);
+        alert('새 리포트가 추가되었습니다.');
+        setViewState({ view: 'detail', selectedId: newDoc.id, selectedQuestion: null });
+      }
+    } catch (e) {
+      console.error(e);
+      alert('저장에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleArrayChange = (field, index, key, value) => {
+    const newArray = [...formData[field]];
+    newArray[index][key] = value;
+    setFormData({ ...formData, [field]: newArray });
+  };
+  
+  const addArrayItem = (field, defaultObj) => {
+    setFormData({ ...formData, [field]: [...(formData[field] || []), defaultObj] });
+  };
+
+  const removeArrayItem = (field, index) => {
+    const newArray = [...formData[field]];
+    newArray.splice(index, 1);
+    setFormData({ ...formData, [field]: newArray });
+  };
+
   const saveInternalMemo = async (id) => {
     if (!memoInputs[id]) return;
-    await updateDoc(doc(db, DB_COLLECTION, id), {
-      internalMemo: memoInputs[id]
-    });
+    await updateDoc(doc(db, DB_COLLECTION, id), { internalMemo: memoInputs[id] });
     alert('교직원 전용 메모가 저장되었습니다.');
   };
 
-  if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 불러오는 중입니다...</div>;
+  if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
 
-  // ----------------------------------------------------------------------
+  // ======================================================================
   // VIEW: LIST
-  // ----------------------------------------------------------------------
+  // ======================================================================
   if (viewState.view === 'list') {
     const trends = reports.filter(r => r.type === 'trend');
     const individuals = reports.filter(r => r.type === 'individual');
 
     return (
       <div className="p-6 max-w-6xl mx-auto space-y-8 bg-gray-50 min-h-screen">
-        <div className="flex justify-between items-center border-b pb-4">
+        <div className="flex justify-between items-end border-b pb-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-800 tracking-tight">내신 연구소</h1>
-            <p className="text-sm text-gray-500 mt-2">
-              {isStudentOrParent 
-                ? `현재 [${user.school} ${currentActiveTerm}] 맞춤 분석 자료가 제공되고 있습니다.` 
-                : "우리 학원만의 철저한 학교별 내신 분석 및 경향 자료입니다."}
-            </p>
+            {!isStudentOrParent && (
+              <p className="text-sm text-gray-500 mt-2">
+                우리 학원만의 철저한 학교별 내신 분석 및 경향 자료입니다.
+              </p>
+            )}
           </div>
-          {isStaff && (
-            <button 
-              onClick={() => addSampleData()} 
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 text-sm"
-            >
-              + 리포트 작성
-            </button>
-          )}
+          
+          <div className="flex gap-2">
+            {isAdmin && (
+              <button 
+                onClick={() => { setTempActiveTerm(activeTerm); setIsSettingsModalOpen(true); }} 
+                className="flex items-center gap-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:bg-gray-300 text-sm font-bold"
+              >
+                <IconSettings /> 활성 학기 설정
+              </button>
+            )}
+            {isStaff && (
+              <button 
+                onClick={() => openForm(null)} 
+                className="flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 text-sm font-bold"
+              >
+                + 리포트 작성
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 1. 경향 분석 리스트 */}
@@ -132,26 +233,15 @@ export default function SchoolStrategy({ currentUser }) {
             <IconChart /> 과목 경향 분석
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {trends.length === 0 ? (
-              <p className="text-gray-400 text-sm">등록된 경향 분석이 없습니다.</p>
-            ) : (
-              trends.map(report => (
-                <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
-                  {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                  <div className="flex justify-between">
-                    <h3 className="font-bold text-lg text-indigo-900">{report.school} {report.grade} {report.term} 경향 분석</h3>
-                  </div>
-                  <p className="text-sm text-gray-600 mt-2">과목: {report.subject} | 업데이트: {report.updatedAt}</p>
-                  
-                  {isStaff && (
-                    <div className="mt-4 flex justify-end gap-2" onClick={e => e.stopPropagation()}>
-                      {!report.isDeleted && <button onClick={() => handleSoftDelete(report.id)} className="text-red-500 hover:text-red-700 p-1"><IconTrash /></button>}
-                      {isAdmin && report.isDeleted && <button onClick={() => handleRestore(report.id)} className="text-green-600 hover:text-green-800 p-1"><IconRefresh /></button>}
-                    </div>
-                  )}
+            {trends.length === 0 ? <p className="text-gray-400 text-sm">등록된 경향 분석이 없습니다.</p> : trends.map(report => (
+              <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
+                {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
+                <div className="flex justify-between">
+                  <h3 className="font-bold text-lg text-indigo-900">{report.school} {report.grade} {report.term} 경향 분석</h3>
                 </div>
-              ))
-            )}
+                <p className="text-sm text-gray-600 mt-2">과목: {report.subject} | 업데이트: {new Date(report.updatedAt).toLocaleDateString()}</p>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -161,208 +251,373 @@ export default function SchoolStrategy({ currentUser }) {
             <IconFile /> 개별 시험 과목 분석
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {individuals.length === 0 ? (
-              <p className="text-gray-400 text-sm">등록된 시험 분석이 없습니다.</p>
-            ) : (
-              individuals.map(report => (
-                <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
-                  {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                  <h3 className="font-bold text-gray-800">{report.school} {report.grade} {report.term} {report.subject} 분석</h3>
-                  <div className="mt-3 text-sm text-gray-600 space-y-1">
-                    <p>• 담당: {report.teacher} 선생님</p>
-                    <p>• 난이도: <span className="font-medium text-indigo-600">{report.difficulty}</span></p>
-                  </div>
-                  
-                  {isStaff && (
-                    <div className="mt-4 flex justify-end gap-2 border-t pt-2" onClick={e => e.stopPropagation()}>
-                      {!report.isDeleted && <button onClick={() => handleSoftDelete(report.id)} className="text-red-500 hover:text-red-700 p-1"><IconTrash /></button>}
-                      {isAdmin && report.isDeleted && <button onClick={() => handleRestore(report.id)} className="text-green-600 hover:text-green-800 p-1"><IconRefresh /></button>}
-                    </div>
-                  )}
+            {individuals.length === 0 ? <p className="text-gray-400 text-sm">등록된 시험 분석이 없습니다.</p> : individuals.map(report => (
+              <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
+                {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
+                <h3 className="font-bold text-gray-800">{report.school} {report.grade} {report.term} {report.subject} 분석</h3>
+                <div className="mt-3 text-sm text-gray-600 space-y-1">
+                  <p>• 담당: {report.teacher || '-'} 선생님</p>
+                  <p>• 난이도: <span className="font-medium text-indigo-600">{report.difficulty || '-'}</span></p>
                 </div>
-              ))
-            )}
+              </div>
+            ))}
           </div>
         </section>
+
+        {/* 관리자 모달 */}
+        {isSettingsModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-xl max-w-sm w-full shadow-2xl">
+              <h3 className="text-lg font-bold mb-4">학생 공개 활성 학기 설정</h3>
+              <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 학기 정보를 입력하세요.<br/>(예: 1-1 중간고사, 2-2 기말고사)</p>
+              <input type="text" value={tempActiveTerm} onChange={e => setTempActiveTerm(e.target.value)} className="w-full border p-3 rounded mb-4" placeholder="예: 1-1 중간고사"/>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setIsSettingsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded">취소</button>
+                <button onClick={handleSaveActiveTerm} className="px-4 py-2 bg-indigo-600 text-white rounded">저장</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // ----------------------------------------------------------------------
-  // VIEW: DETAIL
-  // ----------------------------------------------------------------------
-  const report = reports.find(r => r.id === viewState.selectedId);
-  if (!report) return null;
-
-  const goBack = () => setViewState({ view: 'list', selectedId: null, selectedQuestion: null });
-
-  return (
-    <div className="p-6 max-w-5xl mx-auto bg-gray-50 min-h-screen">
-      <button onClick={goBack} className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-6 font-medium">
-        <IconArrowLeft /> 목록으로 돌아가기
-      </button>
-
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        {/* 헤더 부분 */}
-        <div className="bg-indigo-900 px-8 py-6 text-white">
-          <div className="inline-block px-3 py-1 bg-indigo-800 rounded-full text-xs font-semibold mb-3 tracking-wider">
-            {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
-          </div>
-          <h1 className="text-3xl font-bold">
-            {report.school} {report.grade} {report.term} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}
-          </h1>
+  // ======================================================================
+  // VIEW: FORM (CREATE / EDIT)
+  // ======================================================================
+  if (viewState.view === 'form' && formData) {
+    const goBack = () => setViewState({ view: viewState.selectedId ? 'detail' : 'list', selectedId: viewState.selectedId, selectedQuestion: null });
+    
+    return (
+      <div className="p-6 max-w-4xl mx-auto bg-gray-50 min-h-screen">
+        <div className="flex justify-between items-center mb-6">
+          <button onClick={goBack} className="flex items-center gap-2 text-gray-600 hover:text-gray-900 font-medium">
+            <IconArrowLeft /> 취소하고 돌아가기
+          </button>
+          <button onClick={handleSaveReport} className="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700">
+            저장하기
+          </button>
         </div>
 
-        {/* 교직원 전용 메모 (학생/학부모에게는 절대 노출 안 됨) */}
-        {isStaff && (
-          <div className="bg-yellow-50 border-b border-yellow-200 p-6">
-            <h3 className="text-yellow-800 font-bold flex items-center gap-2 mb-2">
-              <IconLock /> 교직원 정보 공유 (학생/학부모 미노출)
-            </h3>
-            <textarea 
-              className="w-full bg-white border border-yellow-300 rounded p-3 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-yellow-400"
-              placeholder="해당 시험에 대한 조교, 강사, 관리자 간의 특이사항이나 정보를 기록하세요."
-              value={memoInputs[report.id] !== undefined ? memoInputs[report.id] : (report.internalMemo || '')}
-              onChange={(e) => setMemoInputs({...memoInputs, [report.id]: e.target.value})}
-            />
-            <div className="flex justify-end mt-2">
-              <button onClick={() => saveInternalMemo(report.id)} className="px-4 py-1.5 bg-yellow-600 text-white text-sm rounded hover:bg-yellow-700">메모 저장</button>
+        <div className="bg-white rounded-xl shadow border p-8 space-y-6">
+          <h2 className="text-2xl font-bold border-b pb-4">리포트 {viewState.selectedId ? '수정' : '작성'}</h2>
+          
+          {/* 기본 정보 */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
+            <div>
+              <label className="block text-sm font-bold mb-1">리포트 종류</label>
+              <select className="w-full border p-2 rounded" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})}>
+                <option value="individual">개별 시험 과목 분석</option>
+                <option value="trend">과목 경향 분석 (설명회용)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">학교명</label>
+              <input type="text" className="w-full border p-2 rounded" placeholder="예: 영일고" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">학년</label>
+              <select className="w-full border p-2 rounded" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
+                <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">학기 및 시험</label>
+              <input type="text" className="w-full border p-2 rounded" placeholder="예: 1-1 중간고사" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">과목</label>
+              <input type="text" className="w-full border p-2 rounded" placeholder="예: 수학(상)" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
             </div>
           </div>
-        )}
 
-        <div className="p-8">
-          {report.type === 'trend' && (
-            <div className="space-y-12">
-              <section>
-                <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-indigo-500 pl-3">난이도 변화 추이</h2>
-                <div className="bg-gray-50 rounded-xl p-6 border flex items-end justify-around h-64">
-                  {report.trendData?.map((data, idx) => (
-                    <div key={idx} className="flex flex-col items-center w-1/5 group">
-                      <span className="text-indigo-600 font-bold mb-2 opacity-0 group-hover:opacity-100 transition-opacity">{data.score}점</span>
-                      <div className="w-16 bg-gradient-to-t from-indigo-300 to-indigo-500 rounded-t-sm relative transition-all duration-500 group-hover:bg-indigo-600" style={{ height: `${data.score}%` }}></div>
-                      <span className="mt-4 text-sm font-medium text-gray-600">{data.examName}</span>
-                    </div>
-                  ))}
+          {/* ================= 개별 시험 분석 폼 ================= */}
+          {formData.type === 'individual' && (
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold border-b pb-2">시험 상세 정보</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div><label className="block text-xs font-bold mb-1">담당 선생님</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.teacher} onChange={e => setFormData({...formData, teacher: e.target.value})}/></div>
+                <div><label className="block text-xs font-bold mb-1">난이도</label><input type="text" className="w-full border p-2 text-sm rounded" placeholder="예: 상" value={formData.difficulty} onChange={e => setFormData({...formData, difficulty: e.target.value})}/></div>
+                <div><label className="block text-xs font-bold mb-1">객관식 문항수</label><input type="number" className="w-full border p-2 text-sm rounded" value={formData.mcCount} onChange={e => setFormData({...formData, mcCount: Number(e.target.value)})}/></div>
+                <div><label className="block text-xs font-bold mb-1">서술/단답 문항수</label><input type="number" className="w-full border p-2 text-sm rounded" value={formData.saCount} onChange={e => setFormData({...formData, saCount: Number(e.target.value)})}/></div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div><label className="block text-xs font-bold mb-1">부교재</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.suppBook} onChange={e => setFormData({...formData, suppBook: e.target.value})}/></div>
+                <div><label className="block text-xs font-bold mb-1">프린트/기타 출처</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.print} onChange={e => setFormData({...formData, print: e.target.value})}/></div>
+              </div>
+              <div><label className="block text-xs font-bold mb-1">시험 범위</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.scope} onChange={e => setFormData({...formData, scope: e.target.value})}/></div>
+              <div><label className="block text-xs font-bold mb-1">시험 총평</label><textarea className="w-full border p-2 text-sm rounded min-h-[100px]" value={formData.review} onChange={e => setFormData({...formData, review: e.target.value})}/></div>
+              <div><label className="block text-xs font-bold mb-1">특이사항 및 킬러문항 설명</label><textarea className="w-full border p-2 text-sm rounded min-h-[80px]" value={formData.specialNotes} onChange={e => setFormData({...formData, specialNotes: e.target.value})}/></div>
+              
+              <h3 className="text-lg font-bold border-b pb-2 pt-4 flex justify-between items-center">
+                문항별 상세 분석
+                <button onClick={() => addArrayItem('questions', { qNum: (formData.questions?.length || 0) + 1, tags: '', unit: '', diff: '', score: '', source: '', analysis: '', qImage: '', simImage: '' })} className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded flex items-center gap-1"><IconPlus/> 문항 추가</button>
+              </h3>
+              {formData.questions?.map((q, idx) => (
+                <div key={idx} className="bg-gray-50 border p-4 rounded relative">
+                  <button onClick={() => removeArrayItem('questions', idx)} className="absolute top-2 right-2 text-red-500"><IconX/></button>
+                  <div className="grid grid-cols-4 md:grid-cols-6 gap-2 mb-2">
+                    <div><label className="text-xs text-gray-500">번호</label><input type="number" className="w-full border p-1 text-sm" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
+                    <div><label className="text-xs text-gray-500">배점</label><input type="number" className="w-full border p-1 text-sm" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
+                    <div className="col-span-2"><label className="text-xs text-gray-500">단원</label><input type="text" className="w-full border p-1 text-sm" value={q.unit} onChange={e=>handleArrayChange('questions', idx, 'unit', e.target.value)}/></div>
+                    <div><label className="text-xs text-gray-500">난이도</label><input type="text" className="w-full border p-1 text-sm" placeholder="상/중/하" value={q.diff} onChange={e=>handleArrayChange('questions', idx, 'diff', e.target.value)}/></div>
+                    <div><label className="text-xs text-gray-500">태그</label><input type="text" className="w-full border p-1 text-sm" placeholder="킬러, 기본 등" value={q.tags} onChange={e=>handleArrayChange('questions', idx, 'tags', e.target.value)}/></div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+                    <div><label className="text-xs text-gray-500">출처 분석</label><input type="text" className="w-full border p-1 text-sm" value={q.source} onChange={e=>handleArrayChange('questions', idx, 'source', e.target.value)}/></div>
+                    <div><label className="text-xs text-gray-500">분석 코멘트</label><input type="text" className="w-full border p-1 text-sm" value={q.analysis} onChange={e=>handleArrayChange('questions', idx, 'analysis', e.target.value)}/></div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div><label className="text-xs text-gray-500">실제 문제 이미지 (URL)</label><input type="text" className="w-full border p-1 text-sm" value={q.qImage} onChange={e=>handleArrayChange('questions', idx, 'qImage', e.target.value)}/></div>
+                    <div><label className="text-xs text-gray-500">유사 적중 문항 이미지 (URL)</label><input type="text" className="w-full border p-1 text-sm" value={q.simImage} onChange={e=>handleArrayChange('questions', idx, 'simImage', e.target.value)}/></div>
+                  </div>
                 </div>
-              </section>
-
-              <section>
-                <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-blue-500 pl-3">주요 출제 범위 및 특징 변화</h2>
-                <div className="space-y-4">
-                  {report.scopeChanges?.map((change, idx) => (
-                    <div key={idx} className="flex items-start gap-4 bg-white border p-4 rounded-lg shadow-sm">
-                      <div className="bg-blue-100 text-blue-700 font-bold px-3 py-1 rounded text-sm whitespace-nowrap">{change.year}</div>
-                      <p className="text-gray-700 leading-relaxed">{change.desc}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section>
-                <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-emerald-500 pl-3">선생님별 출제 스타일 비교</h2>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-gray-100 text-gray-700">
-                        <th className="p-3 border">선생님</th>
-                        <th className="p-3 border">주요 출제 유형</th>
-                        <th className="p-3 border">특징 및 대비 전략</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.teacherStyles?.map((teacher, idx) => (
-                        <tr key={idx} className="border-b hover:bg-gray-50">
-                          <td className="p-3 border font-bold text-emerald-800">{teacher.name}</td>
-                          <td className="p-3 border text-gray-600">{teacher.type}</td>
-                          <td className="p-3 border text-gray-600 text-sm">{teacher.strategy}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+              ))}
             </div>
           )}
 
-          {report.type === 'individual' && (
-            <div className="space-y-8">
-              <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <InfoBox label="출제 선생님" value={report.teacher} />
-                <InfoBox label="시험 난이도" value={report.difficulty} />
-                <InfoBox label="예상 1등급 컷" value={report.gradeCuts?.grade1} />
-                <InfoBox label="객관식 / 주관식" value={`${report.mcCount}문항 / ${report.saCount + report.essayCount}문항`} />
-                <InfoBox label="부교재" value={report.suppBook} colSpan={2} />
-                <InfoBox label="학교 프린트" value={report.print} colSpan={2} />
-              </section>
-
-              <section className="bg-gray-50 p-5 rounded-xl border">
-                <h3 className="font-bold text-gray-800 mb-2">시험 범위</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">{report.scope || '시험 범위 정보가 없습니다.'}</p>
-              </section>
-
-              <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="border border-indigo-100 rounded-xl p-5 bg-white shadow-sm">
-                  <h3 className="font-bold text-indigo-900 mb-3 text-lg">📝 시험 총평</h3>
-                  <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.review}</p>
-                </div>
-                <div className="border border-red-100 rounded-xl p-5 bg-white shadow-sm">
-                  <h3 className="font-bold text-red-800 mb-3 text-lg">💡 특이사항 및 킬러문항</h3>
-                  <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.specialNotes}</p>
-                </div>
-              </section>
-
-              <section>
-                <h2 className="text-xl font-bold text-gray-800 mb-4 border-l-4 border-indigo-500 pl-3">상세 문항 분석</h2>
-                <div className="flex flex-wrap gap-3">
-                  {report.questions?.map((q) => (
-                    <button
-                      key={q.qNum}
-                      onClick={() => setViewState({ ...viewState, selectedQuestion: q })}
-                      className={`px-4 py-2 rounded-lg border transition-all flex flex-col items-center min-w-[80px] ${viewState.selectedQuestion?.qNum === q.qNum ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white hover:bg-gray-50 text-gray-700'}`}
-                    >
-                      <span className="font-bold text-lg">{q.qNum}번</span>
-                      {q.tags && <span className={`text-[10px] px-1.5 py-0.5 rounded mt-1 ${q.tags.includes('킬러') ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{q.tags}</span>}
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              {viewState.selectedQuestion && (
-                <div className="mt-6 border-2 border-indigo-100 rounded-xl p-6 bg-white animate-fade-in">
-                  <div className="flex justify-between items-center mb-6 border-b pb-4">
-                    <h3 className="text-2xl font-bold text-indigo-900">{viewState.selectedQuestion.qNum}번 문항 상세 분석</h3>
-                    <button onClick={() => setViewState({...viewState, selectedQuestion: null})} className="text-gray-400 hover:text-gray-600">닫기 ✕</button>
+          {/* ================= 경향 분석 폼 ================= */}
+          {formData.type === 'trend' && (
+            <div className="space-y-6">
+              {/* 1. 난이도 추이 */}
+              <div className="border p-4 rounded">
+                <h3 className="text-sm font-bold mb-2 flex justify-between">
+                  난이도 변화 추이 (최대 5개 권장)
+                  <button onClick={() => addArrayItem('trendData', { examName: '', score: 50 })} className="text-blue-600 text-xs flex items-center gap-1">+ 추가</button>
+                </h3>
+                {formData.trendData?.map((data, idx) => (
+                  <div key={idx} className="flex gap-2 mb-2">
+                    <input type="text" placeholder="시험명 (예: 23년 1학기)" className="flex-1 border p-1 text-sm" value={data.examName} onChange={e=>handleArrayChange('trendData', idx, 'examName', e.target.value)} />
+                    <input type="number" placeholder="점수(높이 0~100)" className="w-24 border p-1 text-sm" value={data.score} onChange={e=>handleArrayChange('trendData', idx, 'score', e.target.value)} />
+                    <button onClick={() => removeArrayItem('trendData', idx)} className="text-red-500 px-2"><IconX/></button>
                   </div>
-                  
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <div className="space-y-4">
-                      <div className="border rounded bg-gray-50 p-2 text-center h-48 flex items-center justify-center text-gray-400">
-                        {viewState.selectedQuestion.qImage ? <img src={viewState.selectedQuestion.qImage} alt="실제문제" className="max-h-full" /> : "[실제 학교 문제 이미지]"}
-                      </div>
-                      <div className="border-2 border-dashed border-indigo-200 rounded bg-indigo-50/30 p-2 text-center h-48 flex items-center justify-center text-indigo-400 font-medium">
-                        {viewState.selectedQuestion.simImage ? <img src={viewState.selectedQuestion.simImage} alt="학원교재 유사문항" className="max-h-full" /> : "[우리 학원 교재 적중 유사 문항 이미지]"}
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-4">
-                      <DetailRow label="단원 및 평가내용" value={viewState.selectedQuestion.unit} />
-                      <DetailRow label="난이도" value={viewState.selectedQuestion.diff} />
-                      <DetailRow label="배점" value={`${viewState.selectedQuestion.score}점`} />
-                      <DetailRow label="출처 분석" value={viewState.selectedQuestion.source} />
-                      <div className="pt-4 mt-4 border-t border-gray-100">
-                        <p className="text-sm text-gray-600 leading-relaxed"><span className="font-bold text-indigo-800">문항 분석평: </span>{viewState.selectedQuestion.analysis || '해당 문항은 기본 개념을 응용한 문항으로... (분석평 내용)'}</p>
-                      </div>
-                    </div>
+                ))}
+              </div>
+
+              {/* 2. 출제 범위 변화 */}
+              <div className="border p-4 rounded">
+                <h3 className="text-sm font-bold mb-2 flex justify-between">
+                  출제 범위 및 특징 변화
+                  <button onClick={() => addArrayItem('scopeChanges', { year: '', desc: '' })} className="text-blue-600 text-xs flex items-center gap-1">+ 추가</button>
+                </h3>
+                {formData.scopeChanges?.map((item, idx) => (
+                  <div key={idx} className="flex gap-2 mb-2">
+                    <input type="text" placeholder="기간/연도" className="w-1/3 border p-1 text-sm" value={item.year} onChange={e=>handleArrayChange('scopeChanges', idx, 'year', e.target.value)} />
+                    <input type="text" placeholder="설명" className="flex-1 border p-1 text-sm" value={item.desc} onChange={e=>handleArrayChange('scopeChanges', idx, 'desc', e.target.value)} />
+                    <button onClick={() => removeArrayItem('scopeChanges', idx)} className="text-red-500 px-2"><IconX/></button>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
+
+              {/* 3. 선생님 스타일 */}
+              <div className="border p-4 rounded">
+                <h3 className="text-sm font-bold mb-2 flex justify-between">
+                  선생님별 스타일 비교
+                  <button onClick={() => addArrayItem('teacherStyles', { name: '', type: '', strategy: '' })} className="text-blue-600 text-xs flex items-center gap-1">+ 추가</button>
+                </h3>
+                {formData.teacherStyles?.map((t, idx) => (
+                  <div key={idx} className="flex gap-2 mb-2">
+                    <input type="text" placeholder="선생님 이름" className="w-1/4 border p-1 text-sm" value={t.name} onChange={e=>handleArrayChange('teacherStyles', idx, 'name', e.target.value)} />
+                    <input type="text" placeholder="출제 유형" className="w-1/4 border p-1 text-sm" value={t.type} onChange={e=>handleArrayChange('teacherStyles', idx, 'type', e.target.value)} />
+                    <input type="text" placeholder="대비 전략" className="flex-1 border p-1 text-sm" value={t.strategy} onChange={e=>handleArrayChange('teacherStyles', idx, 'strategy', e.target.value)} />
+                    <button onClick={() => removeArrayItem('teacherStyles', idx)} className="text-red-500 px-2"><IconX/></button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  // ======================================================================
+  // VIEW: DETAIL
+  // ======================================================================
+  const report = reports.find(r => r.id === viewState.selectedId);
+  if (!report && viewState.view === 'detail') return null;
+
+  if (viewState.view === 'detail') {
+    const goBack = () => setViewState({ view: 'list', selectedId: null, selectedQuestion: null });
+
+    return (
+      <div className="p-6 max-w-5xl mx-auto bg-gray-50 min-h-screen">
+        <div className="flex justify-between items-center mb-6">
+          <button onClick={goBack} className="flex items-center gap-2 text-gray-600 hover:text-gray-900 font-medium">
+            <IconArrowLeft /> 목록으로 돌아가기
+          </button>
+          
+          {/* 액션 버튼 그룹 */}
+          {isStaff && (
+            <div className="flex gap-2">
+              <button onClick={() => openForm(report)} className="flex items-center gap-1 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg shadow-sm hover:bg-gray-50 text-sm font-bold">
+                <IconEdit /> 편집/수정
+              </button>
+              {!report.isDeleted && <button onClick={() => handleSoftDelete(report.id)} className="flex items-center gap-1 px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg shadow-sm hover:bg-red-100 text-sm font-bold">
+                <IconTrash /> 휴지통
+              </button>}
+              {isAdmin && report.isDeleted && <button onClick={() => handleRestore(report.id)} className="flex items-center gap-1 px-4 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg shadow-sm hover:bg-green-100 text-sm font-bold">
+                <IconRefresh /> 복구
+              </button>}
+              {isAdmin && <button onClick={() => handleHardDelete(report.id)} className="flex items-center gap-1 px-4 py-2 bg-red-600 text-white rounded-lg shadow-sm hover:bg-red-700 text-sm font-bold">
+                영구 삭제
+              </button>}
+            </div>
+          )}
+        </div>
+
+        <div className={`bg-white rounded-2xl shadow-sm border overflow-hidden ${report.isDeleted ? 'opacity-70 grayscale' : 'border-gray-100'}`}>
+          <div className="bg-indigo-900 px-8 py-6 text-white">
+            <div className="inline-block px-3 py-1 bg-indigo-800 rounded-full text-xs font-semibold mb-3 tracking-wider">
+              {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
+            </div>
+            <h1 className="text-3xl font-bold">
+              {report.school} {report.grade} {report.term} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}
+            </h1>
+          </div>
+
+          {isStaff && (
+            <div className="bg-yellow-50 border-b border-yellow-200 p-6">
+              <h3 className="text-yellow-800 font-bold flex items-center gap-2 mb-2">
+                <IconLock /> 교직원 정보 공유 (학생/학부모 미노출)
+              </h3>
+              <textarea 
+                className="w-full bg-white border border-yellow-300 rounded p-3 text-sm min-h-[80px] focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                placeholder="해당 시험에 대한 특이사항이나 정보를 기록하세요."
+                value={memoInputs[report.id] !== undefined ? memoInputs[report.id] : (report.internalMemo || '')}
+                onChange={(e) => setMemoInputs({...memoInputs, [report.id]: e.target.value})}
+              />
+              <div className="flex justify-end mt-2">
+                <button onClick={() => saveInternalMemo(report.id)} className="px-4 py-1.5 bg-yellow-600 text-white text-sm rounded hover:bg-yellow-700">메모 저장</button>
+              </div>
+            </div>
+          )}
+
+          <div className="p-8">
+            {report.type === 'trend' && (
+              <div className="space-y-12">
+                {report.trendData?.length > 0 && <section>
+                  <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-indigo-500 pl-3">난이도 변화 추이</h2>
+                  <div className="bg-gray-50 rounded-xl p-6 border flex items-end justify-around h-64">
+                    {report.trendData.map((data, idx) => (
+                      <div key={idx} className="flex flex-col items-center w-1/5 group">
+                        <span className="text-indigo-600 font-bold mb-2">{data.score}</span>
+                        <div className="w-16 bg-gradient-to-t from-indigo-300 to-indigo-500 rounded-t-sm relative transition-all duration-500 group-hover:bg-indigo-600" style={{ height: `${data.score}%` }}></div>
+                        <span className="mt-4 text-sm font-medium text-gray-600">{data.examName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>}
+
+                {report.scopeChanges?.length > 0 && <section>
+                  <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-blue-500 pl-3">주요 출제 범위 및 특징 변화</h2>
+                  <div className="space-y-4">
+                    {report.scopeChanges.map((change, idx) => (
+                      <div key={idx} className="flex items-start gap-4 bg-white border p-4 rounded-lg shadow-sm">
+                        <div className="bg-blue-100 text-blue-700 font-bold px-3 py-1 rounded text-sm whitespace-nowrap">{change.year}</div>
+                        <p className="text-gray-700 leading-relaxed">{change.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>}
+
+                {report.teacherStyles?.length > 0 && <section>
+                  <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-emerald-500 pl-3">선생님별 출제 스타일 비교</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-gray-100 text-gray-700">
+                          <th className="p-3 border w-1/4">선생님</th><th className="p-3 border w-1/4">주요 출제 유형</th><th className="p-3 border w-1/2">특징 및 대비 전략</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {report.teacherStyles.map((teacher, idx) => (
+                          <tr key={idx} className="border-b hover:bg-gray-50">
+                            <td className="p-3 border font-bold text-emerald-800">{teacher.name}</td><td className="p-3 border text-gray-600">{teacher.type}</td><td className="p-3 border text-gray-600 text-sm">{teacher.strategy}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>}
+              </div>
+            )}
+
+            {report.type === 'individual' && (
+              <div className="space-y-8">
+                <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <InfoBox label="출제 선생님" value={report.teacher} />
+                  <InfoBox label="시험 난이도" value={report.difficulty} />
+                  <InfoBox label="예상 1등급 컷" value={report.gradeCuts?.grade1} />
+                  <InfoBox label="객관식 / 주관식" value={`${report.mcCount || 0}문항 / ${(report.saCount||0) + (report.essayCount||0)}문항`} />
+                  <InfoBox label="부교재" value={report.suppBook} colSpan={2} />
+                  <InfoBox label="학교 프린트" value={report.print} colSpan={2} />
+                </section>
+
+                <section className="bg-gray-50 p-5 rounded-xl border">
+                  <h3 className="font-bold text-gray-800 mb-2">시험 범위</h3>
+                  <p className="text-gray-600 text-sm leading-relaxed">{report.scope || '입력된 정보가 없습니다.'}</p>
+                </section>
+
+                <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="border border-indigo-100 rounded-xl p-5 bg-white shadow-sm">
+                    <h3 className="font-bold text-indigo-900 mb-3 text-lg">📝 시험 총평</h3>
+                    <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.review}</p>
+                  </div>
+                  <div className="border border-red-100 rounded-xl p-5 bg-white shadow-sm">
+                    <h3 className="font-bold text-red-800 mb-3 text-lg">💡 특이사항 및 킬러문항</h3>
+                    <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.specialNotes}</p>
+                  </div>
+                </section>
+
+                {report.questions?.length > 0 && <section>
+                  <h2 className="text-xl font-bold text-gray-800 mb-4 border-l-4 border-indigo-500 pl-3">상세 문항 분석</h2>
+                  <div className="flex flex-wrap gap-3">
+                    {report.questions.map((q, idx) => (
+                      <button key={idx} onClick={() => setViewState({ ...viewState, selectedQuestion: q })} className={`px-4 py-2 rounded-lg border transition-all flex flex-col items-center min-w-[80px] ${viewState.selectedQuestion?.qNum === q.qNum ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white hover:bg-gray-50 text-gray-700'}`}>
+                        <span className="font-bold text-lg">{q.qNum}번</span>
+                        {q.tags && <span className={`text-[10px] px-1.5 py-0.5 rounded mt-1 ${q.tags.includes('킬러') ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{q.tags}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </section>}
+
+                {viewState.selectedQuestion && (
+                  <div className="mt-6 border-2 border-indigo-100 rounded-xl p-6 bg-white animate-fade-in">
+                    <div className="flex justify-between items-center mb-6 border-b pb-4">
+                      <h3 className="text-2xl font-bold text-indigo-900">{viewState.selectedQuestion.qNum}번 문항 상세 분석</h3>
+                      <button onClick={() => setViewState({...viewState, selectedQuestion: null})} className="text-gray-400 hover:text-gray-600">닫기 ✕</button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                      <div className="space-y-4">
+                        <div className="border rounded bg-gray-50 p-2 text-center h-48 flex items-center justify-center text-gray-400 overflow-hidden">
+                          {viewState.selectedQuestion.qImage ? <img src={viewState.selectedQuestion.qImage} alt="실제문제" className="max-h-full object-contain" /> : "[실제 학교 문제 이미지 (URL 없음)]"}
+                        </div>
+                        <div className="border-2 border-dashed border-indigo-200 rounded bg-indigo-50/30 p-2 text-center h-48 flex items-center justify-center text-indigo-400 font-medium overflow-hidden">
+                          {viewState.selectedQuestion.simImage ? <img src={viewState.selectedQuestion.simImage} alt="학원교재 유사문항" className="max-h-full object-contain" /> : "[우리 학원 교재 유사 문항 (URL 없음)]"}
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <DetailRow label="단원 및 평가내용" value={viewState.selectedQuestion.unit} />
+                        <DetailRow label="난이도" value={viewState.selectedQuestion.diff} />
+                        <DetailRow label="배점" value={`${viewState.selectedQuestion.score}점`} />
+                        <DetailRow label="출처 분석" value={viewState.selectedQuestion.source} />
+                        <div className="pt-4 mt-4 border-t border-gray-100">
+                          <p className="text-sm text-gray-600 leading-relaxed"><span className="font-bold text-indigo-800">문항 분석평: </span>{viewState.selectedQuestion.analysis}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function InfoBox({ label, value, colSpan = 1 }) {
     return (
@@ -377,60 +632,8 @@ export default function SchoolStrategy({ currentUser }) {
     return (
       <div className="flex border-b border-gray-100 pb-2">
         <span className="w-1/3 text-sm font-bold text-gray-500">{label}</span>
-        <span className="w-2/3 text-sm text-gray-800 font-medium">{value}</span>
+        <span className="w-2/3 text-sm text-gray-800 font-medium">{value || '-'}</span>
       </div>
     );
-  }
-
-  // --- 샘플 데이터 주입 함수 ---
-  async function addSampleData() {
-    try {
-      await addDoc(collection(db, DB_COLLECTION), {
-        type: 'individual',
-        school: '영일고', grade: '1학년', term: '1-1 중간고사', subject: '수학',
-        teacher: '김수학', difficulty: '상',
-        mcCount: 15, saCount: 5, essayCount: 2,
-        suppBook: '올림포스 고난도', print: '학교 자체 제공 20제',
-        scope: '다항식의 연산 ~ 이차방정식과 이차함수',
-        review: '전반적으로 계산이 복잡하고 시간이 부족했을 것으로 예상됨. 특히 서술형에서 감점 요소가 많음.',
-        specialNotes: '서술형 2번은 작년 수능특강 연계 문항으로 킬러 문항이었음.',
-        gradeCuts: { grade1: '88점', grade2: '79점' },
-        internalMemo: '김수학 선생님은 항상 부교재 뒷부분에서 서술형을 내는 경향이 있음. 다음 기말 대비때 부교재 3회독 필수.',
-        isDeleted: false,
-        createdAt: new Date(),
-        updatedAt: '2024.04.28',
-        questions: [
-          { qNum: 1, tags: '기본', unit: '다항식의 연산', diff: '하', score: 3.5, source: '교과서' },
-          { qNum: 15, tags: '킬러', unit: '이차방정식과 이차함수', diff: '상', score: 5.5, source: '모의고사 기출 변형', analysis: '판별식을 두 번 써야 하는 복합 유형입니다.' }
-        ]
-      });
-
-      await addDoc(collection(db, DB_COLLECTION), {
-        type: 'trend',
-        school: '영일고', grade: '1학년', term: '1-1 중간고사', subject: '수학',
-        updatedAt: '2024.04.30',
-        isDeleted: false,
-        createdAt: new Date(),
-        trendData: [
-          { examName: '22년 1학기', score: 65 },
-          { examName: '22년 2학기', score: 70 },
-          { examName: '23년 1학기', score: 85 },
-          { examName: '23년 2학기', score: 80 },
-          { examName: '24년 1학기', score: 95 }
-        ],
-        scopeChanges: [
-          { year: '2022~2023', desc: '주로 교과서와 기본 프린트 위주의 평이한 출제 방식 유지' },
-          { year: '2024 현재', desc: '부교재(고난도) 반영 비율이 40% 이상으로 증가하며, 모의고사 기출 변형이 본격적으로 등장함.' }
-        ],
-        teacherStyles: [
-          { name: '김수학', type: '서술형 깐깐함, 모의고사 변형', strategy: '풀이 과정을 정확히 쓰는 연습과 고난도 기출 3회독 필요' },
-          { name: '이개념', type: '교과서 구석구석 꼼꼼한 출제', strategy: '교과서 예제, 유제 및 날개 문제까지 암기 수준으로 학습' }
-        ]
-      });
-      alert('샘플 리포트가 추가되었습니다.');
-    } catch (e) {
-      console.error(e);
-      alert('샘플 데이터 추가 실패: 권한이나 네트워크 상태를 확인해주세요.');
-    }
   }
 }

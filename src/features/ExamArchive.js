@@ -78,8 +78,13 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // 최신순 정렬 (연도 역순)
-            results.sort((a, b) => b.year.localeCompare(a.year) || b.semester.localeCompare(a.semester));
+// [UX/UX 심리학 반영] 1차: 학교명 가나다순, 2차: 같은 학교일 경우 최신 연도/학기순 정렬
+            // localeCompare를 사용하여 브라우저 단에서 빠르고 비용 없이 정렬을 수행합니다.
+            results.sort((a, b) => 
+                a.schoolName.localeCompare(b.schoolName) || 
+                b.year.localeCompare(a.year) || 
+                b.semester.localeCompare(a.semester)
+            );
             setExams(results);
         } catch (error) {
             if (error.code === 'permission-denied') {
