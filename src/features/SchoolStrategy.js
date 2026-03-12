@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../firebase'; // 기존 프로젝트의 firebase 설정 경로
-import { collection, onSnapshot, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase'; 
+import { collection, onSnapshot, doc, updateDoc, addDoc } from 'firebase/firestore';
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -10,12 +10,14 @@ const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" heigh
 const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>;
 const IconArrowLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>;
 
+// 통합 DB 경로 상수 설정
+const APP_ID = 'imperial-clinic-v1';
+const DB_COLLECTION = `artifacts/${APP_ID}/public/data/school_strategies`;
+
 export default function SchoolStrategy({ currentUser }) {
-  // 실제 환경에서는 Context나 Props에서 가져옵니다. 
-  // 테스트를 위해 currentUser가 없을 경우 임시 관리자 계정으로 세팅합니다.
   const user = currentUser || { role: 'admin', school: '영일고' }; 
   
-  // 관리자 설정: 현재 활성화된 내신 기간 (추후 DB에서 관리 가능)
+  // 관리자 설정: 현재 활성화된 내신 기간
   const currentActiveTerm = "1-1 중간고사"; 
 
   const [reports, setReports] = useState([]);
@@ -23,42 +25,50 @@ export default function SchoolStrategy({ currentUser }) {
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
 
-  // 권한 확인
-  const isStaff = ['admin', 'instructor', 'assistant'].includes(user.role);
+  // App.js 기준 직급명으로 권한 확인 (instructor, assistant -> lecturer, ta 로 수정)
+  const isStaff = ['admin', 'lecturer', 'ta'].includes(user.role);
   const isAdmin = user.role === 'admin';
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
-  // Firestore 데이터 실시간 구독
+  // Firestore 데이터 실시간 구독 (에러 핸들링 포함)
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'school_strategies'), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // 인메모리 필터링 (Firestore 복합 Index 에러 방지)
-      const filteredData = data.filter(report => {
-        if (isStudentOrParent) {
-          // 학생/학부모: 본인 학교 + 현재 활성 학기 + 삭제되지 않은 리포트만
-          return !report.isDeleted && 
-                 report.term === currentActiveTerm && 
-                 report.school === user.school;
-        } else if (isAdmin) {
-          // 관리자: 전부 볼 수 있음 (삭제된 것도 복구를 위해 노출)
-          return true;
-        } else {
-          // 강사/조교: 삭제되지 않은 리포트만
-          return !report.isDeleted;
-        }
-      });
+    const unsubscribe = onSnapshot(
+      collection(db, DB_COLLECTION), 
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        
+        // 인메모리 필터링
+        const filteredData = data.filter(report => {
+          if (isStudentOrParent) {
+            // 학생/학부모: 본인 학교 + 현재 활성 학기 + 삭제되지 않은 리포트만
+            return !report.isDeleted && 
+                   report.term === currentActiveTerm && 
+                   report.school === user.school;
+          } else if (isAdmin) {
+            // 관리자: 전부 볼 수 있음 (삭제된 것도 복구를 위해 노출)
+            return true;
+          } else {
+            // 강사/조교: 삭제되지 않은 리포트만
+            return !report.isDeleted;
+          }
+        });
 
-      // 정렬: 경향 분석(trend)이 항상 위로, 그 다음 개별 분석(individual)
-      filteredData.sort((a, b) => {
-        if (a.type === 'trend' && b.type !== 'trend') return -1;
-        if (a.type !== 'trend' && b.type === 'trend') return 1;
-        return b.createdAt - a.createdAt; // 최신순
-      });
+        // 정렬: 경향 분석(trend)이 항상 위로, 그 다음 최신순
+        filteredData.sort((a, b) => {
+          if (a.type === 'trend' && b.type !== 'trend') return -1;
+          if (a.type !== 'trend' && b.type === 'trend') return 1;
+          return b.createdAt - a.createdAt; 
+        });
 
-      setReports(filteredData);
-      setLoading(false);
-    });
+        setReports(filteredData);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Firestore 데이터 불러오기 에러:", error);
+        alert("데이터를 불러오는데 실패했습니다. 권한을 확인해주세요.");
+        setLoading(false); // 무한 로딩 방지
+      }
+    );
 
     return () => unsubscribe();
   }, [user, isStudentOrParent, isAdmin]);
@@ -66,21 +76,21 @@ export default function SchoolStrategy({ currentUser }) {
   // Soft Delete 로직
   const handleSoftDelete = async (id) => {
     if (window.confirm('이 리포트를 삭제하시겠습니까? (관리자만 복구 가능)')) {
-      await updateDoc(doc(db, 'school_strategies', id), { isDeleted: true });
+      await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: true });
     }
   };
 
   // 관리자 복구 로직
   const handleRestore = async (id) => {
     if (window.confirm('이 리포트를 다시 복구하시겠습니까?')) {
-      await updateDoc(doc(db, 'school_strategies', id), { isDeleted: false });
+      await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: false });
     }
   };
 
   // 교직원 전용 메모 저장
   const saveInternalMemo = async (id) => {
     if (!memoInputs[id]) return;
-    await updateDoc(doc(db, 'school_strategies', id), {
+    await updateDoc(doc(db, DB_COLLECTION, id), {
       internalMemo: memoInputs[id]
     });
     alert('교직원 전용 메모가 저장되었습니다.');
@@ -106,7 +116,6 @@ export default function SchoolStrategy({ currentUser }) {
                 : "우리 학원만의 철저한 학교별 내신 분석 및 경향 자료입니다."}
             </p>
           </div>
-          {/* 테스트용 샘플 추가 버튼 (실제 운영시 입력 폼 모달로 교체 권장) */}
           {isStaff && (
             <button 
               onClick={() => addSampleData()} 
@@ -117,7 +126,7 @@ export default function SchoolStrategy({ currentUser }) {
           )}
         </div>
 
-        {/* 1. 경향 분석 리스트 (항상 최상단) */}
+        {/* 1. 경향 분석 리스트 */}
         <section>
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
             <IconChart /> 과목 경향 분석
@@ -134,7 +143,6 @@ export default function SchoolStrategy({ currentUser }) {
                   </div>
                   <p className="text-sm text-gray-600 mt-2">과목: {report.subject} | 업데이트: {report.updatedAt}</p>
                   
-                  {/* 삭제/복구 액션 */}
                   {isStaff && (
                     <div className="mt-4 flex justify-end gap-2" onClick={e => e.stopPropagation()}>
                       {!report.isDeleted && <button onClick={() => handleSoftDelete(report.id)} className="text-red-500 hover:text-red-700 p-1"><IconTrash /></button>}
@@ -224,12 +232,8 @@ export default function SchoolStrategy({ currentUser }) {
         )}
 
         <div className="p-8">
-          {/* ==========================================
-              경향 분석 렌더링 (학부모 설명회 퀄리티)
-          ========================================== */}
           {report.type === 'trend' && (
             <div className="space-y-12">
-              {/* 1. 난이도 변화 추이 */}
               <section>
                 <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-indigo-500 pl-3">난이도 변화 추이</h2>
                 <div className="bg-gray-50 rounded-xl p-6 border flex items-end justify-around h-64">
@@ -243,7 +247,6 @@ export default function SchoolStrategy({ currentUser }) {
                 </div>
               </section>
 
-              {/* 2. 주요 출제 범위 변화 */}
               <section>
                 <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-blue-500 pl-3">주요 출제 범위 및 특징 변화</h2>
                 <div className="space-y-4">
@@ -256,7 +259,6 @@ export default function SchoolStrategy({ currentUser }) {
                 </div>
               </section>
 
-              {/* 3. 선생님별 스타일 비교 */}
               <section>
                 <h2 className="text-xl font-bold text-gray-800 mb-6 border-l-4 border-emerald-500 pl-3">선생님별 출제 스타일 비교</h2>
                 <div className="overflow-x-auto">
@@ -283,12 +285,8 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
           )}
 
-          {/* ==========================================
-              개별 시험 분석 렌더링
-          ========================================== */}
           {report.type === 'individual' && (
             <div className="space-y-8">
-              {/* 기본 시험 정보 Grid */}
               <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <InfoBox label="출제 선생님" value={report.teacher} />
                 <InfoBox label="시험 난이도" value={report.difficulty} />
@@ -300,7 +298,7 @@ export default function SchoolStrategy({ currentUser }) {
 
               <section className="bg-gray-50 p-5 rounded-xl border">
                 <h3 className="font-bold text-gray-800 mb-2">시험 범위</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">{report.scope}</p>
+                <p className="text-gray-600 text-sm leading-relaxed">{report.scope || '시험 범위 정보가 없습니다.'}</p>
               </section>
 
               <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -314,7 +312,6 @@ export default function SchoolStrategy({ currentUser }) {
                 </div>
               </section>
 
-              {/* 문항 리스트 */}
               <section>
                 <h2 className="text-xl font-bold text-gray-800 mb-4 border-l-4 border-indigo-500 pl-3">상세 문항 분석</h2>
                 <div className="flex flex-wrap gap-3">
@@ -331,7 +328,6 @@ export default function SchoolStrategy({ currentUser }) {
                 </div>
               </section>
 
-              {/* 개별 문항 클릭 시 상세 뷰 */}
               {viewState.selectedQuestion && (
                 <div className="mt-6 border-2 border-indigo-100 rounded-xl p-6 bg-white animate-fade-in">
                   <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -340,7 +336,6 @@ export default function SchoolStrategy({ currentUser }) {
                   </div>
                   
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* 이미지 영역 */}
                     <div className="space-y-4">
                       <div className="border rounded bg-gray-50 p-2 text-center h-48 flex items-center justify-center text-gray-400">
                         {viewState.selectedQuestion.qImage ? <img src={viewState.selectedQuestion.qImage} alt="실제문제" className="max-h-full" /> : "[실제 학교 문제 이미지]"}
@@ -350,7 +345,6 @@ export default function SchoolStrategy({ currentUser }) {
                       </div>
                     </div>
                     
-                    {/* 텍스트 정보 영역 */}
                     <div className="space-y-4">
                       <DetailRow label="단원 및 평가내용" value={viewState.selectedQuestion.unit} />
                       <DetailRow label="난이도" value={viewState.selectedQuestion.diff} />
@@ -370,7 +364,6 @@ export default function SchoolStrategy({ currentUser }) {
     </div>
   );
 
-  // --- 헬퍼 컴포넌트 ---
   function InfoBox({ label, value, colSpan = 1 }) {
     return (
       <div className={`bg-white border rounded-lg p-4 shadow-sm col-span-${colSpan}`}>
@@ -389,16 +382,16 @@ export default function SchoolStrategy({ currentUser }) {
     );
   }
 
-  // --- 샘플 데이터 주입 함수 (테스트용) ---
+  // --- 샘플 데이터 주입 함수 ---
   async function addSampleData() {
     try {
-      // 1. 개별 분석 리포트 샘플
-      await addDoc(collection(db, 'school_strategies'), {
+      await addDoc(collection(db, DB_COLLECTION), {
         type: 'individual',
         school: '영일고', grade: '1학년', term: '1-1 중간고사', subject: '수학',
         teacher: '김수학', difficulty: '상',
         mcCount: 15, saCount: 5, essayCount: 2,
         suppBook: '올림포스 고난도', print: '학교 자체 제공 20제',
+        scope: '다항식의 연산 ~ 이차방정식과 이차함수',
         review: '전반적으로 계산이 복잡하고 시간이 부족했을 것으로 예상됨. 특히 서술형에서 감점 요소가 많음.',
         specialNotes: '서술형 2번은 작년 수능특강 연계 문항으로 킬러 문항이었음.',
         gradeCuts: { grade1: '88점', grade2: '79점' },
@@ -412,8 +405,7 @@ export default function SchoolStrategy({ currentUser }) {
         ]
       });
 
-      // 2. 경향 분석 리포트 샘플
-      await addDoc(collection(db, 'school_strategies'), {
+      await addDoc(collection(db, DB_COLLECTION), {
         type: 'trend',
         school: '영일고', grade: '1학년', term: '1-1 중간고사', subject: '수학',
         updatedAt: '2024.04.30',
@@ -424,7 +416,7 @@ export default function SchoolStrategy({ currentUser }) {
           { examName: '22년 2학기', score: 70 },
           { examName: '23년 1학기', score: 85 },
           { examName: '23년 2학기', score: 80 },
-          { examName: '24년 1학기', score: 95 } // 최근 가장 어려워짐
+          { examName: '24년 1학기', score: 95 }
         ],
         scopeChanges: [
           { year: '2022~2023', desc: '주로 교과서와 기본 프린트 위주의 평이한 출제 방식 유지' },
@@ -438,7 +430,7 @@ export default function SchoolStrategy({ currentUser }) {
       alert('샘플 리포트가 추가되었습니다.');
     } catch (e) {
       console.error(e);
-      alert('추가 실패');
+      alert('샘플 데이터 추가 실패: 권한이나 네트워크 상태를 확인해주세요.');
     }
   }
 }
