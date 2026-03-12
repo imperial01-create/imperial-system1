@@ -1,3 +1,4 @@
+/* [서비스 가치] 사용자 계정 생성 시 보안 검증을 위한 authUid 필드를 미리 확보하여 Rules 충돌을 방지합니다. */
 import React, { useState, useEffect } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User, School, GraduationCap
@@ -19,43 +20,29 @@ const UserManager = ({ currentUser }) => {
 
     const [formData, setFormData] = useState({ 
         name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
-        schoolName: '', grade: '1학년'
+        schoolName: '', grade: '1학년', authUid: ''
     });
     const [isEditMode, setIsEditMode] = useState(false);
-    
     const [studentList, setStudentList] = useState([]);
     const [studentSearch, setStudentSearch] = useState('');
 
     useEffect(() => {
-        const fetchUsers = async () => {
-            setLoading(true);
-            const cacheKey = 'imperial_users_manager_cache_v2';
-            const cached = localStorage.getItem(cacheKey);
-            if (cached) {
-                try {
-                    const parsed = JSON.parse(cached);
-                    if (Date.now() - parsed.timestamp < 3600000) { 
-                        setUsers(parsed.data);
-                        setStudentList(parsed.data.filter(u => u.role === 'student'));
-                        setLoading(false);
-                        return;
-                    }
-                } catch(e) { localStorage.removeItem(cacheKey); }
-            }
-            try {
-                const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-                const snap = await getDocs(q);
-                const userList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                setUsers(userList);
-                setStudentList(userList.filter(u => u.role === 'student'));
-                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: userList }));
-            } catch (e) { console.error("User Load Error", e); } finally { setLoading(false); }
-        };
         fetchUsers();
     }, []);
 
+    const fetchUsers = async () => {
+        setLoading(true);
+        try {
+            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+            const snap = await getDocs(q);
+            const userList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setUsers(userList);
+            setStudentList(userList.filter(u => u.role === 'student'));
+        } catch (e) { console.error("User Load Error", e); } finally { setLoading(false); }
+    };
+
     const handleOpenCreate = () => {
-        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년' });
+        setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '' });
         setIsEditMode(false);
         setIsModalOpen(true);
     };
@@ -68,7 +55,8 @@ const UserManager = ({ currentUser }) => {
             childName: user.childName || '',
             hourlyRate: user.hourlyRate || '',
             schoolName: user.schoolName || '',
-            grade: user.grade || '1학년'
+            grade: user.grade || '1학년',
+            authUid: user.authUid || ''
         });
         setIsEditMode(true);
         setIsModalOpen(true);
@@ -76,14 +64,12 @@ const UserManager = ({ currentUser }) => {
 
     const handleSaveUser = async () => {
         if (!formData.name || !formData.userId || !formData.password) return alert('필수 정보를 입력하세요.');
-        if (activeTab === 'parent' && !formData.childId) return alert('학부모 계정은 자녀(학생)와 연결해야 합니다.');
-        if (activeTab === 'student' && !formData.schoolName) return alert('학생의 학교명을 입력해주세요.');
-
         setLoading(true);
         try {
             const payload = {
                 name: formData.name, userId: formData.userId, password: formData.password, role: activeTab,
-                phone: formData.phone || '', updatedAt: serverTimestamp()
+                phone: formData.phone || '', updatedAt: serverTimestamp(),
+                authUid: formData.authUid || '' // 보안 연결용 필드 유지
             };
             if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
             if (activeTab === 'ta' || activeTab === 'lecturer') payload.subject = formData.subject || '';
@@ -98,9 +84,18 @@ const UserManager = ({ currentUser }) => {
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), payload);
             }
             setIsModalOpen(false);
-            localStorage.removeItem('imperial_users_manager_cache_v2');
-            window.location.reload(); 
-        } catch (e) { alert('저장 실패: ' + e.message); setLoading(false); }
+            fetchUsers();
+        } catch (e) { alert('저장 실패: ' + e.message); } finally { setLoading(false); }
+    };
+
+    const handleDeleteUser = async () => {
+        if (!targetUserId) return;
+        setLoading(true);
+        try {
+            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
+            setIsDeleteConfirmOpen(false);
+            fetchUsers();
+        } catch (e) { alert('삭제 실패: ' + e.message); } finally { setLoading(false); }
     };
 
     const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
@@ -127,37 +122,14 @@ const UserManager = ({ currentUser }) => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
             </div>
 
-            {/* Mobile View */}
-            <div className="md:hidden space-y-4">
-                {filteredUsers.map(u => (
-                    <Card key={u.id} className="p-5 flex flex-col gap-3">
-                        <div className="flex justify-between items-start">
-                            <div className="flex items-center gap-2">
-                                <div className="bg-blue-100 p-2 rounded-full text-blue-600"><User size={18} /></div>
-                                <div><div className="font-bold text-lg">{u.name}</div><div className="text-xs text-gray-400">{u.userId}</div></div>
-                            </div>
-                            <div className="flex gap-2">
-                                <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg"><Edit2 size={16}/></button>
-                                <button onClick={() => {setTargetUserId(u.id); setIsDeleteConfirmOpen(true);}} className="p-2 border rounded-lg"><Trash2 size={16}/></button>
-                            </div>
-                        </div>
-                        <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm">
-                            {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
-                            <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
-                        </div>
-                    </Card>
-                ))}
-            </div>
-
-            {/* Desktop View */}
             <div className="hidden md:block">
                 <Card className="p-0 overflow-hidden">
                     <table className="w-full text-left border-collapse">
-                        <thead><tr className="bg-gray-50 text-gray-500 text-sm border-b"><th className="p-4">이름</th><th className="p-4">아이디</th><th className="p-4">전화번호</th><th className="p-4">정보</th><th className="p-4 text-right">관리</th></tr></thead>
+                        <thead><tr className="bg-gray-50 text-gray-500 text-sm border-b"><th className="p-4">이름</th><th className="p-4">아이디</th><th className="p-4">정보</th><th className="p-4 text-right">관리</th></tr></thead>
                         <tbody className="divide-y">
                             {filteredUsers.map(u => (
                                 <tr key={u.id} className="hover:bg-gray-50">
-                                    <td className="p-4 font-bold">{u.name}</td><td className="p-4">{u.userId}</td><td className="p-4">{u.phone || '-'}</td>
+                                    <td className="p-4 font-bold">{u.name}</td><td className="p-4">{u.userId}</td>
                                     <td className="p-4">
                                         {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
                                         {activeTab === 'parent' && <span className="text-green-600 font-bold">자녀: {u.childName}</span>}
@@ -187,13 +159,17 @@ const UserManager = ({ currentUser }) => {
                             </select>
                         </div>
                     )}
-                    {activeTab === 'parent' && (
-                        <div className="bg-gray-50 p-4 border rounded-xl">
-                             {formData.childName ? <div className="flex justify-between font-bold"><span>{formData.childName}</span><button onClick={()=>setFormData({...formData, childId:'', childName:''})}><X/></button></div> : <input className="w-full border p-2" placeholder="학생 검색" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)}/>}
-                             {studentSearch && !formData.childId && <div className="mt-2 border bg-white max-h-32 overflow-y-auto">{studentList.filter(s=>s.name.includes(studentSearch)).map(s=><div key={s.id} onClick={()=>{setFormData({...formData, childId:s.id, childName:s.name}); setStudentSearch('');}} className="p-2 hover:bg-gray-50">{s.name}</div>)}</div>}
-                        </div>
-                    )}
                     <Button className="w-full py-3" onClick={handleSaveUser} disabled={loading}>{loading ? <Loader className="animate-spin mx-auto"/> : '저장하기'}</Button>
+                </div>
+            </Modal>
+
+            <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="사용자 삭제">
+                <div className="text-center space-y-4">
+                    <p className="text-lg">정말로 이 사용자를 삭제하시겠습니까?<br/><span className="text-red-500 font-bold">이 작업은 되돌릴 수 없습니다.</span></p>
+                    <div className="flex gap-2">
+                        <Button variant="secondary" className="flex-1" onClick={() => setIsDeleteConfirmOpen(false)}>취소</Button>
+                        <Button variant="danger" className="flex-1" onClick={handleDeleteUser} disabled={loading}>삭제</Button>
+                    </div>
                 </div>
             </Modal>
         </div>

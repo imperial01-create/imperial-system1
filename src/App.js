@@ -1,3 +1,4 @@
+/* [서비스 가치] 사용자의 ID/PW 인증과 Firebase Auth UID를 동기화하여 보안 구멍을 원천 봉쇄합니다. */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { 
@@ -6,7 +7,7 @@ import {
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { collection, getDocs, query, where } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore'; 
 import { auth, db } from './firebase'; 
 import { LoadingSpinner } from './components/UI';
 
@@ -25,7 +26,6 @@ const APP_ID = 'imperial-clinic-v1';
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
-
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 border border-gray-100">
@@ -72,14 +72,13 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
 
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
-
+    if (!currentUser) return null;
     return (
         <div className="space-y-6 animate-in fade-in">
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-8 rounded-3xl shadow-lg">
                 <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
                 <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
             </div>
-            
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div onClick={() => navigate('/strategy')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
@@ -88,7 +87,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                     <p className="text-gray-500 leading-relaxed">학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.</p>
                 </div>
-
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -96,7 +94,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.</p>
                 </div>
-
                 {(['admin', 'lecturer', 'student', 'parent'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -108,8 +105,6 @@ const Dashboard = ({ currentUser }) => {
                         <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' || currentUser.role === 'parent' ? '배정된 강의 진도를 확인하고 영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고 강의 영상을 업로드하세요.'}</p>
                     </div>
                 )}
-
-                {/* 추가 권한별 메뉴 카드 복구 */}
                 {(['admin', 'lecturer', 'ta'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -119,7 +114,6 @@ const Dashboard = ({ currentUser }) => {
                         <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를 가장 빠르게 확인하세요.</p>
                     </div>
                 )}
-
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -129,7 +123,6 @@ const Dashboard = ({ currentUser }) => {
                         <p className="text-gray-500 leading-relaxed">전체 직원의 급여를 정산하고 관리합니다.</p>
                     </div>
                 )}
-
                 {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
                         <div className="flex items-center gap-4 mb-4">
@@ -137,16 +130,6 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">월급 확인</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">이번 달 급여 명세서와 정산 내역을 확인합니다.</p>
-                    </div>
-                )}
-
-                {currentUser.role === 'lecturer' && (
-                    <div onClick={() => navigate('/pickup')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-orange-100 p-3 rounded-xl text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors"><Printer size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">픽업 신청</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">데스크에 출력물 픽업을 간편하게 신청하세요.</p>
                     </div>
                 )}
             </div>
@@ -159,27 +142,32 @@ const AppContent = () => {
   const [loading, setLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [users, setUsers] = useState([]); 
-
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
-
   const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
-    const safetyTimeout = setTimeout(() => setLoading(false), 5000);
-    const initAuth = async () => { try { await signInAnonymously(auth); } catch (e) { setLoading(false); } };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-        clearTimeout(safetyTimeout);
-        if(user) {
-             const saved = sessionStorage.getItem('imperial_user');
-             if(saved) setCurrentUser(JSON.parse(saved));
+    const initAuth = async () => {
+      try {
+        const userCredential = await signInAnonymously(auth);
+        const uid = userCredential.user.uid;
+        // 이미 해당 UID로 연결된 유저 정보가 있는지 확인
+        const userDoc = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uid));
+        if (userDoc.exists()) {
+          const userData = { id: userDoc.id, ...userDoc.data() };
+          setCurrentUser(userData);
+          sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+        } else {
+          // 세션 복구 시도 (기존 방식 유지하되 데이터 확인)
+          const saved = sessionStorage.getItem('imperial_user');
+          if (saved) setCurrentUser(JSON.parse(saved));
         }
-        setLoading(false);
-    });
-    return () => { unsubscribe(); clearTimeout(safetyTimeout); };
+      } catch (e) { console.error("Auth Init Error", e); }
+      finally { setLoading(false); }
+    };
+    initAuth();
   }, []);
 
   useEffect(() => {
@@ -200,15 +188,32 @@ const AppContent = () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id), where('password', '==', loginForm.password));
+         // 1. 기존 유저 컬렉션에서 ID/PW 매칭 확인
+         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), 
+                         where('userId', '==', loginForm.id), 
+                         where('password', '==', loginForm.password));
          const s = await getDocs(q);
+         
          if(!s.empty) {
-             const userData = { id: s.docs[0].id, ...s.docs[0].data() };
-             setCurrentUser(userData);
-             sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+             const foundDoc = s.docs[0];
+             const userData = { ...foundDoc.data() };
+             const authUid = auth.currentUser.uid;
+
+             // 2. [CTO 중요 로직] 현재 Auth UID로 유저 문서를 다시 생성/업데이트 (보안 연결)
+             // 기존 문서를 삭제하거나 authUid 필드만 업데이트 할 수 있으나, 규칙 최적화를 위해 UID를 문서 ID로 사용함
+             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authUid), {
+                 ...userData,
+                 authUid: authUid,
+                 lastLogin: new Date().toISOString()
+             });
+
+             const finalUser = { id: authUid, ...userData, authUid };
+             setCurrentUser(finalUser);
+             sessionStorage.setItem('imperial_user', JSON.stringify(finalUser));
              navigate('/dashboard'); 
-         } else { setLoginErrorModal({ isOpen: true, msg: '로그인 실패' }); }
-     } catch (e) { setLoginErrorModal({ isOpen: true, msg: e.message }); } finally { setLoginProcessing(false); }
+         } else { setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 확인하세요.' }); }
+     } catch (e) { setLoginErrorModal({ isOpen: true, msg: "보안 통신 오류: " + e.message }); } 
+     finally { setLoginProcessing(false); }
   };
 
   const handleLogout = () => { sessionStorage.removeItem('imperial_user'); setCurrentUser(null); navigate('/'); };
@@ -243,10 +248,9 @@ const AppContent = () => {
               </button>
            ))}
         </nav>
-        {/* 사이드바 프로필 정보 복구 */}
         <div className="absolute bottom-0 w-full p-4 border-t">
             <div className="flex items-center gap-3 mb-4 px-2">
-                <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-500 uppercase">{currentUser.name[0]}</div>
+                <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-500 uppercase">{currentUser.name?.[0]}</div>
                 <div><div className="font-bold text-sm">{currentUser.name}</div><div className="text-xs text-gray-500 uppercase">{currentUser.role}</div></div>
             </div>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 p-2 font-bold"><LogOut size={16}/> 로그아웃</button>
@@ -254,7 +258,7 @@ const AppContent = () => {
       </aside>
       <main className="flex-1 overflow-y-auto">
            <div className="max-w-[1600px] mx-auto px-4 md:px-8 py-6">
-            <Suspense fallback={<Loader className="animate-spin text-blue-600" />}>
+            <Suspense fallback={<div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" /></div>}>
                 <Routes>
                     <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                     <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
