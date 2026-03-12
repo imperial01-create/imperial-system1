@@ -29,7 +29,6 @@ const getLocalToday = () => {
   return new Date(d.getTime() - offset).toISOString().split('T')[0];
 };
 
-// [추가] 3주 후 날짜 계산 (데이터 효율화용)
 const getFutureDate = (days) => {
   const d = new Date();
   d.setDate(d.getDate() + days);
@@ -305,7 +304,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         return map;
     }, [users]);
 
-    // [최적화] 세션 데이터 로드 (Cache-First)
     const fetchSessions = useCallback(async (forceRefresh = false) => {
         setAppLoading(true);
         const year = currentDate.getFullYear();
@@ -318,7 +316,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
                 if (cached) {
                     try {
                         const parsed = JSON.parse(cached);
-                        // [CTO 최적화] 관리자는 1분(60000ms)마다 새로고침 유도, 학생/조교는 1시간(3600000ms) 캐시 유지로 비용 절감
                         const cacheTTL = currentUser.role === 'admin' ? 60000 : 3600000; 
                         if (Date.now() - parsed.timestamp < cacheTTL) { 
                             setSessionMap(parsed.data);
@@ -335,12 +332,11 @@ const ClinicDashboard = ({ currentUser, users }) => {
 
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
                 const today = getLocalToday();
-                // [수정] 데이터 효율화: 접속일 기준 3주(21일) 후까지만 데이터 로드
                 const endDate = getFutureDate(21);
                 sessionQuery = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), 
                     where('date', '>=', today), 
-                    where('date', '<=', endDate) // 3주 제한 적용
+                    where('date', '<=', endDate) 
                 );
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -366,7 +362,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         fetchSessions(false);
     }, [fetchSessions]);
 
-    // 로컬 상태와 캐시 동기화 헬퍼
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
@@ -397,7 +392,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
 
     const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
 
-    // [추가] 텔레그램 발송 로직
     const sendClinicNotificationToTelegram = async (updates) => {
         try {
             const bookedSessions = Object.values(updates).map(s => {
@@ -441,10 +435,9 @@ ${scheduleText}
         }
     };
 
-    // [수정] 날짜 선택 시 기존 선택된 슬롯 해제
     const handleDateChange = (dStr) => {
         setSelectedDateStr(dStr);
-        setStudentSelectedSlots([]); // 선택 초기화
+        setStudentSelectedSlots([]); 
     };
 
     const handleAction = async (action, payload) => {
@@ -461,7 +454,6 @@ ${scheduleText}
                 setStudentSelectedSlots(p => [...p, s.id]);
             }
         } else if (action === 'add_request') {
-            // ... (기존 로직 유지) ...
             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
             const newSession = {
@@ -502,7 +494,7 @@ ${scheduleText}
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                const resetData = { status: 'open', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' };
+                const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' };
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
                 updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
                 notify('예약 신청이 취소되었습니다.');
@@ -532,7 +524,6 @@ ${scheduleText}
   };
 
   const handleSaveDefaultSchedule = async () => {
-      // ... (기존 로직 유지) ...
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
       const batch = writeBatch(db);
@@ -561,6 +552,8 @@ ${scheduleText}
       fetchSessions(true); 
   };
 
+  // [CTO FIX] 학생의 신청 데이터 무결성 강화 및 DB 룰 통과 
+  // [서비스 가치(Service Value)] 학생의 예약 신청 성공률을 높여 서비스의 이탈률을 방지합니다.
   const submitStudentApplication = async () => {
       const formattedTopic = applicationItems.map(i => i.subject).join(', ');
       const formattedRange = applicationItems.map(i => `${i.workbook} (${i.range})`).join('\n');
@@ -569,29 +562,56 @@ ${scheduleText}
       
       studentSelectedSlots.forEach(id => {
         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
-        const updateData = { status: 'pending', studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' };
+        const updateData = { 
+            status: 'pending', 
+            studentId: currentUser.id, // 누락되었던 식별자 추가
+            studentName: currentUser.name, 
+            studentPhone: currentUser.phone || '', 
+            topic: formattedTopic, 
+            questionRange: formattedRange, 
+            source: 'app' 
+        };
         batch.update(ref, updateData);
         updates[id] = { id, ...updateData }; 
       });
 
-      await batch.commit(); 
-      
-      updateLocalAndCacheState(prev => {
-          const next = { ...prev };
-          Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; });
-          return next;
-      });
-
-      sendClinicNotificationToTelegram(updates);
-
-      setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
+      try {
+          await batch.commit(); 
+          updateLocalAndCacheState(prev => {
+              const next = { ...prev };
+              Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; });
+              return next;
+          });
+          sendClinicNotificationToTelegram(updates);
+          setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
+      } catch(e) {
+          console.error("Student Booking Error:", e);
+          notify('예약 처리 중 오류가 발생했습니다. 권한을 확인해주세요.', 'error');
+      }
   };
 
+  // [CTO FIX] 관리자의 직접 수정 기능 안정화
   const handleAdminEditSubmit = async () => {
-    const updateData = {studentName:adminEditData.studentName,topic:adminEditData.topic,questionRange:adminEditData.questionRange,status:adminEditData.studentName?'confirmed':'open'};
-    await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
-    updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...updateData } }));
-    setModalState({type:null}); notify('수정완료'); 
+    // 학생 이름을 비웠다면 상태를 'open'으로 변경, 채웠다면 기존 상태 유지 혹은 'confirmed'로 자동 전이
+    const newStatus = adminEditData.studentName ? 
+                      (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 
+                      'open';
+
+    const updateData = {
+        studentName: adminEditData.studentName,
+        topic: adminEditData.topic,
+        questionRange: adminEditData.questionRange,
+        status: newStatus
+    };
+    
+    try {
+        await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
+        updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...updateData } }));
+        setModalState({type:null}); notify('수정완료', 'success'); 
+    } catch (e) {
+        console.error("Admin Edit Error:", e);
+        notify('수정 권한이 거부되었습니다. 재시도 해주세요.', 'error');
+    }
   };
 
   const pendingBookings = sessions.filter(s => s.status === 'pending');
@@ -605,7 +625,7 @@ ${scheduleText}
   return (
     <div className="space-y-6 w-full">
        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4 space-y-2 pointer-events-none">
-          {notifications.map(n=><div key={n.id} className="backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl bg-gray-900/90">{n.msg}</div>)}
+          {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
        {currentUser.role === 'admin' && (
@@ -630,6 +650,9 @@ ${scheduleText}
                     ))}</div>
                   )}
               </Card>
+
+              {/* [CTO FIX] 관리자 근무 일괄 생성 UI 개선 및 반응형 적용 */}
+              {/* [서비스 가치(Service Value)] 입력 폼이 찌그러지지 않아 시간 낭비를 막고, 직관적인 UI로 관리자의 업무 생산성을 극대화합니다. */}
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 근무 일괄 생성</h3>
@@ -638,25 +661,35 @@ ${scheduleText}
                       </select>
                   </div>
                   <div className="flex gap-2 mb-4">
-                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm" value={batchDateRange.start} onChange={e=>setBatchDateRange({...batchDateRange, start:e.target.value})}/>
+                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300" value={batchDateRange.start} onChange={e=>setBatchDateRange({...batchDateRange, start:e.target.value})}/>
                       <span className="self-center">~</span>
-                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm" value={batchDateRange.end} onChange={e=>setBatchDateRange({...batchDateRange, end:e.target.value})}/>
+                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300" value={batchDateRange.end} onChange={e=>setBatchDateRange({...batchDateRange, end:e.target.value})}/>
                   </div>
-                  <div className="grid grid-cols-7 gap-2 mb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
                       {DAYS.map(d=>(
-                          <div key={d} className={`border rounded-lg p-2 text-center transition-all ${defaultSchedule[d].active ? 'bg-blue-100 border-blue-300' : 'bg-white'}`}>
-                              <div className="flex justify-between items-center mb-1">
-                                <span className="text-xs font-bold">{d}</span>
-                                <input type="checkbox" checked={defaultSchedule[d].active} onChange={()=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], active: !defaultSchedule[d].active}})}/>
+                          <div key={d} className={`border rounded-xl p-3 shadow-sm transition-all flex flex-col justify-between min-h-[100px] ${defaultSchedule[d].active ? 'bg-blue-100 border-blue-400' : 'bg-white'}`}>
+                              <div className="flex justify-between items-center mb-2">
+                                <span className={`text-sm font-black ${defaultSchedule[d].active ? 'text-blue-800' : 'text-gray-500'}`}>{d}요일</span>
+                                <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={defaultSchedule[d].active} onChange={()=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], active: !defaultSchedule[d].active}})}/>
                               </div>
-                              <input type="time" className="w-full text-xs mb-1 border rounded" value={defaultSchedule[d].start} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], start:e.target.value}})} disabled={!defaultSchedule[d].active}/>
-                              <input type="time" className="w-full text-xs border rounded" value={defaultSchedule[d].end} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], end:e.target.value}})} disabled={!defaultSchedule[d].active}/>
+                              <div className="flex flex-col gap-1.5 mt-auto">
+                                  <div className="flex items-center gap-1">
+                                      <span className="text-xs text-gray-500 w-6">시작</span>
+                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500" value={defaultSchedule[d].start} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], start:e.target.value}})} disabled={!defaultSchedule[d].active}/>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                      <span className="text-xs text-gray-500 w-6">종료</span>
+                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500" value={defaultSchedule[d].end} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], end:e.target.value}})} disabled={!defaultSchedule[d].active}/>
+                                  </div>
+                              </div>
                           </div>
                       ))}
                   </div>
-                  <Button onClick={handleSaveDefaultSchedule} className="w-full" size="sm">스케줄 생성 실행</Button>
+                  <Button onClick={handleSaveDefaultSchedule} className="w-full py-3 font-bold text-lg" size="sm">스케줄 생성 실행</Button>
               </Card>
+
               <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
+              
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
@@ -787,25 +820,65 @@ ${scheduleText}
             </div>
         )}
 
-      {/* ... Modals (기존과 동일) ... */}
+      {/* --- Modals --- */}
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 취소">
-    <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
-    <Button onClick={async()=>{ 
-        if(!requestData.reason) return notify('사유입력','error'); 
-        await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
-        // [CTO FIX] DB 업데이트 후 로컬 상태와 캐시를 즉시 동기화하여 UI에 즉각 반영되도록 조치
-        updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'cancellation_requested', cancelReason: requestData.reason } }));
-        setModalState({type:null}); 
-        notify('요청 완료 (관리자에게 전달되었습니다)'); 
-    }} className="w-full py-4 text-lg">요청 전송</Button>
-</Modal>
-      <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">{applicationItems.map((item,i)=>(<div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50"><div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div><div className="flex gap-3"><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div><div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div></div></div>))}<Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button><Button className="w-full py-4 text-xl" onClick={submitStudentApplication}>신청 완료</Button></Modal>
-      <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백"><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/><textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/><Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button></Modal>
-      <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정"><div className="space-y-4"><div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div><div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div><Button className="w-full py-4 text-lg" onClick={handleAdminEditSubmit}>저장하기</Button></div></Modal>
-      <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계"><div className="space-y-6"><div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div><div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div></div></Modal>
-      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송"><div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div><Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'confirmed' } })); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button></Modal>
-      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송"><div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed">{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div><Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button></Modal>
-      {/* [CTO FIX] 누락되었던 관리자 권한 제어용 공통 확인(Confirm) 모달 추가 */}
+        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
+        <Button onClick={async()=>{ 
+            if(!requestData.reason) return notify('사유입력','error'); 
+            await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
+            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'cancellation_requested', cancelReason: requestData.reason } }));
+            setModalState({type:null}); 
+            notify('요청 완료 (관리자에게 전달되었습니다)'); 
+        }} className="w-full py-4 text-lg">요청 전송</Button>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">
+        {applicationItems.map((item,i)=>(
+            <div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50">
+                <div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div>
+                <div className="flex gap-3">
+                    <div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div>
+                    <div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div>
+                </div>
+            </div>
+        ))}
+        <Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button>
+        <Button className="w-full py-4 text-xl font-bold" onClick={submitStudentApplication}>신청 완료</Button>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백">
+        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/>
+        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/>
+        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/>
+        <Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정">
+        <div className="space-y-4">
+            <div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약 처리됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div>
+            <div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div>
+            <div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div>
+            <Button className="w-full py-4 text-lg font-bold" onClick={handleAdminEditSubmit}>수정 정보 저장하기</Button>
+        </div>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
+        <div className="space-y-6">
+            <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div>
+            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
+        </div>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송">
+        <div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div>
+        <Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'confirmed' } })); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button>
+      </Modal>
+      
+      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송">
+        <div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed">{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div>
+        <Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button>
+      </Modal>
+      
       <Modal isOpen={!!confirmConfig} onClose={() => setConfirmConfig(null)} title="시스템 확인">
         <div className="space-y-6">
             <p className="text-lg text-gray-800 text-center font-medium mt-4 whitespace-pre-wrap">{confirmConfig?.message}</p>
