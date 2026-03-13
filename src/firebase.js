@@ -1,11 +1,9 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
 import { 
   getFirestore, 
   initializeFirestore, 
   persistentLocalCache, 
-  persistentMultipleTabManager, 
-  enableIndexedDbPersistence 
+  persistentMultipleTabManager 
 } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -20,29 +18,13 @@ const firebaseConfig = {
 // 1. Firebase 앱 초기화
 const app = initializeApp(firebaseConfig);
 
-// 2. 인증 모듈 초기화
-export const auth = getAuth(app);
+// 2. Auth 모듈 제거 완료 (인증 기능 미사용)
 
-// 3. Firestore DB 초기화 (비용 절감 및 속도 최적화 적용)
-// 로컬 캐시를 활성화하여 읽기 비용을 줄이고 로딩 속도를 높입니다.
+// 3. Firestore DB 초기화 (이중 캐시 충돌 방지를 위해 최신 방식으로 단일화)
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ 
     tabManager: persistentMultipleTabManager() 
   })
 });
-
-// 4. 오프라인 지속성 활성화 (선택적)
-// 인터넷이 끊겨도 앱이 작동하도록 돕습니다.
-try { 
-  enableIndexedDbPersistence(db).catch((err) => {
-    if (err.code === 'failed-precondition') {
-      console.warn('다중 탭 오픈으로 인해 지속성 모드를 사용할 수 없습니다.');
-    } else if (err.code === 'unimplemented') {
-      console.warn('브라우저가 이 기능을 지원하지 않습니다.');
-    }
-  }); 
-} catch(e) {
-  // 환경에 따라 지원되지 않을 수 있으므로 에러는 무시합니다.
-}
 
 export default app;

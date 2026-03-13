@@ -57,7 +57,6 @@
      </div>
    );
    
-   // [추가됨] 브라우저 기본 alert()을 대체할 프리미엄 Toast Notification
    export const Toast = ({ message, type = 'info', onClose, duration = 3000 }) => {
      useEffect(() => {
        if (!message) return;

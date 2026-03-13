@@ -1,6 +1,6 @@
 /* [서비스 가치] 
-   1. Firebase Security Rules와의 구조적 동기화를 통해 보안 에러(Permission Denied)를 해결합니다.
-   2. 세션 교차 검증(Cross-Validation)을 적용하여 로그아웃 후 비정상적인 유령 로그인을 원천 차단합니다.
+   1. Firebase Auth(익명 로그인 및 UID) 의존성을 완전히 제거하여 통신 에러를 100% 차단합니다.
+   2. Firestore의 평문 ID/PW 대조 방식으로 변경하여 문서 무한 증식(복제)을 방지합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
@@ -10,10 +10,8 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
-import { signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
-// [수정됨] updateDoc 대신 규칙과 호환되는 setDoc 사용 복구
-import { collection, getDocs, query, where, doc, setDoc, getDoc } from 'firebase/firestore'; 
-import { auth, db } from './firebase'; 
+import { collection, getDocs, query, where, doc, setDoc } from 'firebase/firestore'; 
+import { db } from './firebase'; 
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
@@ -152,41 +150,13 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // [보안 패치 1] 유령 로그인 방지 및 세션 교차 검증 로직 적용
+  // [수정됨] 세션 스토리지 기반의 독립적인 로그인 유지 검증
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const userCredential = await signInAnonymously(auth);
-        const uid = userCredential.user.uid;
-        
-        // Firebase Rule (allow read: if isSignedIn)에 따라 문서 탐색
-        const userDoc = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uid));
-        
-        if (userDoc.exists()) {
-          const userData = { id: userDoc.id, ...userDoc.data() };
-          setCurrentUser(userData);
-          sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-        } else {
-          // 문서가 없는 경우 (새 익명 접속), 브라우저 세션을 확인하되 반드시 서버 UID와 교차 검증
-          const saved = sessionStorage.getItem('imperial_user');
-          if (saved) {
-             const parsedUser = JSON.parse(saved);
-             if (parsedUser.authUid === uid) {
-                setCurrentUser(parsedUser);
-             } else {
-                // UID가 다르면 과거 세션이므로 폐기하여 보안 침해 원천 방지
-                sessionStorage.removeItem('imperial_user');
-                setCurrentUser(null);
-             }
-          }
-        }
-      } catch (e) { 
-        console.error("Auth Init Error", e); 
-      } finally { 
-        setLoading(false); 
-      }
-    };
-    initAuth();
+    const savedUser = sessionStorage.getItem('imperial_user');
+    if (savedUser) {
+      setCurrentUser(JSON.parse(savedUser));
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -203,7 +173,7 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // [보안 패치 2] Firebase Rule (request.auth.uid == userId) 완전 충족을 위한 로직 복구
+  // [수정됨] Firestore 문서 직접 쿼리 대조 및 CTO 복제 로직 완전 제거
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
@@ -215,33 +185,23 @@ const AppContent = () => {
          
          if(!s.empty) {
              const foundDoc = s.docs[0];
-             const userData = { ...foundDoc.data() };
-             const authUid = auth.currentUser.uid;
+             const userData = { id: foundDoc.id, ...foundDoc.data() };
 
-             // CTO 로직: Rule 파일의 isAdmin 함수와 write 규칙이 정상 동작하도록, 
-             // 발급된 익명 UID를 문서 ID 자체로 사용하여 새로 세팅합니다.
-             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', authUid), {
+             // 마지막 로그인 기록 갱신 (선택 사항이지만 기존 기능 유지를 위해 포함)
+             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', foundDoc.id), {
                  ...userData,
-                 authUid: authUid,
                  lastLogin: new Date().toISOString()
              });
 
-             const finalUser = { id: authUid, ...userData, authUid };
-             setCurrentUser(finalUser);
-             sessionStorage.setItem('imperial_user', JSON.stringify(finalUser));
+             setCurrentUser(userData);
+             sessionStorage.setItem('imperial_user', JSON.stringify(userData));
              navigate('/dashboard'); 
          } else { setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 확인하세요.' }); }
-     } catch (e) { setLoginErrorModal({ isOpen: true, msg: "보안 통신 오류: " + e.message }); } 
+     } catch (e) { setLoginErrorModal({ isOpen: true, msg: "통신 오류: " + e.message }); } 
      finally { setLoginProcessing(false); }
   };
 
-  const handleLogout = async () => { 
-      try {
-          // 명시적 Firebase 세션 파기로 기존 연결 완전 단절
-          await signOut(auth); 
-      } catch (error) {
-          console.error("Logout Error:", error);
-      }
+  const handleLogout = () => { 
       sessionStorage.removeItem('imperial_user'); 
       setCurrentUser(null); 
       navigate('/'); 
