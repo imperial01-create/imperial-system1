@@ -1,13 +1,14 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 반정규화를 통한 Firebase 비용 최소화 및 Toast 알림 도입으로 UX 개선) */
+   (Updated: DB 레벨 중복 생성 원천 차단(setDoc) 및 O(N) 중복 색출 UI 적용 완료) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User, School, GraduationCap
    } from 'lucide-react';
-   import { collection, doc, addDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
+   // [CTO FIX] addDoc 대신 setDoc을 추가로 import 합니다.
+   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
    import { db } from '../firebase';
-   import { Button, Card, Modal, Toast } from '../components/UI'; // Toast 컴포넌트 추가
+   import { Button, Card, Modal, Toast } from '../components/UI';
    
    const APP_ID = 'imperial-clinic-v1';
    
@@ -102,9 +103,15 @@
                    await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id), payload);
                    showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
                } else {
+                   // UI 단에서의 1차 방어 (이미 존재하는 아이디인지 배열에서 검사)
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
+                   
                    payload.createdAt = serverTimestamp();
-                   await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), payload);
+                   
+                   // [CTO 아키텍처 개선] 무작위 문서 ID(addDoc) 대신, userId 자체를 문서 ID로 사용하는 setDoc 적용
+                   // DB 레벨에서 동일한 아이디의 방이 2개 생성되는 것을 물리적으로 원천 차단합니다.
+                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.userId), payload);
+                   
                    showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
                }
                setIsModalOpen(false);
