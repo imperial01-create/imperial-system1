@@ -17,7 +17,6 @@ const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="1
 // 통합 DB 경로 상수 설정
 const APP_ID = 'imperial-clinic-v1';
 const DB_COLLECTION = `artifacts/${APP_ID}/public/data/school_strategies`;
-const SETTINGS_DOC = `artifacts/${APP_ID}/public/data/settings/school_strategy`;
 
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
@@ -33,7 +32,7 @@ export default function SchoolStrategy({ currentUser }) {
   // viewState.view: 'list' | 'detail' | 'form'
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
-  const [formData, setFormData] = useState(null); // 리포트 작성/수정 폼 데이터
+  const [formData, setFormData] = useState(null);
 
   const isStaff = ['admin', 'lecturer', 'ta'].includes(user.role);
   const isAdmin = user.role === 'admin';
@@ -63,12 +62,11 @@ export default function SchoolStrategy({ currentUser }) {
         
         const filteredData = data.filter(report => {
           if (isStudentOrParent) {
-            // 학생/학부모: 본인 학교 + 현재 활성 학기 + 삭제되지 않은 리포트만
             return !report.isDeleted && report.term === activeTerm && report.school === user.school;
           } else if (isAdmin) {
-            return true; // 관리자: 전부 볼 수 있음
+            return true; 
           } else {
-            return !report.isDeleted; // 강사/조교: 삭제되지 않은 리포트만
+            return !report.isDeleted; 
           }
         });
 
@@ -129,7 +127,7 @@ export default function SchoolStrategy({ currentUser }) {
       setFormData({ ...existingReport });
     } else {
       setFormData({
-        type: 'individual', school: '', grade: '1학년', term: activeTerm, subject: '', 
+        type: 'individual', year: new Date().getFullYear().toString(), school: '', term: activeTerm, subject: '', 
         teacher: '', difficulty: '중', mcCount: 0, saCount: 0, essayCount: 0, 
         suppBook: '', print: '', scope: '', review: '', specialNotes: '', 
         gradeCuts: { grade1: '', grade2: '' }, questions: [],
@@ -140,8 +138,8 @@ export default function SchoolStrategy({ currentUser }) {
   };
 
   const handleSaveReport = async () => {
-    if(!formData.school || !formData.subject) {
-      alert("학교명과 과목은 필수 입력입니다."); return;
+    if(!formData.school || !formData.subject || !formData.year) {
+      alert("년도, 학교명, 과목은 필수 입력입니다."); return;
     }
     setLoading(true);
     try {
@@ -170,6 +168,32 @@ export default function SchoolStrategy({ currentUser }) {
     setFormData({ ...formData, [field]: newArray });
   };
   
+  // IDI 점수 변경 및 난이도 자동 계산 로직
+  const handleIdiChange = (index, key, value) => {
+    let numVal = parseInt(value, 10);
+    if (isNaN(numVal)) numVal = 1;
+    if (numVal < 1) numVal = 1;
+    if (numVal > 5) numVal = 5;
+
+    const newArray = [...formData.questions];
+    newArray[index][key] = numVal;
+
+    // 총점 계산
+    const q = newArray[index];
+    const totalIdi = (q.idiSource || 1) + (q.idiLogic || 1) + (q.idiConcept || 1) + (q.idiCalc || 1) + (q.idiProg || 1);
+    
+    // 자동 난이도 산정
+    let calculatedDiff = '하';
+    if (totalIdi >= 20) calculatedDiff = '최상';
+    else if (totalIdi >= 15) calculatedDiff = '상';
+    else if (totalIdi >= 10) calculatedDiff = '중';
+
+    newArray[index].idiTotal = totalIdi;
+    newArray[index].diff = calculatedDiff;
+
+    setFormData({ ...formData, questions: newArray });
+  };
+
   const addArrayItem = (field, defaultObj) => {
     setFormData({ ...formData, [field]: [...(formData[field] || []), defaultObj] });
   };
@@ -237,7 +261,8 @@ export default function SchoolStrategy({ currentUser }) {
               <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
                 {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                 <div className="flex justify-between">
-                  <h3 className="font-bold text-lg text-indigo-900">{report.school} {report.grade} {report.term} 경향 분석</h3>
+                  {/* 제목에 년도 포함 */}
+                  <h3 className="font-bold text-lg text-indigo-900">[{report.year}] {report.school} {report.term} 경향 분석</h3>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">과목: {report.subject} | 업데이트: {new Date(report.updatedAt).toLocaleDateString()}</p>
               </div>
@@ -254,7 +279,8 @@ export default function SchoolStrategy({ currentUser }) {
             {individuals.length === 0 ? <p className="text-gray-400 text-sm">등록된 시험 분석이 없습니다.</p> : individuals.map(report => (
               <div key={report.id} className={`bg-white border rounded-xl p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => setViewState({ view: 'detail', selectedId: report.id })}>
                 {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                <h3 className="font-bold text-gray-800">{report.school} {report.grade} {report.term} {report.subject} 분석</h3>
+                {/* 제목에 년도 포함 */}
+                <h3 className="font-bold text-gray-800">[{report.year}] {report.school} {report.term} {report.subject} 분석</h3>
                 <div className="mt-3 text-sm text-gray-600 space-y-1">
                   <p>• 담당: {report.teacher || '-'} 선생님</p>
                   <p>• 난이도: <span className="font-medium text-indigo-600">{report.difficulty || '-'}</span></p>
@@ -311,16 +337,16 @@ export default function SchoolStrategy({ currentUser }) {
                 <option value="trend">과목 경향 분석 (설명회용)</option>
               </select>
             </div>
+            {/* 년도 필드 추가 */}
+            <div>
+              <label className="block text-sm font-bold mb-1">년도</label>
+              <input type="number" className="w-full border p-2 rounded" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
+            </div>
             <div>
               <label className="block text-sm font-bold mb-1">학교명</label>
               <input type="text" className="w-full border p-2 rounded" placeholder="예: 영일고" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
             </div>
-            <div>
-              <label className="block text-sm font-bold mb-1">학년</label>
-              <select className="w-full border p-2 rounded" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
-                <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-              </select>
-            </div>
+            {/* 학년 필드 삭제됨 */}
             <div>
               <label className="block text-sm font-bold mb-1">학기 및 시험</label>
               <input type="text" className="w-full border p-2 rounded" placeholder="예: 1-1 중간고사" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} />
@@ -337,7 +363,7 @@ export default function SchoolStrategy({ currentUser }) {
               <h3 className="text-lg font-bold border-b pb-2">시험 상세 정보</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div><label className="block text-xs font-bold mb-1">담당 선생님</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.teacher} onChange={e => setFormData({...formData, teacher: e.target.value})}/></div>
-                <div><label className="block text-xs font-bold mb-1">난이도</label><input type="text" className="w-full border p-2 text-sm rounded" placeholder="예: 상" value={formData.difficulty} onChange={e => setFormData({...formData, difficulty: e.target.value})}/></div>
+                <div><label className="block text-xs font-bold mb-1">총평 난이도</label><input type="text" className="w-full border p-2 text-sm rounded" placeholder="예: 상" value={formData.difficulty} onChange={e => setFormData({...formData, difficulty: e.target.value})}/></div>
                 <div><label className="block text-xs font-bold mb-1">객관식 문항수</label><input type="number" className="w-full border p-2 text-sm rounded" value={formData.mcCount} onChange={e => setFormData({...formData, mcCount: Number(e.target.value)})}/></div>
                 <div><label className="block text-xs font-bold mb-1">서술/단답 문항수</label><input type="number" className="w-full border p-2 text-sm rounded" value={formData.saCount} onChange={e => setFormData({...formData, saCount: Number(e.target.value)})}/></div>
               </div>
@@ -347,11 +373,12 @@ export default function SchoolStrategy({ currentUser }) {
               </div>
               <div><label className="block text-xs font-bold mb-1">시험 범위</label><input type="text" className="w-full border p-2 text-sm rounded" value={formData.scope} onChange={e => setFormData({...formData, scope: e.target.value})}/></div>
               <div><label className="block text-xs font-bold mb-1">시험 총평</label><textarea className="w-full border p-2 text-sm rounded min-h-[100px]" value={formData.review} onChange={e => setFormData({...formData, review: e.target.value})}/></div>
-              <div><label className="block text-xs font-bold mb-1">특이사항 및 킬러문항 설명</label><textarea className="w-full border p-2 text-sm rounded min-h-[80px]" value={formData.specialNotes} onChange={e => setFormData({...formData, specialNotes: e.target.value})}/></div>
+              {/* 특이사항 명칭 변경 */}
+              <div><label className="block text-xs font-bold mb-1">특이사항</label><textarea className="w-full border p-2 text-sm rounded min-h-[80px]" value={formData.specialNotes} onChange={e => setFormData({...formData, specialNotes: e.target.value})}/></div>
               
               <h3 className="text-lg font-bold border-b pb-2 pt-4 flex justify-between items-center">
                 문항별 상세 분석
-                <button onClick={() => addArrayItem('questions', { qNum: (formData.questions?.length || 0) + 1, tags: '', unit: '', diff: '', score: '', source: '', analysis: '', qImage: '', simImage: '' })} className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded flex items-center gap-1"><IconPlus/> 문항 추가</button>
+                <button onClick={() => addArrayItem('questions', { qNum: (formData.questions?.length || 0) + 1, tags: '', unit: '', diff: '하', score: '', source: '', analysis: '', qImage: '', simImage: '', idiSource: 1, idiLogic: 1, idiConcept: 1, idiCalc: 1, idiProg: 1, idiTotal: 5 })} className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded flex items-center gap-1"><IconPlus/> 문항 추가</button>
               </h3>
               {formData.questions?.map((q, idx) => (
                 <div key={idx} className="bg-gray-50 border p-4 rounded relative">
@@ -360,9 +387,20 @@ export default function SchoolStrategy({ currentUser }) {
                     <div><label className="text-xs text-gray-500">번호</label><input type="number" className="w-full border p-1 text-sm" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
                     <div><label className="text-xs text-gray-500">배점</label><input type="number" className="w-full border p-1 text-sm" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
                     <div className="col-span-2"><label className="text-xs text-gray-500">단원</label><input type="text" className="w-full border p-1 text-sm" value={q.unit} onChange={e=>handleArrayChange('questions', idx, 'unit', e.target.value)}/></div>
-                    <div><label className="text-xs text-gray-500">난이도</label><input type="text" className="w-full border p-1 text-sm" placeholder="상/중/하" value={q.diff} onChange={e=>handleArrayChange('questions', idx, 'diff', e.target.value)}/></div>
+                    {/* 난이도는 IDI로 인해 자동 산정됨 */}
+                    <div><label className="text-xs text-gray-500">난이도 (자동)</label><input type="text" className="w-full border p-1 text-sm bg-gray-200 text-gray-600" readOnly value={`${q.diff || '하'} (${q.idiTotal || 5}점)`} /></div>
                     <div><label className="text-xs text-gray-500">태그</label><input type="text" className="w-full border p-1 text-sm" placeholder="킬러, 기본 등" value={q.tags} onChange={e=>handleArrayChange('questions', idx, 'tags', e.target.value)}/></div>
                   </div>
+
+                  {/* IDI 입력 폼 추가 */}
+                  <div className="grid grid-cols-5 gap-2 mb-2 bg-indigo-50/50 p-2 rounded border border-indigo-100">
+                    <div><label className="text-[10px] text-indigo-700 font-bold">출처 친숙도(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm" value={q.idiSource || 1} onChange={e=>handleIdiChange(idx, 'idiSource', e.target.value)}/></div>
+                    <div><label className="text-[10px] text-indigo-700 font-bold">변형 로직(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm" value={q.idiLogic || 1} onChange={e=>handleIdiChange(idx, 'idiLogic', e.target.value)}/></div>
+                    <div><label className="text-[10px] text-indigo-700 font-bold">개념 결합도(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm" value={q.idiConcept || 1} onChange={e=>handleIdiChange(idx, 'idiConcept', e.target.value)}/></div>
+                    <div><label className="text-[10px] text-indigo-700 font-bold">연산 복잡도(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm" value={q.idiCalc || 1} onChange={e=>handleIdiChange(idx, 'idiCalc', e.target.value)}/></div>
+                    <div><label className="text-[10px] text-indigo-700 font-bold">논리 전개(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm" value={q.idiProg || 1} onChange={e=>handleIdiChange(idx, 'idiProg', e.target.value)}/></div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
                     <div><label className="text-xs text-gray-500">출처 분석</label><input type="text" className="w-full border p-1 text-sm" value={q.source} onChange={e=>handleArrayChange('questions', idx, 'source', e.target.value)}/></div>
                     <div><label className="text-xs text-gray-500">분석 코멘트</label><input type="text" className="w-full border p-1 text-sm" value={q.analysis} onChange={e=>handleArrayChange('questions', idx, 'analysis', e.target.value)}/></div>
@@ -471,8 +509,9 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="inline-block px-3 py-1 bg-indigo-800 rounded-full text-xs font-semibold mb-3 tracking-wider">
               {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
             </div>
+            {/* 타이틀에 년도 반영 및 학년 삭제됨 */}
             <h1 className="text-3xl font-bold">
-              {report.school} {report.grade} {report.term} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}
+              [{report.year}] {report.school} {report.term} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}
             </h1>
           </div>
 
@@ -547,7 +586,7 @@ export default function SchoolStrategy({ currentUser }) {
               <div className="space-y-8">
                 <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <InfoBox label="출제 선생님" value={report.teacher} />
-                  <InfoBox label="시험 난이도" value={report.difficulty} />
+                  <InfoBox label="총평 난이도" value={report.difficulty} />
                   <InfoBox label="예상 1등급 컷" value={report.gradeCuts?.grade1} />
                   <InfoBox label="객관식 / 주관식" value={`${report.mcCount || 0}문항 / ${(report.saCount||0) + (report.essayCount||0)}문항`} />
                   <InfoBox label="부교재" value={report.suppBook} colSpan={2} />
@@ -565,7 +604,8 @@ export default function SchoolStrategy({ currentUser }) {
                     <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.review}</p>
                   </div>
                   <div className="border border-red-100 rounded-xl p-5 bg-white shadow-sm">
-                    <h3 className="font-bold text-red-800 mb-3 text-lg">💡 특이사항 및 킬러문항</h3>
+                    {/* 타이틀 변경 */}
+                    <h3 className="font-bold text-red-800 mb-3 text-lg">💡 특이사항</h3>
                     <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{report.specialNotes}</p>
                   </div>
                 </section>
@@ -601,10 +641,23 @@ export default function SchoolStrategy({ currentUser }) {
                       
                       <div className="space-y-4">
                         <DetailRow label="단원 및 평가내용" value={viewState.selectedQuestion.unit} />
-                        <DetailRow label="난이도" value={viewState.selectedQuestion.diff} />
+                        <DetailRow label="최종 난이도" value={`${viewState.selectedQuestion.diff || '하'} (IDI: ${viewState.selectedQuestion.idiTotal || 5}점)`} />
                         <DetailRow label="배점" value={`${viewState.selectedQuestion.score}점`} />
                         <DetailRow label="출처 분석" value={viewState.selectedQuestion.source} />
-                        <div className="pt-4 mt-4 border-t border-gray-100">
+
+                        {/* IDI 점수 노출 영역 */}
+                        <div className="pt-4 border-t border-gray-100">
+                          <p className="text-sm font-bold text-indigo-800 mb-2">📊 IDI (Imperial Difficulty Index) 지수</p>
+                          <div className="grid grid-cols-5 gap-2 text-center text-sm">
+                            <div className="bg-indigo-50 p-2 rounded flex flex-col items-center justify-center"><span className="text-[10px] text-indigo-600 mb-1">출처 친숙도</span><span className="font-bold">{viewState.selectedQuestion.idiSource || 1}</span></div>
+                            <div className="bg-indigo-50 p-2 rounded flex flex-col items-center justify-center"><span className="text-[10px] text-indigo-600 mb-1">변형 로직</span><span className="font-bold">{viewState.selectedQuestion.idiLogic || 1}</span></div>
+                            <div className="bg-indigo-50 p-2 rounded flex flex-col items-center justify-center"><span className="text-[10px] text-indigo-600 mb-1">개념 결합도</span><span className="font-bold">{viewState.selectedQuestion.idiConcept || 1}</span></div>
+                            <div className="bg-indigo-50 p-2 rounded flex flex-col items-center justify-center"><span className="text-[10px] text-indigo-600 mb-1">연산 복잡도</span><span className="font-bold">{viewState.selectedQuestion.idiCalc || 1}</span></div>
+                            <div className="bg-indigo-50 p-2 rounded flex flex-col items-center justify-center"><span className="text-[10px] text-indigo-600 mb-1">논리 전개</span><span className="font-bold">{viewState.selectedQuestion.idiProg || 1}</span></div>
+                          </div>
+                        </div>
+
+                        <div className="pt-4 mt-2 border-t border-gray-100">
                           <p className="text-sm text-gray-600 leading-relaxed"><span className="font-bold text-indigo-800">문항 분석평: </span>{viewState.selectedQuestion.analysis}</p>
                         </div>
                       </div>
