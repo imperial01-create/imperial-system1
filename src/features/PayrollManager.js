@@ -98,9 +98,35 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const isManagementMode = viewMode === 'management';
 
+    // [CTO 최적화] 유령(중복) 계정 필터링 로직 추가
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
-        return (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
+        
+        // 1차 필터링: 관리자, 강사, 조교만 추출
+        const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
+        
+        // [CTO 최적화] 데이터 반정규화 복구 과정에서 발생한 중복 데이터 필터링 (Defensive Coding)
+        // Time Complexity: O(N) - 배열을 한 번만 순회하며 Map을 사용하여 성능 저하를 방지합니다.
+        const userMap = new Map();
+        
+        filtered.forEach(user => {
+            const existingUser = userMap.get(user.userId);
+            
+            if (!existingUser) {
+                userMap.set(user.userId, user);
+            } else {
+                // 이미 같은 아이디가 존재할 경우: '더 최근에 업데이트된 데이터' 또는 '정상적인 authUid가 있는 데이터'를 진짜로 간주하여 덮어씌움
+                const isNewer = user.updatedAt && existingUser.updatedAt && (user.updatedAt > existingUser.updatedAt);
+                const hasAuth = user.authUid && !existingUser.authUid;
+                
+                if (isNewer || hasAuth) {
+                    userMap.set(user.userId, user);
+                }
+            }
+        });
+        
+        // Map의 value들만 뽑아서 고유한 사용자 배열 반환
+        return Array.from(userMap.values());
     }, [isManagementMode, users, currentUser]);
 
     // [CTO 철벽 방어 로직] 캐시를 완전히 무시하고 서버의 진실된 데이터만 가져오도록 설계

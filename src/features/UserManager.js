@@ -129,13 +129,22 @@
            }
        };
    
+       // [CTO 최적화] 관리자 시각화: 중복된 userId를 찾아내기 위한 해시맵 (O(N) 복잡도)
+       const duplicateCounts = React.useMemo(() => {
+           const counts = {};
+           users.forEach(u => {
+               counts[u.userId] = (counts[u.userId] || 0) + 1;
+           });
+           return counts;
+       }, [users]);
+   
        const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
    
        return (
            <div className="space-y-6 w-full animate-in fade-in">
                {/* 글로벌 Toast 렌더링 */}
                <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
-
+   
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
@@ -162,7 +171,15 @@
                            <div className="flex justify-between items-start">
                                <div className="flex items-center gap-2">
                                    <div className="bg-blue-100 p-2 rounded-full text-blue-600"><User size={18} /></div>
-                                   <div><div className="font-bold text-lg">{u.name}</div><div className="text-xs text-gray-400">{u.userId}</div></div>
+                                   <div>
+                                       <div className="font-bold text-lg">{u.name}</div>
+                                       <div className="text-xs text-gray-400 flex items-center gap-1">
+                                           {u.userId}
+                                           {duplicateCounts[u.userId] > 1 && (
+                                               <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[8px] font-bold rounded-full animate-pulse">중복!</span>
+                                           )}
+                                       </div>
+                                   </div>
                                </div>
                                <div className="flex gap-2">
                                    <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg hover:bg-gray-50"><Edit2 size={16}/></button>
@@ -188,7 +205,17 @@
                                filteredUsers.map(u => (
                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                                        <td className="p-4 font-bold">{u.name}</td>
-                                       <td className="p-4">{u.userId}</td>
+                                       {/* [CTO 추가 UI] 데스크톱 뷰 중복 계정 경고 뱃지 */}
+                                       <td className="p-4">
+                                           <div className="flex items-center gap-2">
+                                               <span>{u.userId}</span>
+                                               {duplicateCounts[u.userId] > 1 && (
+                                                   <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200 animate-pulse">
+                                                       중복 계정!
+                                                   </span>
+                                               )}
+                                           </div>
+                                       </td>
                                        <td className="p-4 text-gray-500">{u.phone || '-'}</td>
                                        <td className="p-4">
                                            {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
