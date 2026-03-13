@@ -14,4 +14,4 @@ root.render(
 );
 
 // PWA 기능을 위해 서비스 워커를 등록합니다.
-serviceWorkerRegistration.register();
+serviceWorkerRegistration.unregister();

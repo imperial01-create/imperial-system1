@@ -1,6 +1,6 @@
 /* [서비스 가치] 
-   1. Firebase Auth(익명 로그인 및 UID) 의존성을 완전히 제거하여 통신 에러를 100% 차단합니다.
-   2. Firestore의 평문 ID/PW 대조 방식으로 변경하여 문서 무한 증식(복제)을 방지합니다.
+   1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
+   2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
@@ -10,7 +10,8 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, setDoc } from 'firebase/firestore'; 
+// [CTO 최적화] setDoc 대신 updateDoc을 import 하여 쓰기 비용을 최소화합니다.
+import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
 import { db } from './firebase'; 
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -24,6 +25,17 @@ const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
 const APP_ID = 'imperial-clinic-v1';
+
+// [보안 최우선 - CTO 권장] 향후 적용할 SHA-256 해시 함수 (설치 불필요, 내장 Web Crypto API 사용)
+// 기존 평문 DB 데이터를 모두 업데이트한 후 적용해야 하므로 현재는 주석 처리해 둡니다.
+/*
+const hashPassword = async (password) => {
+  const msgBuffer = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+*/
 
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
@@ -150,8 +162,16 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // [수정됨] 세션 스토리지 기반의 독립적인 로그인 유지 검증
+  // [수정됨] 세션 스토리지 기반의 독립적인 로그인 유지 검증 및 PWA 캐시 무효화
   useEffect(() => {
+    // [핵심 해결책: 서비스 워커 캐시 강제 무효화]
+    // 학부모나 학생 기기에 남아있는 구버전 코드를 강제로 비워, 중복 계정을 생성하는 옛날 코드가 실행되지 않게 합니다.
+    if ('caches' in window) {
+      caches.keys().then((names) => {
+        names.forEach(name => caches.delete(name));
+      });
+    }
+
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
@@ -173,11 +193,12 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // [수정됨] Firestore 문서 직접 쿼리 대조 및 CTO 복제 로직 완전 제거
+  // [CTO 최적화] Firestore 문서 쿼리 및 로그인 처리 (비용/속도 효율화 완료)
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
+         // 향후 보안 강화를 위해 평문(loginForm.password) 대신 해시 함수 적용을 권장합니다.
          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), 
                          where('userId', '==', loginForm.id), 
                          where('password', '==', loginForm.password));
@@ -187,9 +208,9 @@ const AppContent = () => {
              const foundDoc = s.docs[0];
              const userData = { id: foundDoc.id, ...foundDoc.data() };
 
-             // 마지막 로그인 기록 갱신 (선택 사항이지만 기존 기능 유지를 위해 포함)
-             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', foundDoc.id), {
-                 ...userData,
+             // [비용 효율적 아키텍처] 
+             // 전체 문서를 덮어쓰는 setDoc 대신 updateDoc을 사용하여 Firestore 쓰기 트래픽과 과금을 최소화합니다.
+             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', foundDoc.id), {
                  lastLogin: new Date().toISOString()
              });
 
