@@ -243,8 +243,10 @@ const AppContent = () => {
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
+  /* [CTO Fix: 레이아웃 무결성 방어 적용]
+     w-full을 부모 컨테이너에 추가하여 디바이스 크기 100%를 보장합니다. */
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden">
+    <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
       
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
@@ -275,7 +277,8 @@ const AppContent = () => {
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative">
+      {/* [CTO Fix: min-w-0 추가] 자식 컴포넌트(표, 달력 등)가 부모 영역 너비를 초과하여 화면 밖으로 넘치는 Flexbox 버그를 원천 차단합니다. */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative min-w-0">
         <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
             <div className="flex items-center gap-2">
                 <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center shadow-sm">
@@ -292,8 +295,9 @@ const AppContent = () => {
             </button>
         </header>
 
-        <main className="flex-1 overflow-y-auto">
-            <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 py-6">
+        {/* [UX/UI 반응형 최적화] 모바일에서는 좌우 여백을 최소화(px-3)하여 몰입감을 주고, 데스크탑에서는 안정적인 여백(md:px-8)을 제공합니다. */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
+            <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
