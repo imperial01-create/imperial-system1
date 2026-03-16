@@ -27,7 +27,7 @@ export default function SchoolStrategy({ currentUser }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  const [activeTerm, setActiveTerm] = useState("1-1 중간고사");
+  const [activeTerm, setActiveTerm] = useState("-1 중간고사");
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("");
 
@@ -43,7 +43,6 @@ export default function SchoolStrategy({ currentUser }) {
   const isAdmin = user.role === 'admin';
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
-  // [CTO 최적화] 브라우저 History API를 이용한 모바일 뒤로가기 제어 로직
   useEffect(() => {
       const handlePopState = (e) => {
           setViewState(prev => {
@@ -82,7 +81,7 @@ export default function SchoolStrategy({ currentUser }) {
           setFormData({ ...existingReport });
       } else {
           setFormData({ 
-              type: 'individual', year: new Date().getFullYear().toString(), school: '', term: activeTerm, subject: '', 
+              type: 'individual', year: new Date().getFullYear().toString(), school: '', term: '', subject: '', 
               teacher: '', difficulty: '중', suppBook: '', print: '', scope: '', review: '', specialNotes: '', 
               gradeCuts: { grade1: '', grade2: '', grade3: '' }, questions: [], trendData: [], scopeChanges: [], teacherStyles: [], isDeleted: false 
           });
@@ -102,10 +101,21 @@ export default function SchoolStrategy({ currentUser }) {
 
   const getStudentTargetTerm = (baseTerm, currentUserObj) => {
     if (!baseTerm) return "";
-    if (!currentUserObj.grade) return baseTerm.trim();
-    const gradeMatch = String(currentUserObj.grade).match(/\d+/);
-    if (!gradeMatch) return baseTerm.trim();
-    return baseTerm.trim().replace(/^\d+/, gradeMatch[0]);
+    const base = baseTerm.trim();
+    
+    let gradeNum = "";
+    if (currentUserObj && currentUserObj.grade) {
+      const gradeMatch = String(currentUserObj.grade).match(/\d+/);
+      if (gradeMatch) gradeNum = gradeMatch[0];
+    }
+    
+    if (!gradeNum) return base; 
+
+    if (base.startsWith('-')) {
+      return gradeNum + base; 
+    }
+    
+    return base.replace(/^\d+/, gradeNum);
   };
 
   useEffect(() => {
@@ -117,9 +127,11 @@ export default function SchoolStrategy({ currentUser }) {
           if (isStudentOrParent) {
             const reportTerm = report.term ? report.term.trim() : "";
             const currentActiveTerm = activeTerm ? activeTerm.trim() : "";
+            
             const targetTerm = getStudentTargetTerm(currentActiveTerm, user);
             const userSchoolRaw = user.schoolname || user.schoolName || user.school || "";
             const reportSchool = report.school ? report.school.trim() : "";
+            
             return !report.isDeleted && reportTerm === targetTerm && reportSchool === userSchoolRaw.trim();
           } else if (isAdmin) return true; 
           else return !report.isDeleted; 
@@ -155,7 +167,6 @@ export default function SchoolStrategy({ currentUser }) {
     if (window.confirm('이 리포트를 다시 복구하시겠습니까?')) await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: false });
   };
 
-  // [요구사항 6] 관리자용 영구 삭제 로직
   const handleHardDelete = async (id) => {
     if (window.confirm('정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
       await deleteDoc(doc(db, DB_COLLECTION, id));
@@ -163,7 +174,6 @@ export default function SchoolStrategy({ currentUser }) {
     }
   };
 
-  // [요구사항 1] IDI 총합 기반 난이도 자동 계산 함수
   const getAutomaticDifficulty = (questions) => {
     const totalIdi = questions?.reduce((sum, q) => sum + (q.idiTotal || 0), 0) || 0;
     let level = '하';
@@ -177,9 +187,10 @@ export default function SchoolStrategy({ currentUser }) {
 
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
+    if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
+    
     setLoading(true);
     try {
-      // 저장 전 자동 계산된 난이도로 덮어쓰기
       const diffInfoForm = getAutomaticDifficulty(formData.questions);
       const payload = { ...formData, difficulty: diffInfoForm.level, updatedAt: new Date().toISOString() };
       
@@ -234,7 +245,6 @@ export default function SchoolStrategy({ currentUser }) {
     alert('교직원 전용 메모가 저장되었습니다.');
   };
 
-  // 단원 비중 계산 유틸리티
   const getUnitDistribution = (questions) => {
     if (!questions || questions.length === 0) return [];
     const counts = questions.reduce((acc, q) => {
@@ -324,7 +334,6 @@ export default function SchoolStrategy({ currentUser }) {
             <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
               {individuals.length === 0 && !isStudentOrParent ? <p className="text-gray-400 text-sm pl-2">등록된 시험 분석이 없습니다.</p> : individuals.map(report => {
-                // [요구사항 1, 3] 리스트 요약 대시보드 - 온도계와 등급컷을 시각적으로 균형있게 재배치
                 const diffInfo = getAutomaticDifficulty(report.questions);
 
                 return (
@@ -333,7 +342,6 @@ export default function SchoolStrategy({ currentUser }) {
                     <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">[{report.year}] {report.school} {report.term} {report.subject} 분석</h3>
                     
                     <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
-                        {/* 1. 체감 난이도 (왼쪽: 온도계, 오른쪽: 텍스트) */}
                         <div className="flex items-center justify-center gap-3 border-r border-gray-100">
                             <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
                                 <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
@@ -345,7 +353,6 @@ export default function SchoolStrategy({ currentUser }) {
                             </div>
                         </div>
 
-                        {/* 2. 등급컷 */}
                         <div className="flex flex-col items-center justify-center w-full px-2">
                             <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
                             <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
@@ -364,8 +371,9 @@ export default function SchoolStrategy({ currentUser }) {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white p-6 rounded-xl max-w-sm w-full shadow-2xl">
               <h3 className="text-lg font-bold mb-4">학생 공개 활성 학기 설정</h3>
-              <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 학기 정보를 입력하세요.<br/>(예: 1-1 중간고사, 2-2 기말고사)<br/><br/>* 맨 앞 숫자는 학생의 학년에 맞게 자동 변환되어 노출됩니다.</p>
-              <input type="text" value={tempActiveTerm} onChange={e => setTempActiveTerm(e.target.value)} className="w-full border p-3 rounded mb-4 focus:ring-2 focus:ring-indigo-300 outline-none" placeholder="예: 1-1 중간고사"/>
+              {/* JSX 구문 에러를 방지하기 위해 '->' 대신 유니코드 ➔ 사용 또는 - &gt; 형태 적용 */}
+              <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 학기 정보를 입력하세요.<br/>(예: -1 중간고사, -2 기말고사)<br/><br/>* 앞에 '-'를 붙여 입력하면, 접속한 학생의 학년에 맞게 자동 변환되어 노출됩니다. (예: 1학년 접속 시 ➔ 1-1 중간고사)</p>
+              <input type="text" value={tempActiveTerm} onChange={e => setTempActiveTerm(e.target.value)} className="w-full border p-3 rounded mb-4 focus:ring-2 focus:ring-indigo-300 outline-none" placeholder="예: -1 중간고사"/>
               <div className="flex justify-end gap-2">
                 <button onClick={() => setIsSettingsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded font-bold text-gray-700">취소</button>
                 <button onClick={handleSaveActiveTerm} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold">저장</button>
@@ -429,11 +437,9 @@ export default function SchoolStrategy({ currentUser }) {
               
               <div className="grid grid-cols-2 md:grid-cols-2 gap-3 md:gap-4 mb-4">
                 <div><label className="block text-xs font-bold mb-1">출제 선생님</label><input type="text" className="w-full border p-2 text-sm rounded outline-none" value={formData.teacher} onChange={e => setFormData({...formData, teacher: e.target.value})}/></div>
-                {/* [요구사항 1] 체감 난이도 자동화 */}
                 <div><label className="block text-xs font-bold mb-1">체감 난이도 (자동 계산)</label><input type="text" className="w-full border p-2 text-sm rounded bg-gray-100 text-gray-600 outline-none" readOnly value={`${diffInfoForm.level} (${diffInfoForm.totalIdi}점)`}/></div>
               </div>
               
-              {/* [요구사항 4] 등급컷 이름 수정 */}
               <div className="mb-4">
                  <label className="block text-xs font-bold mb-1">등급컷</label>
                  <div className="flex gap-2">
@@ -550,7 +556,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   if (viewState.view === 'detail') {
 
-    // [요구사항 8] 자동 파싱을 통한 객관식/주관식 집계 로직
     let mcqCount = 0, mcqScore = 0, saqCount = 0, saqScore = 0;
     (report.questions || []).forEach(q => {
         const qNumStr = String(q.qNum || '');
@@ -590,7 +595,6 @@ export default function SchoolStrategy({ currentUser }) {
               {isAdmin && report.isDeleted && <button onClick={() => handleRestore(report.id)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg shadow-sm hover:bg-green-100 text-xs md:text-sm font-bold">
                 <IconRefresh /> 복구
               </button>}
-              {/* [요구사항 6] 관리자용 영구 삭제 버튼 추가 */}
               {isAdmin && <button onClick={() => handleHardDelete(report.id)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-800 text-white rounded-lg shadow-sm hover:bg-gray-900 text-xs md:text-sm font-bold">
                 <IconTrash /> <span className="hidden md:inline">영구 삭제</span>
               </button>}
@@ -651,13 +655,11 @@ export default function SchoolStrategy({ currentUser }) {
             {report.type === 'individual' && (
               <div className="space-y-6 md:space-y-8">
                 
-                {/* [요구사항 2] 상세 뷰 진입 시 총평만 최상단에 배치 */}
                 <div className="bg-white border border-indigo-100 rounded-xl p-4 md:p-6 shadow-sm mb-6">
                     <h3 className="text-sm md:text-base font-bold text-indigo-900 mb-2">📝 시험 총평 요약</h3>
                     <p className="text-gray-800 text-sm md:text-base leading-relaxed whitespace-pre-wrap">{report.review}</p>
                 </div>
 
-                {/* 세부정보 아코디언 */}
                 <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
                   <button onClick={() => setShowDetails(!showDetails)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors">
                     <span className="font-bold text-gray-800 flex items-center gap-2 text-sm md:text-base">세부 정보 <span className="hidden md:inline text-xs text-gray-500 font-normal">(출제 선생님, 등급컷, 출제 비중 등)</span></span>
@@ -669,7 +671,6 @@ export default function SchoolStrategy({ currentUser }) {
                       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
                         <InfoBox label="출제 선생님" value={report.teacher} />
                         
-                        {/* 등급컷 InfoBox 형식 수정 */}
                         <div className="bg-white border rounded-xl p-3 md:p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-center">
                             <p className="text-[10px] md:text-xs text-gray-500 font-medium mb-1.5">등급컷</p>
                             <div className="flex flex-col gap-1 text-xs md:text-sm">
@@ -686,7 +687,6 @@ export default function SchoolStrategy({ currentUser }) {
                         <InfoBox label="학교 프린트/기타출처" value={report.print} />
                       </section>
 
-                      {/* [요구사항 2] 세부정보 내에 목록형 출처 비중 및 단원별 비중 삽입 */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
                           <div className="border border-blue-100 rounded-xl p-4 md:p-5 bg-blue-50/30">
                               <h3 className="font-bold text-blue-900 mb-3 text-xs md:text-sm">📊 출제 근거 (문항 출처 비중)</h3>
@@ -727,59 +727,53 @@ export default function SchoolStrategy({ currentUser }) {
                   )}
                 </div>
 
-                {/* 상세 문항 리스트 아코디언 */}
-                {report.questions?.length > 0 && (
-                  <div className="border border-indigo-200 rounded-xl overflow-hidden bg-white">
-                    <button onClick={() => setShowQuestions(!showQuestions)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-indigo-50 hover:bg-indigo-100 transition-colors">
-                      <span className="font-bold text-indigo-900 flex items-center gap-2 text-sm md:text-base">상세 문항 리스트 <span className="hidden md:inline text-xs text-indigo-500 font-normal">(표를 클릭하면 분석 확인)</span></span>
-                      {showQuestions ? <IconChevronUp /> : <IconChevronDown />}
-                    </button>
-                    
-                    {showQuestions && (
-                      <div className="p-0 animate-fade-in border-t border-indigo-100">
-                        <div className="overflow-x-auto">
-                          {/* [요구사항 7] 변경된 표 헤더 및 구조 */}
-                          <table className="w-full text-left text-xs md:text-sm">
-                            <thead className="bg-gray-50 border-b">
-                              <tr>
-                                <th className="p-3 md:p-4 font-bold text-gray-600 text-center w-16 md:w-20">번호</th>
-                                <th className="p-3 md:p-4 font-bold text-gray-600">단원</th>
-                                <th className="p-3 md:p-4 font-bold text-gray-600 text-center w-24 md:w-32">난이도(IDI점수)</th>
-                                <th className="p-3 md:p-4 font-bold text-gray-600 w-24 md:w-32 text-center">출제 근거</th>
+                <div className="border border-indigo-200 rounded-xl overflow-hidden bg-white">
+                  <button onClick={() => setShowQuestions(!showQuestions)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                    <span className="font-bold text-indigo-900 flex items-center gap-2 text-sm md:text-base">상세 문항 리스트 <span className="hidden md:inline text-xs text-indigo-500 font-normal">(표를 클릭하면 분석 확인)</span></span>
+                    {showQuestions ? <IconChevronUp /> : <IconChevronDown />}
+                  </button>
+                  
+                  {showQuestions && (
+                    <div className="p-0 animate-fade-in border-t border-indigo-100">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs md:text-sm">
+                          <thead className="bg-gray-50 border-b">
+                            <tr>
+                              <th className="p-3 md:p-4 font-bold text-gray-600 text-center w-16 md:w-20">번호</th>
+                              <th className="p-3 md:p-4 font-bold text-gray-600">단원</th>
+                              <th className="p-3 md:p-4 font-bold text-gray-600 text-center w-24 md:w-32">난이도(IDI점수)</th>
+                              <th className="p-3 md:p-4 font-bold text-gray-600 w-24 md:w-32 text-center">출제 근거</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {report.questions.map((q, idx) => (
+                              <tr key={idx} onClick={() => handleOpenModal(q)} className="border-b hover:bg-indigo-50 transition-colors cursor-pointer group">
+                                <td className="p-3 md:p-4 text-center font-bold text-indigo-900 group-hover:text-indigo-600">{q.qNum}</td>
+                                <td className="p-3 md:p-4">
+                                  <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-2">
+                                    <span className="truncate max-w-[120px] md:max-w-[200px]">{q.unit}</span>
+                                    {q.tags && <span className={`text-[9px] md:text-[10px] px-1.5 md:px-2 py-0.5 rounded w-fit whitespace-nowrap ${q.tags.includes('킬러') ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{q.tags}</span>}
+                                  </div>
+                                </td>
+                                <td className="p-3 md:p-4 text-center">
+                                  <span className={`font-medium ${q.diff==='최상'?'text-red-600':q.diff==='상'?'text-orange-500':q.diff==='중'?'text-green-600':'text-blue-500'}`}>{q.diff} ({q.idiTotal}점)</span>
+                                </td>
+                                <td className="p-3 md:p-4 text-center text-gray-600 text-[10px] md:text-xs">
+                                    <span className="truncate max-w-[80px] md:max-w-[100px] block mx-auto">{q.source}</span>
+                                </td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {report.questions.map((q, idx) => (
-                                // [요구사항 7] tr 어디든 클릭하면 모달 팝업
-                                <tr key={idx} onClick={() => handleOpenModal(q)} className="border-b hover:bg-indigo-50 transition-colors cursor-pointer group">
-                                  <td className="p-3 md:p-4 text-center font-bold text-indigo-900 group-hover:text-indigo-600">{q.qNum}</td>
-                                  <td className="p-3 md:p-4">
-                                    <div className="flex flex-col md:flex-row md:items-center gap-1 md:gap-2">
-                                      <span className="truncate max-w-[120px] md:max-w-[200px]">{q.unit}</span>
-                                      {q.tags && <span className={`text-[9px] md:text-[10px] px-1.5 md:px-2 py-0.5 rounded w-fit whitespace-nowrap ${q.tags.includes('킬러') ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{q.tags}</span>}
-                                    </div>
-                                  </td>
-                                  <td className="p-3 md:p-4 text-center">
-                                    <span className={`font-medium ${q.diff==='최상'?'text-red-600':q.diff==='상'?'text-orange-500':q.diff==='중'?'text-green-600':'text-blue-500'}`}>{q.diff} ({q.idiTotal}점)</span>
-                                  </td>
-                                  <td className="p-3 md:p-4 text-center text-gray-600 text-[10px] md:text-xs">
-                                      <span className="truncate max-w-[80px] md:max-w-[100px] block mx-auto">{q.source}</span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* [요구사항 5] 교직원 전용 내부 정보 하단 배치 */}
         {isStaff && (
           <div className="mt-6 md:mt-8 border border-yellow-300 rounded-xl overflow-hidden bg-white shadow-sm">
             <button onClick={() => setShowInternalMemo(!showInternalMemo)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-yellow-50 hover:bg-yellow-100 transition-colors">
@@ -797,14 +791,12 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         )}
 
-        {/* --- [요구사항 5] 상세 문항 분석 Modal (슬라이드형 네비게이션 포함) --- */}
+        {/* 모달 뷰 영역 */}
         {viewState.selectedQuestion && (
           <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4 backdrop-blur-sm animate-fade-in overflow-hidden">
             
-            {/* Modal Container */}
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[95vh] md:max-h-[90vh] flex flex-col relative z-40">
                 
-                {/* [요구사항 5] 네비게이션 (모달 경계면에 투명하게 오버레이) */}
                 <button onClick={handlePrevQuestion} disabled={currentQIndex <= 0} className="absolute -left-2 md:-left-6 top-1/2 -translate-y-1/2 z-50 bg-black/40 hover:bg-black/70 text-white rounded-full p-3 md:p-4 transition-all disabled:opacity-0 disabled:cursor-not-allowed shadow-lg">
                     <IconChevronLeft />
                 </button>
@@ -812,22 +804,18 @@ export default function SchoolStrategy({ currentUser }) {
                     <IconChevronRight />
                 </button>
 
-                {/* 모달 헤더 */}
                 <div className="px-5 md:px-8 py-3 md:py-4 border-b bg-indigo-50 flex justify-between items-center shrink-0 rounded-t-2xl">
                     <div className="flex items-center gap-2 pl-4 md:pl-0">
                         <span className="bg-indigo-600 text-white px-2 py-1 md:px-3 md:py-1 rounded-lg text-sm md:text-lg font-black">{viewState.selectedQuestion.qNum}번</span>
                         <h3 className="text-sm md:text-xl font-black text-indigo-900">문항 상세 분석</h3>
                     </div>
-                    {/* [요구사항 3] 뒤로가기 제어를 위해 소프트 버튼도 history API 연동 */}
                     <button onClick={handleGoBack} className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-200 hover:text-indigo-900 transition-colors font-bold z-50">
                         <IconX />
                     </button>
                 </div>
               
-                {/* 모달 컨텐츠 스크롤 영역 */}
                 <div className="p-5 md:p-8 overflow-y-auto space-y-6 md:space-y-8 flex-1 custom-scrollbar">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8 px-2 md:px-4">
-                        {/* 이미지 영역 ([요구사항 6] Lazy Load 적용) */}
                         <div className="space-y-3 md:space-y-4">
                             <div className="border border-gray-200 rounded-xl bg-gray-50 p-2 text-center h-48 md:h-64 flex flex-col items-center justify-center text-gray-400 overflow-hidden relative group">
                                 <span className="absolute top-2 left-2 text-[10px] md:text-xs font-bold bg-gray-200 text-gray-700 px-2 py-1 rounded shadow-sm">실제 출제 문제</span>
@@ -839,14 +827,12 @@ export default function SchoolStrategy({ currentUser }) {
                             </div>
                         </div>
                         
-                        {/* 데이터 분석 영역 */}
                         <div className="space-y-2 md:space-y-3">
                             <DetailRow label="단원 및 내용" value={viewState.selectedQuestion.unit} />
                             <DetailRow label="출처 분석" value={viewState.selectedQuestion.source} />
                             <DetailRow label="최종 난이도" value={`${viewState.selectedQuestion.diff || '하'} (총 ${viewState.selectedQuestion.idiTotal || 5}점)`} />
                             <DetailRow label="문항 배점" value={`${viewState.selectedQuestion.score}점`} />
 
-                            {/* [요구사항 10] IDI 지수 시각화 (만점 표시 추가) */}
                             <div className="pt-3 md:pt-4 mt-2">
                                 <p className="text-xs md:text-sm font-bold text-indigo-800 mb-2 md:mb-3">
                                     📊 세부 난이도 지수 (IDI 총합 : {viewState.selectedQuestion.idiTotal} <span className="text-[10px] md:text-xs text-indigo-400 font-normal">/ 25점</span>)
