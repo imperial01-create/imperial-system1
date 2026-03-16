@@ -155,6 +155,7 @@ export default function SchoolStrategy({ currentUser }) {
     if (window.confirm('이 리포트를 다시 복구하시겠습니까?')) await updateDoc(doc(db, DB_COLLECTION, id), { isDeleted: false });
   };
 
+  // [요구사항 6] 관리자용 영구 삭제 로직
   const handleHardDelete = async (id) => {
     if (window.confirm('정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
       await deleteDoc(doc(db, DB_COLLECTION, id));
@@ -162,11 +163,26 @@ export default function SchoolStrategy({ currentUser }) {
     }
   };
 
+  // [요구사항 1] IDI 총합 기반 난이도 자동 계산 함수
+  const getAutomaticDifficulty = (questions) => {
+    const totalIdi = questions?.reduce((sum, q) => sum + (q.idiTotal || 0), 0) || 0;
+    let level = '하';
+    let percent = 40;
+    if (totalIdi >= 295) { level = '최상'; percent = 100; }
+    else if (totalIdi > 262 && totalIdi < 295) { level = '상'; percent = 80; }
+    else if (totalIdi > 210 && totalIdi <= 262) { level = '중'; percent = 60; }
+    else { level = '하'; percent = 40; }
+    return { totalIdi, level, percent };
+  };
+
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
     setLoading(true);
     try {
-      const payload = { ...formData, updatedAt: new Date().toISOString() };
+      // 저장 전 자동 계산된 난이도로 덮어쓰기
+      const diffInfoForm = getAutomaticDifficulty(formData.questions);
+      const payload = { ...formData, difficulty: diffInfoForm.level, updatedAt: new Date().toISOString() };
+      
       if (viewState.selectedId) {
         await updateDoc(doc(db, DB_COLLECTION, viewState.selectedId), payload);
         alert('성공적으로 수정되었습니다.');
@@ -175,7 +191,7 @@ export default function SchoolStrategy({ currentUser }) {
         await addDoc(collection(db, DB_COLLECTION), payload);
         alert('새 리포트가 추가되었습니다.');
       }
-      handleGoBack(); // 저장 후 이전 화면으로 자연스럽게 전환
+      handleGoBack(); 
     } catch (e) { console.error(e); alert('저장에 실패했습니다.'); } finally { setLoading(false); }
   };
 
@@ -218,11 +234,7 @@ export default function SchoolStrategy({ currentUser }) {
     alert('교직원 전용 메모가 저장되었습니다.');
   };
 
-  // 공통 유틸리티 계산 함수
-  const getDifficultyPercentage = (diff) => {
-    switch(diff) { case '최상': return 100; case '상': return 80; case '중': return 60; case '하': return 40; case '최하': return 20; default: return 60; }
-  };
-
+  // 단원 비중 계산 유틸리티
   const getUnitDistribution = (questions) => {
     if (!questions || questions.length === 0) return [];
     const counts = questions.reduce((acc, q) => {
@@ -231,15 +243,9 @@ export default function SchoolStrategy({ currentUser }) {
       return acc;
     }, {});
     const total = questions.length;
-    let cumulativePercent = 0;
-    const colors = ['#4f46e5', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#8b5cf6', '#d946ef'];
-    
-    return Object.entries(counts).map(([unit, count], index) => {
-      const percent = Math.round((count / total) * 100);
-      const start = cumulativePercent;
-      cumulativePercent += percent;
-      return { unit, percent, count, color: colors[index % colors.length], startAngle: `${start}%`, endAngle: `${cumulativePercent}%` };
-    });
+    return Object.entries(counts).map(([unit, count]) => ({
+        unit, count, percent: Math.round((count / total) * 100)
+    })).sort((a,b) => b.count - a.count);
   };
 
   const getSourceDistribution = (questions) => {
@@ -318,41 +324,33 @@ export default function SchoolStrategy({ currentUser }) {
             <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
               {individuals.length === 0 && !isStudentOrParent ? <p className="text-gray-400 text-sm pl-2">등록된 시험 분석이 없습니다.</p> : individuals.map(report => {
-                // [요구사항 1] 리스트 요약 대시보드 로직
-                const examIdiSum = report.questions?.reduce((sum, q) => sum + (q.idiTotal || 0), 0) || 0;
-                const dist = getUnitDistribution(report.questions);
-                const donutBackground = dist.length > 0 ? `conic-gradient(${dist.map(d => `${d.color} ${d.startAngle} ${d.endAngle}`).join(', ')})` : '';
+                // [요구사항 1, 3] 리스트 요약 대시보드 - 온도계와 등급컷을 시각적으로 균형있게 재배치
+                const diffInfo = getAutomaticDifficulty(report.questions);
 
                 return (
                   <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => handleOpenDetail(report.id)}>
                     {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                    <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight">[{report.year}] {report.school} {report.term} {report.subject} 분석</h3>
+                    <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">[{report.year}] {report.school} {report.term} {report.subject} 분석</h3>
                     
-                    <div className="mt-4 grid grid-cols-3 gap-2 border-t border-gray-100 pt-4">
-                        {/* 1. 체감 난이도 (온도계) */}
-                        <div className="flex flex-col items-center justify-end">
-                            <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
-                            <div className="relative w-3.5 h-10 md:w-4 md:h-12 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5 mb-1.5">
-                                <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full" style={{ height: `${getDifficultyPercentage(report.difficulty)}%` }}></div>
+                    <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
+                        {/* 1. 체감 난이도 (왼쪽: 온도계, 오른쪽: 텍스트) */}
+                        <div className="flex items-center justify-center gap-3 border-r border-gray-100">
+                            <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
+                                <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
                             </div>
-                            <span className="text-xs font-black text-indigo-900 leading-none mb-0.5">{report.difficulty}</span>
-                            <span className="text-[9px] text-gray-400 font-medium">IDI {examIdiSum}점</span>
+                            <div className="flex flex-col items-start justify-center">
+                                <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
+                                <span className="text-sm md:text-base font-black text-indigo-900 leading-none mb-1">{diffInfo.level}</span>
+                                <span className="text-[9px] md:text-[10px] text-gray-400 font-medium">IDI {diffInfo.totalIdi}점</span>
+                            </div>
                         </div>
 
                         {/* 2. 등급컷 */}
-                        <div className="flex flex-col items-center justify-center border-l border-r border-gray-100 px-1 w-full">
-                            <span className="text-[10px] font-bold text-gray-500 mb-1.5 md:mb-2">예상 등급컷</span>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold">{report.gradeCuts?.grade1 || '-'}</span></div>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold">{report.gradeCuts?.grade2 || '-'}</span></div>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold">{report.gradeCuts?.grade3 || '-'}</span></div>
-                        </div>
-
-                        {/* 3. 단원 비중 */}
-                        <div className="flex flex-col items-center justify-center">
-                            <span className="text-[10px] font-bold text-gray-500 mb-1.5">단원별 비중</span>
-                            {dist.length > 0 ? (
-                                <div className="w-10 h-10 md:w-12 md:h-12 rounded-full shadow-inner" style={{ background: donutBackground }}></div>
-                            ) : <div className="w-10 h-10 md:w-12 md:h-12 bg-gray-100 rounded-full flex items-center justify-center text-[8px] text-gray-400">N/A</div>}
+                        <div className="flex flex-col items-center justify-center w-full px-2">
+                            <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
+                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
+                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
+                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
                         </div>
                     </div>
                   </div>
@@ -383,6 +381,8 @@ export default function SchoolStrategy({ currentUser }) {
   // VIEW: FORM (CREATE / EDIT)
   // ======================================================================
   if (viewState.view === 'form' && formData) {
+    const diffInfoForm = getAutomaticDifficulty(formData.questions);
+
     return (
       <div className="p-3 md:p-6 max-w-4xl mx-auto bg-gray-50 min-h-screen">
         <div className="flex justify-between items-center mb-4 md:mb-6">
@@ -429,12 +429,13 @@ export default function SchoolStrategy({ currentUser }) {
               
               <div className="grid grid-cols-2 md:grid-cols-2 gap-3 md:gap-4 mb-4">
                 <div><label className="block text-xs font-bold mb-1">출제 선생님</label><input type="text" className="w-full border p-2 text-sm rounded outline-none" value={formData.teacher} onChange={e => setFormData({...formData, teacher: e.target.value})}/></div>
-                <div><label className="block text-xs font-bold mb-1">총평 난이도</label><input type="text" className="w-full border p-2 text-sm rounded outline-none" placeholder="예: 상" value={formData.difficulty} onChange={e => setFormData({...formData, difficulty: e.target.value})}/></div>
+                {/* [요구사항 1] 체감 난이도 자동화 */}
+                <div><label className="block text-xs font-bold mb-1">체감 난이도 (자동 계산)</label><input type="text" className="w-full border p-2 text-sm rounded bg-gray-100 text-gray-600 outline-none" readOnly value={`${diffInfoForm.level} (${diffInfoForm.totalIdi}점)`}/></div>
               </div>
               
-              {/* [요구사항 1] 등급컷 입력 폼 */}
+              {/* [요구사항 4] 등급컷 이름 수정 */}
               <div className="mb-4">
-                 <label className="block text-xs font-bold mb-1">예상 등급컷</label>
+                 <label className="block text-xs font-bold mb-1">등급컷</label>
                  <div className="flex gap-2">
                     <input type="text" className="w-1/3 border p-2 text-sm rounded outline-none text-center" placeholder="1등급 (예: 92)" value={formData.gradeCuts?.grade1 || ''} onChange={e => setFormData({...formData, gradeCuts: { ...formData.gradeCuts, grade1: e.target.value }})}/>
                     <input type="text" className="w-1/3 border p-2 text-sm rounded outline-none text-center" placeholder="2등급 (예: 85)" value={formData.gradeCuts?.grade2 || ''} onChange={e => setFormData({...formData, gradeCuts: { ...formData.gradeCuts, grade2: e.target.value }})}/>
@@ -459,8 +460,7 @@ export default function SchoolStrategy({ currentUser }) {
                   <div key={idx} className="bg-gray-50 border p-3 md:p-4 rounded-xl relative shadow-sm">
                     <button onClick={() => removeArrayItem('questions', idx)} className="absolute top-3 right-3 text-red-500 hover:bg-red-100 rounded-full p-1"><IconX/></button>
                     <div className="grid grid-cols-4 md:grid-cols-6 gap-2 mb-3">
-                      {/* [요구사항 9] 문항 번호 텍스트 입력 허용 */}
-                      <div><label className="text-[10px] text-gray-500 font-bold">번호</label><input type="text" placeholder="객관식1" className="w-full border p-1.5 text-sm rounded outline-none" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
+                      <div><label className="text-[10px] text-gray-500 font-bold">번호 (예: 객관식1)</label><input type="text" placeholder="객관식1" className="w-full border p-1.5 text-sm rounded outline-none" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">배점</label><input type="number" className="w-full border p-1.5 text-sm rounded outline-none" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
                       <div className="col-span-2"><label className="text-[10px] text-gray-500 font-bold">단원</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.unit} onChange={e=>handleArrayChange('questions', idx, 'unit', e.target.value)}/></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">난이도 (자동)</label><input type="text" className="w-full border p-1.5 text-sm bg-gray-200 text-gray-600 rounded" readOnly value={`${q.diff || '하'} (${q.idiTotal || 5})`} /></div>
@@ -590,26 +590,13 @@ export default function SchoolStrategy({ currentUser }) {
               {isAdmin && report.isDeleted && <button onClick={() => handleRestore(report.id)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg shadow-sm hover:bg-green-100 text-xs md:text-sm font-bold">
                 <IconRefresh /> 복구
               </button>}
+              {/* [요구사항 6] 관리자용 영구 삭제 버튼 추가 */}
+              {isAdmin && <button onClick={() => handleHardDelete(report.id)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-800 text-white rounded-lg shadow-sm hover:bg-gray-900 text-xs md:text-sm font-bold">
+                <IconTrash /> <span className="hidden md:inline">영구 삭제</span>
+              </button>}
             </div>
           )}
         </div>
-
-        {isStaff && (
-          <div className="border border-yellow-300 rounded-xl overflow-hidden bg-white mb-4 md:mb-6 shadow-sm">
-            <button onClick={() => setShowInternalMemo(!showInternalMemo)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-yellow-50 hover:bg-yellow-100 transition-colors">
-              <span className="font-bold text-yellow-800 flex items-center gap-2 text-sm md:text-base"><IconLock /> 교직원 전용 정보 <span className="hidden md:inline text-xs text-yellow-600 font-normal">(학생/학부모 미노출)</span></span>
-              {showInternalMemo ? <IconChevronUp /> : <IconChevronDown />}
-            </button>
-            {showInternalMemo && (
-              <div className="p-4 md:p-6 bg-yellow-50/30 border-t border-yellow-200 animate-fade-in">
-                <textarea className="w-full bg-white border border-yellow-300 rounded-lg p-3 text-sm min-h-[100px] focus:outline-none focus:ring-2 focus:ring-yellow-400" placeholder="강사의 특별한 출제 성향, 다음 학기 대비 전략 등 내부적으로 공유할 내용을 기록하세요." value={memoInputs[report.id] !== undefined ? memoInputs[report.id] : (report.internalMemo || '')} onChange={(e) => setMemoInputs({...memoInputs, [report.id]: e.target.value})}/>
-                <div className="flex justify-end mt-3">
-                  <button onClick={() => saveInternalMemo(report.id)} className="px-4 py-1.5 md:px-5 md:py-2 bg-yellow-600 text-white font-bold text-sm rounded-lg hover:bg-yellow-700 shadow-sm transition-colors">메모 저장</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         <div className={`bg-white rounded-2xl shadow-sm border overflow-hidden ${report.isDeleted ? 'opacity-70 grayscale' : 'border-gray-100'}`}>
           <div className="bg-indigo-900 px-5 md:px-8 py-5 md:py-6 text-white">
@@ -673,7 +660,7 @@ export default function SchoolStrategy({ currentUser }) {
                 {/* 세부정보 아코디언 */}
                 <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
                   <button onClick={() => setShowDetails(!showDetails)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-gray-50 hover:bg-gray-100 transition-colors">
-                    <span className="font-bold text-gray-800 flex items-center gap-2 text-sm md:text-base">세부 정보 <span className="hidden md:inline text-xs text-gray-500 font-normal">(출제 선생님, 1등급 컷, 출처 비중 등)</span></span>
+                    <span className="font-bold text-gray-800 flex items-center gap-2 text-sm md:text-base">세부 정보 <span className="hidden md:inline text-xs text-gray-500 font-normal">(출제 선생님, 등급컷, 출제 비중 등)</span></span>
                     {showDetails ? <IconChevronUp /> : <IconChevronDown />}
                   </button>
                   
@@ -681,7 +668,17 @@ export default function SchoolStrategy({ currentUser }) {
                     <div className="p-4 md:p-6 space-y-4 md:space-y-6 animate-fade-in border-t">
                       <section className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
                         <InfoBox label="출제 선생님" value={report.teacher} />
-                        <InfoBox label="예상 1등급 컷" value={report.gradeCuts?.grade1} />
+                        
+                        {/* 등급컷 InfoBox 형식 수정 */}
+                        <div className="bg-white border rounded-xl p-3 md:p-4 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-center">
+                            <p className="text-[10px] md:text-xs text-gray-500 font-medium mb-1.5">등급컷</p>
+                            <div className="flex flex-col gap-1 text-xs md:text-sm">
+                                <div className="flex justify-between border-b border-gray-50 pb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
+                                <div className="flex justify-between border-b border-gray-50 pb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
+                                <div className="flex justify-between"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
+                            </div>
+                        </div>
+
                         <InfoBox label="객관식 / 주관식" value={mcqSaqText} colSpan={2} />
                       </section>
                       <section className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
@@ -689,17 +686,31 @@ export default function SchoolStrategy({ currentUser }) {
                         <InfoBox label="학교 프린트/기타출처" value={report.print} />
                       </section>
 
-                      {/* [요구사항 2] 세부정보 내에 목록형 출처 비중 삽입 */}
-                      <div className="border border-blue-100 rounded-xl p-4 md:p-5 bg-blue-50/30">
-                          <h3 className="font-bold text-blue-900 mb-3 text-xs md:text-sm">📊 출제 근거 (문항 출처 비중)</h3>
-                          <ul className="space-y-2">
-                              {getSourceDistribution(report.questions).map(d => (
-                                  <li key={d.source} className="flex justify-between items-center text-xs md:text-sm text-gray-700 bg-white p-2.5 rounded-lg border border-blue-50 shadow-sm">
-                                      <span className="font-medium text-gray-800">{d.source}</span>
-                                      <span className="font-bold text-blue-600">{d.count}문항 <span className="text-blue-400 font-normal">({d.percent}%)</span></span>
-                                  </li>
-                              ))}
-                          </ul>
+                      {/* [요구사항 2] 세부정보 내에 목록형 출처 비중 및 단원별 비중 삽입 */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                          <div className="border border-blue-100 rounded-xl p-4 md:p-5 bg-blue-50/30">
+                              <h3 className="font-bold text-blue-900 mb-3 text-xs md:text-sm">📊 출제 근거 (문항 출처 비중)</h3>
+                              <ul className="space-y-2">
+                                  {getSourceDistribution(report.questions).map(d => (
+                                      <li key={d.source} className="flex justify-between items-center text-xs md:text-sm text-gray-700 bg-white p-2.5 rounded-lg border border-blue-50 shadow-sm">
+                                          <span className="font-medium text-gray-800">{d.source}</span>
+                                          <span className="font-bold text-blue-600">{d.count}문항 <span className="text-blue-400 font-normal">({d.percent}%)</span></span>
+                                      </li>
+                                  ))}
+                              </ul>
+                          </div>
+
+                          <div className="border border-purple-100 rounded-xl p-4 md:p-5 bg-purple-50/30">
+                              <h3 className="font-bold text-purple-900 mb-3 text-xs md:text-sm">📚 단원별 출제 비중</h3>
+                              <ul className="space-y-2">
+                                  {getUnitDistribution(report.questions).map(d => (
+                                      <li key={d.unit} className="flex justify-between items-center text-xs md:text-sm text-gray-700 bg-white p-2.5 rounded-lg border border-purple-50 shadow-sm">
+                                          <span className="font-medium text-gray-800">{d.unit}</span>
+                                          <span className="font-bold text-purple-600">{d.count}문항 <span className="text-purple-400 font-normal">({d.percent}%)</span></span>
+                                      </li>
+                                  ))}
+                              </ul>
+                          </div>
                       </div>
 
                       <section className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
@@ -767,6 +778,24 @@ export default function SchoolStrategy({ currentUser }) {
             )}
           </div>
         </div>
+
+        {/* [요구사항 5] 교직원 전용 내부 정보 하단 배치 */}
+        {isStaff && (
+          <div className="mt-6 md:mt-8 border border-yellow-300 rounded-xl overflow-hidden bg-white shadow-sm">
+            <button onClick={() => setShowInternalMemo(!showInternalMemo)} className="w-full px-4 md:px-6 py-3 md:py-4 flex justify-between items-center bg-yellow-50 hover:bg-yellow-100 transition-colors">
+              <span className="font-bold text-yellow-800 flex items-center gap-2 text-sm md:text-base"><IconLock /> 교직원 전용 정보 <span className="hidden md:inline text-xs text-yellow-600 font-normal">(학생/학부모 미노출)</span></span>
+              {showInternalMemo ? <IconChevronUp /> : <IconChevronDown />}
+            </button>
+            {showInternalMemo && (
+              <div className="p-4 md:p-6 bg-yellow-50/30 border-t border-yellow-200 animate-fade-in">
+                <textarea className="w-full bg-white border border-yellow-300 rounded-lg p-3 text-sm min-h-[100px] focus:outline-none focus:ring-2 focus:ring-yellow-400" placeholder="강사의 특별한 출제 성향, 다음 학기 대비 전략 등 내부적으로 공유할 내용을 기록하세요." value={memoInputs[report.id] !== undefined ? memoInputs[report.id] : (report.internalMemo || '')} onChange={(e) => setMemoInputs({...memoInputs, [report.id]: e.target.value})}/>
+                <div className="flex justify-end mt-3">
+                  <button onClick={() => saveInternalMemo(report.id)} className="px-4 py-1.5 md:px-5 md:py-2 bg-yellow-600 text-white font-bold text-sm rounded-lg hover:bg-yellow-700 shadow-sm transition-colors">메모 저장</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* --- [요구사항 5] 상세 문항 분석 Modal (슬라이드형 네비게이션 포함) --- */}
         {viewState.selectedQuestion && (
