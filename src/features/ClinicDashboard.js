@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-// [Import Check] 아이콘 및 라이브러리 완벽 확인
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
@@ -22,7 +21,6 @@ const TEMPLATES = {
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
 };
 
-// --- Helper Functions ---
 const getLocalToday = () => {
   const d = new Date();
   const offset = d.getTimezoneOffset() * 60000;
@@ -52,7 +50,6 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// --- Calendar View Component ---
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
@@ -173,7 +170,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 <div className="w-full md:w-14 text-left md:text-right text-lg md:text-base font-bold text-gray-800 md:text-gray-600 font-mono pl-1 mt-2 md:mt-4">{t}</div>
                 <div className="flex-1 space-y-3 w-full">
                   {slots.map(s => {
-                    const isConfirmed = s.status === 'confirmed';
+                    const isConfirmed = s.status === 'confirmed' || s.status === 'completed';
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
@@ -210,7 +207,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
                     if (isParent) {
                         const isMyChild = s.studentName === currentUser.childName;
-                        const isBooked = s.status === 'confirmed' || s.status === 'pending';
+                        const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
                         if (isBooked && !isMyChild) {
                             return (
                                 <div key={s.id} className="border rounded-2xl p-4 flex flex-col justify-center bg-gray-50 border-gray-200 opacity-70 w-full min-h-[80px]">
@@ -247,8 +244,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                   <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
-                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2"><Edit2 size={18}/></button>
-                                <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2"><Trash2 size={18}/></button>
+                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="예약 정보 수정"><Edit2 size={18}/></button>
+                                <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
+                                {/* [CTO FIX] 관리자는 언제든 피드백 작성/수정 가능 */}
+                                {(s.status === 'confirmed' || s.status === 'completed') && (
+                                    <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
+                                )}
                               </div>
                             )}
                             {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
@@ -258,7 +259,19 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
-                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted'}>{s.feedbackStatus==='submitted'?'완료':'작성'}</Button>}
+                            
+                            {/* [CTO FIX] 조교 본인이라면 피드백 '완료' 후에도 '수정'할 수 있도록 버튼 해제 */}
+                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && (
+                                <Button 
+                                    size="sm" 
+                                    variant={s.feedbackStatus==='submitted'?'secondary':'primary'} 
+                                    icon={CheckSquare} 
+                                    onClick={()=>onAction('write_feedback', s)} 
+                                    disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id}
+                                >
+                                    {s.feedbackStatus==='submitted' ? '수정' : '작성'}
+                                </Button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -274,7 +287,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   );
 });
 
-// --- Main Clinic Dashboard ---
 const ClinicDashboard = ({ currentUser, users }) => {
     const [sessionMap, setSessionMap] = useState({});
     const [sessions, setSessions] = useState([]);
@@ -552,8 +564,6 @@ ${scheduleText}
       fetchSessions(true); 
   };
 
-  // [CTO FIX] 학생의 신청 데이터 무결성 강화 및 DB 룰 통과 
-  // [서비스 가치(Service Value)] 학생의 예약 신청 성공률을 높여 서비스의 이탈률을 방지합니다.
   const submitStudentApplication = async () => {
       const formattedTopic = applicationItems.map(i => i.subject).join(', ');
       const formattedRange = applicationItems.map(i => `${i.workbook} (${i.range})`).join('\n');
@@ -564,7 +574,7 @@ ${scheduleText}
         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
         const updateData = { 
             status: 'pending', 
-            studentId: currentUser.id, // 누락되었던 식별자 추가
+            studentId: currentUser.id, 
             studentName: currentUser.name, 
             studentPhone: currentUser.phone || '', 
             topic: formattedTopic, 
@@ -590,9 +600,7 @@ ${scheduleText}
       }
   };
 
-  // [CTO FIX] 관리자의 직접 수정 기능 안정화
   const handleAdminEditSubmit = async () => {
-    // 학생 이름을 비웠다면 상태를 'open'으로 변경, 채웠다면 기존 상태 유지 혹은 'confirmed'로 자동 전이
     const newStatus = adminEditData.studentName ? 
                       (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 
                       'open';
@@ -618,7 +626,9 @@ ${scheduleText}
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
   const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
-  const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+  
+  // [CTO FIX] 학부모/학생 피드백 열람을 위해 completed 상태의 세션도 필터링에 포함
+  const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
   if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
@@ -651,8 +661,6 @@ ${scheduleText}
                   )}
               </Card>
 
-              {/* [CTO FIX] 관리자 근무 일괄 생성 UI 개선 및 반응형 적용 */}
-              {/* [서비스 가치(Service Value)] 입력 폼이 찌그러지지 않아 시간 낭비를 막고, 직관적인 UI로 관리자의 업무 생산성을 극대화합니다. */}
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 근무 일괄 생성</h3>
@@ -764,7 +772,7 @@ ${scheduleText}
                 <Card className="bg-blue-50 border-blue-100 w-full">
                     <h2 className="text-lg font-bold mb-4 text-blue-800 flex items-center gap-2"><CheckCircle size={20}/> {currentUser.role === 'parent' ? `${currentUser.childName} 학생의` : '나의'} 예약 현황</h2>
                     {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400">예약 내역이 없습니다.</div> : (
-                        <div className="space-y-3 max-h-[400px] overflow-y-auto custom-scrollbar">
+                        <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
                             {studentMyClinics.map(s => (
                                 <div key={s.id} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
                                     <div className="flex justify-between mb-2">
@@ -781,6 +789,16 @@ ${scheduleText}
                                         <div className="flex gap-2 mb-1"><span className="font-bold text-gray-500 w-8 shrink-0">과목</span> <span>{s.topic}</span></div>
                                         <div className="flex gap-2"><span className="font-bold text-gray-500 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap">{s.questionRange}</span></div>
                                     </div>
+                                    
+                                    {/* [CTO FIX] 학생/학부모에게 작성된 피드백 노출 UI 추가 */}
+                                    {(s.status === 'completed' && (s.clinicContent || s.feedback || s.improvement)) && (
+                                        <div className="mt-3 bg-green-50 p-3.5 rounded-lg text-sm text-gray-700 border border-green-100">
+                                            <div className="font-bold text-green-800 mb-2 flex items-center gap-1.5"><MessageSquare size={16}/> 클리닉 피드백</div>
+                                            {s.clinicContent && <div className="whitespace-pre-wrap leading-relaxed"><span className="font-bold text-gray-600">진행 내용:</span> {s.clinicContent}</div>}
+                                            {s.feedback && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-600">문제점:</span> {s.feedback}</div>}
+                                            {s.improvement && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-600">개선 방향:</span> {s.improvement}</div>}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>

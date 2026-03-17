@@ -99,14 +99,18 @@ export default function SchoolStrategy({ currentUser }) {
     fetchSettings();
   }, []);
 
+  // [CTO FIX] 학부모 계정 연동: 자녀의 학년 정보 활용
   const getStudentTargetTerm = (baseTerm, currentUserObj) => {
     if (!baseTerm) return "";
     const base = baseTerm.trim();
     
     let gradeNum = "";
-    if (currentUserObj && currentUserObj.grade) {
-      const gradeMatch = String(currentUserObj.grade).match(/\d+/);
-      if (gradeMatch) gradeNum = gradeMatch[0];
+    if (currentUserObj) {
+      const gradeStr = currentUserObj.childGrade || currentUserObj.grade;
+      if (gradeStr) {
+        const gradeMatch = String(gradeStr).match(/\d+/);
+        if (gradeMatch) gradeNum = gradeMatch[0];
+      }
     }
     
     if (!gradeNum) return base; 
@@ -129,7 +133,8 @@ export default function SchoolStrategy({ currentUser }) {
             const currentActiveTerm = activeTerm ? activeTerm.trim() : "";
             
             const targetTerm = getStudentTargetTerm(currentActiveTerm, user);
-            const userSchoolRaw = user.schoolname || user.schoolName || user.school || "";
+            // [CTO FIX] 학부모 계정 연동: 자녀의 학교 정보 활용
+            const userSchoolRaw = user.childSchool || user.schoolname || user.schoolName || user.school || "";
             const reportSchool = report.school ? report.school.trim() : "";
             
             return !report.isDeleted && reportTerm === targetTerm && reportSchool === userSchoolRaw.trim();
@@ -137,28 +142,22 @@ export default function SchoolStrategy({ currentUser }) {
           else return !report.isDeleted; 
         });
 
-        // [요구사항 1] 리포트 다중 정렬 로직 (연도 최신순 -> 학교명 가나다순 -> 과목 가나다순)
         filteredData.sort((a, b) => {
-          // 경향 분석 vs 개별 분석 분리 기준 유지
           if (a.type === 'trend' && b.type !== 'trend') return -1;
           if (a.type !== 'trend' && b.type === 'trend') return 1;
           
-          // 1순위: 연도 (내림차순, 최신순)
           const yearA = parseInt(a.year) || 0;
           const yearB = parseInt(b.year) || 0;
           if (yearA !== yearB) return yearB - yearA;
 
-          // 2순위: 학교명 (오름차순, 가나다순)
           const schoolA = (a.school || "").trim();
           const schoolB = (b.school || "").trim();
           if (schoolA !== schoolB) return schoolA.localeCompare(schoolB);
 
-          // 3순위: 과목명 (오름차순, 가나다순)
           const subjectA = (a.subject || "").trim();
           const subjectB = (b.subject || "").trim();
           if (subjectA !== subjectB) return subjectA.localeCompare(subjectB);
 
-          // 4순위: 작성 시간 (내림차순)
           return new Date(b.createdAt) - new Date(a.createdAt);
         });
 
@@ -294,7 +293,7 @@ export default function SchoolStrategy({ currentUser }) {
   if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
 
   const targetDisplayTerm = isStudentOrParent ? getStudentTargetTerm(activeTerm, user) : activeTerm;
-  const userSchoolName = user.schoolname || user.schoolName || user.school || "소속 학교";
+  const userSchoolName = user.childSchool || user.schoolname || user.schoolName || user.school || "소속 학교";
 
   // ======================================================================
   // VIEW: LIST
@@ -391,7 +390,6 @@ export default function SchoolStrategy({ currentUser }) {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white p-6 rounded-xl max-w-sm w-full shadow-2xl">
               <h3 className="text-lg font-bold mb-4">학생 공개 활성 학기 설정</h3>
-              {/* JSX 구문 에러를 방지하기 위해 '->' 대신 유니코드 ➔ 사용 */}
               <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 학기 정보를 입력하세요.<br/>(예: -1 중간고사, -2 기말고사)<br/><br/>* 앞에 '-'를 붙여 입력하면, 접속한 학생의 학년에 맞게 자동 변환되어 노출됩니다. (예: 1학년 접속 시 ➔ 1-1 중간고사)</p>
               <input type="text" value={tempActiveTerm} onChange={e => setTempActiveTerm(e.target.value)} className="w-full border p-3 rounded mb-4 focus:ring-2 focus:ring-indigo-300 outline-none" placeholder="예: -1 중간고사"/>
               <div className="flex justify-end gap-2">
@@ -576,7 +574,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   if (viewState.view === 'detail') {
 
-    // [요구사항 2] 부동소수점 방어를 위한 객관식/주관식 점수 집계 로직 최적화
     let mcqCount = 0, mcqScore = 0, saqCount = 0, saqScore = 0;
     (report.questions || []).forEach(q => {
         const qNumStr = String(q.qNum || '');
@@ -586,7 +583,6 @@ export default function SchoolStrategy({ currentUser }) {
         else { mcqCount++; mcqScore += score; }
     });
     
-    // 소수점 2자리에서 반올림 처리하여 60.0000001 같은 오류 방지 후 다시 Number 변환
     mcqScore = Number(mcqScore.toFixed(2));
     saqScore = Number(saqScore.toFixed(2));
     const mcqSaqText = `${mcqCount}문제(${mcqScore}점) / ${saqCount}문제(${saqScore}점)`;
