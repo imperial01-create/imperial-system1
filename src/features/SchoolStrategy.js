@@ -17,6 +17,7 @@ const IconChevronDown = () => <svg xmlns="http://www.w3.org/2000/svg" width="20"
 const IconChevronUp = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>;
 const IconChevronLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>;
 const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>;
+const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
 const DB_COLLECTION = `artifacts/${APP_ID}/public/data/school_strategies`;
@@ -42,6 +43,12 @@ export default function SchoolStrategy({ currentUser }) {
   const isStaff = ['admin', 'lecturer', 'ta'].includes(user.role);
   const isAdmin = user.role === 'admin';
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
+
+  // [CTO 추가] 검색 필터 상태 관리
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
+  const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
+  const [appliedFilters, setAppliedFilters] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
 
   useEffect(() => {
       const handlePopState = (e) => {
@@ -99,7 +106,6 @@ export default function SchoolStrategy({ currentUser }) {
     fetchSettings();
   }, []);
 
-  // [CTO FIX] 학부모 계정 연동: 자녀의 학년 정보 활용
   const getStudentTargetTerm = (baseTerm, currentUserObj) => {
     if (!baseTerm) return "";
     const base = baseTerm.trim();
@@ -133,7 +139,6 @@ export default function SchoolStrategy({ currentUser }) {
             const currentActiveTerm = activeTerm ? activeTerm.trim() : "";
             
             const targetTerm = getStudentTargetTerm(currentActiveTerm, user);
-            // [CTO FIX] 학부모 계정 연동: 자녀의 학교 정보 활용
             const userSchoolRaw = user.childSchool || user.schoolname || user.schoolName || user.school || "";
             const reportSchool = report.school ? report.school.trim() : "";
             
@@ -290,6 +295,11 @@ export default function SchoolStrategy({ currentUser }) {
     })).sort((a,b) => b.count - a.count);
   };
 
+  // [CTO 추가] 검색 실행 함수
+  const handleSearchSubmit = () => {
+      setAppliedFilters(filterInput);
+  };
+
   if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
 
   const targetDisplayTerm = isStudentOrParent ? getStudentTargetTerm(activeTerm, user) : activeTerm;
@@ -299,8 +309,51 @@ export default function SchoolStrategy({ currentUser }) {
   // VIEW: LIST
   // ======================================================================
   if (viewState.view === 'list') {
-    const trends = reports.filter(r => r.type === 'trend');
-    const individuals = reports.filter(r => r.type === 'individual');
+
+    // [CTO 추가] 교직원 전용 클라이언트 필터링 로직
+    let displayedReports = reports;
+    if (isStaff) {
+        displayedReports = reports.filter(r => {
+            // 1. 연도 매칭
+            if (appliedFilters.year !== '전체' && r.year !== appliedFilters.year) return false;
+            
+            // 2. 학교명 매칭 (포함 검색)
+            if (appliedFilters.school.trim() !== '') {
+                const searchSchool = appliedFilters.school.trim().toLowerCase();
+                const reportSchool = (r.school || '').toLowerCase();
+                if (!reportSchool.includes(searchSchool)) return false;
+            }
+
+            // 3. 학년 및 시험 종류 매칭
+            if (appliedFilters.grade !== '전체' || appliedFilters.exam !== '전체') {
+                const rTerm = r.term || '';
+                let gradeMatch = true;
+                let examMatch = true;
+
+                if (appliedFilters.grade !== '전체') {
+                    const g = appliedFilters.grade.replace('학년', '');
+                    gradeMatch = rTerm.startsWith(`${g}-`) || rTerm.startsWith(`${g}학년`); // 1- 또는 1학년 형태 모두 방어
+                }
+
+                if (appliedFilters.exam !== '전체') {
+                    let suffix = '';
+                    if (appliedFilters.exam === '1학기 중간고사') suffix = '-1 중간고사';
+                    if (appliedFilters.exam === '1학기 기말고사') suffix = '-1 기말고사';
+                    if (appliedFilters.exam === '2학기 중간고사') suffix = '-2 중간고사';
+                    if (appliedFilters.exam === '2학기 기말고사') suffix = '-2 기말고사';
+                    
+                    examMatch = rTerm.includes(suffix);
+                }
+
+                if (!gradeMatch || !examMatch) return false;
+            }
+
+            return true;
+        });
+    }
+
+    const trends = displayedReports.filter(r => r.type === 'trend');
+    const individuals = displayedReports.filter(r => r.type === 'individual');
 
     return (
       <div className="p-3 md:p-6 max-w-6xl mx-auto space-y-6 md:space-y-8 bg-gray-50 min-h-screen">
@@ -325,6 +378,47 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         </div>
 
+        {/* [CTO 추가] 교직원 전용 대시보드 검색창 */}
+        {isStaff && (
+            <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row gap-3 items-end">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
+                    <div className="flex flex-col">
+                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">년도</label>
+                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.year} onChange={e => setFilterInput({...filterInput, year: e.target.value})}>
+                            <option value="전체">전체 년도</option>
+                            {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
+                        </select>
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">학교명 검색</label>
+                        <input type="text" placeholder="예: 영일고" className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.school} onChange={e => setFilterInput({...filterInput, school: e.target.value})} onKeyDown={e => e.key === 'Enter' && handleSearchSubmit()} />
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">학년</label>
+                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.grade} onChange={e => setFilterInput({...filterInput, grade: e.target.value})}>
+                            <option value="전체">전체 학년</option>
+                            <option value="1학년">1학년</option>
+                            <option value="2학년">2학년</option>
+                            <option value="3학년">3학년</option>
+                        </select>
+                    </div>
+                    <div className="flex flex-col">
+                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">시험 선택</label>
+                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.exam} onChange={e => setFilterInput({...filterInput, exam: e.target.value})}>
+                            <option value="전체">전체 시험</option>
+                            <option value="1학기 중간고사">1학기 중간고사</option>
+                            <option value="1학기 기말고사">1학기 기말고사</option>
+                            <option value="2학기 중간고사">2학기 중간고사</option>
+                            <option value="2학기 기말고사">2학기 기말고사</option>
+                        </select>
+                    </div>
+                </div>
+                <button onClick={handleSearchSubmit} className="w-full md:w-auto px-5 py-2 h-[38px] bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 flex items-center justify-center gap-1">
+                    <IconSearch /> 검색
+                </button>
+            </div>
+        )}
+
         {isStudentOrParent && reports.length === 0 && (
            <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
              <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
@@ -333,11 +427,17 @@ export default function SchoolStrategy({ currentUser }) {
            </div>
         )}
 
-        {(trends.length > 0 || !isStudentOrParent) && (
+        {isStaff && displayedReports.length === 0 && (
+           <div className="py-12 text-center text-gray-500 text-sm bg-white rounded-xl border border-gray-100 shadow-sm">
+               검색 조건에 일치하는 리포트가 없습니다.
+           </div>
+        )}
+
+        {(trends.length > 0 || (!isStudentOrParent && displayedReports.length > 0)) && trends.length > 0 && (
           <section>
             <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><IconChart /> 과목 경향 분석</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-              {trends.length === 0 && !isStudentOrParent ? <p className="text-gray-400 text-sm pl-2">등록된 분석이 없습니다.</p> : trends.map(report => (
+              {trends.map(report => (
                 <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
                   {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                   <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.school} {report.term} 경향 분석</h3>
@@ -348,11 +448,11 @@ export default function SchoolStrategy({ currentUser }) {
           </section>
         )}
 
-        {(individuals.length > 0 || !isStudentOrParent) && (
+        {(individuals.length > 0 || (!isStudentOrParent && displayedReports.length > 0)) && individuals.length > 0 && (
           <section>
             <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
-              {individuals.length === 0 && !isStudentOrParent ? <p className="text-gray-400 text-sm pl-2">등록된 시험 분석이 없습니다.</p> : individuals.map(report => {
+              {individuals.map(report => {
                 const diffInfo = getAutomaticDifficulty(report.questions);
 
                 return (
