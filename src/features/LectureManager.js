@@ -2,12 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText, Upload // [추가] Upload 아이콘
+    FileText, Upload 
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
     query, where, onSnapshot, serverTimestamp, getDocs,
-    writeBatch // [추가] 과금 방어용 일괄 처리 API
+    writeBatch 
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
@@ -723,12 +723,15 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </Modal>
 
-            {/* [추가된 모달] CSV 업로드 모달 */}
+            {/* [수정된 모달] CSV 업로드 모달 가이드 문구 변경 */}
             <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="CSV 일괄 동기화">
                 <div className="space-y-6 w-full">
                     <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
-                        <p className="font-bold mb-1 flex items-center gap-1"><CheckCircle size={16}/> 스마트 데이터 매핑 알고리즘</p>
-                        <p className="opacity-90 leading-relaxed">학년, 괄호, 날짜 등 불필요한 메타데이터는 서버로 전송되기 전 자동으로 필터링됩니다. 기존에 등록된 데이터와 비교하여 <b>변경된 내용(Diff)</b>만 업데이트되므로 네트워크 요금을 극도로 절약합니다.</p>
+                        <p className="font-bold mb-2 flex items-center gap-1"><BookOpen size={16}/> 데이터 불러오는 법</p>
+                        <div className="opacity-90 leading-relaxed space-y-1">
+                            <p>• 강사별 현황은 <b>통통통의 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 에서 엑셀을 저장하여 csv 파일로 저장 후 입력</p>
+                            <p>• 반별 원생 목록은 <b>통통통의 학사관리 &gt; 원생 &gt; 반별 원생목록</b> 에서 엑셀을 저장하여 csv 파일로 저장 후 입력</p>
+                        </div>
                     </div>
 
                     <div>
