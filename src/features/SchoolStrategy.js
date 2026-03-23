@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '../firebase'; 
-import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager'; // [CTO 추가] 통합 매니저 임포트
+import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, deleteDoc, getDocs } from 'firebase/firestore'; // getDocs 추가
+import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager';
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -79,7 +79,6 @@ export default function SchoolStrategy({ currentUser }) {
   const handleOpenForm = (existingReport = null) => {
       pushHistory('form');
       if (existingReport) {
-          // 통합 컬렉션의 데이터를 폼 구조에 맞게 매핑
           setFormData({ 
               ...existingReport,
               school: existingReport.schoolName || existingReport.school || '',
@@ -122,17 +121,14 @@ export default function SchoolStrategy({ currentUser }) {
   };
 
   useEffect(() => {
-    // [CTO 수정] 통합 컬렉션 리스닝. 아카이브 자료만 있고 연구소 내용이 없는 것은 거름.
     const unsubscribe = onSnapshot(
       collection(db, INTEGRATED_COLLECTION), 
       (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const filteredData = data.filter(report => {
-          // 내신연구소용 데이터(type)가 없으면 노출하지 않음
           if (!report.type) return false;
 
           if (isStudentOrParent) {
-            // 포맷 통일 (예: 1-1 중간고사)
             const reportGrade = report.grade?.replace('학년','') || '1';
             const reportSemester = report.semester?.replace('학기','') || '1';
             const reportTermType = report.termType || report.term || '중간고사';
@@ -210,6 +206,96 @@ export default function SchoolStrategy({ currentUser }) {
     return { totalIdi, level, percent };
   };
 
+  // ======================================================================
+  // 💡 [CTO 1회성 마이그레이션 스크립트] 기존 레거시 데이터 통합 병합
+  // ======================================================================
+  const runDataMigration = async () => {
+    if (!window.confirm("기존 아카이브와 내신연구소 데이터를 통합하시겠습니까? (이 작업은 1회만 수행하세요)")) return;
+    
+    setLoading(true);
+    let successCount = 0;
+
+    try {
+      // 1. 기존 기출 아카이브 데이터 가져오기 및 통합 컬렉션에 병합
+      const archiveSnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/exam_archive`));
+      for (const archiveDoc of archiveSnapshot.docs) {
+        const data = archiveDoc.data();
+        if (!data.year || !data.schoolName) continue;
+
+        const baseData = {
+          year: data.year,
+          schoolName: data.schoolName.trim(),
+          grade: (data.grade || '1학년').replace(/\s+/g, ''),
+          semester: (data.semester || '1학기').replace(/\s+/g, ''),
+          termType: (data.termType || data.term || '중간고사').replace(/\s+/g, ''),
+          subject: (data.subject || '수학').trim(),
+        };
+
+        const updatePayload = {
+          region: data.region || '서울',
+          district: data.district || '양천구',
+          schoolType: data.schoolType || '고등학교',
+          files: data.files || {}
+        };
+
+        await upsertExamData(baseData, updatePayload);
+        successCount++;
+      }
+
+      // 2. 기존 내신 연구소 데이터 가져오기 및 통합 컬렉션에 병합
+      const strategySnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/school_strategies`));
+      for (const stratDoc of strategySnapshot.docs) {
+        const data = stratDoc.data();
+        if (!data.year || (!data.school && !data.schoolName)) continue;
+
+        const termStr = data.term || ""; 
+        const gradeMatch = termStr.match(/^(\d)/);
+        const grade = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
+        let semester = "1학기";
+        if (termStr.includes("-2") || termStr.includes("2학기")) semester = "2학기";
+        let termType = "중간고사";
+        if (termStr.includes("기말")) termType = "기말고사";
+
+        const baseData = {
+          year: data.year,
+          schoolName: (data.schoolName || data.school).trim(),
+          grade: grade,
+          semester: semester,
+          termType: termType,
+          subject: (data.subject || '수학').trim()
+        };
+
+        const updatePayload = {
+          type: data.type || 'individual',
+          teacher: data.teacher || '',
+          difficulty: data.difficulty || '중',
+          gradeCuts: data.gradeCuts || { grade1: '', grade2: '', grade3: '' },
+          suppBook: data.suppBook || '',
+          print: data.print || '',
+          scope: data.scope || '',
+          review: data.review || '',
+          specialNotes: data.specialNotes || '',
+          questions: data.questions || [],
+          trendData: data.trendData || [],
+          scopeChanges: data.scopeChanges || [],
+          teacherStyles: data.teacherStyles || [],
+          isDeleted: data.isDeleted || false,
+          internalMemo: data.internalMemo || ''
+        };
+
+        await upsertExamData(baseData, updatePayload);
+        successCount++;
+      }
+
+      alert(`🎉 마이그레이션 완료! 총 ${successCount}건의 데이터가 성공적으로 통합 및 병합되었습니다. 새로고침 해주세요.`);
+    } catch (error) {
+      console.error("Migration Error:", error);
+      alert("마이그레이션 중 오류가 발생했습니다. 개발자 도구(F12) 콘솔을 확인해주세요.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
     if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
@@ -218,7 +304,6 @@ export default function SchoolStrategy({ currentUser }) {
     try {
       const diffInfoForm = getAutomaticDifficulty(formData.questions);
       
-      // 학기 파싱
       const termStr = formData.term || ""; 
       const gradeMatch = termStr.match(/^(\d)/);
       const grade = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
@@ -253,7 +338,6 @@ export default function SchoolStrategy({ currentUser }) {
           isDeleted: formData.isDeleted || false
       };
       
-      // [CTO 도입] 병합 저장 (Upsert)
       await upsertExamData(baseData, strategyPayload);
       alert('성공적으로 저장 및 통합되었습니다.');
       handleGoBack(); 
@@ -381,6 +465,14 @@ export default function SchoolStrategy({ currentUser }) {
             )}
           </div>
           <div className="flex gap-2">
+            
+            {/* 🚨 [임시] 관리자용 데이터 마이그레이션 버튼 추가 */}
+            {isAdmin && (
+              <button onClick={runDataMigration} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-red-600 text-white rounded-lg shadow-sm hover:bg-red-700 text-xs md:text-sm font-bold animate-pulse">
+                <span>데이터 통합 실행</span>
+              </button>
+            )}
+
             {isAdmin && (
               <button onClick={() => { setTempActiveTerm(activeTerm); setIsSettingsModalOpen(true); }} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:bg-gray-300 text-xs md:text-sm font-bold">
                 <IconSettings /> <span className="hidden md:inline">활성 학기 설정</span>
@@ -550,7 +642,6 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
           </div>
 
-          {/* 이하 Form 상세 요소 (기존과 동일하여 생략 없이 유지) */}
           {formData.type === 'individual' && (
             <div className="space-y-6">
               <h3 className="text-lg font-bold border-b pb-2">시험 상세 정보</h3>
@@ -731,7 +822,7 @@ export default function SchoolStrategy({ currentUser }) {
 
           <div className="p-4 md:p-8">
             
-            {/* [CTO 추가] 보안 방어막 (Zero Trust) : 강사/관리자에게만 원본 PDF 링크 노출 */}
+            {/* [CTO 방어막] 보안 방어막 (Zero Trust) : 강사/관리자에게만 원본 PDF 링크 노출 */}
             {isStaff && report.files?.examPaper?.url && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex justify-between items-center shadow-sm">
                     <div className="flex flex-col">
