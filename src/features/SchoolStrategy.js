@@ -89,8 +89,8 @@ export default function SchoolStrategy({ currentUser }) {
               const snap = await getDocs(qTrend);
               const trends = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isDeleted);
               
-              setTrendReports(sortReports(trends)); // 정렬 적용
-              setIndividualReports([]); 
+              setTrendReports(sortReports(trends)); 
+              // 검색 상태 유지를 위해 초기 로드 시 개별 리포트는 비우지 않고 그대로 둡니다.
           } else if (isStudentOrParent) {
               const userSchoolRaw = String(user.childSchool || user.schoolname || user.schoolName || user.school || "").trim();
               const qStudent = query(collection(db, INTEGRATED_COLLECTION), where("schoolName", "==", userSchoolRaw));
@@ -137,6 +137,7 @@ export default function SchoolStrategy({ currentUser }) {
       fetchInitialData();
   }, [fetchInitialData]);
 
+  // [CTO 최적화] 메모리 누수 방지를 위해 중복 선언되어 있던 popstate 이벤트 리스너를 단일화했습니다.
   useEffect(() => {
       const handlePopState = (e) => {
           setViewState(prev => {
@@ -219,7 +220,6 @@ export default function SchoolStrategy({ currentUser }) {
       }
   };
 
-  // 배경 데이터 새로고침 함수 (저장/삭제 시 호출)
   const refreshData = () => {
       if (isStaff && hasSearched) handleSearchSubmit();
       else fetchInitialData();
@@ -298,34 +298,6 @@ export default function SchoolStrategy({ currentUser }) {
     else if (totalIdi > 210 && totalIdi <= 262) { level = '중'; percent = 60; }
     else { level = '하'; percent = 40; }
     return { totalIdi, level, percent };
-  };
-
-  const runDataCleanup = async () => {
-    if (!window.confirm("🚨 경고: 마이그레이션이 완벽히 끝났습니까?\n기존에 있던 'exam_archive'와 'school_strategies' 컬렉션의 찌꺼기 데이터를 전부 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.")) return;
-    
-    setLoading(true);
-    let deletedCount = 0;
-
-    try {
-      const archiveSnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/exam_archive`));
-      for (const docSnap of archiveSnapshot.docs) {
-        await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/exam_archive`, docSnap.id));
-        deletedCount++;
-      }
-
-      const strategySnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/school_strategies`));
-      for (const docSnap of strategySnapshot.docs) {
-        await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/school_strategies`, docSnap.id));
-        deletedCount++;
-      }
-
-      alert(`🧹 찌꺼기 청소 완료!\n총 ${deletedCount}개의 레거시 데이터가 영구적으로 삭제되었습니다.\n이제 데이터베이스 스토리지가 최적화되었습니다.`);
-    } catch (error) {
-      console.error("Cleanup Error:", error);
-      alert("찌꺼기 데이터 삭제 중 오류가 발생했습니다. 개발자 도구(F12)를 확인해주세요.");
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleSaveReport = async () => {
@@ -461,13 +433,6 @@ export default function SchoolStrategy({ currentUser }) {
             )}
           </div>
           <div className="flex gap-2">
-            
-            {isAdmin && (
-              <button onClick={runDataCleanup} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-red-600 text-white rounded-lg shadow-sm hover:bg-red-700 text-xs md:text-sm font-bold">
-                <span>찌꺼기 데이터 청소</span>
-              </button>
-            )}
-
             {isAdmin && (
               <button onClick={() => { setTempActiveTerm(activeTerm); setIsSettingsModalOpen(true); }} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:bg-gray-300 text-xs md:text-sm font-bold">
                 <IconSettings /> <span className="hidden md:inline">활성 학기 설정</span>
@@ -843,18 +808,7 @@ export default function SchoolStrategy({ currentUser }) {
 
           <div className="p-4 md:p-8">
             
-            {/* 보안 방어막 (Zero Trust) */}
-            {isStaff && report.files?.examPaper?.url && (
-                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex justify-between items-center shadow-sm">
-                    <div className="flex flex-col">
-                        <span className="font-bold text-red-900 text-sm">🔒 교직원 전용: 원본 시험지 파일</span>
-                        <span className="text-xs text-red-600">이 링크는 학생과 학부모에게 절대 노출되지 않습니다.</span>
-                    </div>
-                    <a href={report.files.examPaper.url} target="_blank" rel="noreferrer" className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg text-sm shadow-sm hover:bg-red-700">
-                        원본 확인하기
-                    </a>
-                </div>
-            )}
+            {/* [CTO 최적화] 상단의 붉은색 PDF 뷰어 제거됨 (하단 교직원 전용 블록으로 통합 완료) */}
 
             {!report.type || (!report.review && (!report.questions || report.questions.length === 0)) ? (
                 <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-xl border border-dashed border-gray-300">
@@ -1046,7 +1000,7 @@ export default function SchoolStrategy({ currentUser }) {
             {showInternalMemo && (
               <div className="p-4 md:p-6 bg-yellow-50/30 border-t border-yellow-200 animate-fade-in">
                 
-                {/* [CTO 추가] 아카이브 파일 퀵 뷰어 (Workflow Integration) */}
+                {/* 아카이브 파일 퀵 뷰어 */}
                 {report.files && Object.values(report.files).some(f => f && f.url) && (
                   <div className="mb-4 p-3 bg-white border border-yellow-300 rounded-lg flex flex-col gap-2 shadow-sm">
                     <span className="text-[11px] md:text-xs font-bold text-yellow-800 flex items-center gap-1">🔗 아카이브 연동 자료 (클릭 시 새 탭에서 원본 확인)</span>
