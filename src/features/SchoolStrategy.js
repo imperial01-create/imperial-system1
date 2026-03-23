@@ -533,7 +533,7 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
             <div>
               <label className="block text-xs md:text-sm font-bold mb-1">년도</label>
-              <input type="number" className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
+              <input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
             </div>
             <div>
               <label className="block text-xs md:text-sm font-bold mb-1">학교명</label>
@@ -577,7 +577,8 @@ export default function SchoolStrategy({ currentUser }) {
               
               <h3 className="text-lg font-bold border-b pb-2 pt-4 flex justify-between items-center">
                 문항별 상세 분석
-                <button onClick={() => addArrayItem('questions', { qNum: '', tags: '', unit: '', diff: '하', score: '', source: '', analysis: '', qImage: '', simImage: '', idiSource: 1, idiLogic: 1, idiConcept: 1, idiCalc: 1, idiProg: 1, idiTotal: 5 })} className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded flex items-center gap-1 font-bold"><IconPlus/> 문항 추가</button>
+                {/* [CTO 추가] 초기 문항 추가 시 불필요한 이미지 url 속성 제거 */}
+                <button onClick={() => addArrayItem('questions', { qNum: '', tags: '', unit: '', diff: '하', score: '', source: '', analysis: '', idiSource: 1, idiLogic: 1, idiConcept: 1, idiCalc: 1, idiProg: 1, idiTotal: 5 })} className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded flex items-center gap-1 font-bold"><IconPlus/> 문항 추가</button>
               </h3>
               <div className="space-y-4">
                 {formData.questions?.map((q, idx) => (
@@ -585,28 +586,27 @@ export default function SchoolStrategy({ currentUser }) {
                     <button onClick={() => removeArrayItem('questions', idx)} className="absolute top-3 right-3 text-red-500 hover:bg-red-100 rounded-full p-1"><IconX/></button>
                     <div className="grid grid-cols-4 md:grid-cols-6 gap-2 mb-3">
                       <div><label className="text-[10px] text-gray-500 font-bold">번호 (예: 객관식1)</label><input type="text" placeholder="객관식1" className="w-full border p-1.5 text-sm rounded outline-none" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
-                      <div><label className="text-[10px] text-gray-500 font-bold">배점</label><input type="number" className="w-full border p-1.5 text-sm rounded outline-none" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
+                      {/* [CTO 추가] onWheel blur 처리를 통해 스크롤 시 점수 변경 방지 */}
+                      <div><label className="text-[10px] text-gray-500 font-bold">배점</label><input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-1.5 text-sm rounded outline-none" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
                       <div className="col-span-2"><label className="text-[10px] text-gray-500 font-bold">단원</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.unit} onChange={e=>handleArrayChange('questions', idx, 'unit', e.target.value)}/></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">난이도 (자동)</label><input type="text" className="w-full border p-1.5 text-sm bg-gray-200 text-gray-600 rounded" readOnly value={`${q.diff || '하'} (${q.idiTotal || 5})`} /></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">태그</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" placeholder="킬러, 기본 등" value={q.tags} onChange={e=>handleArrayChange('questions', idx, 'tags', e.target.value)}/></div>
                     </div>
 
                     <div className="grid grid-cols-5 gap-1 md:gap-2 mb-3 bg-indigo-50 p-2 rounded-lg border border-indigo-100">
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">출처친숙도(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiSource || 1} onChange={e=>handleIdiChange(idx, 'idiSource', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">변형로직(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiLogic || 1} onChange={e=>handleIdiChange(idx, 'idiLogic', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">개념결합(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiConcept || 1} onChange={e=>handleIdiChange(idx, 'idiConcept', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">연산복잡(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiCalc || 1} onChange={e=>handleIdiChange(idx, 'idiCalc', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">논리전개(1-5)</label><input type="number" min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiProg || 1} onChange={e=>handleIdiChange(idx, 'idiProg', e.target.value)}/></div>
+                      {/* [CTO 추가] IDI 점수 입력 시에도 스크롤 오류 방지 적용 */}
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">출처친숙도(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiSource || 1} onChange={e=>handleIdiChange(idx, 'idiSource', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">변형로직(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiLogic || 1} onChange={e=>handleIdiChange(idx, 'idiLogic', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">개념결합(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiConcept || 1} onChange={e=>handleIdiChange(idx, 'idiConcept', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">연산복잡(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiCalc || 1} onChange={e=>handleIdiChange(idx, 'idiCalc', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">논리전개(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiProg || 1} onChange={e=>handleIdiChange(idx, 'idiProg', e.target.value)}/></div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
                       <div><label className="text-[10px] text-gray-500 font-bold">출처 분석</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.source} onChange={e=>handleArrayChange('questions', idx, 'source', e.target.value)}/></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">분석 코멘트</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.analysis} onChange={e=>handleArrayChange('questions', idx, 'analysis', e.target.value)}/></div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <div><label className="text-[10px] text-gray-500 font-bold">실제 문제 이미지 (URL)</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.qImage} onChange={e=>handleArrayChange('questions', idx, 'qImage', e.target.value)}/></div>
-                      <div><label className="text-[10px] text-gray-500 font-bold">유사 적중 문항 이미지 (URL)</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.simImage} onChange={e=>handleArrayChange('questions', idx, 'simImage', e.target.value)}/></div>
-                    </div>
+                    {/* [CTO 추가] qImage, simImage 입력 필드 삭제 완료 */}
                   </div>
                 ))}
               </div>
@@ -623,7 +623,7 @@ export default function SchoolStrategy({ currentUser }) {
                 {formData.trendData?.map((data, idx) => (
                   <div key={idx} className="flex gap-2 mb-2">
                     <input type="text" placeholder="시험명 (예: 23년 1학기)" className="flex-1 border p-2 text-sm rounded" value={data.examName} onChange={e=>handleArrayChange('trendData', idx, 'examName', e.target.value)} />
-                    <input type="number" placeholder="점수(0~100)" className="w-24 border p-2 text-sm rounded" value={data.score} onChange={e=>handleArrayChange('trendData', idx, 'score', e.target.value)} />
+                    <input type="number" onWheel={(e) => e.target.blur()} placeholder="점수(0~100)" className="w-24 border p-2 text-sm rounded" value={data.score} onChange={e=>handleArrayChange('trendData', idx, 'score', e.target.value)} />
                     <button onClick={() => removeArrayItem('trendData', idx)} className="text-red-500 px-2 hover:bg-red-100 rounded"><IconX/></button>
                   </div>
                 ))}
@@ -864,6 +864,8 @@ export default function SchoolStrategy({ currentUser }) {
                               <th className="p-3 md:p-4 font-bold text-gray-600">단원</th>
                               <th className="p-3 md:p-4 font-bold text-gray-600 text-center w-24 md:w-32">난이도(IDI점수)</th>
                               <th className="p-3 md:p-4 font-bold text-gray-600 w-24 md:w-32 text-center">출제 근거</th>
+                              {/* [CTO 추가] 상세보기 헤더 추가 */}
+                              <th className="p-3 md:p-4 font-bold text-gray-600 w-16 md:w-20 text-center">상세보기</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -881,6 +883,18 @@ export default function SchoolStrategy({ currentUser }) {
                                 </td>
                                 <td className="p-3 md:p-4 text-center text-gray-600 text-[10px] md:text-xs">
                                     <span className="truncate max-w-[80px] md:max-w-[100px] block mx-auto">{q.source}</span>
+                                </td>
+                                {/* [CTO 추가] 직관적인 상세보기 버튼 추가 */}
+                                <td className="p-3 md:p-4 text-center">
+                                    <button 
+                                        onClick={(e) => { 
+                                            e.stopPropagation(); 
+                                            handleOpenModal(q); 
+                                        }} 
+                                        className="px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-200 rounded-lg text-[10px] md:text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors shadow-sm"
+                                    >
+                                        분석 보기
+                                    </button>
                                 </td>
                               </tr>
                             ))}
@@ -935,19 +949,9 @@ export default function SchoolStrategy({ currentUser }) {
                     </button>
                 </div>
               
+                {/* [CTO 추가] 불필요한 이미지 뷰어를 완전히 제거하고 텍스트 기반 정보로 레이아웃 최적화 */}
                 <div className="p-5 md:p-8 overflow-y-auto space-y-6 md:space-y-8 flex-1 custom-scrollbar">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8 px-2 md:px-4">
-                        <div className="space-y-3 md:space-y-4">
-                            <div className="border border-gray-200 rounded-xl bg-gray-50 p-2 text-center h-48 md:h-64 flex flex-col items-center justify-center text-gray-400 overflow-hidden relative group">
-                                <span className="absolute top-2 left-2 text-[10px] md:text-xs font-bold bg-gray-200 text-gray-700 px-2 py-1 rounded shadow-sm">실제 출제 문제</span>
-                                {viewState.selectedQuestion.qImage ? <img src={viewState.selectedQuestion.qImage} alt="실제문제" loading="lazy" className="max-h-full object-contain" /> : <p className="text-xs md:text-sm">이미지 등록 안됨</p>}
-                            </div>
-                            <div className="border-2 border-dashed border-indigo-300 rounded-xl bg-indigo-50 p-2 text-center h-48 md:h-64 flex flex-col items-center justify-center text-indigo-400 font-medium overflow-hidden relative">
-                                <span className="absolute top-2 left-2 text-[10px] md:text-xs font-bold bg-indigo-200 text-indigo-800 px-2 py-1 rounded shadow-sm">적중/유사 문항</span>
-                                {viewState.selectedQuestion.simImage ? <img src={viewState.selectedQuestion.simImage} alt="학원교재 유사문항" loading="lazy" className="max-h-full object-contain" /> : <p className="text-xs md:text-sm">이미지 등록 안됨</p>}
-                            </div>
-                        </div>
-                        
+                    <div className="w-full max-w-3xl mx-auto px-2 md:px-4">
                         <div className="space-y-2 md:space-y-3">
                             <DetailRow label="단원 및 내용" value={viewState.selectedQuestion.unit} />
                             <DetailRow label="출처 분석" value={viewState.selectedQuestion.source} />
