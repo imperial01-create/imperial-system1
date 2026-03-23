@@ -2,17 +2,66 @@ import React, { useState, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText // [FIX] 누락된 아이콘 추가하여 렌더링 에러 방지
+    FileText, Upload // [추가] Upload 아이콘
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
-    query, where, onSnapshot, serverTimestamp, getDocs 
+    query, where, onSnapshot, serverTimestamp, getDocs,
+    writeBatch // [추가] 과금 방어용 일괄 처리 API
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+// --- Helper: CSV Data Cleaners & Parsers ---
+
+// 1. 따옴표 내부의 줄바꿈까지 완벽하게 처리하는 커스텀 CSV 파서 [보안/안정성]
+const parseCSV = (str) => {
+    const result = [];
+    let row = [];
+    let inQuotes = false;
+    let val = "";
+    for (let i = 0; i < str.length; i++) {
+        const char = str[i];
+        if (char === '"') {
+            inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+            row.push(val.trim());
+            val = "";
+        } else if (char === '\n' && !inQuotes) {
+            row.push(val.trim());
+            result.push(row);
+            row = [];
+            val = "";
+        } else {
+            if (char !== '\r') val += char;
+        }
+    }
+    row.push(val.trim());
+    if (row.length > 0 && row.some(v => v)) result.push(row);
+    return result;
+};
+
+// 2. 반 이름 정제: 앞의 학년(고1 등) 제거, 뒤의 괄호 제거 [데이터 최적화]
+const cleanClassName = (rawName) => {
+    if (!rawName) return '';
+    return rawName
+        .replace(/^(초|중|고)\d\s*/, '') // 시작 부분의 '고1 ', '중2' 등 제거
+        .replace(/\s*\(.*$/, '')         // 끝 부분의 괄호 전체 제거
+        .trim();
+};
+
+// 3. 학생 이름 정제: 앞의 날짜 [03/01] 무시, 뒤의 괄호 (중1) 무시
+const cleanStudentName = (rawName) => {
+    if (!rawName) return '';
+    return rawName
+        .replace(/^\[.*?\]\s*/, '')  // 시작 부분의 '[03/14] ' 등 제거
+        .replace(/\s*\(.*?\)$/, '')  // 끝 부분의 '(고1)' 등 제거
+        .trim();
+};
+
 
 // --- Helper: Simple Calendar ---
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
@@ -224,7 +273,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 </div>
                                 <div className="space-y-2 text-sm">
                                     <div className="flex gap-2">
-                                        {/* [FIX] FileText 아이콘이 import 되어 이제 에러가 발생하지 않습니다. */}
                                         <div className="w-6 shrink-0 text-gray-400"><FileText size={16}/></div>
                                         <div className="text-gray-700 break-all"><span className="font-bold text-gray-500 text-xs block">진도</span>{lecture.progress}</div>
                                     </div>
@@ -345,6 +393,12 @@ export const AdminLectureManager = ({ users }) => {
     const [studentSearch, setStudentSearch] = useState('');
     const [isSaving, setIsSaving] = useState(false);
 
+    // [추가된 상태] CSV 동기화 관리용 상태
+    const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+    const [csvLecturerFile, setCsvLecturerFile] = useState(null);
+    const [csvStudentFile, setCsvStudentFile] = useState(null);
+    const [isSyncing, setIsSyncing] = useState(false);
+
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
         return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -396,14 +450,205 @@ export const AdminLectureManager = ({ users }) => {
         }
     };
 
+    // [추가된 헬퍼 함수] 파일 읽기 (비동기)
+    const readCsvFile = (file) => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = (e) => reject(e);
+            reader.readAsText(file, 'UTF-8'); // 한글 깨짐 방지
+        });
+    };
+
+    // [추가된 핵심 로직] CSV 동기화 프로세스
+    const handleSyncCsv = async () => {
+        if (!csvLecturerFile || !csvStudentFile) {
+            return alert("두 개의 CSV 파일을 모두 업로드해주세요.");
+        }
+        
+        setIsSyncing(true);
+        try {
+            const lecturerRaw = await readCsvFile(csvLecturerFile);
+            const studentRaw = await readCsvFile(csvStudentFile);
+            
+            const lecturerData = parseCSV(lecturerRaw);
+            const studentData = parseCSV(studentRaw);
+
+            const parsedClasses = {};
+            let currentTeacherName = '';
+            const DAYS_OF_WEEK = ['월', '화', '수', '목', '금', '토', '일'];
+
+            // 1. 강사별 현황 파싱 (시간, 교실, 강사 매핑)
+            lecturerData.forEach((row) => {
+                if (row.length === 0) return;
+                
+                // 강사명 추출 (예: "* 강사명 : 김기중")
+                if (row[0] && row[0].startsWith('* 강사명')) {
+                    currentTeacherName = row[0].replace('* 강사명', '').replace(':', '').trim();
+                    return;
+                }
+
+                const timeStr = row[0];
+                // 시간이 적힌 행(Row)인지 판별 (예: "16:00 ~ 18:00")
+                if (timeStr && timeStr.includes('~')) {
+                    for (let col = 1; col <= 7; col++) {
+                        const cell = row[col];
+                        if (cell) {
+                            // 셀 내부 줄바꿈 분리 (1번째 줄: 학년(무시), 2번째 줄: 반이름, 3번째 줄: 교실)
+                            const lines = cell.split('\n').map(l => l.trim()).filter(l => l);
+                            if (lines.length >= 2) {
+                                const rawClassName = lines[1];
+                                const classroom = lines[2] || '';
+                                const className = cleanClassName(rawClassName);
+                                const day = DAYS_OF_WEEK[col - 1];
+
+                                if (className) {
+                                    if (!parsedClasses[className]) {
+                                        parsedClasses[className] = {
+                                            name: className,
+                                            lecturerName: currentTeacherName,
+                                            time: timeStr,
+                                            classroom: classroom,
+                                            days: [],
+                                            studentNames: []
+                                        };
+                                    }
+                                    // 요일 중복 방지 추가
+                                    if (!parsedClasses[className].days.includes(day)) {
+                                        parsedClasses[className].days.push(day);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // 2. 반별 원생 목록 파싱 (학생 연동)
+            if (studentData.length > 0) {
+                const headers = studentData[0]; // 0번째 Row: 반 이름 목록
+                
+                // 각 반별(Column)로 데이터 읽기
+                for (let col = 1; col < headers.length; col++) {
+                    const rawClassName = headers[col];
+                    if (!rawClassName) continue;
+                    
+                    const className = cleanClassName(rawClassName);
+                    
+                    // 강사별 현황 파일에 해당 반이 존재할 때만 학생 병합
+                    if (parsedClasses[className]) {
+                        // 2번째 Row부터 끝까지 학생 데이터 추출 (Row 1은 강사/시간 정보이므로 스킵)
+                        for (let r = 2; r < studentData.length; r++) {
+                            if (studentData[r] && studentData[r][col]) {
+                                const rawStudent = studentData[r][col];
+                                const studentName = cleanStudentName(rawStudent);
+                                
+                                if (studentName && !parsedClasses[className].studentNames.includes(studentName)) {
+                                    parsedClasses[className].studentNames.push(studentName);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Firebase 최적화 Batch 쓰기
+            const batch = writeBatch(db);
+            let writeCount = 0;
+
+            const existingClassesMap = {};
+            classes.forEach(c => { existingClassesMap[c.name] = c; });
+
+            Object.values(parsedClasses).forEach(newClsData => {
+                // 이름으로 강사 및 학생 ID 매칭 (System에 등록된 유저 기반)
+                const lecturerId = users.find(u => u.role === 'lecturer' && u.name === newClsData.lecturerName)?.id || '';
+                const studentIds = newClsData.studentNames
+                    .map(name => users.find(u => u.role === 'student' && u.name === name)?.id)
+                    .filter(Boolean); // undefined 제거
+
+                const existing = existingClassesMap[newClsData.name];
+                
+                if (existing) {
+                    // [최적화] 변경된 사항이 있는지 검증 (Deep Compare - 배열은 정렬 후 문자열 비교로 완벽 검증)
+                    const existingStudentIdsSorted = [...(existing.studentIds || [])].sort().join(',');
+                    const newStudentIdsSorted = [...studentIds].sort().join(',');
+                    
+                    const hasChanged = 
+                        existing.lecturerId !== lecturerId ||
+                        existing.time !== newClsData.time ||
+                        existing.classroom !== newClsData.classroom ||
+                        (existing.days || []).join(',') !== newClsData.days.join(',') ||
+                        existingStudentIdsSorted !== newStudentIdsSorted;
+
+                    if (hasChanged) {
+                        const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
+                        batch.update(classRef, {
+                            lecturerId,
+                            time: newClsData.time,
+                            classroom: newClsData.classroom,
+                            days: newClsData.days,
+                            studentIds,
+                            updatedAt: serverTimestamp()
+                        });
+                        writeCount++;
+                    }
+                } else {
+                    // 신규 반 생성
+                    const classRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
+                    batch.set(classRef, {
+                        name: newClsData.name,
+                        lecturerId,
+                        time: newClsData.time,
+                        classroom: newClsData.classroom,
+                        days: newClsData.days,
+                        studentIds,
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                    });
+                    writeCount++;
+                }
+            });
+
+            if (writeCount > 0) {
+                await batch.commit();
+                alert(`성공적으로 동기화되었습니다. (업데이트/생성된 반: ${writeCount}개)`);
+            } else {
+                alert("기존 데이터와 동일하여 변경된 사항이 없습니다. (Firebase 과금 방어 완료)");
+            }
+            
+            setIsCsvModalOpen(false);
+            setCsvLecturerFile(null);
+            setCsvStudentFile(null);
+
+        } catch (error) {
+            console.error("CSV Sync Error:", error);
+            alert("파일 동기화 중 오류가 발생했습니다. 파일 형식을 확인해주세요.");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
     return (
         <div className="space-y-8 w-full animate-in fade-in">
             {/* 1. Class Management Section */}
             <div className="w-full">
                 <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
                     <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
-                    <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
+                    
+                    {/* [UI 수정] 버튼 그룹화 및 일괄등록 버튼 추가 */}
+                    <div className="flex gap-2 w-full md:w-auto">
+                        <Button 
+                            variant="outline" 
+                            onClick={() => setIsCsvModalOpen(true)} 
+                            icon={Upload} 
+                            className="w-full md:w-auto bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
+                        >
+                            CSV 일괄 등록
+                        </Button>
+                        <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
+                    </div>
                 </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
                     {classes.map(cls => (
                         <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
@@ -414,10 +659,22 @@ export const AdminLectureManager = ({ users }) => {
                                     <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-1.5 hover:bg-red-50 rounded text-red-400"><Trash2 size={16}/></button>
                                 </div>
                             </div>
+
+                            {/* [UI 추가] 시간 및 교실 정보 표시 영역 */}
+                            {(cls.time || cls.classroom) && (
+                                <div className="text-xs text-gray-500 mb-2 bg-gray-50 p-2 rounded-lg flex flex-col gap-1">
+                                    {cls.time && <span className="flex items-center gap-1">⏰ {cls.time}</span>}
+                                    {cls.classroom && <span className="flex items-center gap-1">🏫 {cls.classroom}</span>}
+                                </div>
+                            )}
+
                             <div className="flex gap-1 mb-2 flex-wrap">
-                                {cls.days.map(d => <span key={d} className="bg-white border border-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{d}</span>)}
+                                {cls.days && cls.days.map(d => <span key={d} className="bg-white border border-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{d}</span>)}
                             </div>
-                            <div className="text-sm text-gray-500">강사: {users.find(u => u.id === cls.lecturerId)?.name}</div>
+                            <div className="flex justify-between items-center text-sm text-gray-500 mt-2">
+                                <span>강사: <span className="font-bold text-gray-700">{users.find(u => u.id === cls.lecturerId)?.name || '미배정'}</span></span>
+                                <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md">학생: {(cls.studentIds || []).length}명</span>
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -463,6 +720,44 @@ export const AdminLectureManager = ({ users }) => {
                         </div>
                     </div>
                     <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>{isSaving ? <Loader className="animate-spin"/> : '저장'}</Button>
+                </div>
+            </Modal>
+
+            {/* [추가된 모달] CSV 업로드 모달 */}
+            <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="CSV 일괄 동기화">
+                <div className="space-y-6 w-full">
+                    <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
+                        <p className="font-bold mb-1 flex items-center gap-1"><CheckCircle size={16}/> 스마트 데이터 매핑 알고리즘</p>
+                        <p className="opacity-90 leading-relaxed">학년, 괄호, 날짜 등 불필요한 메타데이터는 서버로 전송되기 전 자동으로 필터링됩니다. 기존에 등록된 데이터와 비교하여 <b>변경된 내용(Diff)</b>만 업데이트되므로 네트워크 요금을 극도로 절약합니다.</p>
+                    </div>
+
+                    <div>
+                        <label className="text-sm font-bold text-gray-700 mb-2 block">1. 강사별 현황 (CSV)</label>
+                        <input 
+                            type="file" 
+                            accept=".csv"
+                            onChange={e => setCsvLecturerFile(e.target.files[0])}
+                            className="w-full border p-3 rounded-xl bg-gray-50 cursor-pointer" 
+                        />
+                    </div>
+
+                    <div>
+                        <label className="text-sm font-bold text-gray-700 mb-2 block">2. 반별 원생 목록 (CSV)</label>
+                        <input 
+                            type="file" 
+                            accept=".csv"
+                            onChange={e => setCsvStudentFile(e.target.files[0])}
+                            className="w-full border p-3 rounded-xl bg-gray-50 cursor-pointer" 
+                        />
+                    </div>
+
+                    <Button 
+                        className="w-full py-4 text-lg" 
+                        onClick={handleSyncCsv} 
+                        disabled={isSyncing}
+                    >
+                        {isSyncing ? <Loader className="animate-spin mx-auto"/> : '데이터 동기화 실행'}
+                    </Button>
                 </div>
             </Modal>
         </div>
