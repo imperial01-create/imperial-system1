@@ -4,9 +4,10 @@ import {
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
   XCircle, Edit3, Trash2
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, addDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
+import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager'; // [CTO 추가] 통합 매니저 임포트
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -18,20 +19,16 @@ const FILE_TYPES = [
     { key: 'analysis', label: '시험분석', icon: PenTool }
 ];
 
-// [CTO 최적화] 매년 코드를 수정할 필요가 없도록 동적 배열 생성 (올해 연도 ~ 2000년)
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (currentYear - i).toString());
 
 const ExamArchive = ({ currentUser }) => {
-    // [UI/UX 최적화] 검색 필터에서 학기와 시험을 combinedTerm으로 통합
     const [filters, setFilters] = useState({
         schoolType: '', district: '', schoolName: '', year: '', combinedTerm: '', subject: '', grade: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
-    
-    // [서비스 가치] 초기 렌더링 시 빈 화면 상태를 명확히 안내하여 학부모/강사의 혼란 방지
     const [hasSearched, setHasSearched] = useState(false);
     
     const [modalState, setModalState] = useState({ type: null, exam: null, fileKey: null });
@@ -40,7 +37,6 @@ const ExamArchive = ({ currentUser }) => {
 
     const [showAddModal, setShowAddModal] = useState(false);
     
-    // [UI/UX 최적화] 신규 폼에서도 combinedTerm으로 직관적 통합
     const [newExamForm, setNewExamForm] = useState({
         schoolType: '고등학교', schoolName: '', year: currentYear.toString(), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
@@ -51,25 +47,23 @@ const ExamArchive = ({ currentUser }) => {
     const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
     useEffect(() => {
-        // [비용 효율화] 컴포넌트 마운트 시 최초 검색 로직을 제거하여 
-        // 불필요한 Firebase Read 과금을 방지합니다. (월간 DB 읽기 비용 대폭 감소)
-        // eslint-disable-next-line
+        // 불필요한 초기 검색 방지
     }, []);
 
     const handleSearch = async () => {
         setLoading(true);
         setErrorMsg('');
-        setHasSearched(true); // 검색 시도 기록
+        setHasSearched(true); 
         
         try {
-            const examsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
+            // [CTO 수정] 통합 컬렉션으로 검색 대상 변경
+            const examsRef = collection(db, INTEGRATED_COLLECTION);
             let q = query(examsRef, limit(50)); 
 
             Object.keys(filters).forEach(key => {
                 if (key === 'combinedTerm' && filters.combinedTerm) {
-                    // [백엔드 호환성] UI에서는 합쳐져 있지만, DB 검색 시에는 기존 스키마에 맞게 분리하여 쿼리
                     const [sem, tm] = filters.combinedTerm.split(' ');
-                    q = query(q, where('semester', '==', sem), where('term', '==', tm));
+                    q = query(q, where('semester', '==', sem), where('termType', '==', tm));
                 } else if (key !== 'combinedTerm' && filters[key] && filters[key].trim() !== '') {
                     q = query(q, where(key, '==', filters[key].trim()));
                 }
@@ -78,12 +72,10 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-// [UX/UX 심리학 반영] 1차: 학교명 가나다순, 2차: 같은 학교일 경우 최신 연도/학기순 정렬
-            // localeCompare를 사용하여 브라우저 단에서 빠르고 비용 없이 정렬을 수행합니다.
             results.sort((a, b) => 
-                a.schoolName.localeCompare(b.schoolName) || 
-                b.year.localeCompare(a.year) || 
-                b.semester.localeCompare(a.semester)
+                (a.schoolName || "").localeCompare(b.schoolName || "") || 
+                (b.year || "").localeCompare(a.year || "") || 
+                (b.semester || "").localeCompare(a.semester || "")
             );
             setExams(results);
         } catch (error) {
@@ -102,50 +94,29 @@ const ExamArchive = ({ currentUser }) => {
         setIsProcessing(true);
         
         try {
-            // [데이터 무결성] UI의 '1학기 중간고사'를 데이터베이스 저장 규칙에 맞게 분할
             const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
 
-            // [운영자 관점 방어적 코딩] 중복 데이터 등록 방지 (N+1 문제 방지를 위해 1차 필터링 후 클라이언트 검증)
-            const checkRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive');
-            const checkQ = query(checkRef,
-                where('schoolName', '==', newExamForm.schoolName.trim()),
-                where('year', '==', newExamForm.year)
-            );
-            const checkSnapshot = await getDocs(checkQ);
-            
-            // O(n) 복잡도로 메모리에서 세부 조건 매칭 확인
-            const isDuplicate = checkSnapshot.docs.some(doc => {
-                const data = doc.data();
-                return data.semester === parsedSemester && 
-                       data.term === parsedTerm && 
-                       data.subject === newExamForm.subject &&
-                       data.grade === newExamForm.grade;
-            });
-
-            if (isDuplicate) {
-                alert("⚠️ 이미 동일한 기출자료(학교, 연도, 학기, 시험, 과목, 학년)가 등록되어 있습니다.\n목록을 먼저 확인해주세요.");
-                setIsProcessing(false);
-                return;
-            }
-
-            const docData = {
+            // [CTO 최적화] O(1) 복잡도의 Upsert 활용. 기존 N+1 중복검사 로직 완전 제거
+            const baseData = {
                 schoolType: newExamForm.schoolType,
                 schoolName: newExamForm.schoolName.trim(),
                 year: newExamForm.year,
                 semester: parsedSemester,
-                term: parsedTerm,
+                termType: parsedTerm,
                 subject: newExamForm.subject,
                 grade: newExamForm.grade,
                 region: '서울',   
                 district: '양천구', 
-                files: {},
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
+            };
+
+            const updatePayload = {
+                createdAt: serverTimestamp(), // 최초 생성시에만 유효
+                files: {} // 기존 파일이 있다면 merge되므로 덮어쓰지 않음
             };
 
             FILE_TYPES.forEach(ft => {
                 if (newExamForm.urls[ft.key]?.trim()) {
-                    docData.files[ft.key] = {
+                    updatePayload.files[ft.key] = {
                         status: 'published',
                         url: newExamForm.urls[ft.key].trim(),
                         workerId: currentUser.id,
@@ -154,16 +125,17 @@ const ExamArchive = ({ currentUser }) => {
                 }
             });
 
-            const docRef = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive'), docData);
+            const docId = await upsertExamData(baseData, updatePayload);
             
-            alert("신규 기출자료가 성공적으로 등록되었습니다.");
+            alert("신규 기출자료가 성공적으로 등록/병합되었습니다.");
             setShowAddModal(false);
             setNewExamForm({ 
                 ...newExamForm, schoolName: '', 
                 urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
             });
             
-            setExams([{ id: docRef.id, ...docData }, ...exams]);
+            // UI 업데이트
+            setExams([{ id: docId, ...baseData, ...updatePayload }, ...exams.filter(e => e.id !== docId)]);
             setErrorMsg('');
         } catch (error) {
             error.code === 'permission-denied' 
@@ -176,11 +148,11 @@ const ExamArchive = ({ currentUser }) => {
 
     const handleDeleteExam = async (examId) => {
         if (!isAdmin) return;
-        if (!window.confirm("정말로 이 기출자료 전체를 삭제하시겠습니까?\n(삭제 후에는 복구할 수 없습니다)")) return;
+        if (!window.confirm("정말로 이 통합 기출자료를 삭제하시겠습니까?\n(아카이브와 내신연구소에서 모두 삭제됩니다)")) return;
         
         setIsProcessing(true);
         try {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', examId));
+            await deleteDoc(doc(db, INTEGRATED_COLLECTION, examId));
             setExams(prev => prev.filter(e => e.id !== examId));
             alert("자료가 성공적으로 삭제되었습니다.");
         } catch (error) {
@@ -195,7 +167,7 @@ const ExamArchive = ({ currentUser }) => {
         if (!window.confirm(`[${fileLabel}] 작업을 시작하시겠습니까?`)) return;
         
         setIsProcessing(true);
-        const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
+        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
             let updatedFilesForState = null;
@@ -216,7 +188,7 @@ const ExamArchive = ({ currentUser }) => {
                     workerName: currentUser.name
                 };
                 updatedFilesForState = files;
-                transaction.update(examRef, { files, updatedAt: serverTimestamp() });
+                transaction.update(examRef, { files: updatedFilesForState, updatedAt: serverTimestamp() });
             });
 
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFilesForState } : e));
@@ -228,7 +200,7 @@ const ExamArchive = ({ currentUser }) => {
     const handleCancelTask = async (exam, fileKey) => {
         if (!window.confirm("작업을 취소하시겠습니까?")) return;
         setIsProcessing(true);
-        const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
+        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
@@ -253,7 +225,7 @@ const ExamArchive = ({ currentUser }) => {
         }
         
         setIsProcessing(true);
-        const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
+        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
@@ -289,7 +261,7 @@ const ExamArchive = ({ currentUser }) => {
     const handleApprove = async (exam, fileKey) => {
         if (!isAdmin) return;
         setIsProcessing(true);
-        const examRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive', exam.id);
+        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
             const updatedFiles = { ...(exam.files || {}) };
@@ -297,7 +269,7 @@ const ExamArchive = ({ currentUser }) => {
             await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
             
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
-            alert("승인 완료! 학생들에게 자료가 공개되었습니다.");
+            alert("승인 완료! 교직원에게 자료가 공개되었습니다.");
         } catch (error) { alert("승인 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
@@ -368,7 +340,7 @@ const ExamArchive = ({ currentUser }) => {
             <div className="flex justify-between items-center mb-2">
                 <div className="flex flex-col">
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
-                    <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리</span>
+                    <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리 (학부모 접근 불가)</span>
                 </div>
                 {canAddExam && (
                     <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
@@ -389,12 +361,10 @@ const ExamArchive = ({ currentUser }) => {
                         {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                     </select>
 
-                    {/* [인지 심리학 반영] 사고 흐름에 맞게 학년을 시험 종류보다 앞으로 배치 */}
                     <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
                     </select>
                     
-                    {/* [인지 부하 감소] 학기와 시험을 하나로 합쳐 탐색 깊이를 줄임 */}
                     <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
                         <option value="">시험 전체</option>
                         <option value="1학기 중간고사">1학기 중간고사</option>
@@ -417,7 +387,6 @@ const ExamArchive = ({ currentUser }) => {
                     </div>
                 ) : exams.length === 0 && !loading ? (
                     <div className="text-center py-16 text-gray-400">
-                        {/* [UX 개선] 검색 전과 검색 후 결과 없음을 구분하여 출력 */}
                         {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : "조건에 맞는 기출 자료가 없습니다."}
                     </div>
                 ) : (
@@ -435,7 +404,7 @@ const ExamArchive = ({ currentUser }) => {
                                     </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
                                         <div className="font-bold text-gray-700 text-sm">
-                                            {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.term?.replace('고사', '')} {exam.subject}
+                                            {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.termType || exam.term || '고사'} {exam.subject}
                                         </div>
                                     </div>
                                 </div>
@@ -452,8 +421,8 @@ const ExamArchive = ({ currentUser }) => {
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
-                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원</p>
-                        <p>링크가 준비된 항목만 입력하세요. <strong>빈칸으로 둔 항목은 '작업 대기(오픈)' 상태로 자동 등록</strong>됩니다.</p>
+                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원 (내신연구소 연동)</p>
+                        <p>여기서 등록한 자료 정보는 <strong>내신 연구소에도 자동 연동</strong>됩니다.</p>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 md:gap-4">
@@ -487,7 +456,6 @@ const ExamArchive = ({ currentUser }) => {
                         
                         <div className="col-span-1">
                             <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
-                            {/* [UI 최적화] 입력 폼에서도 통합된 셀렉트 박스 사용 */}
                             <select className="w-full border p-2.5 rounded-xl bg-gray-50 text-sm" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
                                 <option value="1학기 중간고사">1학기 중간고사</option>
                                 <option value="1학기 기말고사">1학기 기말고사</option>
@@ -522,20 +490,6 @@ const ExamArchive = ({ currentUser }) => {
 
             <Modal isOpen={['upload_link', 'edit_link'].includes(modalState.type)} onClose={() => { setModalState({ type: null, exam: null, fileKey: null }); setUploadUrl(''); }} title={modalState.type === 'edit_link' ? "자료 링크 수정" : "자료 링크 등록"}>
                 <div className="space-y-4">
-                    {modalState.type === 'upload_link' && (
-                        <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800 mb-4">
-                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 용량 절약을 위한 정책</p>
-                            <p>파일을 직접 업로드하지 않고, <strong>구글 드라이브 공유 링크(URL)</strong>를 붙여넣어 주세요.</p>
-                        </div>
-                    )}
-                    
-                    {modalState.type === 'edit_link' && (
-                        <div className="bg-orange-50 p-4 rounded-xl text-sm text-orange-800 mb-4">
-                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 링크 삭제 안내</p>
-                            <p>입력칸을 <strong>빈칸</strong>으로 비우고 완료를 누르면, 해당 자료는 다시 <strong>'작업 대기(오픈)'</strong> 상태로 돌아갑니다.</p>
-                        </div>
-                    )}
-
                     <div>
                         <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
                             <LinkIcon size={16}/> {modalState.fileKey && FILE_TYPES.find(f => f.key === modalState.fileKey)?.label} URL
