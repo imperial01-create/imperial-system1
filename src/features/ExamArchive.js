@@ -7,7 +7,7 @@ import {
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
-import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager'; // [CTO 추가] 통합 매니저 임포트
+import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager'; 
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -20,7 +20,7 @@ const FILE_TYPES = [
 ];
 
 const currentYear = new Date().getFullYear();
-const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (currentYear - i).toString());
+const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
 
 const ExamArchive = ({ currentUser }) => {
     const [filters, setFilters] = useState({
@@ -38,7 +38,7 @@ const ExamArchive = ({ currentUser }) => {
     const [showAddModal, setShowAddModal] = useState(false);
     
     const [newExamForm, setNewExamForm] = useState({
-        schoolType: '고등학교', schoolName: '', year: currentYear.toString(), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
+        schoolType: '고등학교', schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
@@ -47,7 +47,6 @@ const ExamArchive = ({ currentUser }) => {
     const canAddExam = ['admin', 'ta'].includes(currentUser.role);
 
     useEffect(() => {
-        // 불필요한 초기 검색 방지
     }, []);
 
     const handleSearch = async () => {
@@ -56,16 +55,16 @@ const ExamArchive = ({ currentUser }) => {
         setHasSearched(true); 
         
         try {
-            // [CTO 수정] 통합 컬렉션으로 검색 대상 변경
             const examsRef = collection(db, INTEGRATED_COLLECTION);
             let q = query(examsRef, limit(50)); 
 
+            // [CTO 최적화] 검색 시 모든 파라미터를 강제 문자열로 비교
             Object.keys(filters).forEach(key => {
                 if (key === 'combinedTerm' && filters.combinedTerm) {
                     const [sem, tm] = filters.combinedTerm.split(' ');
-                    q = query(q, where('semester', '==', sem), where('termType', '==', tm));
+                    q = query(q, where('semester', '==', String(sem)), where('termType', '==', String(tm)));
                 } else if (key !== 'combinedTerm' && filters[key] && filters[key].trim() !== '') {
-                    q = query(q, where(key, '==', filters[key].trim()));
+                    q = query(q, where(key, '==', String(filters[key].trim())));
                 }
             });
 
@@ -73,9 +72,9 @@ const ExamArchive = ({ currentUser }) => {
             const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
             results.sort((a, b) => 
-                (a.schoolName || "").localeCompare(b.schoolName || "") || 
-                (b.year || "").localeCompare(a.year || "") || 
-                (b.semester || "").localeCompare(a.semester || "")
+                String(a.schoolName || "").localeCompare(String(b.schoolName || "")) || 
+                String(b.year || "").localeCompare(String(a.year || "")) || 
+                String(b.semester || "").localeCompare(String(a.semester || ""))
             );
             setExams(results);
         } catch (error) {
@@ -96,11 +95,10 @@ const ExamArchive = ({ currentUser }) => {
         try {
             const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
 
-            // [CTO 최적화] O(1) 복잡도의 Upsert 활용. 기존 N+1 중복검사 로직 완전 제거
             const baseData = {
                 schoolType: newExamForm.schoolType,
                 schoolName: newExamForm.schoolName.trim(),
-                year: newExamForm.year,
+                year: String(newExamForm.year), // 강제 문자열 변환
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: newExamForm.subject,
@@ -110,8 +108,8 @@ const ExamArchive = ({ currentUser }) => {
             };
 
             const updatePayload = {
-                createdAt: serverTimestamp(), // 최초 생성시에만 유효
-                files: {} // 기존 파일이 있다면 merge되므로 덮어쓰지 않음
+                createdAt: serverTimestamp(), 
+                files: {} 
             };
 
             FILE_TYPES.forEach(ft => {
@@ -134,7 +132,6 @@ const ExamArchive = ({ currentUser }) => {
                 urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
             });
             
-            // UI 업데이트
             setExams([{ id: docId, ...baseData, ...updatePayload }, ...exams.filter(e => e.id !== docId)]);
             setErrorMsg('');
         } catch (error) {
@@ -404,7 +401,7 @@ const ExamArchive = ({ currentUser }) => {
                                     </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
                                         <div className="font-bold text-gray-700 text-sm">
-                                            {exam.year} {exam.grade?.replace('학년', '') || '1'}-{exam.semester?.replace('학기', '') || '1'} {exam.termType || exam.term || '고사'} {exam.subject}
+                                            {exam.year} {String(exam.grade || '1학년').replace('학년', '')}-{String(exam.semester || '1학기').replace('학기', '')} {exam.termType || exam.term || '고사'} {exam.subject}
                                         </div>
                                     </div>
                                 </div>

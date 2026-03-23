@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '../firebase'; 
-import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, deleteDoc, getDocs } from 'firebase/firestore'; // getDocs 추가
+import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, deleteDoc, getDocs } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager';
 
 // --- [아이콘 컴포넌트] ---
@@ -79,10 +79,26 @@ export default function SchoolStrategy({ currentUser }) {
   const handleOpenForm = (existingReport = null) => {
       pushHistory('form');
       if (existingReport) {
+          // [CTO 최적화] 빈 데이터로 인한 오류를 막기 위해 병합 로직 강화
           setFormData({ 
-              ...existingReport,
+              type: existingReport.type || 'individual',
+              year: String(existingReport.year || new Date().getFullYear()),
               school: existingReport.schoolName || existingReport.school || '',
-              term: `${existingReport.grade?.replace('학년','') || '1'}-${existingReport.semester?.replace('학기','') || '1'} ${existingReport.termType || existingReport.term || '중간고사'}`
+              term: `${String(existingReport.grade || '1학년').replace('학년','')}-${String(existingReport.semester || '1학기').replace('학기','')} ${existingReport.termType || existingReport.term || '중간고사'}`,
+              subject: existingReport.subject || '',
+              teacher: existingReport.teacher || '',
+              difficulty: existingReport.difficulty || '중',
+              suppBook: existingReport.suppBook || '',
+              print: existingReport.print || '',
+              scope: existingReport.scope || '',
+              review: existingReport.review || '',
+              specialNotes: existingReport.specialNotes || '',
+              gradeCuts: existingReport.gradeCuts || { grade1: '', grade2: '', grade3: '' },
+              questions: existingReport.questions || [],
+              trendData: existingReport.trendData || [],
+              scopeChanges: existingReport.scopeChanges || [],
+              teacherStyles: existingReport.teacherStyles || [],
+              isDeleted: existingReport.isDeleted || false,
           });
       } else {
           setFormData({ 
@@ -126,12 +142,11 @@ export default function SchoolStrategy({ currentUser }) {
       (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const filteredData = data.filter(report => {
-          if (!report.type) return false;
-
+          // [CTO 최적화] 아카이브에만 있는 자료(!report.type)도 목록에 띄워 강사가 클릭하여 분석을 추가하도록 허용합니다.
           if (isStudentOrParent) {
-            const reportGrade = report.grade?.replace('학년','') || '1';
-            const reportSemester = report.semester?.replace('학기','') || '1';
-            const reportTermType = report.termType || report.term || '중간고사';
+            const reportGrade = String(report.grade || '1학년').replace('학년','');
+            const reportSemester = String(report.semester || '1학기').replace('학기','');
+            const reportTermType = String(report.termType || report.term || '중간고사');
             const generatedTerm = `${reportGrade}-${reportSemester} ${reportTermType}`;
             
             const currentActiveTerm = activeTerm ? activeTerm.trim() : "";
@@ -207,7 +222,7 @@ export default function SchoolStrategy({ currentUser }) {
   };
 
   // ======================================================================
-  // 💡 [CTO 1회성 마이그레이션 스크립트] 기존 레거시 데이터 통합 병합
+  // 💡 [CTO 1회성 마이그레이션 스크립트] 검색 버그 완벽 수정 및 통합 병합
   // ======================================================================
   const runDataMigration = async () => {
     if (!window.confirm("기존 아카이브와 내신연구소 데이터를 통합하시겠습니까? (이 작업은 1회만 수행하세요)")) return;
@@ -216,19 +231,18 @@ export default function SchoolStrategy({ currentUser }) {
     let successCount = 0;
 
     try {
-      // 1. 기존 기출 아카이브 데이터 가져오기 및 통합 컬렉션에 병합
       const archiveSnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/exam_archive`));
       for (const archiveDoc of archiveSnapshot.docs) {
         const data = archiveDoc.data();
         if (!data.year || !data.schoolName) continue;
 
         const baseData = {
-          year: data.year,
-          schoolName: data.schoolName.trim(),
-          grade: (data.grade || '1학년').replace(/\s+/g, ''),
-          semester: (data.semester || '1학기').replace(/\s+/g, ''),
-          termType: (data.termType || data.term || '중간고사').replace(/\s+/g, ''),
-          subject: (data.subject || '수학').trim(),
+          year: String(data.year).trim(), // 문자열 강제 변환
+          schoolName: String(data.schoolName).trim(),
+          grade: String(data.grade || '1학년').trim(),
+          semester: String(data.semester || '1학기').trim(),
+          termType: String(data.termType || data.term || '중간고사').trim(),
+          subject: String(data.subject || '수학').trim(),
         };
 
         const updatePayload = {
@@ -242,27 +256,31 @@ export default function SchoolStrategy({ currentUser }) {
         successCount++;
       }
 
-      // 2. 기존 내신 연구소 데이터 가져오기 및 통합 컬렉션에 병합
       const strategySnapshot = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/school_strategies`));
       for (const stratDoc of strategySnapshot.docs) {
         const data = stratDoc.data();
         if (!data.year || (!data.school && !data.schoolName)) continue;
 
-        const termStr = data.term || ""; 
-        const gradeMatch = termStr.match(/^(\d)/);
-        const grade = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
-        let semester = "1학기";
-        if (termStr.includes("-2") || termStr.includes("2학기")) semester = "2학기";
-        let termType = "중간고사";
-        if (termStr.includes("기말")) termType = "기말고사";
+        const termStr = String(data.term || ""); 
+        let grade = String(data.grade || "1학년");
+        let semester = String(data.semester || "1학기");
+        let termType = String(data.termType || "중간고사");
+
+        // 구형 데이터 호환 파싱
+        if (termStr && !data.grade) {
+            const gradeMatch = termStr.match(/^(\d)/);
+            if (gradeMatch) grade = `${gradeMatch[1]}학년`;
+            if (termStr.includes("-2") || termStr.includes("2학기")) semester = "2학기";
+            if (termStr.includes("기말")) termType = "기말고사";
+        }
 
         const baseData = {
-          year: data.year,
-          schoolName: (data.schoolName || data.school).trim(),
+          year: String(data.year).trim(),
+          schoolName: String(data.schoolName || data.school).trim(),
           grade: grade,
           semester: semester,
           termType: termType,
-          subject: (data.subject || '수학').trim()
+          subject: String(data.subject || '수학').trim()
         };
 
         const updatePayload = {
@@ -287,10 +305,10 @@ export default function SchoolStrategy({ currentUser }) {
         successCount++;
       }
 
-      alert(`🎉 마이그레이션 완료! 총 ${successCount}건의 데이터가 성공적으로 통합 및 병합되었습니다. 새로고침 해주세요.`);
+      alert(`🎉 마이그레이션 완료! 총 ${successCount}건의 데이터가 성공적으로 통합되었습니다. 화면을 새로고침 해주세요.`);
     } catch (error) {
       console.error("Migration Error:", error);
-      alert("마이그레이션 중 오류가 발생했습니다. 개발자 도구(F12) 콘솔을 확인해주세요.");
+      alert("마이그레이션 중 오류가 발생했습니다. 개발자 도구(F12)를 확인해주세요.");
     } finally {
       setLoading(false);
     }
@@ -304,7 +322,7 @@ export default function SchoolStrategy({ currentUser }) {
     try {
       const diffInfoForm = getAutomaticDifficulty(formData.questions);
       
-      const termStr = formData.term || ""; 
+      const termStr = String(formData.term || ""); 
       const gradeMatch = termStr.match(/^(\d)/);
       const grade = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
       let semester = "1학기";
@@ -314,11 +332,11 @@ export default function SchoolStrategy({ currentUser }) {
 
       const baseData = {
           schoolName: formData.school.trim(),
-          year: formData.year,
+          year: String(formData.year).trim(),
           grade: grade,
           semester: semester,
           termType: termType,
-          subject: formData.subject
+          subject: formData.subject.trim()
       };
 
       const strategyPayload = {
@@ -422,21 +440,28 @@ export default function SchoolStrategy({ currentUser }) {
   if (viewState.view === 'list') {
     let displayedReports = reports;
     if (isStaff) {
+        // [CTO 최적화] 검색 로직의 String 강제 캐스팅으로 모든 Type Coercion 오류 해결
         displayedReports = reports.filter(r => {
-            if (appliedFilters.year !== '전체' && r.year !== appliedFilters.year) return false;
+            if (appliedFilters.year !== '전체' && String(r.year) !== String(appliedFilters.year)) return false;
+            
             if (appliedFilters.school.trim() !== '') {
                 const searchSchool = appliedFilters.school.trim().toLowerCase();
-                const reportSchool = (r.schoolName || r.school || '').toLowerCase();
+                const reportSchool = String(r.schoolName || r.school || '').toLowerCase();
                 if (!reportSchool.includes(searchSchool)) return false;
             }
+            
             if (appliedFilters.grade !== '전체' || appliedFilters.exam !== '전체') {
-                const rTerm = `${r.grade?.replace('학년','') || '1'}-${r.semester?.replace('학기','') || '1'} ${r.termType || r.term || '중간고사'}`;
+                const rGrade = String(r.grade || '1학년').replace('학년', '');
+                const rSemester = String(r.semester || '1학기').replace('학기', '');
+                const rTermType = String(r.termType || r.term || '중간고사');
+                const rTerm = `${rGrade}-${rSemester} ${rTermType}`;
+
                 let gradeMatch = true;
                 let examMatch = true;
 
                 if (appliedFilters.grade !== '전체') {
                     const g = appliedFilters.grade.replace('학년', '');
-                    gradeMatch = rTerm.startsWith(`${g}-`) || rTerm.startsWith(`${g}학년`); 
+                    gradeMatch = rTerm.startsWith(`${g}-`); 
                 }
                 if (appliedFilters.exam !== '전체') {
                     let suffix = '';
@@ -453,7 +478,7 @@ export default function SchoolStrategy({ currentUser }) {
     }
 
     const trends = displayedReports.filter(r => r.type === 'trend');
-    const individuals = displayedReports.filter(r => r.type === 'individual');
+    const individuals = displayedReports.filter(r => r.type !== 'trend'); // trend가 아닌 모든 것(아카이브 온리 포함)
 
     return (
       <div className="p-3 md:p-6 max-w-6xl mx-auto space-y-6 md:space-y-8 bg-gray-50 min-h-screen">
@@ -466,7 +491,7 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
           <div className="flex gap-2">
             
-            {/* 🚨 [임시] 관리자용 데이터 마이그레이션 버튼 추가 */}
+            {/* 🚨 관리자용 데이터 마이그레이션 버튼 (1회 클릭 후 삭제 요망) */}
             {isAdmin && (
               <button onClick={runDataMigration} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-red-600 text-white rounded-lg shadow-sm hover:bg-red-700 text-xs md:text-sm font-bold animate-pulse">
                 <span>데이터 통합 실행</span>
@@ -547,7 +572,7 @@ export default function SchoolStrategy({ currentUser }) {
               {trends.map(report => (
                 <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
                   {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                  <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {report.grade?.replace('학년','') || '1'}-{report.semester?.replace('학기','') || '1'} {report.termType || report.term || '고사'} 경향 분석</h3>
+                  <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
                   <p className="text-xs md:text-sm text-gray-600 mt-2">과목: {report.subject}</p>
                 </div>
               ))}
@@ -561,30 +586,43 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
               {individuals.map(report => {
                 const diffInfo = getAutomaticDifficulty(report.questions);
+                // [CTO 최적화] 아카이브 PDF만 올라가고, 아직 리뷰나 문항 분석이 없는 껍데기(Stub) 문서인지 판별
+                const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
 
                 return (
                   <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => handleOpenDetail(report.id)}>
                     {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                    <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">[{report.year}] {report.schoolName || report.school} {report.grade?.replace('학년','') || '1'}-{report.semester?.replace('학기','') || '1'} {report.termType || report.term || '고사'} {report.subject} 분석</h3>
+                    <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
+                        [{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {report.subject} 분석
+                    </h3>
                     
                     <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
-                        <div className="flex items-center justify-center gap-3 border-r border-gray-100">
-                            <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
-                                <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
+                        {isStrategyEmpty ? (
+                            <div className="col-span-2 flex flex-col items-center justify-center py-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                                <span className="text-xs text-gray-500 font-bold mb-1">분석 데이터 작성 대기중</span>
+                                <span className="text-[10px] text-gray-400">클릭하여 내신 분석을 추가하세요</span>
                             </div>
-                            <div className="flex flex-col items-start justify-center">
-                                <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
-                                <span className="text-sm md:text-base font-black text-indigo-900 leading-none mb-1">{diffInfo.level}</span>
-                                <span className="text-[9px] md:text-[10px] text-gray-400 font-medium">IDI {diffInfo.totalIdi}점</span>
-                            </div>
-                        </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center justify-center gap-3 border-r border-gray-100">
+                                    <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
+                                        <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
+                                    </div>
+                                    <div className="flex flex-col items-start justify-center">
+                                        <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
+                                        <span className="text-sm md:text-base font-black text-indigo-900 leading-none mb-1">{diffInfo.level}</span>
+                                        <span className="text-[9px] md:text-[10px] text-gray-400 font-medium">IDI {diffInfo.totalIdi}점</span>
+                                    </div>
+                                </div>
 
-                        <div className="flex flex-col items-center justify-center w-full px-2">
-                            <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
-                            <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
-                        </div>
+                                <div className="flex flex-col items-center justify-center w-full px-2">
+                                    <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
+                                </div>
+                            </>
+                        )}
                     </div>
                   </div>
                 )
@@ -614,7 +652,7 @@ export default function SchoolStrategy({ currentUser }) {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border p-4 md:p-8 space-y-6">
-          <h2 className="text-xl md:text-2xl font-bold border-b pb-4">리포트 {viewState.selectedId ? '수정' : '작성'}</h2>
+          <h2 className="text-xl md:text-2xl font-bold border-b pb-4">리포트 {viewState.selectedId ? '수정/작성' : '작성'}</h2>
           
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 bg-gray-50 p-3 md:p-4 rounded-lg">
             <div className="col-span-2 md:col-span-1">
@@ -797,7 +835,7 @@ export default function SchoolStrategy({ currentUser }) {
           {isStaff && (
             <div className="flex gap-1 md:gap-2">
               <button onClick={() => handleOpenForm(report)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-white border border-gray-300 text-gray-700 rounded-lg shadow-sm hover:bg-gray-50 text-xs md:text-sm font-bold">
-                <IconEdit /> 수정
+                <IconEdit /> 수정/분석추가
               </button>
               {!report.isDeleted && <button onClick={() => handleSoftDelete(report.id)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg shadow-sm hover:bg-red-100 text-xs md:text-sm font-bold">
                 <IconTrash /> <span className="hidden md:inline">삭제</span>
@@ -817,16 +855,16 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="inline-block px-2 md:px-3 py-1 bg-indigo-800 rounded-full text-[10px] md:text-xs font-semibold mb-2 md:mb-3 tracking-wider">
               {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
             </div>
-            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {report.grade?.replace('학년','') || '1'}-{report.semester?.replace('학기','') || '1'} {report.termType || report.term || '고사'} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
+            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
           </div>
 
           <div className="p-4 md:p-8">
             
-            {/* [CTO 방어막] 보안 방어막 (Zero Trust) : 강사/관리자에게만 원본 PDF 링크 노출 */}
+            {/* 보안 방어막 (Zero Trust) */}
             {isStaff && report.files?.examPaper?.url && (
                 <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex justify-between items-center shadow-sm">
                     <div className="flex flex-col">
-                        <span className="font-bold text-red-900 text-sm">🔒 교직원 전용: 원본 시험지 및 해설지 파일</span>
+                        <span className="font-bold text-red-900 text-sm">🔒 교직원 전용: 원본 시험지 파일</span>
                         <span className="text-xs text-red-600">이 링크는 학생과 학부모에게 절대 노출되지 않습니다.</span>
                     </div>
                     <a href={report.files.examPaper.url} target="_blank" rel="noreferrer" className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg text-sm shadow-sm hover:bg-red-700">
@@ -835,7 +873,17 @@ export default function SchoolStrategy({ currentUser }) {
                 </div>
             )}
 
-            {report.type === 'trend' && (
+            {/* [CTO 추가] 아카이브 데이터만 있고 아직 전략을 작성하지 않았을 때 노출할 UI */}
+            {!report.type || (!report.review && (!report.questions || report.questions.length === 0)) ? (
+                <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                    <span className="text-gray-500 font-bold mb-2">현재 PDF만 업로드되었으며, 분석 데이터가 작성되지 않았습니다.</span>
+                    {isStaff && (
+                        <button onClick={() => handleOpenForm(report)} className="px-5 py-2 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 text-sm">
+                            내신 분석 작성하기
+                        </button>
+                    )}
+                </div>
+            ) : report.type === 'trend' ? (
               <div className="space-y-8 md:space-y-12">
                 {report.trendData?.length > 0 && <section>
                   <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 md:mb-6 border-l-4 border-indigo-500 pl-3">난이도 변화 추이</h2>
@@ -874,11 +922,8 @@ export default function SchoolStrategy({ currentUser }) {
                   </div>
                 </section>}
               </div>
-            )}
-
-            {report.type === 'individual' && (
+            ) : (
               <div className="space-y-6 md:space-y-8">
-                
                 <div className="bg-white border border-indigo-100 rounded-xl p-4 md:p-6 shadow-sm mb-6">
                     <h3 className="text-sm md:text-base font-bold text-indigo-900 mb-2">📝 시험 총평 요약</h3>
                     <p className="text-gray-800 text-sm md:text-base leading-relaxed whitespace-pre-wrap">{report.review}</p>
