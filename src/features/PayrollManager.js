@@ -4,10 +4,12 @@ import {
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus
 } from 'lucide-react';
-// [CTO FIX] getDocFromServer, getDocsFromServer를 추가하여 캐시를 강제로 뚫고 서버 최신 데이터를 가져옵니다.
 import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
+
+// 🚀 [신규 추가] PDF 자동 분석 컴포넌트 임포트
+import PdfAutoFiller from './PdfAutoFiller';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -98,48 +100,34 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const isManagementMode = viewMode === 'management';
 
-    // [CTO 최적화] 유령(중복) 계정 필터링 로직 추가
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
-        
-        // 1차 필터링: 관리자, 강사, 조교만 추출
         const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
         
-        // [CTO 최적화] 데이터 반정규화 복구 과정에서 발생한 중복 데이터 필터링 (Defensive Coding)
-        // Time Complexity: O(N) - 배열을 한 번만 순회하며 Map을 사용하여 성능 저하를 방지합니다.
         const userMap = new Map();
-        
         filtered.forEach(user => {
             const existingUser = userMap.get(user.userId);
-            
             if (!existingUser) {
                 userMap.set(user.userId, user);
             } else {
-                // 이미 같은 아이디가 존재할 경우: '더 최근에 업데이트된 데이터' 또는 '정상적인 authUid가 있는 데이터'를 진짜로 간주하여 덮어씌움
                 const isNewer = user.updatedAt && existingUser.updatedAt && (user.updatedAt > existingUser.updatedAt);
                 const hasAuth = user.authUid && !existingUser.authUid;
-                
                 if (isNewer || hasAuth) {
                     userMap.set(user.userId, user);
                 }
             }
         });
-        
-        // Map의 value들만 뽑아서 고유한 사용자 배열 반환
         return Array.from(userMap.values());
     }, [isManagementMode, users, currentUser]);
 
-    // [CTO 철벽 방어 로직] 캐시를 완전히 무시하고 서버의 진실된 데이터만 가져오도록 설계
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
-        // 캐시 키 버전을 v7로 올려 이전 찌꺼기 데이터를 완벽히 폐기합니다.
         const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             const cacheTTL = isManagementMode ? 300000 : 0;
 
-            // 관리자 모드(비용 절감)일 때만 로컬스토리지 캐시를 허용합니다.
             if (!forceRefresh && cacheTTL > 0) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -158,30 +146,22 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const fetchedData = {};
             
             if (isManagementMode) {
-                // [관리자 뷰]
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), where('yearMonth', '==', selectedMonth));
                 let snapshot;
                 try {
-                    // 서버 강제 조회 시도
                     snapshot = await getDocsFromServer(q);
                 } catch (err) {
-                    // 인터넷이 끊겼을 때 앱이 죽지 않도록 일반 조회(캐시 폴백) 수행
                     snapshot = await getDocs(q);
                 }
                 snapshot.forEach(doc => { fetchedData[doc.data().userId] = doc.data(); });
             } else {
-                // [강사/조교 개인 뷰] - 문제가 발생했던 핵심 지점
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
                 
                 let snapshot;
                 try {
-                    // [핵심 해결책] 
-                    // 로컬 IndexedDB에 고착화된 '데이터 없음' 유령 캐시를 무시하고 
-                    // 무조건 Firebase 서버를 때려서 실제 저장된 정산 데이터를 가져옵니다.
                     snapshot = await getDocFromServer(docRef);
                 } catch (err) {
-                    // 기기가 완전 오프라인 상태일 경우에만 최후의 수단으로 일반 조회를 사용합니다.
                     snapshot = await getDoc(docRef);
                 }
 
@@ -194,7 +174,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const now = Date.now();
             setLastUpdated(now);
             
-            // 관리자 모드일 경우에만 갱신된 최신 데이터를 로컬스토리지에 저장해줍니다.
             if (cacheTTL > 0) {
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
             }
@@ -221,6 +200,95 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     }, [selectedMonth, isManagementMode]);
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
+
+    // 🚀 [신규 기능] PDF 추출 데이터 일괄 적용 및 DB 자동 저장 핸들러
+    const handlePdfDataExtracted = async (extractedData) => {
+        setCalcProcessing(true);
+        try {
+            const updatedPayrolls = { ...payrolls };
+            const promises = [];
+            let updateCount = 0;
+
+            for (const user of targetUsers) {
+                const autoData = extractedData[user.id];
+                if (autoData) {
+                    let currentPayroll = updatedPayrolls[user.id];
+                    
+                    // 만약 해당 월의 정산 내역이 아예 없는 직원이면, 기본 뼈대를 우선 생성합니다.
+                    if (!currentPayroll) {
+                        currentPayroll = {
+                            userId: user.id,
+                            userName: user.name,
+                            userRole: user.role,
+                            yearMonth: selectedMonth,
+                            hourlyRate: Number(user.hourlyRate) || 0,
+                            baseSalary: 0,
+                            totalHours: 0,
+                            weeklyHolidayPay: 0,
+                            mealAllowance: 0,
+                            bonus: 0,
+                            totalGross: 0,
+                            deductions: { '국민연금': 0, '건강보험': 0, '고용보험': 0, '장기요양보험료': 0, '소득세': 0, '지방소득세': 0 },
+                            netSalary: 0,
+                            status: 'calculated',
+                            updatedAt: serverTimestamp()
+                        };
+                    }
+
+                    // 추출된 공제 데이터 덮어쓰기
+                    const newDeductions = {
+                        ...currentPayroll.deductions,
+                        '국민연금': autoData.nationalPension || 0,
+                        '건강보험': autoData.healthInsurance || 0,
+                        '고용보험': autoData.employmentInsurance || 0,
+                        '장기요양보험료': autoData.longTermCare || 0,
+                        '소득세': autoData.taxIncome || 0,
+                        '지방소득세': autoData.taxLocal || 0
+                    };
+
+                    // 실수령액(Net Salary) 재계산 방어 로직
+                    const safeBaseSalary = Number(currentPayroll.baseSalary) || 0;
+                    const safeHolidayPay = Number(currentPayroll.weeklyHolidayPay) || 0;
+                    const safeBonus = Number(currentPayroll.bonus) || 0;
+                    const safeMeal = Number(currentPayroll.mealAllowance) || 0;
+                    const gross = safeBaseSalary + safeHolidayPay + safeBonus + safeMeal;
+                    const totalDeductions = Object.values(newDeductions).reduce((a, b) => a + (Number(b) || 0), 0);
+                    const net = gross - totalDeductions;
+
+                    const newData = {
+                        ...currentPayroll,
+                        totalGross: gross,
+                        deductions: newDeductions,
+                        netSalary: net,
+                        status: 'confirmed', // 자동 파싱 완료 시 확정 상태로 변경
+                        updatedAt: serverTimestamp()
+                    };
+
+                    updatedPayrolls[user.id] = newData;
+                    const docId = `${user.id}_${selectedMonth}`;
+                    // 서버로 즉시 일괄 저장 (Batch Promise)
+                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData, { merge: true }));
+                    updateCount++;
+                }
+            }
+
+            if (promises.length > 0) {
+                await Promise.all(promises);
+                setPayrolls(updatedPayrolls);
+                
+                // 로컬 캐시 업데이트
+                const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
+                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
+                
+                alert(`성공! 총 ${updateCount}명의 공제 내역이 완벽하게 계산되어 서버에 저장되었습니다.`);
+            }
+        } catch (e) {
+            console.error(e);
+            alert("공제 내역 자동 적용 중 오류가 발생했습니다: " + e.message);
+        } finally {
+            setCalcProcessing(false);
+        }
+    };
 
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
@@ -382,6 +450,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             {/* Content Area */}
             {isManagementMode ? (
                 <>
+                    {/* 🚀 PDF 업로드 및 공제 자동입력 컴포넌트 */}
+                    <PdfAutoFiller users={targetUsers} onExtractSuccess={handlePdfDataExtracted} />
+
                     {/* 모바일 카드 뷰 */}
                     <div className="md:hidden space-y-4">
                         {targetUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
