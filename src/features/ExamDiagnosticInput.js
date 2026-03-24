@@ -11,29 +11,25 @@ import { Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckS
  * 본인의 반을 즉시 확인하고 수십 명의 학생 성적을 원클릭으로 일괄 저장할 수 있습니다.
  */
 export default function ExamDiagnosticInput({ currentUser }) {
-  // 기본 마스터 데이터 (반, 학생)
   const [data, setData] = useState({ classes: [], students: [] });
   const [loadingInitial, setLoadingInitial] = useState(true);
   
-  // 시험 검색 관련 상태
   const currentYear = new Date().getFullYear();
   const [filters, setFilters] = useState({
     schoolName: '',
     year: String(currentYear),
-    gradeSem: '', // '1-1', '2-2' 등
-    term: ''      // '중간고사', '기말고사'
+    gradeSem: '',
+    term: ''
   });
   const [searchedExams, setSearchedExams] = useState([]);
   const [loadingExams, setLoadingExams] = useState(false);
   const [selectedExamId, setSelectedExamId] = useState('');
 
-  // 반 및 학생 선택 관련 상태
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedStudentIds, setSelectedStudentIds] = useState([]);
   const [inputsByStudent, setInputsByStudent] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 1. 초기 마스터 데이터 불러오기 (반, 학생 데이터만 로드 - 시험은 검색 시 로드)
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
@@ -59,7 +55,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
     fetchInitialData();
   }, []);
 
-  // 2. [비용 최적화] 조건에 맞는 시험만 검색하여 불러오기
   const handleSearchExams = async () => {
     if (!filters.schoolName.trim()) {
       return alert("학교명을 입력해주세요. (예: 목동고, 목동 등 일부 입력 가능)");
@@ -71,7 +66,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
     try {
       const examsRef = collection(db, 'artifacts/imperial-clinic-v1/public/data/integrated_exams');
       
-      // 파이어베이스 최적화: 입력된 학교명으로 시작하는 데이터만 검색 (Prefix Search)
       const q = query(
         examsRef,
         where('schoolName', '>=', filters.schoolName.trim()),
@@ -81,12 +75,11 @@ export default function ExamDiagnosticInput({ currentUser }) {
       const snap = await getDocs(q);
       let results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      // 드롭다운 필터를 로컬에서 적용하여 속도 극대화 (N+1 방지)
       if (filters.year) {
         results = results.filter(e => e.year === filters.year);
       }
       if (filters.gradeSem) {
-        const [gStr, sStr] = filters.gradeSem.split('-'); // 예: "1-1" -> "1", "1"
+        const [gStr, sStr] = filters.gradeSem.split('-');
         const targetGrade = `${gStr}학년`;
         const targetSem = `${sStr}학기`;
         results = results.filter(e => e.grade === targetGrade && e.semester === targetSem);
@@ -107,14 +100,11 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }
   };
 
-  // 3. [오류 수정 완료] 강사 권한에 따른 담당 반 매핑 로직 수정
   const availableClasses = data.classes.filter(c => {
     if (currentUser?.role === 'admin') return true;
-    // lecturerId (강의 관리와 연동되는 키값) 매핑 추가 완비
     return c.lecturerId === currentUser?.id || c.instructorId === currentUser?.id || c.teacherId === currentUser?.id || c.teacherName === currentUser?.name;
   });
 
-  // 선택된 반에 소속된 학생 필터링
   const classStudents = data.students.filter(s => {
     if (!selectedClassId) return false;
     const cls = availableClasses.find(c => c.id === selectedClassId);
@@ -142,31 +132,44 @@ export default function ExamDiagnosticInput({ currentUser }) {
   };
 
   const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
+  
+  // 🚀 [버그 수정 완료] 문항 정보가 없거나 중복될 경우를 대비한 완벽한 전처리 로직
   const examQuestionsList = selectedExamData?.questions && selectedExamData.questions.length > 0 
-    ? selectedExamData.questions 
-    : Array.from({ length: 30 }, (_, i) => ({ number: i + 1, point: null }));
+    ? selectedExamData.questions.map((q, idx) => ({
+        ...q,
+        // q.number가 아예 없거나 null이면 시스템이 자동으로 "1", "2" 인덱스를 부여
+        displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : String(idx + 1),
+        calcPoint: q.point ? Number(q.point) : null
+      }))
+    : Array.from({ length: 30 }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: null }));
 
-  const toggleWrongQuestion = (sId, qNum) => {
+  const toggleWrongQuestion = (sId, qNumStr) => {
     setInputsByStudent(prev => {
       const currentInput = prev[sId];
-      const isWrong = currentInput.wrongQuestions.includes(qNum);
+      // 문자열 기반의 완벽한 포함 여부 체크
+      const isWrong = currentInput.wrongQuestions.includes(qNumStr);
       
       let newWrongs;
       if (isWrong) {
-        newWrongs = currentInput.wrongQuestions.filter(n => n !== qNum);
+        newWrongs = currentInput.wrongQuestions.filter(n => n !== qNumStr);
       } else {
-        newWrongs = [...currentInput.wrongQuestions, qNum].sort((a, b) => a - b);
+        // 🚀 [버그 수정 완료] "객관식1" 등의 문자열이 포함되어 있어도 NaN 에러 없이 숫자만 추출하여 안전하게 오름차순 정렬
+        newWrongs = [...currentInput.wrongQuestions, qNumStr].sort((a, b) => {
+          const numA = parseInt(String(a).replace(/[^0-9]/g, ''), 10) || 0;
+          const numB = parseInt(String(b).replace(/[^0-9]/g, ''), 10) || 0;
+          return numA - numB;
+        });
       }
 
       let newScore = 100;
       const totalQs = examQuestionsList.length;
-      const hasPoints = examQuestionsList.some(q => q.point);
+      const hasPoints = examQuestionsList.some(q => q.calcPoint !== null);
 
       if (hasPoints) {
         let deduction = 0;
         newWrongs.forEach(n => {
-          const qInfo = examQuestionsList.find(x => Number(x.number) === Number(n));
-          if (qInfo && qInfo.point) deduction += Number(qInfo.point);
+          const qInfo = examQuestionsList.find(x => x.displayNumber === n);
+          if (qInfo && qInfo.calcPoint) deduction += qInfo.calcPoint;
         });
         newScore = Math.max(0, 100 - deduction);
       } else {
@@ -235,7 +238,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
         <p className="opacity-90 text-sm">조건 검색을 통해 시험을 찾고, 반 전체 학생의 점수와 리포트를 일괄 생성하세요.</p>
       </div>
 
-      {/* Step 1: 조건부 시험 검색 */}
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
           <Search className="text-blue-600" size={20} /> 1단계: 진단할 시험 검색 및 선택
@@ -305,7 +307,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
         )}
       </div>
 
-      {/* Step 2: 반 및 학생 선택 */}
       <div className={`bg-white p-6 rounded-2xl shadow-sm border border-gray-100 transition-opacity ${!selectedExamId ? 'opacity-50 pointer-events-none' : ''}`}>
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
           <Users className="text-indigo-600" size={20} /> 2단계: 대상 반 및 학생 선택
@@ -345,7 +346,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
         )}
       </div>
 
-      {/* Step 3: 학생별 입력 섹션 */}
       {selectedStudentIds.length > 0 && (
         <div className="space-y-4">
           <div className="flex justify-between items-center px-1">
@@ -378,16 +378,20 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 <div>
                   <p className="text-sm font-bold text-gray-700 mb-2">🎯 오답 문항을 클릭하세요 (자동 점수 차감)</p>
                   <div className="flex flex-wrap gap-2">
-                    {examQuestionsList.map(q => {
-                      const isWrong = input.wrongQuestions.includes(q.number);
+                    {/* 🚀 [버그 수정 완료] 문항 박스의 버튼 너비를 가변(min-w)으로 수정하여 긴 텍스트도 안 잘리게 표시 */}
+                    {examQuestionsList.map((q, idx) => {
+                      const isWrong = input.wrongQuestions.includes(q.displayNumber);
                       return (
                         <button 
-                          key={q.number}
-                          onClick={() => toggleWrongQuestion(sId, q.number)}
-                          className={`w-10 h-10 rounded-xl font-black text-sm transition-all duration-200 
-                            ${isWrong ? 'bg-rose-500 text-white shadow-lg scale-110 border-rose-600' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border-gray-200 border'}`}
+                          key={`q-${idx}-${q.displayNumber}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            toggleWrongQuestion(sId, q.displayNumber);
+                          }}
+                          className={`px-3 min-w-[2.5rem] h-10 rounded-xl font-black text-sm transition-all duration-200 whitespace-nowrap
+                            ${isWrong ? 'bg-rose-500 text-white shadow-lg scale-105 border-rose-600' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border-gray-200 border'}`}
                         >
-                          {q.number}
+                          {q.displayNumber}
                         </button>
                       );
                     })}
