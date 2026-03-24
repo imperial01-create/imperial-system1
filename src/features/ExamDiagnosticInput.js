@@ -3,13 +3,6 @@ import { collection, getDocs, addDoc, serverTimestamp, query, where } from 'fire
 import { db } from '../firebase';
 import { Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckSquare, Loader } from 'lucide-react';
 
-/**
- * [서비스 가치(Service Value)] 
- * 1. 데이터 비용 최적화: 수천 개의 시험을 한 번에 불러오지 않고, 학교명 기반으로 필요한 데이터만 
- * 스마트하게 쿼리(Lazy Fetch)하여 Firebase 읽기 비용(과금)을 극한으로 방어합니다.
- * 2. 강사 업무 효율화: '강의 관리'와 데이터 스키마를 완벽히 연동하여, 강사가 로그인 시 
- * 본인의 반을 즉시 확인하고 수십 명의 학생 성적을 원클릭으로 일괄 저장할 수 있습니다.
- */
 export default function ExamDiagnosticInput({ currentUser }) {
   const [data, setData] = useState({ classes: [], students: [] });
   const [loadingInitial, setLoadingInitial] = useState(true);
@@ -133,27 +126,25 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
   const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
   
-  // 🚀 [버그 수정 완료] 문항 정보가 없거나 중복될 경우를 대비한 완벽한 전처리 로직
+  // 🚀 [버그 수정 완료] score 필드 우선 인식 및 데이터 전처리
   const examQuestionsList = selectedExamData?.questions && selectedExamData.questions.length > 0 
     ? selectedExamData.questions.map((q, idx) => ({
         ...q,
-        // q.number가 아예 없거나 null이면 시스템이 자동으로 "1", "2" 인덱스를 부여
         displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : String(idx + 1),
-        calcPoint: q.point ? Number(q.point) : null
+        // score 필드가 있으면 최우선 적용, 없으면 point 적용
+        calcPoint: (q.score !== undefined && q.score !== null) ? Number(q.score) : (q.point !== undefined && q.point !== null ? Number(q.point) : null)
       }))
     : Array.from({ length: 30 }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: null }));
 
   const toggleWrongQuestion = (sId, qNumStr) => {
     setInputsByStudent(prev => {
       const currentInput = prev[sId];
-      // 문자열 기반의 완벽한 포함 여부 체크
       const isWrong = currentInput.wrongQuestions.includes(qNumStr);
       
       let newWrongs;
       if (isWrong) {
         newWrongs = currentInput.wrongQuestions.filter(n => n !== qNumStr);
       } else {
-        // 🚀 [버그 수정 완료] "객관식1" 등의 문자열이 포함되어 있어도 NaN 에러 없이 숫자만 추출하여 안전하게 오름차순 정렬
         newWrongs = [...currentInput.wrongQuestions, qNumStr].sort((a, b) => {
           const numA = parseInt(String(a).replace(/[^0-9]/g, ''), 10) || 0;
           const numB = parseInt(String(b).replace(/[^0-9]/g, ''), 10) || 0;
@@ -161,6 +152,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
         });
       }
 
+      // 🚀 [버그 수정 완료] 정확한 배점 차감 로직
       let newScore = 100;
       const totalQs = examQuestionsList.length;
       const hasPoints = examQuestionsList.some(q => q.calcPoint !== null);
@@ -171,7 +163,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
           const qInfo = examQuestionsList.find(x => x.displayNumber === n);
           if (qInfo && qInfo.calcPoint) deduction += qInfo.calcPoint;
         });
-        newScore = Math.max(0, 100 - deduction);
+        // 100점에서 감점하며, 소수점 오류 방지를 위해 소수점 첫째 자리까지만 반올림
+        newScore = Math.max(0, Math.round((100 - deduction) * 10) / 10);
       } else {
         const deductionPerQ = 100 / totalQs;
         newScore = Math.max(0, Math.round(100 - (newWrongs.length * deductionPerQ)));
@@ -358,6 +351,25 @@ export default function ExamDiagnosticInput({ currentUser }) {
             const input = inputsByStudent[sId];
             if (!input) return null;
 
+            // 🚀 [UI 혁신] 문항들을 객관식/주관식 등 type 별로 그룹화하여 줄바꿈(단락) 형성
+            const groupedQuestions = [];
+            examQuestionsList.forEach(q => {
+              // 1. type 명시 여부 확인
+              let type = q.type || q.questionType;
+              // 2. 명시되어 있지 않으면 문항 번호(예: '객관식1')에서 문자만 추출
+              if (!type) {
+                const match = String(q.displayNumber).match(/^([가-힣]+)/);
+                type = match ? match[1] : '일반 문항';
+              }
+              
+              let group = groupedQuestions.find(g => g.type === type);
+              if (!group) {
+                group = { type, questions: [] };
+                groupedQuestions.push(group);
+              }
+              group.questions.push(q);
+            });
+
             return (
               <div key={sId} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-200 border-l-4 border-l-rose-500 flex flex-col gap-4">
                 
@@ -376,29 +388,42 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 </div>
 
                 <div>
-                  <p className="text-sm font-bold text-gray-700 mb-2">🎯 오답 문항을 클릭하세요 (자동 점수 차감)</p>
-                  <div className="flex flex-wrap gap-2">
-                    {/* 🚀 [버그 수정 완료] 문항 박스의 버튼 너비를 가변(min-w)으로 수정하여 긴 텍스트도 안 잘리게 표시 */}
-                    {examQuestionsList.map((q, idx) => {
-                      const isWrong = input.wrongQuestions.includes(q.displayNumber);
-                      return (
-                        <button 
-                          key={`q-${idx}-${q.displayNumber}`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            toggleWrongQuestion(sId, q.displayNumber);
-                          }}
-                          className={`px-3 min-w-[2.5rem] h-10 rounded-xl font-black text-sm transition-all duration-200 whitespace-nowrap
-                            ${isWrong ? 'bg-rose-500 text-white shadow-lg scale-105 border-rose-600' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border-gray-200 border'}`}
-                        >
-                          {q.displayNumber}
-                        </button>
-                      );
-                    })}
+                  <p className="text-sm font-bold text-gray-700 mb-3">🎯 오답 문항을 클릭하세요 (자동 점수 차감)</p>
+                  
+                  {/* 그룹별 렌더링을 통한 줄바꿈(flex-col) 적용 */}
+                  <div className="flex flex-col gap-5">
+                    {groupedQuestions.map((group, gIdx) => (
+                      <div key={gIdx} className="flex flex-col gap-2 border-l-2 border-indigo-200 pl-3">
+                        <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-md w-fit">
+                          {group.type}
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {group.questions.map((q, idx) => {
+                            const isWrong = input.wrongQuestions.includes(q.displayNumber);
+                            // 버튼에는 '객관식1' 대신 '1'만 예쁘게 표시되도록 정규식 처리
+                            const btnText = String(q.displayNumber).replace(/^[가-힣\s]+/, '') || String(idx + 1);
+                            
+                            return (
+                              <button 
+                                key={`q-${idx}-${q.displayNumber}`}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  toggleWrongQuestion(sId, q.displayNumber);
+                                }}
+                                className={`px-3 min-w-[2.5rem] h-10 rounded-xl font-black text-sm transition-all duration-200 whitespace-nowrap
+                                  ${isWrong ? 'bg-rose-500 text-white shadow-md scale-105 border-rose-600' : 'bg-white text-gray-600 hover:bg-gray-100 border-gray-300 border shadow-sm'}`}
+                              >
+                                {btnText}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4 pt-4 border-t border-gray-100">
                   <div>
                     <label className="block text-xs font-bold text-gray-500 mb-1 uppercase">선생님 1:1 학습 분석</label>
                     <textarea 
