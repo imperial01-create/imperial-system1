@@ -37,6 +37,10 @@ const ExamArchive = ({ currentUser }) => {
 
     const [showAddModal, setShowAddModal] = useState(false);
     
+    // 🚀 [신규 상태] 정보 수정 모달 및 폼 상태
+    const [showEditExamModal, setShowEditExamModal] = useState(false);
+    const [editExamForm, setEditExamForm] = useState(null);
+    
     const [newExamForm, setNewExamForm] = useState({
         schoolType: '고등학교', schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
@@ -58,7 +62,6 @@ const ExamArchive = ({ currentUser }) => {
             const examsRef = collection(db, INTEGRATED_COLLECTION);
             let q = query(examsRef, limit(50)); 
 
-            // [CTO 최적화] 검색 시 모든 파라미터를 강제 문자열로 비교
             Object.keys(filters).forEach(key => {
                 if (key === 'combinedTerm' && filters.combinedTerm) {
                     const [sem, tm] = filters.combinedTerm.split(' ');
@@ -98,7 +101,7 @@ const ExamArchive = ({ currentUser }) => {
             const baseData = {
                 schoolType: newExamForm.schoolType,
                 schoolName: newExamForm.schoolName.trim(),
-                year: String(newExamForm.year), // 강제 문자열 변환
+                year: String(newExamForm.year), 
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: newExamForm.subject,
@@ -138,6 +141,53 @@ const ExamArchive = ({ currentUser }) => {
             error.code === 'permission-denied' 
                 ? alert("보안 에러: 기출문제를 등록할 권한이 없습니다.") 
                 : alert("등록 실패: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // 🚀 [신규 기능] 시험 정보 수정 버튼 클릭 핸들러
+    const handleEditExamClick = (exam) => {
+        setEditExamForm({
+            id: exam.id,
+            schoolType: exam.schoolType || '고등학교',
+            schoolName: exam.schoolName || '',
+            year: exam.year || String(currentYear),
+            combinedTerm: `${exam.semester || '1학기'} ${exam.termType || '중간고사'}`,
+            subject: exam.subject || '',
+            grade: exam.grade || '1학년'
+        });
+        setShowEditExamModal(true);
+    };
+
+    // 🚀 [신규 기능] 시험 정보 수정 제출 핸들러 (updateDoc을 통해 메타데이터만 안전하게 변경)
+    const handleEditSubmitExam = async () => {
+        if (!editExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
+        setIsProcessing(true);
+        try {
+            const [parsedSemester, parsedTerm] = editExamForm.combinedTerm.split(' ');
+            
+            const updateData = {
+                schoolType: editExamForm.schoolType,
+                schoolName: editExamForm.schoolName.trim(),
+                year: String(editExamForm.year),
+                semester: parsedSemester,
+                termType: parsedTerm,
+                subject: editExamForm.subject,
+                grade: editExamForm.grade,
+                updatedAt: serverTimestamp()
+            };
+
+            // DB 업데이트
+            await updateDoc(doc(db, INTEGRATED_COLLECTION, editExamForm.id), updateData);
+
+            // 로컬 상태 즉시 반영 (낙관적 업데이트)
+            setExams(prev => prev.map(e => e.id === editExamForm.id ? { ...e, ...updateData } : e));
+            
+            alert("기출자료 정보가 성공적으로 수정되었습니다.");
+            setShowEditExamModal(false);
+        } catch (error) {
+            alert("수정 실패: " + error.message);
         } finally {
             setIsProcessing(false);
         }
@@ -393,10 +443,16 @@ const ExamArchive = ({ currentUser }) => {
                                 <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
                                     <div className="flex justify-between items-start">
                                         <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
+                                        {/* 🚀 [신규 기능] 관리자 전용 수정 및 삭제 버튼 영역 */}
                                         {isAdmin && (
-                                            <button onClick={() => handleDeleteExam(exam.id)} className="text-red-400 hover:text-red-600 transition-colors mt-1" title="기출자료 전체 삭제">
-                                                <Trash2 size={18} />
-                                            </button>
+                                            <div className="flex gap-2 mt-1">
+                                                <button onClick={() => handleEditExamClick(exam)} className="text-gray-400 hover:text-blue-600 transition-colors" title="시험 정보 수정">
+                                                    <Edit3 size={18} />
+                                                </button>
+                                                <button onClick={() => handleDeleteExam(exam.id)} className="text-red-400 hover:text-red-600 transition-colors" title="기출자료 전체 삭제">
+                                                    <Trash2 size={18} />
+                                                </button>
+                                            </div>
                                         )}
                                     </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
@@ -415,6 +471,7 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
+            {/* 신규 등록 모달 */}
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
@@ -483,6 +540,62 @@ const ExamArchive = ({ currentUser }) => {
                         {isProcessing ? <Loader className="animate-spin mx-auto" /> : '아카이브 생성 및 배포'}
                     </Button>
                 </div>
+            </Modal>
+
+            {/* 🚀 [신규 기능] 기출자료 정보 수정 모달 */}
+            <Modal isOpen={showEditExamModal} onClose={() => setShowEditExamModal(false)} title="기출자료 정보 수정">
+                {editExamForm && (
+                    <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
+                        <div className="bg-orange-50 p-4 rounded-xl text-xs md:text-sm text-orange-800 mb-4">
+                            <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 관리자 권한 수정</p>
+                            <p>기본 정보(학교, 연도 등)만 수정되며 연결된 드라이브 파일과 작업 이력은 안전하게 유지됩니다.</p>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 md:gap-4">
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">학교명</label>
+                                <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" placeholder="목동고" value={editExamForm.schoolName} onChange={e => setEditExamForm({...editExamForm, schoolName: e.target.value})}/>
+                            </div>
+                            <div className="col-span-2 sm:col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">학교급</label>
+                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.schoolType} onChange={e => setEditExamForm({...editExamForm, schoolType: e.target.value})}>
+                                    <option value="중학교">중학교</option><option value="고등학교">고등학교</option>
+                                </select>
+                            </div>
+                            <div className="col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">학년</label>
+                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.grade} onChange={e => setEditExamForm({...editExamForm, grade: e.target.value})}>
+                                    <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                                </select>
+                            </div>
+                            <div className="col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">과목</label>
+                                <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})}/>
+                            </div>
+                            
+                            <div className="col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
+                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.year} onChange={e => setEditExamForm({...editExamForm, year: e.target.value})}>
+                                    {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
+                                </select>
+                            </div>
+                            
+                            <div className="col-span-1">
+                                <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
+                                <select className="w-full border p-2.5 rounded-xl bg-gray-50 text-sm" value={editExamForm.combinedTerm} onChange={e => setEditExamForm({...editExamForm, combinedTerm: e.target.value})}>
+                                    <option value="1학기 중간고사">1학기 중간고사</option>
+                                    <option value="1학기 기말고사">1학기 기말고사</option>
+                                    <option value="2학기 중간고사">2학기 중간고사</option>
+                                    <option value="2학기 기말고사">2학기 기말고사</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <Button className="w-full mt-6 py-4 text-base md:text-lg shadow-md" onClick={handleEditSubmitExam} disabled={isProcessing}>
+                            {isProcessing ? <Loader className="animate-spin mx-auto" /> : '기출자료 정보 수정 완료'}
+                        </Button>
+                    </div>
+                )}
             </Modal>
 
             <Modal isOpen={['upload_link', 'edit_link'].includes(modalState.type)} onClose={() => { setModalState({ type: null, exam: null, fileKey: null }); setUploadUrl(''); }} title={modalState.type === 'edit_link' ? "자료 링크 수정" : "자료 링크 등록"}>
