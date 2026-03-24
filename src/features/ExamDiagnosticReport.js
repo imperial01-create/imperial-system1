@@ -4,10 +4,6 @@ import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Target, TrendingUp, AlertTriangle, BookOpen, Award, ArrowLeft } from 'lucide-react';
 
-/**
- * [서비스 가치] 학부모가 직관적으로 아이의 성적표를 확인하고, 뒤로 가기 시 끊김 없이 
- * 자신의 시험 목록으로 돌아가도록 UX(사용자 경험)를 극대화했습니다.
- */
 export default function ExamDiagnosticReport({ diagnosticId }) {
   const [data, setData] = useState({ diagnostic: null, exam: null });
   const [analysis, setAnalysis] = useState({ predictedGrade: '-', wrongQuestionsInfo: [] });
@@ -41,34 +37,53 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
   }, [diagnosticId]);
 
   const calculateAnalysis = (diag, exam) => {
-    // 1. [요청 반영] 정교한 예상 등급 산출 로직
-    let predicted = '4등급'; // 기본값 (3등급 미만)
+    // 1. [수정완료] 등급컷 산출 시 명시적 숫자(Number) 형변환 추가
+    let predicted = '4등급'; 
     if (exam.gradeCuts) {
-      const cut1 = exam.gradeCuts["1등급"] || 100;
-      const cut2 = exam.gradeCuts["2등급"] || 100;
-      const cut3 = exam.gradeCuts["3등급"] || 100;
+      const studentScore = Number(diag.score || 0);
+      const cut1 = Number(exam.gradeCuts["1등급"] || 100);
+      const cut2 = Number(exam.gradeCuts["2등급"] || 100);
+      const cut3 = Number(exam.gradeCuts["3등급"] || 100);
 
-      if (diag.score >= cut1) {
+      if (studentScore >= cut1) {
         predicted = '1등급';
-      } else if (diag.score >= cut2) {
+      } else if (studentScore >= cut2) {
         predicted = '2등급';
-      } else if (diag.score >= cut3) {
+      } else if (studentScore >= cut3) {
         predicted = '3등급';
       }
     }
 
-    // 2. [요청 반영] 오답 문항 정보 매핑 (마스터 데이터의 questions 배열 활용)
+    // 2. [수정완료] 오답 문항 스마트 매칭 로직 (정규표현식 사용)
     const wrongQs = [];
     if (exam.questions && diag.wrongQuestionNumbers) {
       diag.wrongQuestionNumbers.forEach(num => {
-        const qInfo = exam.questions.find(q => q.number === num);
-        if (qInfo) wrongQs.push(qInfo);
-        else wrongQs.push({ number: num, concept: '정보 없음', difficulty: '-' });
+        const targetNumStr = String(num).trim(); // 강사가 입력한 번호 (예: "1")
+        
+        // 일치하는 문항 찾기 (1차: 정확히 일치, 2차: 문자열에서 숫자만 추출해서 비교)
+        let qInfo = exam.questions.find(q => String(q.number) === targetNumStr);
+        if (!qInfo) {
+          qInfo = exam.questions.find(q => String(q.number).replace(/[^0-9]/g, '') === targetNumStr);
+        }
+
+        if (qInfo) {
+          wrongQs.push({
+            originalNumber: qInfo.number, // "객관식1" 원본 유지
+            sortNumber: Number(targetNumStr), // 정렬용
+            concept: qInfo.concept || qInfo.unit || '개념 정보 없음',
+            difficulty: qInfo.difficulty || (qInfo.idi ? `IDI ${qInfo.idi}` : '-') // IDI 정보가 있으면 표시
+          });
+        } else {
+          wrongQs.push({ 
+            originalNumber: targetNumStr, sortNumber: Number(targetNumStr), 
+            concept: '문항 정보 매핑 불가', difficulty: '-' 
+          });
+        }
       });
     }
 
     // 문항 번호순 정렬
-    wrongQs.sort((a, b) => a.number - b.number);
+    wrongQs.sort((a, b) => a.sortNumber - b.sortNumber);
 
     setAnalysis({ predictedGrade: predicted, wrongQuestionsInfo: wrongQs });
   };
@@ -79,8 +94,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 bg-slate-50 min-h-screen">
-      
-      {/* [요청 반영] 강력한 네비게이션 복귀 버튼 */}
       <button 
         onClick={() => navigate('/my-exams')} 
         className="mb-6 flex items-center gap-2 text-indigo-700 hover:text-indigo-900 font-bold bg-indigo-100 hover:bg-indigo-200 px-4 py-2 rounded-xl transition-all w-fit"
@@ -95,7 +108,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
         </div>
 
         <div className="p-6 md:p-8 space-y-8">
-          {/* 상단: 점수 및 등급 */}
           <div className="flex flex-col md:flex-row justify-between items-center bg-indigo-50 p-6 rounded-xl border border-indigo-100">
             <div className="text-center md:text-left mb-4 md:mb-0">
               <p className="text-gray-500 text-sm font-semibold mb-1">IMPERIAL STUDENT</p>
@@ -114,7 +126,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
             </div>
           </div>
 
-          {/* 중단: 학원 총평 */}
           <div className="bg-white">
             <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3 border-b pb-2">
               <Target className="text-indigo-600" size={24} /> 학원 공식 총평
@@ -124,7 +135,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
             </p>
           </div>
 
-          {/* 하단: [요청 반영] 오답 문항 확인 */}
           <div>
             <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3 border-b pb-2">
               <AlertTriangle className="text-orange-500" size={24} /> 오답 문항 분석
@@ -134,8 +144,8 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
                 {analysis.wrongQuestionsInfo.map((q, idx) => (
                   <div key={idx} className="flex flex-col p-3 bg-orange-50 rounded-lg border border-orange-100">
                     <div className="flex justify-between items-center mb-1">
-                      <span className="font-black text-orange-700">{q.number}번 문항</span>
-                      <span className="text-xs font-bold px-2 py-0.5 bg-white text-gray-600 rounded shadow-sm">
+                      <span className="font-black text-orange-700">{q.originalNumber}번 문항</span>
+                      <span className="text-xs font-bold px-2 py-0.5 bg-white text-gray-600 rounded shadow-sm border border-gray-200">
                         난이도: {q.difficulty}
                       </span>
                     </div>
@@ -148,7 +158,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
             )}
           </div>
 
-          {/* 최하단: 맞춤 솔루션 */}
           <div className="bg-blue-50 p-6 rounded-xl border border-blue-200">
             <h3 className="text-lg font-bold text-blue-900 flex items-center gap-2 mb-4">
               <TrendingUp className="text-blue-600" size={24} /> 담당 선생님 1:1 맞춤 코멘트

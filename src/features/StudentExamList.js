@@ -2,15 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
-import { Target, AlertCircle, TrendingUp, ChevronRight, MessageSquare } from 'lucide-react';
+import { Target, AlertCircle, TrendingUp, ChevronRight, MessageSquare, Calendar } from 'lucide-react';
 import { LoadingSpinner } from '../components/UI';
-// 🚀 [신규] 차트 라이브러리 임포트 (npm install recharts 필수)
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-/**
- * [서비스 가치] 학부모에게 성적 상승 곡선을 시각적으로 증명하여, 
- * 학원의 교육 시스템에 대한 강한 신뢰를 형성하고 장기 등록을 유도합니다.
- */
 export default function StudentExamList({ currentUser }) {
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -22,35 +17,32 @@ export default function StudentExamList({ currentUser }) {
       if (!currentUser?.name) return;
       
       try {
-        // 1. 학생의 진단 데이터 불러오기
         const diagRef = collection(db, 'artifacts/imperial-clinic-v1/public/data/student_exam_diagnostics');
         const q = query(diagRef, where('studentName', '==', currentUser.name));
         const snap = await getDocs(q);
         
         let diagList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        
-        // 최신순 정렬 후 최근 5회만 추출
         diagList.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
         const recent5Exams = diagList.slice(0, 5);
 
-        // 2. 표에 난이도와 총평을 표시하기 위해 마스터 데이터(integrated_exams) 조인
         const enrichedExams = await Promise.all(recent5Exams.map(async (diag) => {
           const masterRef = doc(db, 'artifacts/imperial-clinic-v1/public/data/integrated_exams', diag.examDocId);
           const masterSnap = await getDoc(masterRef);
           const masterData = masterSnap.exists() ? masterSnap.data() : {};
           
-          // 등급컷 계산
+          // [수정완료] 등급컷 계산 시 명시적 숫자(Number) 형변환
           let grade = '4등급';
           if (masterData.gradeCuts) {
-            const c1 = masterData.gradeCuts['1등급'] || 100;
-            const c2 = masterData.gradeCuts['2등급'] || 100;
-            const c3 = masterData.gradeCuts['3등급'] || 100;
-            if(diag.score >= c1) grade = '1등급';
-            else if(diag.score >= c2) grade = '2등급';
-            else if(diag.score >= c3) grade = '3등급';
+            const score = Number(diag.score || 0);
+            const c1 = Number(masterData.gradeCuts['1등급'] || 100);
+            const c2 = Number(masterData.gradeCuts['2등급'] || 100);
+            const c3 = Number(masterData.gradeCuts['3등급'] || 100);
+            
+            if(score >= c1) grade = '1등급';
+            else if(score >= c2) grade = '2등급';
+            else if(score >= c3) grade = '3등급';
           }
 
-          // 날짜 포맷 (createdAt이 있으면 사용, 없으면 임시 텍스트)
           const dateStr = diag.createdAt ? 
             diag.createdAt.toDate().toLocaleDateString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit'}) 
             : '최근';
@@ -66,7 +58,6 @@ export default function StudentExamList({ currentUser }) {
 
         setExams(enrichedExams);
       } catch (err) {
-        console.error(err);
         setError("데이터를 불러오지 못했습니다.");
       } finally {
         setLoading(false);
@@ -79,23 +70,20 @@ export default function StudentExamList({ currentUser }) {
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="p-6 text-center text-red-500 bg-red-50 rounded-xl"><AlertCircle className="mx-auto mb-2"/>{error}</div>;
 
-  // 그래프용 데이터: 과거부터 최신순으로 그려야 하므로 배열을 역순(Reverse) 처리
   const chartData = [...exams].reverse().map((exam, index) => {
-    // X축 라벨을 짧게 만들기 위해 examDocId 파싱 (예: 2024_목동고_1학년_수학 -> 수학)
     const nameParts = exam.examDocId.split('_');
     const shortName = nameParts.length > 3 ? `${nameParts[1]} ${nameParts[nameParts.length-1]}` : `시험${index+1}`;
-    return { name: shortName, 점수: exam.score, 풀네임: exam.examDocId.replace(/_/g, ' ') };
+    return { name: shortName, 점수: Number(exam.score), 풀네임: exam.examDocId.replace(/_/g, ' ') };
   });
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in pb-12">
+    <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in pb-12 px-2 md:px-0">
       
-      {/* 헤더 */}
-      <div className="bg-gradient-to-r from-indigo-700 to-blue-600 text-white p-8 rounded-3xl shadow-lg">
-        <h1 className="text-3xl font-bold mb-2 flex items-center gap-3">
-          <Target size={32} /> 나의 시험 결과 대시보드
+      <div className="bg-gradient-to-r from-indigo-700 to-blue-600 text-white p-6 md:p-8 rounded-3xl shadow-lg">
+        <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-3">
+          <Target size={32} className="shrink-0" /> 나의 시험 결과 대시보드
         </h1>
-        <p className="opacity-90 text-lg">
+        <p className="opacity-90 text-sm md:text-lg">
           {currentUser.name} 학생의 최근 5회 성적 추이와 선생님의 맞춤 코멘트를 확인하세요.
         </p>
       </div>
@@ -107,34 +95,34 @@ export default function StudentExamList({ currentUser }) {
         </div>
       ) : (
         <>
-          {/* 섹션 1: 최근 성적 추이 그래프 */}
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-6">
+          <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-gray-100">
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 flex items-center gap-2 mb-6">
               <TrendingUp className="text-blue-600" /> 최근 성적 추이 (최대 5회)
             </h2>
-            <div className="h-[300px] w-full">
+            <div className="h-[250px] md:h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: -20 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#6B7280', fontSize: 12}} dy={10} />
-                  <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{fill: '#6B7280', fontSize: 12}} />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#6B7280', fontSize: 11}} dy={10} />
+                  <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{fill: '#6B7280', fontSize: 11}} />
                   <Tooltip 
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                     formatter={(value) => [`${value}점`, '획득 점수']}
                     labelFormatter={(label, payload) => payload?.[0]?.payload?.풀네임 || label}
                   />
-                  <Line type="monotone" dataKey="점수" stroke="#4F46E5" strokeWidth={4} dot={{ r: 6, fill: '#4F46E5', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 8 }} />
+                  <Line type="monotone" dataKey="점수" stroke="#4F46E5" strokeWidth={3} dot={{ r: 5, fill: '#4F46E5', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 7 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* 섹션 2: 최근 5회 시험 요약 표 */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-            <h2 className="text-xl font-bold text-gray-800 p-6 border-b border-gray-100 bg-gray-50/50">
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 p-5 md:p-6 border-b border-gray-100 bg-gray-50/50">
               시험 기록 및 상세 리포트
             </h2>
-            <div className="overflow-x-auto">
+
+            {/* [수정완료] 데스크탑용 테이블 UI */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-gray-50 text-gray-600 text-sm border-b border-gray-200">
@@ -148,11 +136,7 @@ export default function StudentExamList({ currentUser }) {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {exams.map((exam) => (
-                    <tr 
-                      key={exam.id} 
-                      onClick={() => navigate(`/report/${exam.id}`)}
-                      className="hover:bg-blue-50/50 cursor-pointer transition-colors group"
-                    >
+                    <tr key={exam.id} onClick={() => navigate(`/report/${exam.id}`)} className="hover:bg-blue-50/50 cursor-pointer transition-colors group">
                       <td className="p-4 text-sm text-gray-500">{exam.date}</td>
                       <td className="p-4 font-bold text-gray-900 group-hover:text-blue-600 flex items-center gap-2">
                         {exam.examDocId.replace(/_/g, ' ')} <ChevronRight size={16} className="opacity-0 group-hover:opacity-100 text-blue-500 transition-opacity" />
@@ -164,38 +148,60 @@ export default function StudentExamList({ currentUser }) {
                           {exam.predictedGrade}
                         </span>
                       </td>
-                      <td className="p-4 text-sm text-gray-600 truncate max-w-[200px]">
-                        {exam.review}
-                      </td>
+                      <td className="p-4 text-sm text-gray-600 truncate max-w-[200px]">{exam.review}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="p-3 bg-blue-50/50 text-center text-sm text-blue-600 font-semibold border-t border-gray-100">
-              💡 행을 클릭하면 상세 진단 리포트(오답 문항 확인)를 볼 수 있습니다.
+
+            {/* [수정완료] 모바일용 반응형 리스트 카드 UI (잘림 현상 방지) */}
+            <div className="md:hidden flex flex-col divide-y divide-gray-100">
+              {exams.map((exam) => (
+                <div key={exam.id} onClick={() => navigate(`/report/${exam.id}`)} className="p-4 hover:bg-blue-50/50 cursor-pointer transition-colors active:bg-blue-100">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex flex-col">
+                      <span className="text-xs text-gray-400 flex items-center gap-1 mb-1"><Calendar size={12}/>{exam.date}</span>
+                      <span className="font-bold text-gray-900 text-sm leading-tight line-clamp-2">{exam.examDocId.replace(/_/g, ' ')}</span>
+                    </div>
+                    <div className="flex flex-col items-end shrink-0 ml-2">
+                      <span className="font-black text-indigo-600 text-lg">{exam.score}점</span>
+                      <span className={`px-2 py-0.5 mt-1 rounded text-[10px] font-bold ${exam.predictedGrade === '1등급' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700'}`}>
+                        {exam.predictedGrade}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 flex items-center justify-between mt-3">
+                    <span className="truncate mr-2 max-w-[80%]">총평: {exam.review}</span>
+                    <span className="text-blue-500 font-bold flex items-center">상세 <ChevronRight size={14}/></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-3 bg-blue-50/50 text-center text-xs md:text-sm text-blue-600 font-semibold border-t border-gray-100">
+              💡 {window.innerWidth < 768 ? '목록을 터치하면' : '행을 클릭하면'} 상세 진단 리포트(오답 문항)를 볼 수 있습니다.
             </div>
           </div>
 
-          {/* 섹션 3: 시험별 선생님 코멘트 및 성장 플랜 */}
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 ml-2">
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 flex items-center gap-2 ml-1 md:ml-2">
               <MessageSquare className="text-indigo-600" /> 선생님 1:1 코멘트 보드
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {exams.map((exam) => (
-                <div key={`comment-${exam.id}`} className="bg-white p-5 rounded-2xl shadow-sm border border-l-4 border-gray-100 border-l-indigo-500 hover:shadow-md transition-shadow">
+                <div key={`comment-${exam.id}`} className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-l-4 border-gray-100 border-l-indigo-500 hover:shadow-md transition-shadow">
                   <div className="text-xs font-bold text-gray-400 mb-1">{exam.date}</div>
-                  <h3 className="font-bold text-gray-900 mb-3 truncate">{exam.examDocId.replace(/_/g, ' ')}</h3>
+                  <h3 className="font-bold text-gray-900 text-sm md:text-base mb-3 truncate">{exam.examDocId.replace(/_/g, ' ')}</h3>
                   
                   <div className="mb-3">
-                    <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded mb-1 inline-block">강사 코멘트</span>
-                    <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{exam.instructorComment || "코멘트 없음"}</p>
+                    <span className="text-[11px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded mb-1 inline-block">강사 코멘트</span>
+                    <p className="text-xs md:text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{exam.instructorComment || "코멘트 없음"}</p>
                   </div>
                   
                   <div className="pt-3 border-t border-gray-100">
-                    <span className="text-xs font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded mb-1 inline-block">성장 플랜</span>
-                    <p className="text-sm text-gray-800 font-semibold leading-relaxed whitespace-pre-wrap">{exam.growthPlan || "플랜 없음"}</p>
+                    <span className="text-[11px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded mb-1 inline-block">성장 플랜</span>
+                    <p className="text-xs md:text-sm text-gray-800 font-semibold leading-relaxed whitespace-pre-wrap">{exam.growthPlan || "플랜 없음"}</p>
                   </div>
                 </div>
               ))}
