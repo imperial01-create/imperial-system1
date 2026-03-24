@@ -2,16 +2,15 @@
    1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
    2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
-   4. [신규] 시험 진단 모듈 통합: 강사용 입력 화면과 학부모 공유용 리포트 라우팅을 지연 로딩(Lazy load)으로 추가하여 앱 초기 구동 속도를 방어합니다.
+   4. [신규 통합] 시험 진단 모듈(강사용 입력, 리포트 공유, 학생용 결과 모아보기)을 지연 로딩(Lazy load)으로 추가하여 앱 초기 구동 속도를 방어합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target // 👈 Target 아이콘 추가
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target
 } from 'lucide-react';
-// [CTO 최적화] setDoc 대신 updateDoc을 import 하여 쓰기 비용을 최소화합니다.
 import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
 import { db } from './firebase'; 
 
@@ -26,9 +25,10 @@ const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
-// 🚀 [신규 추가] 시험 진단 컴포넌트 지연 로딩 (초기 로딩 속도 최적화)
+// 🚀 [신규 추가] 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
+const StudentExamList = React.lazy(() => import('./features/StudentExamList')); // 학생/학부모 전용 메뉴
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -104,6 +104,17 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">시험 진단 입력</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">학생의 시험 결과를 입력하고 학부모 전용 프리미엄 분석 리포트를 즉시 생성합니다.</p>
+                    </div>
+                )}
+
+                {/* 🚀 [신규 추가] 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
+                {['student', 'parent'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/my-exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><Target size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">나의 시험 결과</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">지금까지 치른 시험의 성적과 담당 선생님의 맞춤 분석 리포트를 확인하세요.</p>
                     </div>
                 )}
 
@@ -237,11 +248,12 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 [신규 추가] 사이드바 메뉴 배열에 시험 진단 메뉴 추가
+  // 🚀 [신규 추가] 사이드바 메뉴 배열
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] }, // 신규 메뉴
+    { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] },
+    { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] }, // 학생, 학부모 전용 메뉴
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
@@ -317,7 +329,7 @@ const AppContent = () => {
                         {/* ==========================================
                             🚀 [신규 추가] 스마트 진단 시스템 라우트
                            ========================================== */}
-                        {/* 1. 강사용 입력 화면: 주소창에 직접 쳐서 들어오는 것을 방지하는 HOC 방식 보안 적용 */}
+                        {/* 1. 강사용 입력 화면 */}
                         <Route 
                             path="/exam-diagnostics" 
                             element={
@@ -326,10 +338,19 @@ const AppContent = () => {
                                 : <Navigate to="/dashboard" replace />
                             } 
                         />
-                        {/* 2. 학부모용 리포트 화면: 파라미터를 읽는 Wrapper를 통해 렌더링 */}
+                        {/* 2. 학부모용 리포트 화면 (공용 링크) */}
                         <Route 
                             path="/report/:diagnosticId" 
                             element={<ReportWrapper />} 
+                        />
+                        {/* 3. 학생/학부모용 나의 시험 리스트 화면 */}
+                        <Route 
+                            path="/my-exams" 
+                            element={
+                                ['student', 'parent'].includes(currentUser.role) 
+                                ? <StudentExamList currentUser={currentUser} /> 
+                                : <Navigate to="/dashboard" replace />
+                            } 
                         />
 
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
