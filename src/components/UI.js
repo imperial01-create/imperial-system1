@@ -1,92 +1,115 @@
 /* [서비스 가치] 부드러운 애니메이션과 직관적인 피드백을 제공하는 공통 UI 컴포넌트로, 
-   학부모와 운영자에게 프리미엄 브랜드 경험(UX)을 제공합니다. */
-   import React, { useEffect } from 'react';
-   import { Loader, X, CheckCircle, AlertCircle, Info } from 'lucide-react';
-   
-   export const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md', type = 'button' }) => {
-     const sizes = { sm: 'px-4 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-8 py-4 text-xl' };
-     const variants = {
-       primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95',
-       secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',
-       success: 'bg-green-600 text-white hover:bg-green-700 shadow-md active:scale-95',
-       danger: 'bg-red-50 text-red-600 hover:bg-red-100 active:scale-95',
-       ghost: 'bg-transparent text-gray-600 hover:bg-gray-100 active:bg-gray-200',
-       outline: 'border-2 border-blue-600 text-blue-600 bg-white hover:bg-blue-50 active:scale-95', 
-       selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner'
-     };
-     return (
-       <button type={type} onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
-         {Icon && <Icon size={size === 'sm' ? 18 : 22} />} {children}
-       </button>
-     );
-   });
-   
-   export const Card = ({ children, className = '' }) => <div className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-5 md:p-6 ${className}`}>{children}</div>;
-   
-   export const Badge = React.memo(({ status }) => {
-     const styles = { 
-       open: 'bg-blue-50 text-blue-700 border border-blue-100', 
-       pending: 'bg-yellow-50 text-yellow-700 border border-yellow-100', 
-       confirmed: 'bg-green-50 text-green-700 border border-green-100', 
-       completed: 'bg-gray-50 text-gray-600 border border-gray-200', 
-       cancellation_requested: 'bg-red-50 text-red-700 border border-red-100', 
-       addition_requested: 'bg-purple-50 text-purple-700 border border-purple-100' 
-     };
-     const labels = { open: '예약 가능', pending: '승인 대기', confirmed: '예약 확정', completed: '클리닉 완료', cancellation_requested: '취소 요청', addition_requested: '추가 신청' };
-     return <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold whitespace-nowrap ${styles[status] || styles.completed}`}>{labels[status] || status}</span>;
-   });
-   
-   export const Modal = ({ isOpen, onClose, title, children }) => {
-     if (!isOpen) return null;
-     return (
-       <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-4 animate-in fade-in duration-200">
-         <div className="bg-white rounded-t-2xl md:rounded-2xl w-full max-w-xl shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in slide-in-from-bottom-4 md:zoom-in-95 duration-200">
-           <div className="flex justify-between items-center p-5 border-b border-gray-100 shrink-0">
-             <h3 className="text-xl font-bold text-gray-900">{title}</h3>
-             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X size={24} className="text-gray-400" /></button>
-           </div>
-           <div className="p-5 overflow-y-auto custom-scrollbar">{children}</div>
-         </div>
-       </div>
-     );
-   };
-   
-   export const LoadingSpinner = () => (
-     <div className="h-full flex items-center justify-center min-h-[200px]">
-       <Loader className="animate-spin text-blue-600" size={40}/>
-     </div>
-   );
-   
-   export const Toast = ({ message, type = 'info', onClose, duration = 3000 }) => {
-     useEffect(() => {
-       if (!message) return;
-       const timer = setTimeout(() => onClose(), duration);
-       return () => clearTimeout(timer);
-     }, [message, duration, onClose]);
-   
-     if (!message) return null;
-   
-     const styles = {
-       success: 'bg-green-50 text-green-800 border-green-200',
-       error: 'bg-red-50 text-red-800 border-red-200',
-       info: 'bg-blue-50 text-blue-800 border-blue-200'
-     };
-   
-     const icons = {
-       success: <CheckCircle className="text-green-500" size={20} />,
-       error: <AlertCircle className="text-red-500" size={20} />,
-       info: <Info className="text-blue-500" size={20} />
-     };
-   
-     return (
-       <div className="fixed top-6 right-6 z-[70] animate-in slide-in-from-right fade-in duration-300">
-         <div className={`flex items-center gap-3 px-5 py-4 rounded-xl border shadow-lg ${styles[type]}`}>
-           {icons[type]}
-           <span className="font-semibold text-sm">{message}</span>
-           <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-600 transition-colors">
-             <X size={18} />
-           </button>
-         </div>
-       </div>
-     );
-   };
+   학부모와 운영자에게 프리미엄 브랜드 경험(UX)을 제공합니다. 
+   [CTO 최적화] Badge 컴포넌트의 범용성을 확대하여 클리닉뿐만 아니라 시험 진단(등급, 취약단원) 등 모든 모듈에서 재사용 가능하게 개선했습니다.
+*/
+import React, { useEffect } from 'react';
+import { Loader, X, CheckCircle, AlertCircle, Info } from 'lucide-react';
+
+export const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md', type = 'button' }) => {
+  const sizes = { sm: 'px-4 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-8 py-4 text-xl' };
+  const variants = {
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95',
+    secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',
+    success: 'bg-green-600 text-white hover:bg-green-700 shadow-md active:scale-95',
+    danger: 'bg-red-50 text-red-600 hover:bg-red-100 active:scale-95',
+    ghost: 'bg-transparent text-gray-600 hover:bg-gray-100 active:bg-gray-200',
+    outline: 'border-2 border-blue-600 text-blue-600 bg-white hover:bg-blue-50 active:scale-95', 
+    selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner'
+  };
+  return (
+    <button type={type} onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
+      {Icon && <Icon size={size === 'sm' ? 18 : 22} />} {children}
+    </button>
+  );
+});
+
+export const Card = ({ children, className = '' }) => <div className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-5 md:p-6 ${className}`}>{children}</div>;
+
+// 🚀 [CTO 수정] 클리닉 전용이었던 Badge를 범용 컴포넌트로 리팩토링 (하위 호환성 유지)
+export const Badge = React.memo(({ status, color, customLabel }) => {
+  const styles = { 
+    // 기존 클리닉 상태 호환
+    open: 'bg-blue-50 text-blue-700 border border-blue-100', 
+    pending: 'bg-yellow-50 text-yellow-700 border border-yellow-100', 
+    confirmed: 'bg-green-50 text-green-700 border border-green-100', 
+    completed: 'bg-gray-50 text-gray-600 border border-gray-200', 
+    cancellation_requested: 'bg-red-50 text-red-700 border border-red-100', 
+    addition_requested: 'bg-purple-50 text-purple-700 border border-purple-100',
+    
+    // 범용 색상 지원 (예: color="red", color="indigo" 등)
+    red: 'bg-red-50 text-red-600 border border-red-100',
+    blue: 'bg-blue-50 text-blue-600 border border-blue-100',
+    green: 'bg-green-50 text-green-600 border border-green-100',
+    orange: 'bg-orange-50 text-orange-600 border border-orange-100',
+    indigo: 'bg-indigo-50 text-indigo-600 border border-indigo-100'
+  };
+  
+  const labels = { open: '예약 가능', pending: '승인 대기', confirmed: '예약 확정', completed: '클리닉 완료', cancellation_requested: '취소 요청', addition_requested: '추가 신청' };
+  
+  // 적용할 스타일: status가 있으면 status 스타일, color가 있으면 color 스타일, 둘 다 없으면 기본 completed(회색) 스타일
+  const appliedStyle = styles[status] || styles[color] || styles.completed;
+  
+  // 표시할 텍스트: customLabel이 우선, 그 다음 labels[status], 매칭 안 되면 원본 status 출력
+  const displayedLabel = customLabel || labels[status] || status;
+
+  return (
+    <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold whitespace-nowrap ${appliedStyle}`}>
+      {displayedLabel}
+    </span>
+  );
+});
+
+export const Modal = ({ isOpen, onClose, title, children }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-t-2xl md:rounded-2xl w-full max-w-xl shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in slide-in-from-bottom-4 md:zoom-in-95 duration-200">
+        <div className="flex justify-between items-center p-5 border-b border-gray-100 shrink-0">
+          <h3 className="text-xl font-bold text-gray-900">{title}</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X size={24} className="text-gray-400" /></button>
+        </div>
+        <div className="p-5 overflow-y-auto custom-scrollbar">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+export const LoadingSpinner = () => (
+  <div className="h-full flex items-center justify-center min-h-[200px]">
+    <Loader className="animate-spin text-blue-600" size={40}/>
+  </div>
+);
+
+export const Toast = ({ message, type = 'info', onClose, duration = 3000 }) => {
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => onClose(), duration);
+    return () => clearTimeout(timer);
+  }, [message, duration, onClose]);
+
+  if (!message) return null;
+
+  const styles = {
+    success: 'bg-green-50 text-green-800 border-green-200',
+    error: 'bg-red-50 text-red-800 border-red-200',
+    info: 'bg-blue-50 text-blue-800 border-blue-200'
+  };
+
+  const icons = {
+    success: <CheckCircle className="text-green-500" size={20} />,
+    error: <AlertCircle className="text-red-500" size={20} />,
+    info: <Info className="text-blue-500" size={20} />
+  };
+
+  return (
+    <div className="fixed top-6 right-6 z-[70] animate-in slide-in-from-right fade-in duration-300">
+      <div className={`flex items-center gap-3 px-5 py-4 rounded-xl border shadow-lg ${styles[type]}`}>
+        {icons[type]}
+        <span className="font-semibold text-sm">{message}</span>
+        <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-600 transition-colors">
+          <X size={18} />
+        </button>
+      </div>
+    </div>
+  );
+};

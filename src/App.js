@@ -2,18 +2,20 @@
    1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
    2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
+   4. [신규] 시험 진단 모듈 통합: 강사용 입력 화면과 학부모 공유용 리포트 라우팅을 지연 로딩(Lazy load)으로 추가하여 앱 초기 구동 속도를 방어합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target // 👈 Target 아이콘 추가
 } from 'lucide-react';
 // [CTO 최적화] setDoc 대신 updateDoc을 import 하여 쓰기 비용을 최소화합니다.
 import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
 import { db } from './firebase'; 
 
+// 기존 컴포넌트 지연 로딩
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -24,18 +26,17 @@ const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
+// 🚀 [신규 추가] 시험 진단 컴포넌트 지연 로딩 (초기 로딩 속도 최적화)
+const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
+const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
+
 const APP_ID = 'imperial-clinic-v1';
 
-// [보안 최우선 - CTO 권장] 향후 적용할 SHA-256 해시 함수 (설치 불필요, 내장 Web Crypto API 사용)
-// 기존 평문 DB 데이터를 모두 업데이트한 후 적용해야 하므로 현재는 주석 처리해 둡니다.
-/*
-const hashPassword = async (password) => {
-  const msgBuffer = new TextEncoder().encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+// [CTO 라우팅 헬퍼] URL 파라미터를 읽어와 리포트 컴포넌트에 주입하는 래퍼 컴포넌트
+const ReportWrapper = () => {
+  const { diagnosticId } = useParams();
+  return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
 };
-*/
 
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
@@ -94,6 +95,18 @@ const Dashboard = ({ currentUser }) => {
                 <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* 🚀 [신규 추가] 관리자/강사용 시험 진단 대시보드 숏컷 */}
+                {['admin', 'lecturer'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-rose-100 p-3 rounded-xl text-rose-600 group-hover:bg-rose-600 group-hover:text-white transition-colors"><Target size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">시험 진단 입력</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">학생의 시험 결과를 입력하고 학부모 전용 프리미엄 분석 리포트를 즉시 생성합니다.</p>
+                    </div>
+                )}
+
                 <div onClick={() => navigate('/strategy')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><Brain size={32} /></div>
@@ -162,10 +175,7 @@ const AppContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // [수정됨] 세션 스토리지 기반의 독립적인 로그인 유지 검증 및 PWA 캐시 무효화
   useEffect(() => {
-    // [핵심 해결책: 서비스 워커 캐시 강제 무효화]
-    // 학부모나 학생 기기에 남아있는 구버전 코드를 강제로 비워, 중복 계정을 생성하는 옛날 코드가 실행되지 않게 합니다.
     if ('caches' in window) {
       caches.keys().then((names) => {
         names.forEach(name => caches.delete(name));
@@ -193,12 +203,10 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // [CTO 최적화] Firestore 문서 쿼리 및 로그인 처리 (비용/속도 효율화 완료)
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         // 향후 보안 강화를 위해 평문(loginForm.password) 대신 해시 함수 적용을 권장합니다.
          const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), 
                          where('userId', '==', loginForm.id), 
                          where('password', '==', loginForm.password));
@@ -208,8 +216,6 @@ const AppContent = () => {
              const foundDoc = s.docs[0];
              const userData = { id: foundDoc.id, ...foundDoc.data() };
 
-             // [비용 효율적 아키텍처] 
-             // 전체 문서를 덮어쓰는 setDoc 대신 updateDoc을 사용하여 Firestore 쓰기 트래픽과 과금을 최소화합니다.
              await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', foundDoc.id), {
                  lastLogin: new Date().toISOString()
              });
@@ -231,9 +237,11 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
+  // 🚀 [신규 추가] 사이드바 메뉴 배열에 시험 진단 메뉴 추가
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
+    { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] }, // 신규 메뉴
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
@@ -243,8 +251,6 @@ const AppContent = () => {
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer'] },
   ];
 
-  /* [CTO Fix: 레이아웃 무결성 방어 적용]
-     w-full을 부모 컨테이너에 추가하여 디바이스 크기 100%를 보장합니다. */
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
@@ -277,7 +283,6 @@ const AppContent = () => {
         </div>
       </aside>
 
-      {/* [CTO Fix: min-w-0 추가] 자식 컴포넌트(표, 달력 등)가 부모 영역 너비를 초과하여 화면 밖으로 넘치는 Flexbox 버그를 원천 차단합니다. */}
       <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative min-w-0">
         <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
             <div className="flex items-center gap-2">
@@ -295,7 +300,6 @@ const AppContent = () => {
             </button>
         </header>
 
-        {/* [UX/UI 반응형 최적화] 모바일에서는 좌우 여백을 최소화(px-3)하여 몰입감을 주고, 데스크탑에서는 안정적인 여백(md:px-8)을 제공합니다. */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
@@ -309,6 +313,25 @@ const AppContent = () => {
                         <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
+                        
+                        {/* ==========================================
+                            🚀 [신규 추가] 스마트 진단 시스템 라우트
+                           ========================================== */}
+                        {/* 1. 강사용 입력 화면: 주소창에 직접 쳐서 들어오는 것을 방지하는 HOC 방식 보안 적용 */}
+                        <Route 
+                            path="/exam-diagnostics" 
+                            element={
+                                ['admin', 'lecturer'].includes(currentUser.role) 
+                                ? <ExamDiagnosticInput currentUser={currentUser} /> 
+                                : <Navigate to="/dashboard" replace />
+                            } 
+                        />
+                        {/* 2. 학부모용 리포트 화면: 파라미터를 읽는 Wrapper를 통해 렌더링 */}
+                        <Route 
+                            path="/report/:diagnosticId" 
+                            element={<ReportWrapper />} 
+                        />
+
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
