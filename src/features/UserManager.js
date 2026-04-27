@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Firebase Auth 보안 토큰 연동 및 클라이언트 기반 1회용 마이그레이션 기능 탑재 + 디버깅 모드) */
+   (Updated: Firebase Auth 보안 토큰 연동 및 Rate Limit 우회형 마이그레이션) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
@@ -147,9 +147,9 @@
            }
        };
    
-       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션 (디버깅 모드)
+       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션 (Rate Limit 우회)
        const handleRunMigration = async () => {
-           if (!window.confirm("⚠️ [보안 경고] 모든 평문 비밀번호를 Firebase Auth로 일괄 이전하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
+           if (!window.confirm("⚠️ [보안 경고] 아직 처리되지 않은 평문 비밀번호를 Firebase Auth로 이전하시겠습니까?\n(이미 완료된 계정은 자동으로 건너뜁니다.)")) return;
            
            setMigrationLoading(true);
            let successCount = 0;
@@ -181,7 +181,9 @@
                        });
    
                        successCount++;
-                       await new Promise(resolve => setTimeout(resolve, 500)); 
+                       
+                       // 🚀 [CTO 수정] 구글 봇 방어 시스템 우회를 위해 생성 간격을 2.5초(2500ms)로 대폭 늘림
+                       await new Promise(resolve => setTimeout(resolve, 2500)); 
    
                    } catch (err) {
                        if (err.code === 'auth/email-already-in-use') {
@@ -190,18 +192,18 @@
                                password: deleteField() 
                            });
                            successCount++;
+                       } else if (err.code === 'auth/too-many-requests') {
+                           // 🚀 [CTO 수정] 과도한 요청 차단 시 친절한 안내 및 루프 중단
+                           alert(`🚨 구글 봇 방어 시스템 작동 (일시 차단)\n\n현재까지 총 ${successCount}명이 성공적으로 암호화되었습니다!\n\n해결책: 1~2분 정도 차단이 풀리길 기다리신 후, [보안 마이그레이션] 버튼을 다시 눌러주세요. 이미 완료된 사람들은 안전하게 보관되며 남은 사람들만 이어서 진행됩니다.`);
+                           setMigrationLoading(false);
+                           return; // 함수 즉시 종료 (이어하기 유도)
                        } else {
                            console.error(`[실패] ${userData.name}:`, err);
                            failCount++;
-                           
-                           // 🚀 [CTO 디버깅 팝업] 첫 번째 에러만 화면에 띄움
-                           if (failCount === 1) { 
-                               alert(`🚨 [마이그레이션 실패 원인 분석]\n이름: ${userData.name}\n에러 코드: ${err.code}\n에러 메시지: ${err.message}\n\n이 팝업 내용을 그대로 복사해서 CTO에게 알려주세요!`);
-                           }
                        }
                    }
                }
-               alert(`🎉 [마이그레이션 완료]\n성공: ${successCount}명\n실패: ${failCount}명\n이제 데이터베이스에서 평문 비밀번호가 완전히 사라졌습니다!`);
+               alert(`🎉 [마이그레이션 완료]\n성공(이번 턴): ${successCount}명\n실패: ${failCount}명\n모든 이전 작업이 끝났습니다!`);
            } catch (e) {
                console.error("Migration Fatal Error:", e);
                alert('데이터를 불러오는 중 치명적인 오류가 발생했습니다.');
@@ -226,7 +228,7 @@
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <div className="flex gap-2 w-full md:w-auto">
                        <Button onClick={handleRunMigration} variant="secondary" className="border-red-500 text-red-500 hover:bg-red-50" icon={migrationLoading ? Loader : Shield} disabled={migrationLoading}>
-                           {migrationLoading ? '이전 중...' : '보안 마이그레이션 (1회용)'}
+                           {migrationLoading ? '이전 중 (창 유지)...' : '보안 마이그레이션 (1회용)'}
                        </Button>
                        <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto" disabled={migrationLoading}>사용자 추가</Button>
                    </div>
