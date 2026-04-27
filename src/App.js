@@ -2,14 +2,14 @@
    1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
    2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
-   4. [신규 통합] 시험 진단 모듈(강사용 입력, 리포트 공유, 학생용 결과 모아보기)을 지연 로딩(Lazy load)으로 추가하여 앱 초기 구동 속도를 방어합니다.
+   4. [신규 통합] 시험 진단 모듈(지연 로딩) 및 지출결의(ExpenseManager) 모듈을 추가하여 앱 초기 구동 속도를 방어합니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt // Receipt(영수증) 아이콘 추가
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
 import { db } from './firebase'; 
@@ -28,7 +28,10 @@ const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 // 🚀 [신규 추가] 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
-const StudentExamList = React.lazy(() => import('./features/StudentExamList')); // 학생/학부모 전용 메뉴
+const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
+
+// 🚀 [신규 추가] 재무관리 - 지출결의서 컴포넌트 지연 로딩
+const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -96,7 +99,18 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
-                {/* 🚀 [신규 추가] 관리자/강사용 시험 진단 대시보드 숏컷 */}
+                {/* 🚀 [신규 추가] 재무관리 - 지출결의(영수증) 대시보드 숏컷 */}
+                {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Receipt size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">지출결의 등록</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">법인카드 및 개인 지출 내역을 등록하고 증빙 영수증을 업로드합니다.</p>
+                    </div>
+                )}
+
+                {/* 🚀 [기존] 관리자/강사용 시험 진단 대시보드 숏컷 */}
                 {['admin', 'lecturer'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -107,7 +121,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [신규 추가] 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
+                {/* 🚀 [기존] 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
                 {['student', 'parent'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/my-exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -251,9 +265,10 @@ const AppContent = () => {
   // 🚀 [신규 추가] 사이드바 메뉴 배열
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
+    { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta'] }, // 관리자/강사/조교용 신규 메뉴
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] },
-    { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] }, // 학생, 학부모 전용 메뉴
+    { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent'] },
@@ -317,6 +332,12 @@ const AppContent = () => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        
+                        {/* 🚀 [신규 라우트] 직원 전용 지출결의 화면 (Role: admin, lecturer, ta) */}
+                        {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
+                            <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
+                        )}
+
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
@@ -326,10 +347,6 @@ const AppContent = () => {
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         
-                        {/* ==========================================
-                            🚀 [신규 추가] 스마트 진단 시스템 라우트
-                           ========================================== */}
-                        {/* 1. 강사용 입력 화면 */}
                         <Route 
                             path="/exam-diagnostics" 
                             element={
@@ -338,12 +355,7 @@ const AppContent = () => {
                                 : <Navigate to="/dashboard" replace />
                             } 
                         />
-                        {/* 2. 학부모용 리포트 화면 (공용 링크) */}
-                        <Route 
-                            path="/report/:diagnosticId" 
-                            element={<ReportWrapper />} 
-                        />
-                        {/* 3. 학생/학부모용 나의 시험 리스트 화면 */}
+                        <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route 
                             path="/my-exams" 
                             element={
