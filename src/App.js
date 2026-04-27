@@ -6,7 +6,6 @@ import {
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart 
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc } from 'firebase/firestore'; 
-// 🚀 [CTO 추가] Firebase Auth 모듈 임포트
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
@@ -231,20 +230,27 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // 🚀 [CTO 로직] Firebase Auth 완벽 연동
+  // 🚀 [CTO 로직: 하이브리드 로그인 브릿지]
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         // 시스템이 백그라운드에서 임의의 도메인으로 매핑하여 Auth 로그인 수행
          const email = `${loginForm.id}@imperial.com`;
-         const userCredential = await signInWithEmailAndPassword(auth, email, loginForm.password);
+         let authUid = null;
+
+         try {
+             // 1. 정상 경로: Firebase Auth 로그인 시도 (마이그레이션이 완료된 계정용)
+             const userCredential = await signInWithEmailAndPassword(auth, email, loginForm.password);
+             authUid = userCredential.user.uid;
+         } catch (authErr) {
+             // 2. 🚨 [브릿지]: Auth에 계정이 없다면 에러를 무시하고 DB의 평문 검증으로 넘어갑니다.
+             console.log("Auth 로그인 실패. 마이그레이션 이전 평문 계정인지 확인합니다.");
+         }
          
-         // Firestore에서 유저 권한(Role) 확인 (setDoc으로 저장했으므로 문서 ID = loginForm.id)
+         // Firestore에서 유저 권한 및 평문 비밀번호 가져오기
          let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', loginForm.id);
          let userDoc = await getDoc(userDocRef);
          
-         // [방어적 코딩] 레거시 데이터(자동 ID) 호환성을 위한 2차 쿼리
          if (!userDoc.exists()) {
              const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id));
              const s = await getDocs(q);
@@ -252,12 +258,18 @@ const AppContent = () => {
          }
          
          if(userDoc && (userDoc.exists ? userDoc.exists() : true)) {
-             const userData = { id: userDoc.id, ...userDoc.data(), authUid: userCredential.user.uid };
+             const docData = userDoc.data();
 
-             // 로그인 시간 갱신 (에러가 나더라도 사용성을 해치지 않도록 catch 처리)
+             // 3. 🚨 평문 로그인 검증 로직
+             // Auth 로그인이 실패(authUid가 null)했는데, DB에 저장된 평문 암호마저 틀렸다면 확실한 인증 실패입니다.
+             if (!authUid && docData.password !== loginForm.password) {
+                 throw new Error("비밀번호 불일치 (평문 및 Auth 모두 실패)");
+             }
+
+             const userData = { id: userDoc.id, ...docData, authUid: authUid || docData.authUid };
+
              updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
-                 lastLogin: new Date().toISOString(),
-                 authUid: userCredential.user.uid // 보안 토큰 연동 갱신
+                 lastLogin: new Date().toISOString()
              }).catch(e => console.error("Update Login Time Error:", e));
 
              setCurrentUser(userData);
@@ -267,13 +279,12 @@ const AppContent = () => {
              setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 등록된 역할(Role) 정보가 없습니다.' }); 
          }
      } catch (e) { 
-         console.error("Auth Login Error:", e);
+         console.error("Login Error:", e);
          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
      } 
      finally { setLoginProcessing(false); }
   };
 
-  // 🚀 [CTO 로직] Firebase Auth 로그아웃 (토큰 완벽 파기)
   const handleLogout = async () => { 
       try {
           await signOut(auth);
