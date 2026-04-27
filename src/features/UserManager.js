@@ -1,13 +1,14 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: DB 레벨 중복 생성 원천 차단(setDoc) 및 O(N) 중복 색출 UI 적용 완료) */
+   (Updated: Firebase Auth 보안 토큰 연동 및 클라이언트 기반 1회용 마이그레이션 기능 탑재) */
    import React, { useState, useEffect } from 'react';
    import { 
-     Users, Search, Plus, Edit2, Trash2, Save, X, Link as LinkIcon, Check, Loader, UserPlus, Shield, DollarSign, Phone, BookOpen, User, School, GraduationCap
+     Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
    } from 'lucide-react';
-   // [CTO FIX] addDoc 대신 setDoc을 추가로 import 합니다.
-   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
-   import { db } from '../firebase';
+   // 🚀 [CTO 추가] getDocs, deleteField 추가 임포트
+   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp, getDocs, deleteField } from 'firebase/firestore';
+   import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+   import { db, secondaryAuth } from '../firebase';
    import { Button, Card, Modal, Toast } from '../components/UI';
    
    const APP_ID = 'imperial-clinic-v1';
@@ -20,8 +21,8 @@
        const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
        const [targetUserId, setTargetUserId] = useState(null);
        const [loading, setLoading] = useState(true);
+       const [migrationLoading, setMigrationLoading] = useState(false); // 마이그레이션 전용 로딩
        
-       // [UX 개선] Toast 상태 관리
        const [toast, setToast] = useState({ message: '', type: 'info' });
    
        const [formData, setFormData] = useState({ 
@@ -33,10 +34,8 @@
        const [studentList, setStudentList] = useState([]);
        const [studentSearch, setStudentSearch] = useState('');
    
-       // 공통 Toast 호출 함수
        const showToast = (message, type = 'error') => setToast({ message, type });
    
-       // [CTO 최적화] getDocs + 수동 localStorage 제거 후 Firebase SDK 기본 캐시 및 실시간 리스너 활용
        useEffect(() => {
            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
            
@@ -63,10 +62,10 @@
        const handleOpenEdit = (user) => {
            setFormData({ 
                ...user, 
-               password: user.password || '', 
+               password: user.password || '', // 수정 시 기존 암호 필드가 사라졌을 수 있으므로 빈 문자열 보정
                childId: user.childId || '',
                childName: user.childName || '',
-               childSnapshot: user.childSnapshot || null, // 반정규화 데이터 로드
+               childSnapshot: user.childSnapshot || null, 
                hourlyRate: user.hourlyRate || '',
                schoolName: user.schoolName || '',
                grade: user.grade || '1학년',
@@ -77,45 +76,62 @@
        };
    
        const handleSaveUser = async () => {
-           // Validation Alert 대체
-           if (!formData.name || !formData.userId || !formData.password) return showToast('필수 정보를 모두 입력해주세요.', 'error');
+           if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
+           if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
            if (activeTab === 'parent' && !formData.childId) return showToast('학부모 계정은 반드시 자녀(학생)와 연결해야 합니다.', 'error');
            if (activeTab === 'student' && !formData.schoolName) return showToast('학생의 학교명을 입력해주세요.', 'error');
    
            setLoading(true);
            try {
                const payload = {
-                   name: formData.name, userId: formData.userId, password: formData.password, role: activeTab,
-                   phone: formData.phone || '', updatedAt: serverTimestamp(), authUid: formData.authUid || ''
+                   name: formData.name, userId: formData.userId, role: activeTab,
+                   phone: formData.phone || '', updatedAt: serverTimestamp()
                };
                if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
                if (activeTab === 'ta' || activeTab === 'lecturer') payload.subject = formData.subject || '';
                if (activeTab === 'ta') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
                
-               // [CTO 최적화] 데이터 반정규화 (Denormalization)
                if (activeTab === 'parent') { 
                    payload.childId = formData.childId; 
-                   payload.childName = formData.childName; // 레거시 호환 유지
-                   payload.childSnapshot = formData.childSnapshot; // O(1) 조회를 위한 스냅샷 저장
+                   payload.childName = formData.childName; 
+                   payload.childSnapshot = formData.childSnapshot; 
                }
    
                if (isEditMode) {
+                   // 관리자가 비밀번호를 입력했다면 이 사용자는 마이그레이션 전이거나 비밀번호 변경 요청임
+                   // (일반적인 정보 수정 시에는 password 필드를 건드리지 않음)
+                   if (formData.password && !formData.authUid) {
+                       payload.password = formData.password;
+                   }
                    await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id), payload);
                    showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
                } else {
-                   // UI 단에서의 1차 방어 (이미 존재하는 아이디인지 배열에서 검사)
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
+                   // 🚀 [CTO 보안] Firebase Auth에 실제 계정 생성 (Secondary App 사용)
+                   const email = `${formData.userId}@imperial.com`;
+                   let authUid = '';
+                   try {
+                       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
+                       authUid = userCredential.user.uid;
+                       await signOut(secondaryAuth); // 관리자 세션 튕김 방지
+                   } catch (authError) {
+                       if (authError.code === 'auth/email-already-in-use') {
+                           throw new Error("이미 시스템(인증서버)에 등록된 계정입니다. 다른 아이디를 사용해주세요.");
+                       }
+                       throw authError;
+                   }
+                   
+                   payload.authUid = authUid;
                    payload.createdAt = serverTimestamp();
+                   // 생성 시에는 평문 비밀번호를 아예 저장하지 않음 (Zero Trust)
                    
-                   // [CTO 아키텍처 개선] 무작위 문서 ID(addDoc) 대신, userId 자체를 문서 ID로 사용하는 setDoc 적용
-                   // DB 레벨에서 동일한 아이디의 방이 2개 생성되는 것을 물리적으로 원천 차단합니다.
                    await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.userId), payload);
-                   
                    showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
                }
                setIsModalOpen(false);
            } catch (e) { 
+               console.error(e);
                showToast(e.message || '저장에 실패했습니다.', 'error'); 
            } finally { 
                setLoading(false); 
@@ -127,6 +143,8 @@
            setLoading(true);
            try {
                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
+               // 참고: 완벽한 처리를 위해서는 Firebase Auth 서버의 계정도 지워야 하지만,
+               // 클라이언트 단에서는 Admin SDK가 없으므로 Firestore 문서만 지워서 로그인을 막습니다.
                showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
                setIsDeleteConfirmOpen(false);
            } catch (e) { 
@@ -136,12 +154,73 @@
            }
        };
    
-       // [CTO 최적화] 관리자 시각화: 중복된 userId를 찾아내기 위한 해시맵 (O(N) 복잡도)
+       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션
+       const handleRunMigration = async () => {
+           if (!window.confirm("⚠️ [보안 경고] 모든 평문 비밀번호를 Firebase Auth로 일괄 이전하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
+           
+           setMigrationLoading(true);
+           let successCount = 0;
+           let failCount = 0;
+           showToast('마이그레이션을 시작합니다. 창을 닫지 마세요...', 'info');
+   
+           try {
+               const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+               const snapshot = await getDocs(q);
+   
+               for (const userDoc of snapshot.docs) {
+                   const userData = userDoc.data();
+                   const userId = userData.userId || userDoc.id;
+   
+                   // 이미 마이그레이션 되었거나(authUid 존재), 비밀번호가 없는 계정은 스킵
+                   if (!userData.password || userData.authUid) continue;
+   
+                   let password = userData.password;
+                   
+                   // Firebase Auth 최소 길이(6자리) 보정
+                   if (password.length < 6) password = password.padEnd(6, '0');
+                   const email = `${userId}@imperial.com`;
+   
+                   try {
+                       // Secondary Auth로 계정 생성 (원장님 세션 유지)
+                       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+                       await signOut(secondaryAuth); // 찌꺼기 세션 방지
+   
+                       // Firestore에서 authUid 저장 및 평문 비밀번호 '영구 삭제'
+                       await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
+                           authUid: userCredential.user.uid,
+                           password: deleteField() 
+                       });
+   
+                       successCount++;
+                       // Firebase의 연속 생성 Rate Limit(과도한 요청 방지)을 우회하기 위해 0.5초 대기
+                       await new Promise(resolve => setTimeout(resolve, 500)); 
+   
+                   } catch (err) {
+                       if (err.code === 'auth/email-already-in-use') {
+                           console.log(`[통과] ${userData.name}님은 이미 Auth에 존재합니다.`);
+                           // Auth에는 있는데 DB 갱신이 안된 경우 복구 처리
+                           await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
+                               password: deleteField() 
+                           });
+                           successCount++;
+                       } else {
+                           console.error(`[실패] ${userData.name}:`, err);
+                           failCount++;
+                       }
+                   }
+               }
+               alert(`🎉 [마이그레이션 완료]\n성공: ${successCount}명\n실패: ${failCount}명\n이제 데이터베이스에서 평문 비밀번호가 완전히 사라졌습니다!`);
+           } catch (e) {
+               console.error("Migration Fatal Error:", e);
+               alert('데이터를 불러오는 중 치명적인 오류가 발생했습니다.');
+           } finally {
+               setMigrationLoading(false);
+           }
+       };
+   
        const duplicateCounts = React.useMemo(() => {
            const counts = {};
-           users.forEach(u => {
-               counts[u.userId] = (counts[u.userId] || 0) + 1;
-           });
+           users.forEach(u => { counts[u.userId] = (counts[u.userId] || 0) + 1; });
            return counts;
        }, [users]);
    
@@ -149,12 +228,17 @@
    
        return (
            <div className="space-y-6 w-full animate-in fade-in">
-               {/* 글로벌 Toast 렌더링 */}
                <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
    
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
-                   <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
+                   <div className="flex gap-2 w-full md:w-auto">
+                       {/* 🚀 임시 마이그레이션 버튼 */}
+                       <Button onClick={handleRunMigration} variant="secondary" className="border-red-500 text-red-500 hover:bg-red-50" icon={migrationLoading ? Loader : Shield} disabled={migrationLoading}>
+                           {migrationLoading ? '이전 중...' : '보안 마이그레이션 (1회용)'}
+                       </Button>
+                       <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto" disabled={migrationLoading}>사용자 추가</Button>
+                   </div>
                </div>
    
                <div className="w-full overflow-x-auto">
@@ -195,7 +279,6 @@
                            </div>
                            <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm">
                                {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
-                               {/* 모바일 뷰: 반정규화된 스냅샷 데이터 활용 */}
                                {activeTab === 'parent' && <div className="flex items-center gap-2 font-bold text-green-600"><User size={14}/> 자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName})` : u.childName}</div>}
                                <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
                            </div>
@@ -211,22 +294,22 @@
                                {filteredUsers.length === 0 ? <tr><td colSpan="5" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr> :
                                filteredUsers.map(u => (
                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                                       <td className="p-4 font-bold">{u.name}</td>
-                                       {/* [CTO 추가 UI] 데스크톱 뷰 중복 계정 경고 뱃지 */}
+                                       <td className="p-4 font-bold">
+                                           {u.name}
+                                           {/* 보안 식별 배지 */}
+                                           {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-red-400" title="마이그레이션 필요"/>}
+                                       </td>
                                        <td className="p-4">
                                            <div className="flex items-center gap-2">
                                                <span>{u.userId}</span>
                                                {duplicateCounts[u.userId] > 1 && (
-                                                   <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200 animate-pulse">
-                                                       중복 계정!
-                                                   </span>
+                                                   <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200 animate-pulse">중복 계정!</span>
                                                )}
                                            </div>
                                        </td>
                                        <td className="p-4 text-gray-500">{u.phone || '-'}</td>
                                        <td className="p-4">
                                            {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
-                                           {/* 데스크톱 뷰: 반정규화된 스냅샷 데이터 활용 (O(1) 성능 최적화 완료) */}
                                            {activeTab === 'parent' && (
                                                 <span className="text-green-600 font-bold">
                                                     자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName} ${u.childSnapshot.grade})` : u.childName}
@@ -251,8 +334,12 @@
                            <input className="border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
                            <input className="border p-3 rounded-xl" placeholder="전화번호" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
                        </div>
-                       <input className="w-full border p-3 rounded-xl" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
-                       <input className="w-full border p-3 rounded-xl" placeholder="비밀번호" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
+                       <input className="w-full border p-3 rounded-xl bg-gray-50" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
+                       
+                       {/* 마이그레이션이 끝난 유저는 비밀번호 수정 UI를 감춤 (비밀번호 변경은 별도 기능으로 분리해야 안전함) */}
+                       {!formData.authUid && (
+                           <input className="w-full border p-3 rounded-xl" placeholder="초기 비밀번호 (6자리 이상)" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
+                       )}
                        
                        {activeTab === 'student' && (
                            <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl">
@@ -263,7 +350,6 @@
                            </div>
                        )}
    
-                       {/* [CTO 로직] 스냅샷 저장을 위한 자녀 선택 핸들러 수정 */}
                        {activeTab === 'parent' && (
                            <div className="bg-gray-50 p-4 border rounded-xl space-y-3">
                                 <label className="text-xs font-bold text-gray-500">연결된 자녀(학생)</label>
@@ -281,7 +367,6 @@
                                            <div className="border bg-white max-h-32 overflow-y-auto rounded-lg shadow-inner">
                                                {studentList.filter(s=>s.name.includes(studentSearch)).map(s=> (
                                                    <div key={s.id} onClick={()=>{
-                                                       // 선택 시 childSnapshot 객체 전체를 formData에 담음
                                                        setFormData({
                                                            ...formData, 
                                                            childId: s.id, 

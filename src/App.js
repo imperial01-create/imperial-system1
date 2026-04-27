@@ -1,9 +1,3 @@
-/* [서비스 가치] 
-   1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
-   2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
-   3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
-   4. [신규 통합] 지출결의서(ExpenseManager)와 관리자 전용 재무 대시보드(FinancialDashboard)를 지연 로딩으로 통합했습니다.
-*/
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -11,8 +5,10 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart 
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
-import { db } from './firebase'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc } from 'firebase/firestore'; 
+// 🚀 [CTO 추가] Firebase Auth 모듈 임포트
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth, db } from './firebase'; 
 
 // 기존 컴포넌트 지연 로딩
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -30,13 +26,12 @@ const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticIn
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 
-// 🚀 [신규 추가] 재무관리 시스템 컴포넌트 지연 로딩
+// 재무관리 시스템 컴포넌트 지연 로딩
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// [CTO 라우팅 헬퍼] URL 파라미터를 읽어와 리포트 컴포넌트에 주입하는 래퍼 컴포넌트
 const ReportWrapper = () => {
   const { diagnosticId } = useParams();
   return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
@@ -100,7 +95,6 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
-                {/* 🚀 [신규 추가] 대표님 전용 재무 대시보드 숏컷 */}
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -111,7 +105,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [신규 추가] 재무관리 - 지출결의(영수증) 대시보드 숏컷 */}
                 {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -122,7 +115,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 관리자/강사용 시험 진단 대시보드 숏컷 */}
                 {['admin', 'lecturer'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -133,7 +125,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
                 {['student', 'parent'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/my-exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -240,32 +231,55 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
+  // 🚀 [CTO 로직] Firebase Auth 완벽 연동
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), 
-                         where('userId', '==', loginForm.id), 
-                         where('password', '==', loginForm.password));
-         const s = await getDocs(q);
+         // 시스템이 백그라운드에서 임의의 도메인으로 매핑하여 Auth 로그인 수행
+         const email = `${loginForm.id}@imperial.com`;
+         const userCredential = await signInWithEmailAndPassword(auth, email, loginForm.password);
          
-         if(!s.empty) {
-             const foundDoc = s.docs[0];
-             const userData = { id: foundDoc.id, ...foundDoc.data() };
+         // Firestore에서 유저 권한(Role) 확인 (setDoc으로 저장했으므로 문서 ID = loginForm.id)
+         let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', loginForm.id);
+         let userDoc = await getDoc(userDocRef);
+         
+         // [방어적 코딩] 레거시 데이터(자동 ID) 호환성을 위한 2차 쿼리
+         if (!userDoc.exists()) {
+             const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id));
+             const s = await getDocs(q);
+             if (!s.empty) userDoc = s.docs[0];
+         }
+         
+         if(userDoc && (userDoc.exists ? userDoc.exists() : true)) {
+             const userData = { id: userDoc.id, ...userDoc.data(), authUid: userCredential.user.uid };
 
-             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', foundDoc.id), {
-                 lastLogin: new Date().toISOString()
-             });
+             // 로그인 시간 갱신 (에러가 나더라도 사용성을 해치지 않도록 catch 처리)
+             updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
+                 lastLogin: new Date().toISOString(),
+                 authUid: userCredential.user.uid // 보안 토큰 연동 갱신
+             }).catch(e => console.error("Update Login Time Error:", e));
 
              setCurrentUser(userData);
              sessionStorage.setItem('imperial_user', JSON.stringify(userData));
              navigate('/dashboard'); 
-         } else { setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 확인하세요.' }); }
-     } catch (e) { setLoginErrorModal({ isOpen: true, msg: "통신 오류: " + e.message }); } 
+         } else { 
+             setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 등록된 역할(Role) 정보가 없습니다.' }); 
+         }
+     } catch (e) { 
+         console.error("Auth Login Error:", e);
+         setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
+     } 
      finally { setLoginProcessing(false); }
   };
 
-  const handleLogout = () => { 
+  // 🚀 [CTO 로직] Firebase Auth 로그아웃 (토큰 완벽 파기)
+  const handleLogout = async () => { 
+      try {
+          await signOut(auth);
+      } catch (e) {
+          console.error("Sign Out Error:", e);
+      }
       sessionStorage.removeItem('imperial_user'); 
       setCurrentUser(null); 
       navigate('/'); 
@@ -274,10 +288,9 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 [신규 추가] 사이드바 메뉴 배열
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, // 관리자 전용 대시보드 메뉴
+    { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] },
@@ -345,8 +358,6 @@ const AppContent = () => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        
-                        {/* 🚀 [신규 라우트] 대표님 전용 재무 대시보드 화면 */}
                         <Route 
                             path="/financial-dashboard" 
                             element={
@@ -355,12 +366,9 @@ const AppContent = () => {
                                 : <Navigate to="/dashboard" replace />
                             } 
                         />
-
-                        {/* 🚀 직원 전용 지출결의 화면 (Role: admin, lecturer, ta) */}
                         {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                             <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
                         )}
-
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
@@ -369,7 +377,6 @@ const AppContent = () => {
                         <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
-                        
                         <Route 
                             path="/exam-diagnostics" 
                             element={
@@ -387,7 +394,6 @@ const AppContent = () => {
                                 : <Navigate to="/dashboard" replace />
                             } 
                         />
-
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
