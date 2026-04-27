@@ -2,14 +2,14 @@
    1. PWA 서비스 워커 캐시 강제 무효화: 학부모 기기에 저장된 구버전 코드를 강제로 비워, 중복 계정 증식 버그를 100% 원천 차단합니다.
    2. Firestore 통신 최적화(updateDoc): 로그인 시 불필요한 전체 문서 덮어쓰기를 제거하여 DB 쓰기 비용을 50% 절감합니다.
    3. 1-Click 네비게이션과 Flexbox 레이아웃 분리는 그대로 유지하여 모바일 최적화를 보장합니다.
-   4. [신규 통합] 시험 진단 모듈(지연 로딩) 및 지출결의(ExpenseManager) 모듈을 추가하여 앱 초기 구동 속도를 방어합니다.
+   4. [신규 통합] 지출결의서(ExpenseManager)와 관리자 전용 재무 대시보드(FinancialDashboard)를 지연 로딩으로 통합했습니다.
 */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt // Receipt(영수증) 아이콘 추가
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart 
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc } from 'firebase/firestore'; 
 import { db } from './firebase'; 
@@ -25,13 +25,14 @@ const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 
-// 🚀 [신규 추가] 스마트 진단 시스템 컴포넌트 지연 로딩
+// 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 
-// 🚀 [신규 추가] 재무관리 - 지출결의서 컴포넌트 지연 로딩
+// 🚀 [신규 추가] 재무관리 시스템 컴포넌트 지연 로딩
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
+const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -99,6 +100,17 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
+                {/* 🚀 [신규 추가] 대표님 전용 재무 대시보드 숏컷 */}
+                {currentUser.role === 'admin' && (
+                    <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><PieChart size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">재무 대시보드</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.</p>
+                    </div>
+                )}
+
                 {/* 🚀 [신규 추가] 재무관리 - 지출결의(영수증) 대시보드 숏컷 */}
                 {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
@@ -110,7 +122,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [기존] 관리자/강사용 시험 진단 대시보드 숏컷 */}
+                {/* 🚀 관리자/강사용 시험 진단 대시보드 숏컷 */}
                 {['admin', 'lecturer'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -121,7 +133,7 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [기존] 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
+                {/* 🚀 학생/학부모용 나의 시험 결과 대시보드 숏컷 */}
                 {['student', 'parent'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/my-exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -265,7 +277,8 @@ const AppContent = () => {
   // 🚀 [신규 추가] 사이드바 메뉴 배열
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
-    { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta'] }, // 관리자/강사/조교용 신규 메뉴
+    { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, // 관리자 전용 대시보드 메뉴
+    { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
@@ -333,7 +346,17 @@ const AppContent = () => {
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                         
-                        {/* 🚀 [신규 라우트] 직원 전용 지출결의 화면 (Role: admin, lecturer, ta) */}
+                        {/* 🚀 [신규 라우트] 대표님 전용 재무 대시보드 화면 */}
+                        <Route 
+                            path="/financial-dashboard" 
+                            element={
+                                currentUser.role === 'admin' 
+                                ? <FinancialDashboard currentUser={currentUser} /> 
+                                : <Navigate to="/dashboard" replace />
+                            } 
+                        />
+
+                        {/* 🚀 직원 전용 지출결의 화면 (Role: admin, lecturer, ta) */}
                         {['admin', 'lecturer', 'ta'].includes(currentUser.role) && (
                             <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
                         )}
