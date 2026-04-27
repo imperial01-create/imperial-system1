@@ -1,11 +1,10 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Firebase Auth 보안 토큰 연동 및 클라이언트 기반 1회용 마이그레이션 기능 탑재) */
+   (Updated: Firebase Auth 보안 토큰 연동 및 클라이언트 기반 1회용 마이그레이션 기능 탑재 + 디버깅 모드) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
    } from 'lucide-react';
-   // 🚀 [CTO 추가] getDocs, deleteField 추가 임포트
    import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp, getDocs, deleteField } from 'firebase/firestore';
    import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
    import { db, secondaryAuth } from '../firebase';
@@ -21,7 +20,7 @@
        const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
        const [targetUserId, setTargetUserId] = useState(null);
        const [loading, setLoading] = useState(true);
-       const [migrationLoading, setMigrationLoading] = useState(false); // 마이그레이션 전용 로딩
+       const [migrationLoading, setMigrationLoading] = useState(false);
        
        const [toast, setToast] = useState({ message: '', type: 'info' });
    
@@ -62,7 +61,7 @@
        const handleOpenEdit = (user) => {
            setFormData({ 
                ...user, 
-               password: user.password || '', // 수정 시 기존 암호 필드가 사라졌을 수 있으므로 빈 문자열 보정
+               password: user.password || '', 
                childId: user.childId || '',
                childName: user.childName || '',
                childSnapshot: user.childSnapshot || null, 
@@ -98,8 +97,6 @@
                }
    
                if (isEditMode) {
-                   // 관리자가 비밀번호를 입력했다면 이 사용자는 마이그레이션 전이거나 비밀번호 변경 요청임
-                   // (일반적인 정보 수정 시에는 password 필드를 건드리지 않음)
                    if (formData.password && !formData.authUid) {
                        payload.password = formData.password;
                    }
@@ -108,13 +105,12 @@
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
-                   // 🚀 [CTO 보안] Firebase Auth에 실제 계정 생성 (Secondary App 사용)
                    const email = `${formData.userId}@imperial.com`;
                    let authUid = '';
                    try {
                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
                        authUid = userCredential.user.uid;
-                       await signOut(secondaryAuth); // 관리자 세션 튕김 방지
+                       await signOut(secondaryAuth);
                    } catch (authError) {
                        if (authError.code === 'auth/email-already-in-use') {
                            throw new Error("이미 시스템(인증서버)에 등록된 계정입니다. 다른 아이디를 사용해주세요.");
@@ -124,7 +120,6 @@
                    
                    payload.authUid = authUid;
                    payload.createdAt = serverTimestamp();
-                   // 생성 시에는 평문 비밀번호를 아예 저장하지 않음 (Zero Trust)
                    
                    await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.userId), payload);
                    showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
@@ -143,8 +138,6 @@
            setLoading(true);
            try {
                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
-               // 참고: 완벽한 처리를 위해서는 Firebase Auth 서버의 계정도 지워야 하지만,
-               // 클라이언트 단에서는 Admin SDK가 없으므로 Firestore 문서만 지워서 로그인을 막습니다.
                showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
                setIsDeleteConfirmOpen(false);
            } catch (e) { 
@@ -154,7 +147,7 @@
            }
        };
    
-       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션
+       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션 (디버깅 모드)
        const handleRunMigration = async () => {
            if (!window.confirm("⚠️ [보안 경고] 모든 평문 비밀번호를 Firebase Auth로 일괄 이전하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
            
@@ -171,34 +164,28 @@
                    const userData = userDoc.data();
                    const userId = userData.userId || userDoc.id;
    
-                   // 이미 마이그레이션 되었거나(authUid 존재), 비밀번호가 없는 계정은 스킵
                    if (!userData.password || userData.authUid) continue;
    
                    let password = userData.password;
                    
-                   // Firebase Auth 최소 길이(6자리) 보정
                    if (password.length < 6) password = password.padEnd(6, '0');
                    const email = `${userId}@imperial.com`;
    
                    try {
-                       // Secondary Auth로 계정 생성 (원장님 세션 유지)
                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-                       await signOut(secondaryAuth); // 찌꺼기 세션 방지
+                       await signOut(secondaryAuth);
    
-                       // Firestore에서 authUid 저장 및 평문 비밀번호 '영구 삭제'
                        await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
                            authUid: userCredential.user.uid,
                            password: deleteField() 
                        });
    
                        successCount++;
-                       // Firebase의 연속 생성 Rate Limit(과도한 요청 방지)을 우회하기 위해 0.5초 대기
                        await new Promise(resolve => setTimeout(resolve, 500)); 
    
                    } catch (err) {
                        if (err.code === 'auth/email-already-in-use') {
                            console.log(`[통과] ${userData.name}님은 이미 Auth에 존재합니다.`);
-                           // Auth에는 있는데 DB 갱신이 안된 경우 복구 처리
                            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
                                password: deleteField() 
                            });
@@ -206,6 +193,11 @@
                        } else {
                            console.error(`[실패] ${userData.name}:`, err);
                            failCount++;
+                           
+                           // 🚀 [CTO 디버깅 팝업] 첫 번째 에러만 화면에 띄움
+                           if (failCount === 1) { 
+                               alert(`🚨 [마이그레이션 실패 원인 분석]\n이름: ${userData.name}\n에러 코드: ${err.code}\n에러 메시지: ${err.message}\n\n이 팝업 내용을 그대로 복사해서 CTO에게 알려주세요!`);
+                           }
                        }
                    }
                }
@@ -233,7 +225,6 @@
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <div className="flex gap-2 w-full md:w-auto">
-                       {/* 🚀 임시 마이그레이션 버튼 */}
                        <Button onClick={handleRunMigration} variant="secondary" className="border-red-500 text-red-500 hover:bg-red-50" icon={migrationLoading ? Loader : Shield} disabled={migrationLoading}>
                            {migrationLoading ? '이전 중...' : '보안 마이그레이션 (1회용)'}
                        </Button>
@@ -296,7 +287,6 @@
                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                                        <td className="p-4 font-bold">
                                            {u.name}
-                                           {/* 보안 식별 배지 */}
                                            {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-red-400" title="마이그레이션 필요"/>}
                                        </td>
                                        <td className="p-4">
@@ -336,7 +326,6 @@
                        </div>
                        <input className="w-full border p-3 rounded-xl bg-gray-50" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
                        
-                       {/* 마이그레이션이 끝난 유저는 비밀번호 수정 UI를 감춤 (비밀번호 변경은 별도 기능으로 분리해야 안전함) */}
                        {!formData.authUid && (
                            <input className="w-full border p-3 rounded-xl" placeholder="초기 비밀번호 (6자리 이상)" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
                        )}
