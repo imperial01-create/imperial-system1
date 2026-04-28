@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Firebase Auth 보안 토큰 연동 및 Rate Limit 우회형 마이그레이션) */
+   (Updated: Firebase Auth 보안 토큰 연동 + 봇 방어 우회 마이그레이션 + 랜덤 문서명 DB 자동 정규화) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
@@ -147,14 +147,15 @@
            }
        };
    
-       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 일괄 마이그레이션 (Rate Limit 우회)
+       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 마이그레이션 + DB 정규화(문서명 통일)
        const handleRunMigration = async () => {
-           if (!window.confirm("⚠️ [보안 경고] 아직 처리되지 않은 평문 비밀번호를 Firebase Auth로 이전하시겠습니까?\n(이미 완료된 계정은 자동으로 건너뜁니다.)")) return;
+           if (!window.confirm("⚠️ [보안 경고] 아직 처리되지 않은 평문 비밀번호를 Firebase Auth로 이전하시겠습니까?\n(랜덤 ID를 가진 문서는 정상적인 ID로 자동 교체됩니다.)")) return;
            
            setMigrationLoading(true);
            let successCount = 0;
            let failCount = 0;
-           showToast('마이그레이션을 시작합니다. 창을 닫지 마세요...', 'info');
+           let normalizedCount = 0; // 문서 이름이 고쳐진 횟수
+           showToast('마이그레이션 및 DB 정규화를 시작합니다...', 'info');
    
            try {
                const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
@@ -162,12 +163,13 @@
    
                for (const userDoc of snapshot.docs) {
                    const userData = userDoc.data();
-                   const userId = userData.userId || userDoc.id;
+                   const currentDocId = userDoc.id;
+                   const userId = userData.userId || currentDocId;
    
+                   // 패스워드가 없거나 이미 마이그레이션 된 계정은 스킵
                    if (!userData.password || userData.authUid) continue;
    
                    let password = userData.password;
-                   
                    if (password.length < 6) password = password.padEnd(6, '0');
                    const email = `${userId}@imperial.com`;
    
@@ -175,38 +177,61 @@
                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
                        await signOut(secondaryAuth);
    
-                       await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
-                           authUid: userCredential.user.uid,
-                           password: deleteField() 
-                       });
+                       // 🚀 [핵심 추가] 문서 ID가 랜덤값인지 확인하고 정규화 처리
+                       if (currentDocId !== userId) {
+                           // 1. 새 문서(정확한 userId 이름)에 데이터 생성 (평문 비번 제외, authUid 포함)
+                           const newPayload = { ...userData, authUid: userCredential.user.uid };
+                           delete newPayload.password;
+                           
+                           await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), newPayload);
+                           
+                           // 2. 기존의 랜덤 ID 문서는 깔끔하게 삭제
+                           await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId));
+                           normalizedCount++;
+                       } else {
+                           // 문서 ID가 이미 userId와 동일하다면 기존처럼 필드만 업데이트
+                           await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId), {
+                               authUid: userCredential.user.uid,
+                               password: deleteField() 
+                           });
+                       }
    
                        successCount++;
-                       
-                       // 🚀 [CTO 수정] 구글 봇 방어 시스템 우회를 위해 생성 간격을 2.5초(2500ms)로 대폭 늘림
+                       // 봇 차단 방지를 위한 2.5초 대기
                        await new Promise(resolve => setTimeout(resolve, 2500)); 
    
                    } catch (err) {
                        if (err.code === 'auth/email-already-in-use') {
-                           console.log(`[통과] ${userData.name}님은 이미 Auth에 존재합니다.`);
-                           await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
-                               password: deleteField() 
-                           });
+                           // Auth에는 있는데 DB만 꼬여있을 때의 복구 로직도 정규화 적용
+                           if (currentDocId !== userId) {
+                               const newPayload = { ...userData };
+                               delete newPayload.password;
+                               await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), newPayload);
+                               await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId));
+                               normalizedCount++;
+                           } else {
+                               await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId), {
+                                   password: deleteField() 
+                               });
+                           }
                            successCount++;
                        } else if (err.code === 'auth/too-many-requests') {
-                           // 🚀 [CTO 수정] 과도한 요청 차단 시 친절한 안내 및 루프 중단
-                           alert(`🚨 구글 봇 방어 시스템 작동 (일시 차단)\n\n현재까지 총 ${successCount}명이 성공적으로 암호화되었습니다!\n\n해결책: 1~2분 정도 차단이 풀리길 기다리신 후, [보안 마이그레이션] 버튼을 다시 눌러주세요. 이미 완료된 사람들은 안전하게 보관되며 남은 사람들만 이어서 진행됩니다.`);
+                           alert(`🚨 구글 봇 방어 시스템 작동 (일시 차단)\n현재까지 ${successCount}명 성공 (문서정리 ${normalizedCount}건)\n1~2분 뒤 다시 눌러주세요.`);
                            setMigrationLoading(false);
-                           return; // 함수 즉시 종료 (이어하기 유도)
+                           return;
                        } else {
                            console.error(`[실패] ${userData.name}:`, err);
                            failCount++;
+                           if (failCount === 1) { 
+                               alert(`🚨 [마이그레이션 실패 원인]\n이름: ${userData.name}\n에러: ${err.message}`);
+                           }
                        }
                    }
                }
-               alert(`🎉 [마이그레이션 완료]\n성공(이번 턴): ${successCount}명\n실패: ${failCount}명\n모든 이전 작업이 끝났습니다!`);
+               alert(`🎉 [마이그레이션 및 정규화 완벽 종료!]\n성공: ${successCount}명 (이 중 이름 고쳐진 문서: ${normalizedCount}개)\n실패: ${failCount}명`);
            } catch (e) {
                console.error("Migration Fatal Error:", e);
-               alert('데이터를 불러오는 중 치명적인 오류가 발생했습니다.');
+               alert('치명적인 오류가 발생했습니다.');
            } finally {
                setMigrationLoading(false);
            }
