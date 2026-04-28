@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Firebase Auth 보안 토큰 연동 + 봇 방어 우회 마이그레이션 + 랜덤 문서명 DB 자동 정규화) */
+   (Updated: 한글/특수문자 ID 안전 인코딩 + Firebase Auth 보안 토큰 연동 + 봇 방어 우회 마이그레이션 + DB 정규화) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
@@ -105,8 +105,11 @@
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
-                   const email = `${formData.userId}@imperial.com`;
+                   // 🚀 [CTO 보안] 한글/특수문자 ID 안전 인코딩 처리
+                   const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
+                   const email = `${safeId}@imperial.com`;
                    let authUid = '';
+   
                    try {
                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
                        authUid = userCredential.user.uid;
@@ -147,7 +150,7 @@
            }
        };
    
-       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 마이그레이션 + DB 정규화(문서명 통일)
+       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 마이그레이션 + DB 정규화 + 한글 ID 인코딩
        const handleRunMigration = async () => {
            if (!window.confirm("⚠️ [보안 경고] 아직 처리되지 않은 평문 비밀번호를 Firebase Auth로 이전하시겠습니까?\n(랜덤 ID를 가진 문서는 정상적인 ID로 자동 교체됩니다.)")) return;
            
@@ -171,25 +174,23 @@
    
                    let password = userData.password;
                    if (password.length < 6) password = password.padEnd(6, '0');
-                   const email = `${userId}@imperial.com`;
+                   
+                   // 🚀 [핵심 추가] 한글 아이디 등으로 인한 Invalid Email 에러 방지 인코딩
+                   const safeId = encodeURIComponent(userId).replace(/[^a-zA-Z0-9]/g, 'x');
+                   const email = `${safeId}@imperial.com`;
    
                    try {
                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
                        await signOut(secondaryAuth);
    
-                       // 🚀 [핵심 추가] 문서 ID가 랜덤값인지 확인하고 정규화 처리
                        if (currentDocId !== userId) {
-                           // 1. 새 문서(정확한 userId 이름)에 데이터 생성 (평문 비번 제외, authUid 포함)
                            const newPayload = { ...userData, authUid: userCredential.user.uid };
                            delete newPayload.password;
                            
                            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), newPayload);
-                           
-                           // 2. 기존의 랜덤 ID 문서는 깔끔하게 삭제
                            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId));
                            normalizedCount++;
                        } else {
-                           // 문서 ID가 이미 userId와 동일하다면 기존처럼 필드만 업데이트
                            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId), {
                                authUid: userCredential.user.uid,
                                password: deleteField() 
@@ -197,12 +198,10 @@
                        }
    
                        successCount++;
-                       // 봇 차단 방지를 위한 2.5초 대기
                        await new Promise(resolve => setTimeout(resolve, 2500)); 
    
                    } catch (err) {
                        if (err.code === 'auth/email-already-in-use') {
-                           // Auth에는 있는데 DB만 꼬여있을 때의 복구 로직도 정규화 적용
                            if (currentDocId !== userId) {
                                const newPayload = { ...userData };
                                delete newPayload.password;
