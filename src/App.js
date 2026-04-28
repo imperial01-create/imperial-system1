@@ -19,13 +19,9 @@ const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
-
-// 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
-
-// 재무관리 시스템 컴포넌트 지연 로딩
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 
@@ -230,56 +226,57 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // 🚀 [CTO 로직: 하이브리드 로그인 브릿지]
+  // 🚀 [CTO 로직: 자동 보정 로그인 패치 적용]
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         const email = `${loginForm.id}@imperial.com`;
+         // 1. 🚨 한글 아이디 특수 인코딩 자동 보정
+         const safeId = encodeURIComponent(loginForm.id).replace(/[^a-zA-Z0-9]/g, 'x');
+         const email = `${safeId}@imperial.com`;
+         
+         // 2. 🚨 짧은 비밀번호(6자리 미만) 자동 보정 ('0' 채움)
+         let loginPassword = loginForm.password;
+         if (loginPassword.length < 6) {
+             loginPassword = loginPassword.padEnd(6, '0');
+         }
+
          let authUid = null;
 
          try {
-             // 1. 정상 경로: Firebase Auth 로그인 시도 (마이그레이션이 완료된 계정용)
-             const userCredential = await signInWithEmailAndPassword(auth, email, loginForm.password);
+             // 3. 보정된 정보로 안전하게 Auth 로그인 시도
+             const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
              authUid = userCredential.user.uid;
          } catch (authErr) {
-             // 2. 🚨 [브릿지]: Auth에 계정이 없다면 에러를 무시하고 DB의 평문 검증으로 넘어갑니다.
-             console.log("Auth 로그인 실패. 마이그레이션 이전 평문 계정인지 확인합니다.");
+             console.log("Auth 로그인 실패. 원인:", authErr.message);
+             throw new Error("비밀번호 또는 아이디 불일치");
          }
          
-         // Firestore에서 유저 권한 및 평문 비밀번호 가져오기
-         let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', loginForm.id);
-         let userDoc = await getDoc(userDocRef);
-         
-         if (!userDoc.exists()) {
-             const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id));
-             const s = await getDocs(q);
-             if (!s.empty) userDoc = s.docs[0];
-         }
-         
-         if(userDoc && (userDoc.exists ? userDoc.exists() : true)) {
-             const docData = userDoc.data();
+         // 4. 권한을 성공적으로 얻은 상태에서 DB 접근
+         try {
+             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', loginForm.id);
+             let userDoc = await getDoc(userDocRef);
+             
+             if(userDoc && userDoc.exists()) {
+                 const docData = userDoc.data();
+                 const userData = { id: userDoc.id, ...docData, authUid: authUid };
 
-             // 3. 🚨 평문 로그인 검증 로직
-             // Auth 로그인이 실패(authUid가 null)했는데, DB에 저장된 평문 암호마저 틀렸다면 확실한 인증 실패입니다.
-             if (!authUid && docData.password !== loginForm.password) {
-                 throw new Error("비밀번호 불일치 (평문 및 Auth 모두 실패)");
+                 // 접속 기록 남기기 (에러 나도 사용성 위해 패스)
+                 updateDoc(userDocRef, { lastLogin: new Date().toISOString() }).catch(e => console.error("Update Login Time Error:", e));
+
+                 setCurrentUser(userData);
+                 sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+                 navigate('/dashboard'); 
+             } else { 
+                 setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' }); 
              }
-
-             const userData = { id: userDoc.id, ...docData, authUid: authUid || docData.authUid };
-
-             updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userDoc.id), {
-                 lastLogin: new Date().toISOString()
-             }).catch(e => console.error("Update Login Time Error:", e));
-
-             setCurrentUser(userData);
-             sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-             navigate('/dashboard'); 
-         } else { 
-             setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 등록된 역할(Role) 정보가 없습니다.' }); 
+         } catch (dbErr) {
+             // 보안 규칙에 의해 튕겼을 경우
+             console.error("Firestore Permission Denied:", dbErr);
+             throw new Error("보안 규칙(Zero Trust) 접근 거부");
          }
      } catch (e) { 
-         console.error("Login Error:", e);
+         console.error("Login Final Error:", e);
          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
      } 
      finally { setLoginProcessing(false); }
