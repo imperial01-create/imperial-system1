@@ -4,11 +4,11 @@ import {
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus
 } from 'lucide-react';
-import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
-// 🚀 [신규 추가] PDF 자동 분석 컴포넌트 임포트
+// 🚀 PDF 자동 분석 컴포넌트 임포트
 import PdfAutoFiller from './PdfAutoFiller';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -153,7 +153,29 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 } catch (err) {
                     snapshot = await getDocs(q);
                 }
-                snapshot.forEach(doc => { fetchedData[doc.data().userId] = doc.data(); });
+
+                // 🚀 [CTO DB 자가 치유 로직] 무작위 랜덤 ID 문서 발견 시 올바른 ID로 병합 후 자동 삭제
+                snapshot.forEach(docSnap => { 
+                    const data = docSnap.data();
+                    const userId = data.userId;
+                    if (!userId) return; // 손상된 데이터 무시
+
+                    const expectedDocId = `${userId}_${selectedMonth}`;
+
+                    if (docSnap.id !== expectedDocId) {
+                        // 과거의 더러운 문서를 발견하면, 정확한 ID로 데이터를 복사하고 기존 것은 지웁니다.
+                        setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', expectedDocId), data, { merge: true })
+                            .then(() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docSnap.id)))
+                            .catch(console.error);
+                        
+                        if (!fetchedData[userId] || fetchedData[userId]._docId !== expectedDocId) {
+                            fetchedData[userId] = { ...data, _docId: expectedDocId };
+                        }
+                    } else {
+                        // 정상 문서
+                        fetchedData[userId] = { ...data, _docId: expectedDocId };
+                    }
+                });
             } else {
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
@@ -166,7 +188,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 }
 
                 if (snapshot.exists()) {
-                    fetchedData[currentUser.id] = snapshot.data();
+                    fetchedData[currentUser.id] = { ...snapshot.data(), _docId: snapshot.id };
                 }
             }
 
@@ -201,20 +223,20 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
-    // 🚀 [신규 기능] PDF 추출 데이터 일괄 적용 및 DB 자동 저장 핸들러
+    // 🚀 [수정됨] PDF 추출 데이터 일괄 적용 및 DB 자동 저장 핸들러
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
         try {
             const updatedPayrolls = { ...payrolls };
             const promises = [];
             let updateCount = 0;
+            const nowISO = new Date().toISOString(); // 캐시용 안전한 시간
 
             for (const user of targetUsers) {
                 const autoData = extractedData[user.id];
                 if (autoData) {
                     let currentPayroll = updatedPayrolls[user.id];
                     
-                    // 만약 해당 월의 정산 내역이 아예 없는 직원이면, 기본 뼈대를 우선 생성합니다.
                     if (!currentPayroll) {
                         currentPayroll = {
                             userId: user.id,
@@ -230,12 +252,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             totalGross: 0,
                             deductions: { '국민연금': 0, '건강보험': 0, '고용보험': 0, '장기요양보험료': 0, '소득세': 0, '지방소득세': 0 },
                             netSalary: 0,
-                            status: 'calculated',
-                            updatedAt: serverTimestamp()
+                            status: 'calculated'
                         };
                     }
 
-                    // 추출된 공제 데이터 덮어쓰기
                     const newDeductions = {
                         ...currentPayroll.deductions,
                         '국민연금': autoData.nationalPension || 0,
@@ -246,7 +266,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         '지방소득세': autoData.taxLocal || 0
                     };
 
-                    // 실수령액(Net Salary) 재계산 방어 로직
                     const safeBaseSalary = Number(currentPayroll.baseSalary) || 0;
                     const safeHolidayPay = Number(currentPayroll.weeklyHolidayPay) || 0;
                     const safeBonus = Number(currentPayroll.bonus) || 0;
@@ -255,19 +274,29 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     const totalDeductions = Object.values(newDeductions).reduce((a, b) => a + (Number(b) || 0), 0);
                     const net = gross - totalDeductions;
 
-                    const newData = {
+                    // 1. DB에 저장될 안전한 데이터 (serverTimestamp 포함)
+                    const dbPayload = {
                         ...currentPayroll,
                         totalGross: gross,
                         deductions: newDeductions,
                         netSalary: net,
-                        status: 'confirmed', // 자동 파싱 완료 시 확정 상태로 변경
+                        status: 'confirmed',
                         updatedAt: serverTimestamp()
                     };
+                    delete dbPayload._docId; // 내부 식별자는 제외
 
-                    updatedPayrolls[user.id] = newData;
+                    // 2. 화면에 바로 적용될 로컬 데이터 (문자열 시간 포함)
+                    const localPayload = {
+                        ...dbPayload,
+                        updatedAt: nowISO,
+                        _docId: `${user.id}_${selectedMonth}`
+                    };
+
+                    updatedPayrolls[user.id] = localPayload;
                     const docId = `${user.id}_${selectedMonth}`;
-                    // 서버로 즉시 일괄 저장 (Batch Promise)
-                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData, { merge: true }));
+                    
+                    // 서버로 즉시 일괄 저장
+                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true }));
                     updateCount++;
                 }
             }
@@ -276,11 +305,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 await Promise.all(promises);
                 setPayrolls(updatedPayrolls);
                 
-                // 로컬 캐시 업데이트
+                // 로컬 캐시 즉시 업데이트
                 const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
                 
-                alert(`성공! 총 ${updateCount}명의 공제 내역이 완벽하게 계산되어 서버에 저장되었습니다.`);
+                alert(`성공! 총 ${updateCount}명의 공제 내역이 데이터베이스에 완벽하게 저장되었습니다.`);
             }
         } catch (e) {
             console.error(e);
@@ -318,7 +347,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const safeHolidayPay = Number(weeklyHolidayPay) || 0;
             const safeTotalGross = safeBaseSalary + safeHolidayPay;
 
-            const newData = { 
+            const dbPayload = { 
                 userId: targetUser.id, 
                 userName: targetUser.name, 
                 userRole: targetUser.role, 
@@ -337,10 +366,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             };
             
             const docId = `${targetUser.id}_${selectedMonth}`;
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true });
             
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), newData, { merge: true });
-            
-            const updatedPayrolls = { ...payrolls, [targetUser.id]: newData };
+            const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
+            const updatedPayrolls = { ...payrolls, [targetUser.id]: localPayload };
             setPayrolls(updatedPayrolls);
             
             const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
@@ -369,7 +398,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const totalDeductions = Object.values(editingPayroll.deductions).reduce((a, b) => a + (Number(b) || 0), 0);
             const net = gross - totalDeductions;
             
-            const updatedData = { 
+            const dbPayload = { 
                 ...editingPayroll, 
                 baseSalary: safeBaseSalary,
                 bonus: safeBonus,
@@ -379,12 +408,13 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 status: 'confirmed', 
                 updatedAt: serverTimestamp() 
             };
+            delete dbPayload._docId;
             
             const docId = `${editingPayroll.userId}_${editingPayroll.yearMonth}`;
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true });
             
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), updatedData, { merge: true });
-            
-            const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: updatedData };
+            const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
+            const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: localPayload };
             setPayrolls(updatedPayrolls);
             
             const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;

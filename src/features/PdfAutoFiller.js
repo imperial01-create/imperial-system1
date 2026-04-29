@@ -5,8 +5,9 @@ import { UploadCloud, Loader, CheckCircle, AlertCircle, FileText } from 'lucide-
 /**
  * [서비스 가치 (Service Value)] 
  * 1. 운영자 관점: 원장님이 매월 겪는 '급여 수기 입력'의 고통과 '입력 실수(Human Error)' 리스크를 0%로 없앱니다.
- * 2. Exact Y-Axis 매핑 알고리즘: PDF의 텍스트 추출 순서가 뒤죽박죽이더라도, 이름과 동일한 
- * '가로선(Y축)' 위에 있는 숫자만 정밀하게 스캔하여 오차율 0%의 무결성 데이터를 구축합니다.
+ * 2. 2-Track 맞춤형 알고리즘: 
+ * - 급여대장: Exact Y-Axis (정밀 가로선 매핑)
+ * - 사업소득: Dynamic Row Banding (동적 구역 싹쓸이 + 함정 회피)
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -24,7 +25,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    setStatus({ state: 'loading', msg: `[${type === 'regular' ? '급여대장' : '사업소득'}] 정밀 가로선(Y축) 레이저 스캔 중...` });
+    setStatus({ state: 'loading', msg: `[${type === 'regular' ? '급여대장' : '사업소득'}] 맞춤형 알고리즘으로 분석 중...` });
     let pdf = null;
 
     try {
@@ -59,6 +60,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
       }
 
       let extractedData = {};
+      // 🚀 버튼 종류에 따라 완전히 다른 스캐너를 가동합니다.
       if (type === 'regular') {
           extractedData = parseRegularPayroll(allItems, users);
       } else {
@@ -82,17 +84,19 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
   };
 
   // ==========================================
-  // 🚀 1. 사업소득명세서(프리랜서) 파서
+  // 🚀 1. 사업소득명세서 파서 (Dynamic Row Banding)
+  // 밀려 있는 숫자까지 싹쓸이하되, 지급액 함정은 피합니다.
   // ==========================================
   const parseBusinessIncome = (items, users) => {
     const results = {};
     const pages = [...new Set(items.map(i => i.page))];
+    let globalColumnMap = {}; // 페이지가 넘어가도 헤더 위치를 기억
 
     pages.forEach(page => {
       const pageItems = items.filter(i => i.page === page);
       let headers = [];
 
-      // 1. 컬럼 기둥(X좌표) 위치 파악
+      // 기둥(Column) 파악 (지급액 함정 포함)
       pageItems.forEach(i => {
         const text = i.str.replace(/\s+/g, '');
         if (text.includes('지급액')) headers.push({ key: 'dummy_payment', x: i.x });
@@ -100,67 +104,72 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
         if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: i.x });
       });
 
-      const columnMap = {};
+      let columnMap = {};
       ['dummy_payment', 'taxIncome', 'taxLocal'].forEach(k => {
         const matching = headers.filter(h => h.key === k);
-        if (matching.length > 0) {
-          columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
-        }
+        if (matching.length > 0) columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
       });
 
-      // 2. 정밀 가로선 스캔 (이름과 동일한 Y좌표에 있는 숫자만 추출)
+      if (Object.keys(columnMap).length > 0) globalColumnMap = columnMap;
+      else columnMap = globalColumnMap;
+
+      // 이름 위치 찾기
+      const foundNames = [];
       users.filter(u => u.contractType !== '정규직').forEach(user => {
         const nameStr = user.name.replace(/\s+/g, '');
-        const nameItems = pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr);
+        pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr).forEach(item => {
+          foundNames.push({ user, y: item.y, x: item.x });
+        });
+      });
 
-        nameItems.forEach(nameItem => {
-          // 이름과 동일선상(오차범위 ±12px 이내)에 있는 숫자들만 필터링
-          const rowNumbers = pageItems.filter(i =>
-            Math.abs(i.y - nameItem.y) < 12 &&
-            /^[-0-9,]+$/.test(i.str.replace(/\s+/g, ''))
-          );
+      foundNames.sort((a, b) => b.y - a.y); // 위에서 아래로 정렬
 
-          let userResult = { taxIncome: 0, taxLocal: 0 };
+      foundNames.forEach((found, idx) => {
+        // [동적 밴딩] 앞사람과 뒷사람 사이의 공간을 통째로 이 사람의 전용 구역으로 설정 (아래로 밀린 숫자 커버)
+        const upperBound = idx === 0 ? found.y + 30 : (foundNames[idx-1].y + found.y) / 2;
+        const lowerBound = idx === foundNames.length - 1 ? found.y - 80 : (found.y + foundNames[idx+1].y) / 2;
 
-          rowNumbers.forEach(numItem => {
-            let closestKey = null;
-            let minDiff = 45; // 컬럼 너비 오차 허용
+        const rowNumbers = pageItems.filter(i => i.y <= upperBound && i.y > lowerBound && /^[-0-9,]+$/.test(i.str.replace(/\s+/g, '')));
+        
+        let userResult = { taxIncome: 0, taxLocal: 0 };
 
-            Object.keys(columnMap).forEach(key => {
-              const diff = Math.abs(columnMap[key] - numItem.x);
-              if (diff < minDiff) {
-                minDiff = diff;
-                closestKey = key;
-              }
-            });
+        rowNumbers.forEach(numItem => {
+          let closestKey = null;
+          let minDiff = 45; 
 
-            // 지급액(dummy_payment) 열에 있는 숫자는 완전히 무시!
-            if (closestKey && closestKey !== 'dummy_payment') {
-              userResult[closestKey] = extractNumber(numItem.str);
-            }
+          Object.keys(columnMap).forEach(key => {
+            const diff = Math.abs(columnMap[key] - numItem.x);
+            if (diff < minDiff) { minDiff = diff; closestKey = key; }
           });
 
-          if (userResult.taxIncome > 0 || userResult.taxLocal > 0) {
-            results[user.id] = { ...userResult, nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0 };
+          // 지급액(dummy_payment) 열에 있는 숫자는 철저히 무시!
+          if (closestKey && closestKey !== 'dummy_payment') {
+            userResult[closestKey] = extractNumber(numItem.str);
           }
         });
+
+        if (userResult.taxIncome > 0 || userResult.taxLocal > 0) {
+          results[found.user.id] = { ...userResult, nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0 };
+        }
       });
     });
     return results;
   };
 
   // ==========================================
-  // 🚀 2. 급여대장(정규직/조교) 파서
+  // 🚀 2. 급여대장 파서 (Exact Y-Axis 매핑)
+  // 이름과 완벽하게 동일한 가로선 상의 숫자만 수집합니다.
   // ==========================================
   const parseRegularPayroll = (items, users) => {
     const results = {};
     const pages = [...new Set(items.map(i => i.page))];
+    let globalColumnMap = {};
 
     pages.forEach(page => {
       const pageItems = items.filter(i => i.page === page);
       let headers = [];
 
-      // 1. 공제 항목별 기둥(X좌표) 위치 파악
+      // 6개 공제 항목 기둥(Column) 파악
       pageItems.forEach(i => {
         const text = i.str.replace(/\s+/g, '');
         if (text.includes('국민연금')) headers.push({ key: 'nationalPension', x: i.x });
@@ -171,21 +180,21 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
         if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: i.x });
       });
 
-      const columnMap = {};
+      let columnMap = {};
       ['nationalPension', 'healthInsurance', 'employmentInsurance', 'longTermCare', 'taxIncome', 'taxLocal'].forEach(k => {
         const matching = headers.filter(h => h.key === k);
-        if (matching.length > 0) {
-          columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
-        }
+        if (matching.length > 0) columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
       });
 
-      // 2. 정밀 가로선 스캔 (이름과 동일한 Y좌표에 있는 숫자만 추출)
+      if (Object.keys(columnMap).length > 0) globalColumnMap = columnMap;
+      else columnMap = globalColumnMap;
+
       users.filter(u => u.contractType !== '프리랜서').forEach(user => {
         const nameStr = user.name.replace(/\s+/g, '');
         const nameItems = pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr);
 
         nameItems.forEach(nameItem => {
-          // 이름과 동일선상(오차범위 ±12px 이내)에 있는 숫자들만 필터링
+          // [정밀 가로선] 이름과 동일선상(오차범위 ±12px 이내)에 있는 숫자들만 레이저 스캔
           const rowNumbers = pageItems.filter(i =>
             Math.abs(i.y - nameItem.y) < 12 &&
             /^[-0-9,]+$/.test(i.str.replace(/\s+/g, ''))
@@ -195,18 +204,13 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
 
           rowNumbers.forEach(numItem => {
             let closestKey = null;
-            let minDiff = 45; // 우측 정렬된 숫자까지 넉넉하게 커버
+            let minDiff = 45; // 우측 정렬된 숫자까지 커버
 
-            // 숫자의 X좌표가 어떤 컬럼 기둥의 X좌표와 가장 가까운지 판별
             Object.keys(columnMap).forEach(key => {
               const diff = Math.abs(columnMap[key] - numItem.x);
-              if (diff < minDiff) {
-                minDiff = diff;
-                closestKey = key;
-              }
+              if (diff < minDiff) { minDiff = diff; closestKey = key; }
             });
 
-            // 빈칸은 숫자로 추출되지 않으므로 자동으로 0원 유지
             if (closestKey) {
               userResult[closestKey] = extractNumber(numItem.str);
             }
@@ -245,7 +249,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
             <FileText size={32} className="text-blue-500" />
             <div>
               <div className="font-bold text-blue-900">정규직/조교 급여대장</div>
-              <div className="text-xs text-blue-500 mt-1">4대보험 및 소득세 자동 매핑</div>
+              <div className="text-xs text-blue-500 mt-1">정밀 가로선(Y축) 매핑</div>
             </div>
           </div>
         </div>
@@ -262,7 +266,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
             <FileText size={32} className="text-emerald-500" />
             <div>
               <div className="font-bold text-emerald-900">프리랜서 사업소득명세서</div>
-              <div className="text-xs text-emerald-500 mt-1">3.3% 사업소득세 자동 매핑</div>
+              <div className="text-xs text-emerald-500 mt-1">동적 밴딩(Row) 매핑</div>
             </div>
           </div>
         </div>
