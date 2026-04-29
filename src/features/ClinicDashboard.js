@@ -51,9 +51,10 @@ const getWeekOfMonth = (date) => {
 };
 
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
+  // 🚀 [CTO FIX] 조교 본인 확인 시 ID 불일치를 대비하여 이름(taName)으로도 확인 (하이브리드 매칭)
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
-        return sessions.filter(s => s.taId === currentUser.id && s.date === selectedDateStr);
+        return sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
      }
      return sessions.filter(s => s.date === selectedDateStr);
   }, [sessions, currentUser, selectedDateStr]);
@@ -117,7 +118,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isToday = dStr === getLocalToday();
             let hasEvent = false;
             if (isStudent) { if (dStr >= getLocalToday()) hasEvent = sessions.some(s => s.date === dStr && s.status === 'open'); }
-            else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && s.taId === currentUser.id); }
+            // 🚀 [CTO FIX] 이벤트 유무 확인할 때도 이름(taName) 포함 확인
+            else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
             return (
@@ -174,7 +176,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    const taSubject = s.taSubject || taSubjectMap?.[s.taId] || '개별 클리닉';
+                    // 🚀 [CTO FIX] 조교 담당 과목 맵핑을 안전하게 수행 (이름으로도 찾음)
+                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId] || taSubjectMap.byName?.[s.taName] || '개별 클리닉';
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -246,7 +249,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 </select>
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="예약 정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
-                                {/* [CTO FIX] 관리자는 언제든 피드백 작성/수정 가능 */}
                                 {(s.status === 'confirmed' || s.status === 'completed') && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
@@ -260,14 +262,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
-                            {/* [CTO FIX] 조교 본인이라면 피드백 '완료' 후에도 '수정'할 수 있도록 버튼 해제 */}
+                            {/* 🚀 [CTO FIX] 피드백 권한 검증 시 조교 이름도 함께 검사 */}
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && (
                                 <Button 
                                     size="sm" 
                                     variant={s.feedbackStatus==='submitted'?'secondary':'primary'} 
                                     icon={CheckSquare} 
                                     onClick={()=>onAction('write_feedback', s)} 
-                                    disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id}
+                                    disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}
                                 >
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
                                 </Button>
@@ -306,14 +308,19 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
+    // 🚀 [CTO FIX] 조교 과목을 찾을 때 ID뿐만 아니라 이름으로도 찾을 수 있게 양방향 저장
     const taSubjectMap = useMemo(() => {
-        const map = {};
+        const mapById = {};
+        const mapByName = {};
         if (users && users.length > 0) {
             users.forEach(u => {
-                if (u.role === 'ta') map[u.id] = u.subject;
+                if (u.role === 'ta') {
+                    mapById[u.id] = u.subject;
+                    mapByName[u.name] = u.subject;
+                }
             });
         }
-        return map;
+        return { byId: mapById, byName: mapByName };
     }, [users]);
 
     const fetchSessions = useCallback(async (forceRefresh = false) => {
@@ -373,6 +380,19 @@ const ClinicDashboard = ({ currentUser, users }) => {
     useEffect(() => {
         fetchSessions(false);
     }, [fetchSessions]);
+
+    // 🚀 [CTO DB 백그라운드 자가 치유] 조교가 화면을 볼 때, 자신의 옛날 ID로 된 문서를 새 ID로 싹 고침
+    useEffect(() => {
+        if (currentUser.role === 'ta' && sessions.length > 0) {
+            const staleSessions = sessions.filter(s => s.taName === currentUser.name && s.taId !== currentUser.id);
+            if (staleSessions.length > 0) {
+                staleSessions.forEach(s => {
+                    updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', s.id), { taId: currentUser.id })
+                    .catch(() => {}); // 사용성을 위해 에러는 조용히 무시
+                });
+            }
+        }
+    }, [sessions, currentUser]);
 
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
@@ -549,7 +569,8 @@ ${scheduleText}
           for (let h = sH; h < eH; h++) {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
-            if (!sessions.some(s => s.taId === targetTa.id && s.date === dStr && s.startTime === sT)) {
+            // 🚀 [CTO FIX] 생성 중복 체크 시 이름도 확인
+            if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', date: dStr, startTime: sT, endTime: eT, 
                 status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', classroom: ''
@@ -627,7 +648,6 @@ ${scheduleText}
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
   const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
   
-  // [CTO FIX] 학부모/학생 피드백 열람을 위해 completed 상태의 세션도 필터링에 포함
   const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
 
   if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
@@ -753,7 +773,8 @@ ${scheduleText}
                 <Card className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-none w-full">
                     <div className="flex justify-between items-end">
                         <div><h2 className="text-2xl font-bold mb-1">안녕하세요, {currentUser.name}님</h2><p className="text-white/80">오늘도 학생들의 성장을 위해 힘써주세요!</p></div>
-                        <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => s.taId === currentUser.id && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
+                        {/* 🚀 [CTO FIX] 조교 이달의 근무 계산 시에도 이름 확인 포함 */}
+                        <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
                 <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
@@ -790,7 +811,6 @@ ${scheduleText}
                                         <div className="flex gap-2"><span className="font-bold text-gray-500 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap">{s.questionRange}</span></div>
                                     </div>
                                     
-                                    {/* [CTO FIX] 학생/학부모에게 작성된 피드백 노출 UI 추가 */}
                                     {(s.status === 'completed' && (s.clinicContent || s.feedback || s.improvement)) && (
                                         <div className="mt-3 bg-green-50 p-3.5 rounded-lg text-sm text-gray-700 border border-green-100">
                                             <div className="font-bold text-green-800 mb-2 flex items-center gap-1.5"><MessageSquare size={16}/> 클리닉 피드백</div>
@@ -883,7 +903,9 @@ ${scheduleText}
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
         <div className="space-y-6">
             <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div>
-            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return s.taId===ta.id&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
+            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);
+            // 🚀 [CTO FIX] 관리자 근무 통계 계산 시 이름도 확인
+            return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
         </div>
       </Modal>
       
