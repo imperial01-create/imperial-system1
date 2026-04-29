@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '../firebase'; 
-import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc } from 'firebase/firestore'; 
-import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager';
+import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
+import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
-const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2 2v2"/></svg>;
 const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>;
 const IconArrowLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>;
 const IconSettings = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>;
@@ -22,7 +22,6 @@ const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" heig
 
 const APP_ID = 'imperial-clinic-v1';
 
-// [CTO 최적화] 다중 정렬 알고리즘 (1순위: 최신년도, 2순위: 학교명 가나다순, 3순위: 최신작성)
 const sortReports = (reportsList) => {
     return reportsList.sort((a, b) => {
         const yearA = parseInt(a.year) || 0;
@@ -90,7 +89,6 @@ export default function SchoolStrategy({ currentUser }) {
               const trends = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isDeleted);
               
               setTrendReports(sortReports(trends)); 
-              // 검색 상태 유지를 위해 초기 로드 시 개별 리포트는 비우지 않고 그대로 둡니다.
           } else if (isStudentOrParent) {
               const userSchoolRaw = String(user.childSchool || user.schoolname || user.schoolName || user.school || "").trim();
               const qStudent = query(collection(db, INTEGRATED_COLLECTION), where("schoolName", "==", userSchoolRaw));
@@ -137,7 +135,6 @@ export default function SchoolStrategy({ currentUser }) {
       fetchInitialData();
   }, [fetchInitialData]);
 
-  // [CTO 최적화] 메모리 누수 방지를 위해 중복 선언되어 있던 popstate 이벤트 리스너를 단일화했습니다.
   useEffect(() => {
       const handlePopState = (e) => {
           setViewState(prev => {
@@ -163,7 +160,6 @@ export default function SchoolStrategy({ currentUser }) {
       setViewState(prev => ({ ...prev, selectedQuestion: q }));
   };
 
-  // [CTO 최적화] 뒤로가기 시 무분별한 리렌더링과 데이터 재요청을 막아 검색 상태를 완벽히 유지합니다.
   const handleGoBack = () => {
       window.history.back();
   };
@@ -300,6 +296,7 @@ export default function SchoolStrategy({ currentUser }) {
     return { totalIdi, level, percent };
   };
 
+  // 🚀 [CTO 버그 패치] 수정 시 고아 문서 방치 해결 (마이그레이션 적용)
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
     if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
@@ -342,11 +339,41 @@ export default function SchoolStrategy({ currentUser }) {
           isDeleted: formData.isDeleted || false
       };
       
-      await upsertExamData(baseData, strategyPayload);
+      const oldId = viewState.selectedId;
+      const newId = generateExamDocId(baseData);
+
+      if (oldId && oldId !== newId) {
+          // 문서의 ID를 구성하는 주요 정보가 바뀐 경우 -> 데이터를 새 ID로 이사시키고 과거 문서 삭제
+          const oldDocRef = doc(db, INTEGRATED_COLLECTION, oldId);
+          const oldDocSnap = await getDoc(oldDocRef);
+          
+          if (oldDocSnap.exists()) {
+              const oldData = oldDocSnap.data();
+              const mergedPayload = {
+                  ...oldData,
+                  ...baseData,
+                  ...strategyPayload,
+                  updatedAt: serverTimestamp()
+              };
+              await setDoc(doc(db, INTEGRATED_COLLECTION, newId), mergedPayload);
+              await deleteDoc(oldDocRef);
+          } else {
+              await upsertExamData(baseData, strategyPayload);
+          }
+      } else {
+          // 주요 정보가 바뀌지 않은 경우 (기존 방식대로 업데이트)
+          await upsertExamData(baseData, strategyPayload);
+      }
+
       alert('성공적으로 저장 및 통합되었습니다.');
       refreshData();
       handleGoBack(); 
-    } catch (e) { console.error(e); alert('저장에 실패했습니다.'); } finally { setLoading(false); }
+    } catch (e) { 
+      console.error(e); 
+      alert('저장에 실패했습니다.'); 
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   const handleArrayChange = (field, index, key, value) => {
@@ -807,9 +834,6 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
 
           <div className="p-4 md:p-8">
-            
-            {/* [CTO 최적화] 상단의 붉은색 PDF 뷰어 제거됨 (하단 교직원 전용 블록으로 통합 완료) */}
-
             {!report.type || (!report.review && (!report.questions || report.questions.length === 0)) ? (
                 <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-xl border border-dashed border-gray-300">
                     <span className="text-gray-500 font-bold mb-2">현재 PDF만 업로드되었으며, 분석 데이터가 작성되지 않았습니다.</span>
@@ -1000,7 +1024,6 @@ export default function SchoolStrategy({ currentUser }) {
             {showInternalMemo && (
               <div className="p-4 md:p-6 bg-yellow-50/30 border-t border-yellow-200 animate-fade-in">
                 
-                {/* 아카이브 파일 퀵 뷰어 */}
                 {report.files && Object.values(report.files).some(f => f && f.url) && (
                   <div className="mb-4 p-3 bg-white border border-yellow-300 rounded-lg flex flex-col gap-2 shadow-sm">
                     <span className="text-[11px] md:text-xs font-bold text-yellow-800 flex items-center gap-1">🔗 아카이브 연동 자료 (클릭 시 새 탭에서 원본 확인)</span>
@@ -1028,7 +1051,6 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         )}
 
-        {/* 모달 뷰 영역 */}
         {viewState.selectedQuestion && (
           <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-2 md:p-4 backdrop-blur-sm animate-fade-in overflow-hidden">
             

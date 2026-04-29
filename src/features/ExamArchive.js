@@ -4,10 +4,10 @@ import {
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
   XCircle, Edit3, Trash2
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
-import { upsertExamData, INTEGRATED_COLLECTION } from '../utils/examDataManager'; 
+import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -37,7 +37,6 @@ const ExamArchive = ({ currentUser }) => {
 
     const [showAddModal, setShowAddModal] = useState(false);
     
-    // 🚀 [신규 상태] 정보 수정 모달 및 폼 상태
     const [showEditExamModal, setShowEditExamModal] = useState(false);
     const [editExamForm, setEditExamForm] = useState(null);
     
@@ -146,7 +145,6 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [신규 기능] 시험 정보 수정 버튼 클릭 핸들러
     const handleEditExamClick = (exam) => {
         setEditExamForm({
             id: exam.id,
@@ -160,7 +158,6 @@ const ExamArchive = ({ currentUser }) => {
         setShowEditExamModal(true);
     };
 
-    // 🚀 [신규 기능] 시험 정보 수정 제출 핸들러 (updateDoc을 통해 메타데이터만 안전하게 변경)
     const handleEditSubmitExam = async () => {
         if (!editExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
         setIsProcessing(true);
@@ -178,11 +175,34 @@ const ExamArchive = ({ currentUser }) => {
                 updatedAt: serverTimestamp()
             };
 
-            // DB 업데이트
-            await updateDoc(doc(db, INTEGRATED_COLLECTION, editExamForm.id), updateData);
+            const oldId = editExamForm.id;
+            const newId = generateExamDocId(updateData);
 
-            // 로컬 상태 즉시 반영 (낙관적 업데이트)
-            setExams(prev => prev.map(e => e.id === editExamForm.id ? { ...e, ...updateData } : e));
+            if (oldId !== newId) {
+                const oldDocRef = doc(db, INTEGRATED_COLLECTION, oldId);
+                const oldDocSnap = await getDoc(oldDocRef);
+
+                if (oldDocSnap.exists()) {
+                    const oldData = oldDocSnap.data();
+                    const newData = { ...oldData, ...updateData }; 
+                    await setDoc(doc(db, INTEGRATED_COLLECTION, newId), newData);
+                    await deleteDoc(oldDocRef);
+                } else {
+                    await setDoc(doc(db, INTEGRATED_COLLECTION, newId), updateData);
+                }
+            } else {
+                await updateDoc(doc(db, INTEGRATED_COLLECTION, oldId), updateData);
+            }
+
+            setExams(prev => {
+                const filtered = prev.filter(e => e.id !== oldId);
+                const oldExam = prev.find(e => e.id === oldId) || {};
+                return [{ ...oldExam, ...updateData, id: newId }, ...filtered].sort((a, b) => 
+                    String(a.schoolName || "").localeCompare(String(b.schoolName || "")) || 
+                    String(b.year || "").localeCompare(String(a.year || "")) || 
+                    String(b.semester || "").localeCompare(String(a.semester || ""))
+                );
+            });
             
             alert("기출자료 정보가 성공적으로 수정되었습니다.");
             setShowEditExamModal(false);
@@ -204,6 +224,106 @@ const ExamArchive = ({ currentUser }) => {
             alert("자료가 성공적으로 삭제되었습니다.");
         } catch (error) {
             alert("삭제 실패: " + error.message);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // 🚀 [CTO 스마트 병합 알고리즘] 쪼개진 문서 퓨전 및 유실 방지 로직
+    const handleRunMergeMigration = async () => {
+        if (!window.confirm("⚠️ [중복 데이터 안전 병합]\n\n같은 시험인데 문서가 2개로 쪼개진 경우, \n'PDF 파일 링크'와 '내신 분석 데이터'를 하나로 완벽하게 합친 후 빈 껍데기 문서를 삭제합니다.\n(데이터 유실 없음)\n\n진행하시겠습니까?")) return;
+
+        setIsProcessing(true);
+        let mergedCount = 0;
+        let deletedCount = 0;
+
+        try {
+            const snapshot = await getDocs(collection(db, INTEGRATED_COLLECTION));
+            const allExams = snapshot.docs.map(doc => ({ _id: doc.id, ...doc.data() }));
+
+            const groups = {};
+            allExams.forEach(exam => {
+                const baseData = {
+                    schoolName: exam.schoolName || exam.school || '',
+                    year: String(exam.year || ''),
+                    grade: exam.grade || '1학년',
+                    semester: exam.semester || '1학기',
+                    termType: exam.termType || exam.term || '중간고사',
+                    subject: exam.subject || ''
+                };
+                const logicalId = generateExamDocId(baseData);
+
+                if (!groups[logicalId]) groups[logicalId] = [];
+                groups[logicalId].push(exam);
+            });
+
+            for (const logicalId of Object.keys(groups)) {
+                const group = groups[logicalId];
+                
+                if (group.length > 1) {
+                    let mergedData = {};
+                    let mergedFiles = {};
+
+                    // 배열을 순회하며 빈 값이 아닌 데이터를 모조리 끌어모음 (데이터 유실 철벽 방어)
+                    group.forEach(exam => {
+                        Object.keys(exam).forEach(key => {
+                            if (key !== 'files' && key !== '_id') {
+                                if (exam[key] !== null && exam[key] !== undefined && exam[key] !== '') {
+                                    if (Array.isArray(exam[key]) && exam[key].length === 0) return; 
+                                    if (typeof exam[key] === 'object' && Object.keys(exam[key]).length === 0) return; 
+                                    
+                                    // 질문 배열(questions)의 경우 더 많이 작성된 쪽을 우선함
+                                    if (key === 'questions' && mergedData.questions && mergedData.questions.length > exam.questions.length) return;
+
+                                    mergedData[key] = exam[key];
+                                }
+                            }
+                        });
+
+                        // 파일 링크는 개별적으로 쪼개서 존재하는 URL을 퓨전
+                        if (exam.files) {
+                            Object.keys(exam.files).forEach(fKey => {
+                                const fileObj = exam.files[fKey];
+                                if (fileObj && fileObj.url && fileObj.url.trim() !== '') {
+                                    mergedFiles[fKey] = fileObj; 
+                                } else if (!mergedFiles[fKey] && fileObj) {
+                                    mergedFiles[fKey] = fileObj; 
+                                }
+                            });
+                        }
+                    });
+
+                    mergedData.files = mergedFiles;
+                    mergedData.updatedAt = serverTimestamp(); 
+
+                    await setDoc(doc(db, INTEGRATED_COLLECTION, logicalId), mergedData, { merge: true });
+                    mergedCount++;
+
+                    // 합쳐졌으니 기존의 찌꺼기(다른 ID) 문서들은 모두 삭제
+                    for (const exam of group) {
+                        if (exam._id !== logicalId) {
+                            await deleteDoc(doc(db, INTEGRATED_COLLECTION, exam._id));
+                            deletedCount++;
+                        }
+                    }
+                } else if (group.length === 1 && group[0]._id !== logicalId) {
+                     // 중복은 아니지만 옛날 랜덤 ID로 저장된 고아 문서인 경우 -> ID 정규화 (이사)
+                     const exam = group[0];
+                     const examData = { ...exam };
+                     delete examData._id;
+
+                     await setDoc(doc(db, INTEGRATED_COLLECTION, logicalId), examData, { merge: true });
+                     await deleteDoc(doc(db, INTEGRATED_COLLECTION, exam._id));
+                     deletedCount++;
+                }
+            }
+
+            alert(`🎉 중복 데이터 안전 병합 완료!\n\n- ${mergedCount}개의 쪼개진 시험 데이터가 하나로 완벽히 합쳐졌습니다.\n- ${deletedCount}개의 쓸모없는 찌꺼기 문서가 정리되었습니다.\n\n다시 검색하시면 깔끔해진 목록을 보실 수 있습니다.`);
+            if (hasSearched) handleSearch(); 
+
+        } catch (error) {
+            console.error("Merge Error:", error);
+            alert("병합 중 오류 발생: " + error.message);
         } finally {
             setIsProcessing(false);
         }
@@ -389,11 +509,19 @@ const ExamArchive = ({ currentUser }) => {
                     <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 기출 아카이브</h2>
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리 (학부모 접근 불가)</span>
                 </div>
-                {canAddExam && (
-                    <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
-                        <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
-                    </Button>
-                )}
+                <div className="flex gap-2">
+                    {/* 🚀 중복 시험 스마트 병합 버튼 추가 */}
+                    {isAdmin && (
+                        <Button onClick={handleRunMergeMigration} variant="secondary" className="border-orange-500 text-orange-600 hover:bg-orange-50" icon={isProcessing ? Loader : LinkIcon} disabled={isProcessing}>
+                            <span className="hidden sm:inline">중복 시험 병합</span><span className="sm:hidden">병합</span>
+                        </Button>
+                    )}
+                    {canAddExam && (
+                        <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
+                            <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
+                        </Button>
+                    )}
+                </div>
             </div>
 
             <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
@@ -443,7 +571,6 @@ const ExamArchive = ({ currentUser }) => {
                                 <div className="w-full lg:w-1/4 shrink-0 flex flex-col justify-center">
                                     <div className="flex justify-between items-start">
                                         <div className="font-bold text-gray-900 text-lg md:text-xl">{exam.schoolName}</div>
-                                        {/* 🚀 [신규 기능] 관리자 전용 수정 및 삭제 버튼 영역 */}
                                         {isAdmin && (
                                             <div className="flex gap-2 mt-1">
                                                 <button onClick={() => handleEditExamClick(exam)} className="text-gray-400 hover:text-blue-600 transition-colors" title="시험 정보 수정">
@@ -471,7 +598,6 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 신규 등록 모달 */}
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
@@ -542,7 +668,6 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 🚀 [신규 기능] 기출자료 정보 수정 모달 */}
             <Modal isOpen={showEditExamModal} onClose={() => setShowEditExamModal(false)} title="기출자료 정보 수정">
                 {editExamForm && (
                     <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
