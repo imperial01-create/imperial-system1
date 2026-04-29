@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
-// [수정1] legacy 의존성 제거. 최신 5.x 버전에 맞는 표준 모듈 임포트
 import * as pdfjsLib from 'pdfjs-dist';
 import { UploadCloud, Loader, CheckCircle, AlertCircle } from 'lucide-react';
 
 /**
  * [서비스 가치 (Service Value)] 
- * 1. 운영자 관점: 원장님이 매월 겪는 '급여 수기 입력(약 2~3시간 소요)'의 고통과 '입력 실수(Human Error)'로 인한 금전적 분쟁 리스크를 0%로 없앱니다.
- * 2. 속도가 곧 매출: 급여 정산을 3초 만에 끝내고, 원장님은 '원생 모집'과 '학부모 상담'이라는 핵심 가치에 시간을 쏟을 수 있습니다.
+ * 1. 운영자 관점: 원장님이 매월 겪는 '급여 수기 입력'의 고통과 '입력 실수(Human Error)' 리스크를 0%로 없앱니다.
+ * 2. 속도가 곧 매출: Row Banding 매핑 알고리즘을 통해 복잡한 세무사 PDF도 3초 만에 완벽하게 정산합니다.
  */
 
-// [수정2] v5 버전에 맞게 확장자를 .mjs로 변경하여 404 Worker 에러 원천 차단
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 export default function PdfAutoFiller({ users, onExtractSuccess }) {
@@ -19,13 +17,12 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    setStatus({ state: 'loading', msg: 'PDF 화면 좌표 스캔 및 한글 해독 중...' });
-    let pdf = null; // 메모리 해제를 위한 블록 스코프 변수
+    setStatus({ state: 'loading', msg: 'PDF 화면 좌표 스캔 및 데이터 1:1 매핑 중...' });
+    let pdf = null;
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       
-      // [수정3 - 핵심 해결] 한글(CJK) 글꼴 완벽 해독을 위한 CMap(Character Map) 주입
       const CMAP_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`;
       const CMAP_PACKED = true;
 
@@ -33,7 +30,6 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
         data: arrayBuffer,
         cMapUrl: CMAP_URL,
         cMapPacked: CMAP_PACKED,
-        // 필요시 표준 폰트도 함께 주입 (선택사항)
         standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/standard_fonts/`
       }).promise;
 
@@ -43,7 +39,6 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // [방어적 코딩] 빈 페이지나 텍스트가 없는 이미지형 PDF 방어
         if (textContent && textContent.items) {
           textContent.items.forEach(item => {
             if (item.str.trim() !== '') {
@@ -70,11 +65,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
       console.error("[PDF 파싱 심각한 오류]:", error);
       setStatus({ state: 'error', msg: `PDF 분석 중 오류가 발생했습니다: ${error.message}` });
     } finally {
-      // [리소스 최적화] 스캔이 끝난 무거운 PDF 객체를 즉시 브라우저 메모리에서 강제 삭제 (Memory Leak 방지)
-      if (pdf) {
-        pdf.destroy();
-      }
-      // 동일한 파일을 다시 업로드할 수 있도록 input 초기화
+      if (pdf) pdf.destroy();
       e.target.value = null;
     }
   };
@@ -85,95 +76,115 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
     const isRegularPayroll = fullText.includes('급여대장') || fullText.includes('국민연금');
     const isBusinessIncome = fullText.includes('사업소득지급대장') || fullText.includes('사업소득');
 
-    if (isRegularPayroll) {
-      let headersX = { np: 0, hi: 0, ei: 0, ltc: 0, tax: 0, localTax: 0 };
-      items.forEach(item => {
-        const text = item.str.replace(/\s+/g, '');
-        if (text.includes('국민연금')) headersX.np = item.x;
-        if (text.includes('건강보험')) headersX.hi = item.x;
-        if (text.includes('고용보험')) headersX.ei = item.x;
-        if (text.includes('장기요양')) headersX.ltc = item.x;
-        if (text === '소득세') headersX.tax = item.x;
-        if (text.includes('지방소득세')) headersX.localTax = item.x;
+    // 1. 헤더(항목명) 위치 찾기
+    let headers = [];
+    items.forEach(item => {
+      const text = item.str.replace(/\s+/g, '');
+      if (isRegularPayroll) {
+        if (text.includes('국민연금')) headers.push({ key: 'nationalPension', x: item.x, y: item.y });
+        if (text.includes('건강보험')) headers.push({ key: 'healthInsurance', x: item.x, y: item.y });
+        if (text.includes('고용보험')) headers.push({ key: 'employmentInsurance', x: item.x, y: item.y });
+        if (text.includes('장기요양')) headers.push({ key: 'longTermCare', x: item.x, y: item.y });
+        if (text.replace('지방소득세', '').includes('소득세') || text.includes('갑근세')) headers.push({ key: 'taxIncome', x: item.x, y: item.y });
+        if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: item.x, y: item.y });
+      } else if (isBusinessIncome) {
+        if (text.replace('지방소득세', '').includes('소득세') || text.includes('세액')) headers.push({ key: 'taxIncome', x: item.x, y: item.y });
+        if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: item.x, y: item.y });
+      }
+    });
+
+    // 헤더 중복 제거 (여러 페이지에 동일한 헤더 반복 방지)
+    const uniqueHeaders = [];
+    headers.forEach(h => {
+      if (!uniqueHeaders.some(uh => uh.key === h.key && Math.abs(uh.x - h.x) < 30)) {
+        uniqueHeaders.push(h);
+      }
+    });
+
+    // 🚀 [CTO 로직] 헤더를 X좌표 기반으로 열(Column)로 묶기 (장기요양과 고용보험이 같은 열에 있는지 판단)
+    let headerColumns = [];
+    uniqueHeaders.forEach(h => {
+      let closestCol = null;
+      let minDiff = 40; // X좌표가 40 이내면 같은 열(Column)로 취급
+      headerColumns.forEach(c => {
+        const diff = Math.abs(c.x - h.x);
+        if (diff < minDiff) { minDiff = diff; closestCol = c; }
+      });
+      if (closestCol) closestCol.headers.push(h);
+      else headerColumns.push({ x: h.x, headers: [h] });
+    });
+
+    // 각 열(Column) 안에서 헤더들을 위에서 아래로(Y좌표 내림차순) 정렬
+    headerColumns.forEach(col => col.headers.sort((a, b) => b.y - a.y));
+
+    // 2. 직원 이름 위치(Y좌표) 찾기
+    let foundUsers = [];
+    users.forEach(user => {
+      if (isRegularPayroll && user.contractType === '프리랜서') return;
+      if (isBusinessIncome && user.contractType === '정규직') return;
+
+      const userNameClean = user.name.replace(/\s+/g, '');
+      const nameItems = items.filter(i => i.str.replace(/\s+/g, '') === userNameClean);
+      nameItems.forEach(ni => foundUsers.push({ user, y: ni.y, x: ni.x }));
+    });
+
+    // 문서 위쪽부터 아래쪽 순서로 이름 정렬
+    foundUsers.sort((a, b) => b.y - a.y);
+
+    // 3. 🚀 [CTO 로직] Row Banding (행렬 밴드) 매핑
+    foundUsers.forEach((found, idx) => {
+      // 이 직원의 데이터 한계선 (다음 사람 이름이 나오기 전까지 모두 이 사람의 영역)
+      const upperBound = found.y + 15;
+      const lowerBound = (idx + 1 < foundUsers.length) ? foundUsers[idx + 1].y + 15 : found.y - 300;
+
+      // 해당 영역 안의 모든 '숫자' 아이템 수집
+      const rowItems = items.filter(i => {
+        const text = i.str.replace(/\s+/g, '');
+        const isNumeric = /^[0-9,]+$/.test(text) || text === '-' || text === '0';
+        return i.y <= upperBound && i.y > lowerBound && isNumeric;
       });
 
-      // [효율성 감사(Efficiency Audit)] 알고리즘 고도화 O(N^2) -> O(N)
-      // 이중 반복문(find)을 제거하고, 해시맵(Map)을 이용해 Y좌표 기반으로 한 번의 순회만으로 행(Row)을 묶습니다.
-      // 직원이 수백 명이어도 즉시 파싱됩니다.
-      const rowsMap = new Map();
-      items.forEach(item => {
-        // 시각적 오차를 줄이기 위해 Y좌표를 5단위로 반올림하여 버킷 생성
-        const yBucket = Math.round(item.y / 5) * 5;
-        if (!rowsMap.has(yBucket)) rowsMap.set(yBucket, []);
-        rowsMap.get(yBucket).push(item);
-      });
-      const rows = Array.from(rowsMap.values());
+      let userResult = {
+        nationalPension: 0, healthInsurance: 0, employmentInsurance: 0,
+        longTermCare: 0, taxIncome: 0, taxLocal: 0,
+      };
 
-      users.forEach(user => {
-        if (user.contractType === '프리랜서') return;
-
-        const userRow = rows.find(r => r.some(i => i.str.replace(/\s+/g, '').includes(user.name)));
+      // 찾아낸 숫자들을 X좌표를 기준으로 열(Column)로 묶기
+      let rowColumns = [];
+      rowItems.forEach(item => {
+        let closestHeaderCol = null;
+        let minDiff = 50; // 우측 정렬 오차 허용범위
+        headerColumns.forEach(hc => {
+          const diff = Math.abs(hc.x - item.x);
+          if (diff < minDiff) { minDiff = diff; closestHeaderCol = hc; }
+        });
         
-        if (userRow) {
-          const findValueNearX = (targetX) => {
-            if (!targetX) return 0;
-            let closest = null;
-            let minDiff = 30; 
-            userRow.forEach(i => {
-              const diff = Math.abs(i.x - targetX);
-              if (diff < minDiff) {
-                minDiff = diff;
-                closest = i;
-              }
-            });
-            if (closest) {
-              const num = Number(closest.str.replace(/[^0-9]/g, ''));
-              return isNaN(num) ? 0 : num;
-            }
-            return 0;
-          };
-
-          results[user.id] = {
-            nationalPension: findValueNearX(headersX.np),
-            healthInsurance: findValueNearX(headersX.hi),
-            employmentInsurance: findValueNearX(headersX.ei),
-            longTermCare: findValueNearX(headersX.ltc),
-            taxIncome: findValueNearX(headersX.tax),
-            taxLocal: findValueNearX(headersX.localTax),
-          };
-        }
-      });
-    } else if (isBusinessIncome) {
-      // (프리랜서 로직은 기존과 동일하게 유지하되 안전하게 구동됩니다)
-      let taxColumnX = 0;
-      items.forEach(item => {
-        if (item.str.replace(/\s+/g, '').includes('소득세') && !item.str.includes('지방')) {
-          taxColumnX = item.x;
+        if (closestHeaderCol) {
+          let col = rowColumns.find(c => c.headerCol === closestHeaderCol);
+          if (col) col.items.push(item);
+          else rowColumns.push({ headerCol: closestHeaderCol, items: [item] });
         }
       });
 
-      users.forEach(user => {
-        if (user.contractType === '정규직') return;
-        const nameItem = items.find(i => i.str.replace(/\s+/g, '').includes(user.name));
+      // 같은 열(Column) 안에서 숫자들을 위에서 아래로 정렬하여 헤더와 1:1로 짝짓기
+      // (장기요양이 위, 고용보험이 아래면 숫자도 위아래로 나누어 정확히 분배)
+      rowColumns.forEach(rowCol => {
+        rowCol.items.sort((a, b) => b.y - a.y);
+        const hCol = rowCol.headerCol;
         
-        if (nameItem) {
-          const taxItems = items.filter(i => 
-            Math.abs(i.x - taxColumnX) < 40 && 
-            Math.abs(i.y - nameItem.y) < 30
-          );
-
-          taxItems.sort((a, b) => b.y - a.y);
-
-          const taxIncome = taxItems.length > 0 ? Number(taxItems[0].str.replace(/[^0-9]/g, '')) : 0;
-          const taxLocal = taxItems.length > 1 ? Number(taxItems[1].str.replace(/[^0-9]/g, '')) : 0;
-
-          results[user.id] = {
-            nationalPension: 0, healthInsurance: 0, employmentInsurance: 0,
-            longTermCare: 0, taxIncome: taxIncome, taxLocal: taxLocal,
-          };
+        for (let i = 0; i < Math.min(hCol.headers.length, rowCol.items.length); i++) {
+          const headerKey = hCol.headers[i].key;
+          let valStr = rowCol.items[i].str.replace(/[^0-9]/g, '');
+          const value = valStr === '' ? 0 : Number(valStr);
+          userResult[headerKey] = value;
         }
       });
-    }
+
+      // 동명이인이나 합계 등으로 인해 여러 번 탐색될 경우, 실제 데이터가 있는(>0) 결과를 최종 저장
+      if (!results[found.user.id] || Object.values(userResult).some(v => v > 0)) {
+          results[found.user.id] = userResult;
+      }
+    });
 
     return results;
   };
@@ -186,12 +197,11 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
             <UploadCloud size={20} /> 세무사 PDF 자동 공제 입력
           </h3>
           <p className="text-sm text-indigo-700 mt-1">
-            급여대장 또는 사업소득명세서 PDF를 업로드하면 공제 내역이 자동으로 채워집니다.
+            급여대장 또는 사업소득명세서 PDF를 업로드하면 공제 내역이 자동으로 매핑됩니다.
           </p>
         </div>
         
         <div className="flex items-center gap-3">
-          {/* [보안 및 사용성] multiple을 허용하지 않고, 정확히 하나의 PDF만 처리하도록 강제 */}
           <input 
             type="file" 
             accept="application/pdf"
