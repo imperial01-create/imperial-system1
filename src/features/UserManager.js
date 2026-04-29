@@ -1,11 +1,11 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 마스터 데이터 복구 - ID 정규화 및 월급 데이터 실종 해결) */
+   (Updated: 보안 마이그레이션 임무 완수 및 코드 클렌징 완료) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
    } from 'lucide-react';
-   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp, getDocs, deleteField } from 'firebase/firestore';
+   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
    import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
    import { db, secondaryAuth } from '../firebase';
    import { Button, Card, Modal, Toast } from '../components/UI';
@@ -20,13 +20,12 @@
        const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
        const [targetUserId, setTargetUserId] = useState(null);
        const [loading, setLoading] = useState(true);
-       const [migrationLoading, setMigrationLoading] = useState(false);
        
        const [toast, setToast] = useState({ message: '', type: 'info' });
    
        const [formData, setFormData] = useState({ 
            name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
-           schoolName: '', grade: '1학년', authUid: '', childSnapshot: null
+           schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: ''
        });
        const [isEditMode, setIsEditMode] = useState(false);
        
@@ -53,7 +52,7 @@
        }, []);
    
        const handleOpenCreate = () => {
-           setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null });
+           setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '' });
            setIsEditMode(false);
            setIsModalOpen(true);
        };
@@ -68,7 +67,9 @@
                hourlyRate: user.hourlyRate || '',
                schoolName: user.schoolName || '',
                grade: user.grade || '1학년',
-               authUid: user.authUid || ''
+               authUid: user.authUid || '',
+               bankName: user.bankName || '',
+               accountNumber: user.accountNumber || ''
            });
            setIsEditMode(true);
            setIsModalOpen(true);
@@ -87,8 +88,13 @@
                    phone: formData.phone || '', updatedAt: serverTimestamp()
                };
                if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
-               if (activeTab === 'ta' || activeTab === 'lecturer') payload.subject = formData.subject || '';
-               if (activeTab === 'ta') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
+               
+               if (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin') { 
+                   if (activeTab !== 'admin') payload.subject = formData.subject || '';
+                   if (activeTab === 'ta') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
+                   payload.bankName = formData.bankName || '';
+                   payload.accountNumber = formData.accountNumber || '';
+               }
                
                if (activeTab === 'parent') { 
                    payload.childId = formData.childId; 
@@ -105,6 +111,7 @@
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
+                   // 🚀 안전한 ID로 인코딩 후 구글 Auth와 Firestore에 동시 생성
                    const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
                    const email = `${safeId}@imperial.com`;
                    let authUid = '';
@@ -149,59 +156,6 @@
            }
        };
    
-       // 🚀 [CTO 마스터 복구 스크립트] 월급 데이터 재연결 + ID 보안 정규화
-       const handleRunMigration = async () => {
-           if (!window.confirm("⚠️ [데이터 복구 시작] 실종된 월급 내역을 모두 찾아내어 새 보안 계정에 연결하시겠습니까?")) return;
-           
-           setMigrationLoading(true);
-           let userFixed = 0;
-           let payrollLinked = 0;
-           showToast('데이터 복구 및 재연결 중...', 'info');
-   
-           try {
-               // 1. 전체 사용자 스캔 및 ID 보안 정규화 (최희원 -> safeId)
-               const userSnapshot = await getDocs(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
-               const userMap = {}; // 이름-아이디 매핑용
-   
-               for (const uDoc of userSnapshot.docs) {
-                   const data = uDoc.data();
-                   const realUserId = data.userId || uDoc.id;
-                   const safeId = encodeURIComponent(realUserId).replace(/[^a-zA-Z0-9]/g, 'x');
-                   userMap[data.name] = safeId; // 이름으로 검색할 수 있게 저장
-   
-                   // 문서의 ID가 보안 인코딩된 safeId가 아니라면 교체
-                   if (uDoc.id !== safeId) {
-                       await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), { ...data, id: safeId }, { merge: true });
-                       await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uDoc.id));
-                       userFixed++;
-                   }
-               }
-   
-               // 2. 전체 월급 내역 스캔 및 주인 찾아주기
-               const payrollSnapshot = await getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'));
-               
-               for (const pDoc of payrollSnapshot.docs) {
-                   const pData = pDoc.data();
-                   const ownerSafeId = userMap[pData.userName]; // 이름으로 주인의 새 ID를 찾음
-   
-                   // 월급 데이터의 주인이 있고, 기존 월급문서의 userId가 새 ownerSafeId와 다르다면 업데이트
-                   if (ownerSafeId && pData.userId !== ownerSafeId) {
-                       await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', pDoc.id), {
-                           userId: ownerSafeId
-                       });
-                       payrollLinked++;
-                   }
-               }
-   
-               alert(`🎉 [복구 완료]\n\n계정 보안 적용: ${userFixed}건\n실종된 월급 재연결: ${payrollLinked}건\n\n이제 월급 관리 메뉴에서 정상적으로 금액이 보일 것입니다!`);
-           } catch (e) {
-               console.error(e);
-               alert('복구 중 오류 발생: ' + e.message);
-           } finally {
-               setMigrationLoading(false);
-           }
-       };
-   
        const duplicateCounts = React.useMemo(() => {
            const counts = {};
            users.forEach(u => { counts[u.userId] = (counts[u.userId] || 0) + 1; });
@@ -217,18 +171,16 @@
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <div className="flex gap-2 w-full md:w-auto">
-                       <Button onClick={handleRunMigration} variant="secondary" className="border-red-500 text-red-500 hover:bg-red-50" icon={migrationLoading ? Loader : Shield} disabled={migrationLoading}>
-                           {migrationLoading ? '데이터 복구 중...' : '보안 마이그레이션 (복구)'}
-                       </Button>
-                       <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto" disabled={migrationLoading}>사용자 추가</Button>
+                       {/* 불필요해진 보안 마이그레이션 버튼 완벽 제거됨 */}
+                       <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
                    </div>
                </div>
    
                <div className="w-full overflow-x-auto">
                    <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[350px]">
-                       {['student', 'parent', 'ta', 'lecturer'].map(role => (
+                       {['student', 'parent', 'ta', 'lecturer', 'admin'].map(role => (
                            <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-4 font-bold text-center transition-colors ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
-                               {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '조교' : '강사'}
+                               {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '조교' : role === 'lecturer' ? '강사' : '관리자'}
                            </button>
                        ))}
                    </div>
@@ -264,6 +216,9 @@
                                {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
                                {activeTab === 'parent' && <div className="flex items-center gap-2 font-bold text-green-600"><User size={14}/> 자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName})` : u.childName}</div>}
                                <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
+                               {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin') && u.bankName && (
+                                   <div className="text-xs text-gray-500 bg-yellow-50 p-1.5 rounded inline-block">🏦 {u.bankName} {u.accountNumber}</div>
+                               )}
                            </div>
                        </Card>
                    ))}
@@ -279,7 +234,7 @@
                                    <tr key={u.id} className="hover:bg-gray-50 transition-colors">
                                        <td className="p-4 font-bold">
                                            {u.name}
-                                           {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-red-400" title="마이그레이션 필요"/>}
+                                           {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-gray-300" title="초기 계정"/>}
                                        </td>
                                        <td className="p-4">
                                            <div className="flex items-center gap-2">
@@ -297,7 +252,12 @@
                                                     자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName} ${u.childSnapshot.grade})` : u.childName}
                                                 </span>
                                            )}
-                                           {(activeTab === 'ta' || activeTab === 'lecturer') && u.subject}
+                                           {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin') && (
+                                               <div className="flex flex-col gap-1">
+                                                   <span>{u.subject}</span>
+                                                   {u.bankName && <span className="text-xs text-gray-500 bg-yellow-50 px-2 py-0.5 rounded-full border border-yellow-100 w-fit">🏦 {u.bankName} {u.accountNumber}</span>}
+                                               </div>
+                                           )}
                                        </td>
                                        <td className="p-4 flex justify-end gap-2">
                                            <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg text-gray-400 hover:text-blue-600 hover:border-blue-100"><Edit2 size={18}/></button>
@@ -367,10 +327,24 @@
                            </div>
                        )}
    
-                       {(activeTab === 'ta' || activeTab === 'lecturer') && (
-                           <div className="grid grid-cols-2 gap-4">
-                               <input className="border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
-                               {activeTab === 'ta' && <input className="border p-3 rounded-xl" type="number" placeholder="시급" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />}
+                       {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin') && (
+                           <div className="space-y-4 mt-2">
+                               {(activeTab === 'ta' || activeTab === 'lecturer') && (
+                                   <div className="grid grid-cols-2 gap-4">
+                                       <input className="border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                                       {activeTab === 'ta' && <input className="border p-3 rounded-xl" type="number" placeholder="시급" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />}
+                                   </div>
+                               )}
+                               <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-xl border border-yellow-100">
+                                   <div>
+                                       <label className="block text-xs font-bold text-gray-500 mb-1">입금은행</label>
+                                       <input className="w-full border p-2 rounded-lg bg-white" placeholder="예: 국민은행" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} />
+                                   </div>
+                                   <div>
+                                       <label className="block text-xs font-bold text-gray-500 mb-1">계좌번호</label>
+                                       <input className="w-full border p-2 rounded-lg bg-white" placeholder="- 없이 숫자만 입력" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} />
+                                   </div>
+                               </div>
                            </div>
                        )}
                        

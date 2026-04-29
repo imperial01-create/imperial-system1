@@ -8,7 +8,7 @@ import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFrom
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
-// 🚀 PDF 자동 분석 컴포넌트 임포트
+// PDF 자동 분석 컴포넌트 임포트
 import PdfAutoFiller from './PdfAutoFiller';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -154,16 +154,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     snapshot = await getDocs(q);
                 }
 
-                // 🚀 [CTO DB 자가 치유 로직] 무작위 랜덤 ID 문서 발견 시 올바른 ID로 병합 후 자동 삭제
                 snapshot.forEach(docSnap => { 
                     const data = docSnap.data();
                     const userId = data.userId;
-                    if (!userId) return; // 손상된 데이터 무시
+                    if (!userId) return; 
 
                     const expectedDocId = `${userId}_${selectedMonth}`;
 
                     if (docSnap.id !== expectedDocId) {
-                        // 과거의 더러운 문서를 발견하면, 정확한 ID로 데이터를 복사하고 기존 것은 지웁니다.
                         setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', expectedDocId), data, { merge: true })
                             .then(() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docSnap.id)))
                             .catch(console.error);
@@ -172,7 +170,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             fetchedData[userId] = { ...data, _docId: expectedDocId };
                         }
                     } else {
-                        // 정상 문서
                         fetchedData[userId] = { ...data, _docId: expectedDocId };
                     }
                 });
@@ -223,14 +220,13 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
 
-    // 🚀 [수정됨] PDF 추출 데이터 일괄 적용 및 DB 자동 저장 핸들러
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
         try {
             const updatedPayrolls = { ...payrolls };
             const promises = [];
             let updateCount = 0;
-            const nowISO = new Date().toISOString(); // 캐시용 안전한 시간
+            const nowISO = new Date().toISOString(); 
 
             for (const user of targetUsers) {
                 const autoData = extractedData[user.id];
@@ -274,7 +270,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     const totalDeductions = Object.values(newDeductions).reduce((a, b) => a + (Number(b) || 0), 0);
                     const net = gross - totalDeductions;
 
-                    // 1. DB에 저장될 안전한 데이터 (serverTimestamp 포함)
                     const dbPayload = {
                         ...currentPayroll,
                         totalGross: gross,
@@ -283,9 +278,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         status: 'confirmed',
                         updatedAt: serverTimestamp()
                     };
-                    delete dbPayload._docId; // 내부 식별자는 제외
+                    delete dbPayload._docId; 
 
-                    // 2. 화면에 바로 적용될 로컬 데이터 (문자열 시간 포함)
                     const localPayload = {
                         ...dbPayload,
                         updatedAt: nowISO,
@@ -295,7 +289,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     updatedPayrolls[user.id] = localPayload;
                     const docId = `${user.id}_${selectedMonth}`;
                     
-                    // 서버로 즉시 일괄 저장
                     promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true }));
                     updateCount++;
                 }
@@ -305,7 +298,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 await Promise.all(promises);
                 setPayrolls(updatedPayrolls);
                 
-                // 로컬 캐시 즉시 업데이트
                 const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
                 
@@ -428,18 +420,25 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     };
 
+    // 🚀 [CTO 로직] '급여 이체대행 목록' 엑셀 다운로드 (은행/계좌 정보 포함)
     const handleDownloadExcel = () => {
-        const data = Object.values(payrolls).map(p => {
-            const row = { '이름': p.userName, '직책': p.userRole === 'ta' ? '조교' : (p.userRole === 'lecturer' ? '강사' : '관리자'), '기본급/시급급여': p.baseSalary, '주휴수당': p.weeklyHolidayPay, '식대': p.mealAllowance, '상여금': p.bonus, '지급총액(세전)': p.totalGross };
-            DEDUCTION_KEYS.forEach(key => { row[key] = p.deductions[key] || 0; });
-            row['공제총액'] = Object.values(p.deductions).reduce((a, b) => a + (b || 0), 0);
-            row['실수령액(세후)'] = p.netSalary;
-            return row;
+        const data = Object.values(payrolls).map((p, index) => {
+            // targetUsers(스냅샷)에서 이 사람의 은행/계좌 정보를 가져옴
+            const user = targetUsers.find(u => u.id === p.userId) || {};
+            
+            return {
+                '순번': index + 1,
+                '입금은행': user.bankName || '',
+                '입금계좌예금주명': p.userName,
+                '입금계좌번호': user.accountNumber || '',
+                '입금금액': p.netSalary
+            };
         });
+        
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Payroll");
-        XLSX.writeFile(wb, `Imperial_Payroll_${selectedMonth}.xlsx`);
+        XLSX.utils.book_append_sheet(wb, ws, "이체대행목록");
+        XLSX.writeFile(wb, `급여 이체대행 목록_${selectedMonth}.xlsx`);
     };
 
     const handleMonthChange = (offset) => {
@@ -473,17 +472,16 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                          (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
                     </div>
                     <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} title="데이터 새로고침" disabled={isLoading || isSessionsLoading} />
-                    {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">엑셀</Button>}
+                    {/* 🚀 다운로드 버튼 */}
+                    {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">엑셀 다운로드</Button>}
                 </div>
             </div>
 
             {/* Content Area */}
             {isManagementMode ? (
                 <>
-                    {/* 🚀 PDF 업로드 및 공제 자동입력 컴포넌트 */}
                     <PdfAutoFiller users={targetUsers} onExtractSuccess={handlePdfDataExtracted} />
 
-                    {/* 모바일 카드 뷰 */}
                     <div className="md:hidden space-y-4">
                         {targetUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
                         {targetUsers.map(user => {
@@ -521,7 +519,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         })}
                     </div>
 
-                    {/* PC 테이블 뷰 */}
                     <div className="hidden md:block">
                         <Card className="overflow-hidden w-full p-0">
                             <div className="w-full overflow-x-auto">
@@ -575,7 +572,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 <div className="w-full animate-in fade-in">
                     {payrolls[currentUser.id] ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                            {/* 좌측: 요약 카드 */}
                             <Card className="lg:col-span-1 border-t-4 border-t-blue-600 shadow-lg h-fit">
                                 <div className="text-center mb-6 border-b pb-4">
                                     <h3 className="text-2xl font-bold text-gray-800">급여 명세서</h3>
@@ -594,7 +590,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 </div>
                             </Card>
 
-                            {/* 우측: 상세 내역 */}
                             <Card className="lg:col-span-2 h-fit">
                                 <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800">
                                     <FileText className="text-gray-500"/> 상세 내역
@@ -634,7 +629,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </div>
             )}
 
-            {/* Admin Edit Modal */}
             <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="급여 상세 수정 (세무 입력)">
                 {editingPayroll && (
                     <div className="space-y-4">
