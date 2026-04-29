@@ -1,11 +1,11 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 보안 마이그레이션 임무 완수 및 코드 클렌징 완료) */
+   (Updated: 자가 치유(Self-Healing) 저장 로직 탑재 - No document 에러 완벽 해결) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
    } from 'lucide-react';
-   import { collection, doc, setDoc, updateDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
+   import { collection, doc, setDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
    import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
    import { db, secondaryAuth } from '../firebase';
    import { Button, Card, Modal, Toast } from '../components/UI';
@@ -24,7 +24,7 @@
        const [toast, setToast] = useState({ message: '', type: 'info' });
    
        const [formData, setFormData] = useState({ 
-           name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
+           id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
            schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: ''
        });
        const [isEditMode, setIsEditMode] = useState(false);
@@ -52,7 +52,7 @@
        }, []);
    
        const handleOpenCreate = () => {
-           setFormData({ name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '' });
+           setFormData({ id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '' });
            setIsEditMode(false);
            setIsModalOpen(true);
        };
@@ -60,6 +60,7 @@
        const handleOpenEdit = (user) => {
            setFormData({ 
                ...user, 
+               id: user.id, // 기존 문서의 ID (랜덤 문자열일 수 있음)
                password: user.password || '', 
                childId: user.childId || '',
                childName: user.childName || '',
@@ -102,17 +103,30 @@
                    payload.childSnapshot = formData.childSnapshot; 
                }
    
+               // 🚀 모든 계정은 반드시 safeId를 기준으로 저장되도록 강제합니다.
+               const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
+   
                if (isEditMode) {
                    if (formData.password && !formData.authUid) {
                        payload.password = formData.password;
                    }
-                   await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id), payload);
+                   
+                   // 🚀 [CTO 자가 치유 로직] updateDoc 대신 setDoc(merge:true)를 사용하여 No document 에러를 원천 차단합니다.
+                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload, { merge: true });
+                   
+                   // 만약 과거의 문서 ID(formData.id)가 정상적인 safeId와 다르다면(랜덤 문자열이라면), 찌꺼기를 삭제합니다.
+                   if (formData.id && formData.id !== safeId) {
+                       try { 
+                           await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id)); 
+                       } catch (e) {
+                           console.log("찌꺼기 문서 삭제 스킵:", e);
+                       }
+                   }
+                   
                    showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
-                   // 🚀 안전한 ID로 인코딩 후 구글 Auth와 Firestore에 동시 생성
-                   const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
                    const email = `${safeId}@imperial.com`;
                    let authUid = '';
    
@@ -153,6 +167,7 @@
                showToast('삭제 실패: ' + e.message, 'error'); 
            } finally { 
                setLoading(false); 
+               setTargetUserId(null);
            }
        };
    
@@ -171,7 +186,6 @@
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <div className="flex gap-2 w-full md:w-auto">
-                       {/* 불필요해진 보안 마이그레이션 버튼 완벽 제거됨 */}
                        <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
                    </div>
                </div>
