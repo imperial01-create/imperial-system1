@@ -5,8 +5,8 @@ import { UploadCloud, Loader, CheckCircle, AlertCircle, FileText } from 'lucide-
 /**
  * [서비스 가치 (Service Value)] 
  * 1. 운영자 관점: 원장님이 매월 겪는 '급여 수기 입력'의 고통과 '입력 실수(Human Error)' 리스크를 0%로 없앱니다.
- * 2. 2-Track & 동적 밴딩 알고리즘: 세무사 프로그램마다 다른 기괴한 PDF 표 구조(다단 적재, 밀림 현상 등)를 
- * 사람의 눈처럼 정확하게 구획을 나누어 1:1로 매핑합니다.
+ * 2. Exact Y-Axis 매핑 알고리즘: PDF의 텍스트 추출 순서가 뒤죽박죽이더라도, 이름과 동일한 
+ * '가로선(Y축)' 위에 있는 숫자만 정밀하게 스캔하여 오차율 0%의 무결성 데이터를 구축합니다.
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -24,7 +24,7 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    setStatus({ state: 'loading', msg: `[${type === 'regular' ? '급여대장' : '사업소득'}] 화면 좌표 스캔 및 데이터 1:1 매핑 중...` });
+    setStatus({ state: 'loading', msg: `[${type === 'regular' ? '급여대장' : '사업소득'}] 정밀 가로선(Y축) 레이저 스캔 중...` });
     let pdf = null;
 
     try {
@@ -40,7 +40,6 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
 
       let allItems = [];
 
-      // 페이지 단위로 아이템을 추출하여 밀림 방지
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
@@ -83,154 +82,140 @@ export default function PdfAutoFiller({ users, onExtractSuccess }) {
   };
 
   // ==========================================
-  // 🚀 1. 사업소득명세서(프리랜서) 파서 알고리즘
+  // 🚀 1. 사업소득명세서(프리랜서) 파서
   // ==========================================
   const parseBusinessIncome = (items, users) => {
     const results = {};
     const pages = [...new Set(items.map(i => i.page))];
-    let globalColumns = []; // 페이지가 넘어가도 헤더 위치를 기억하기 위함
 
     pages.forEach(page => {
       const pageItems = items.filter(i => i.page === page);
-      let rawHeaders = [];
+      let headers = [];
 
-      // 1. 헤더 찾기 (지급액 함정 파기: 지급액 숫자가 세금으로 딸려가는 것 방지)
+      // 1. 컬럼 기둥(X좌표) 위치 파악
       pageItems.forEach(i => {
         const text = i.str.replace(/\s+/g, '');
-        if (text.includes('지급액')) rawHeaders.push({ key: 'dummy_payment', x: i.x, y: i.y });
-        if (text.replace('지방소득세', '').includes('소득세') || text.includes('세액')) rawHeaders.push({ key: 'taxIncome', x: i.x, y: i.y });
-        if (text.includes('지방소득세') || text.includes('주민세')) rawHeaders.push({ key: 'taxLocal', x: i.x, y: i.y });
+        if (text.includes('지급액')) headers.push({ key: 'dummy_payment', x: i.x });
+        if (text.replace('지방소득세', '').includes('소득세') || text.includes('세액')) headers.push({ key: 'taxIncome', x: i.x });
+        if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: i.x });
       });
 
-      // 2. 헤더를 X좌표 기준으로 기둥(Column)으로 묶기
-      let columns = [];
-      rawHeaders.forEach(rh => {
-        let col = columns.find(c => Math.abs(c.avgX - rh.x) < 40);
-        if (col) {
-          col.headers.push(rh);
-          col.avgX = col.headers.reduce((sum, h) => sum + h.x, 0) / col.headers.length;
-        } else {
-          columns.push({ avgX: rh.x, headers: [rh] });
+      const columnMap = {};
+      ['dummy_payment', 'taxIncome', 'taxLocal'].forEach(k => {
+        const matching = headers.filter(h => h.key === k);
+        if (matching.length > 0) {
+          columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
         }
       });
 
-      if (columns.length > 0) globalColumns = columns;
-      else columns = globalColumns;
-
-      // 3. 페이지 내 모든 유저 위치 찾기 및 동적 밴딩(Row Banding)
-      const foundNames = [];
+      // 2. 정밀 가로선 스캔 (이름과 동일한 Y좌표에 있는 숫자만 추출)
       users.filter(u => u.contractType !== '정규직').forEach(user => {
         const nameStr = user.name.replace(/\s+/g, '');
-        pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr).forEach(item => {
-          foundNames.push({ user, y: item.y, x: item.x });
-        });
-      });
+        const nameItems = pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr);
 
-      foundNames.sort((a, b) => b.y - a.y); // 위에서 아래로 정렬
+        nameItems.forEach(nameItem => {
+          // 이름과 동일선상(오차범위 ±12px 이내)에 있는 숫자들만 필터링
+          const rowNumbers = pageItems.filter(i =>
+            Math.abs(i.y - nameItem.y) < 12 &&
+            /^[-0-9,]+$/.test(i.str.replace(/\s+/g, ''))
+          );
 
-      foundNames.forEach((found, idx) => {
-        // 앞사람과 뒷사람 사이의 공간을 통째로 이 사람의 전용 구역으로 설정
-        const upperBound = idx === 0 ? found.y + 30 : (foundNames[idx-1].y + found.y) / 2;
-        const lowerBound = idx === foundNames.length - 1 ? found.y - 50 : (found.y + foundNames[idx+1].y) / 2;
+          let userResult = { taxIncome: 0, taxLocal: 0 };
 
-        const rowNumbers = pageItems.filter(i => i.y <= upperBound && i.y > lowerBound && /^[-0-9,]+$/.test(i.str.replace(/\s+/g, '')));
-        
-        let userResult = { taxIncome: 0, taxLocal: 0 };
+          rowNumbers.forEach(numItem => {
+            let closestKey = null;
+            let minDiff = 45; // 컬럼 너비 오차 허용
 
-        columns.forEach(col => {
-          let colNumbers = rowNumbers.filter(i => Math.abs(i.x - col.avgX) < 35);
-          colNumbers.sort((a, b) => b.y - a.y);
-          
-          for (let i = 0; i < Math.min(col.headers.length, colNumbers.length); i++) {
-            const key = col.headers[i].key;
-            if (key !== 'dummy_payment') {
-              userResult[key] = extractNumber(colNumbers[i].str);
+            Object.keys(columnMap).forEach(key => {
+              const diff = Math.abs(columnMap[key] - numItem.x);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closestKey = key;
+              }
+            });
+
+            // 지급액(dummy_payment) 열에 있는 숫자는 완전히 무시!
+            if (closestKey && closestKey !== 'dummy_payment') {
+              userResult[closestKey] = extractNumber(numItem.str);
             }
+          });
+
+          if (userResult.taxIncome > 0 || userResult.taxLocal > 0) {
+            results[user.id] = { ...userResult, nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0 };
           }
         });
-
-        if (userResult.taxIncome > 0 || userResult.taxLocal > 0) {
-          results[found.user.id] = { ...userResult, nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0 };
-        }
       });
     });
     return results;
   };
 
   // ==========================================
-  // 🚀 2. 급여대장(정규직/조교) 파서 알고리즘
+  // 🚀 2. 급여대장(정규직/조교) 파서
   // ==========================================
   const parseRegularPayroll = (items, users) => {
     const results = {};
     const pages = [...new Set(items.map(i => i.page))];
-    let globalColumns = [];
 
     pages.forEach(page => {
       const pageItems = items.filter(i => i.page === page);
-      let rawHeaders = [];
+      let headers = [];
 
-      // 1. 헤더 찾기 (모든 공제 항목)
+      // 1. 공제 항목별 기둥(X좌표) 위치 파악
       pageItems.forEach(i => {
         const text = i.str.replace(/\s+/g, '');
-        if (text.includes('국민연금')) rawHeaders.push({ key: 'nationalPension', x: i.x, y: i.y });
-        if (text.includes('건강보험')) rawHeaders.push({ key: 'healthInsurance', x: i.x, y: i.y });
-        if (text.includes('장기요양')) rawHeaders.push({ key: 'longTermCare', x: i.x, y: i.y });
-        if (text.includes('고용보험')) rawHeaders.push({ key: 'employmentInsurance', x: i.x, y: i.y });
-        if (text.replace('지방소득세', '').includes('소득세') || text.includes('갑근세')) rawHeaders.push({ key: 'taxIncome', x: i.x, y: i.y });
-        if (text.includes('지방소득세') || text.includes('주민세')) rawHeaders.push({ key: 'taxLocal', x: i.x, y: i.y });
+        if (text.includes('국민연금')) headers.push({ key: 'nationalPension', x: i.x });
+        if (text.includes('건강보험')) headers.push({ key: 'healthInsurance', x: i.x });
+        if (text.includes('고용보험')) headers.push({ key: 'employmentInsurance', x: i.x });
+        if (text.includes('장기요양')) headers.push({ key: 'longTermCare', x: i.x });
+        if (text.replace('지방소득세', '').includes('소득세') || text.includes('갑근세')) headers.push({ key: 'taxIncome', x: i.x });
+        if (text.includes('지방소득세') || text.includes('주민세')) headers.push({ key: 'taxLocal', x: i.x });
       });
 
-      // 2. 다단 적재(2층 탑) 해결을 위한 헤더 기둥 묶기
-      let columns = [];
-      rawHeaders.forEach(rh => {
-        let col = columns.find(c => Math.abs(c.avgX - rh.x) < 35);
-        if (col) {
-          col.headers.push(rh);
-          col.avgX = col.headers.reduce((sum, h) => sum + h.x, 0) / col.headers.length;
-        } else {
-          columns.push({ avgX: rh.x, headers: [rh] });
+      const columnMap = {};
+      ['nationalPension', 'healthInsurance', 'employmentInsurance', 'longTermCare', 'taxIncome', 'taxLocal'].forEach(k => {
+        const matching = headers.filter(h => h.key === k);
+        if (matching.length > 0) {
+          columnMap[k] = matching.reduce((sum, h) => sum + h.x, 0) / matching.length;
         }
       });
 
-      // 기둥 내에서 위아래(Y축) 순서대로 정렬 (예: 1층 장기요양, 2층 고용보험)
-      columns.forEach(c => c.headers.sort((a, b) => b.y - a.y));
-
-      if (columns.length > 0) globalColumns = columns;
-      else columns = globalColumns;
-
-      // 3. 유저 밴딩(Row Banding)
-      const foundNames = [];
+      // 2. 정밀 가로선 스캔 (이름과 동일한 Y좌표에 있는 숫자만 추출)
       users.filter(u => u.contractType !== '프리랜서').forEach(user => {
         const nameStr = user.name.replace(/\s+/g, '');
-        pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr).forEach(item => {
-          foundNames.push({ user, y: item.y, x: item.x });
-        });
-      });
+        const nameItems = pageItems.filter(i => i.str.replace(/\s+/g, '') === nameStr);
 
-      foundNames.sort((a, b) => b.y - a.y);
+        nameItems.forEach(nameItem => {
+          // 이름과 동일선상(오차범위 ±12px 이내)에 있는 숫자들만 필터링
+          const rowNumbers = pageItems.filter(i =>
+            Math.abs(i.y - nameItem.y) < 12 &&
+            /^[-0-9,]+$/.test(i.str.replace(/\s+/g, ''))
+          );
 
-      foundNames.forEach((found, idx) => {
-        const upperBound = idx === 0 ? found.y + 40 : (foundNames[idx-1].y + found.y) / 2;
-        const lowerBound = idx === foundNames.length - 1 ? found.y - 80 : (found.y + foundNames[idx+1].y) / 2;
+          let userResult = { nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0, taxIncome: 0, taxLocal: 0 };
 
-        const rowNumbers = pageItems.filter(i => i.y <= upperBound && i.y > lowerBound && /^[-0-9,]+$/.test(i.str.replace(/\s+/g, '')));
-        
-        let userResult = { nationalPension: 0, healthInsurance: 0, employmentInsurance: 0, longTermCare: 0, taxIncome: 0, taxLocal: 0 };
+          rowNumbers.forEach(numItem => {
+            let closestKey = null;
+            let minDiff = 45; // 우측 정렬된 숫자까지 넉넉하게 커버
 
-        columns.forEach(col => {
-          // 해당 기둥 근처의 숫자들만 모아서 위아래 정렬
-          let colNumbers = rowNumbers.filter(i => Math.abs(i.x - col.avgX) < 35);
-          colNumbers.sort((a, b) => b.y - a.y);
-          
-          // 헤더 층수와 숫자 층수를 1:1 완벽 매핑
-          for (let i = 0; i < Math.min(col.headers.length, colNumbers.length); i++) {
-            userResult[col.headers[i].key] = extractNumber(colNumbers[i].str);
+            // 숫자의 X좌표가 어떤 컬럼 기둥의 X좌표와 가장 가까운지 판별
+            Object.keys(columnMap).forEach(key => {
+              const diff = Math.abs(columnMap[key] - numItem.x);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closestKey = key;
+              }
+            });
+
+            // 빈칸은 숫자로 추출되지 않으므로 자동으로 0원 유지
+            if (closestKey) {
+              userResult[closestKey] = extractNumber(numItem.str);
+            }
+          });
+
+          if (Object.values(userResult).some(v => v > 0)) {
+            results[user.id] = userResult;
           }
         });
-
-        if (Object.values(userResult).some(v => v > 0)) {
-          results[found.user.id] = userResult;
-        }
       });
     });
     return results;
