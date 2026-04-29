@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 한글/특수문자 ID 안전 인코딩 + Firebase Auth 보안 토큰 연동 + 봇 방어 우회 마이그레이션 + DB 정규화) */
+   (Updated: 마스터 데이터 복구 - ID 정규화 및 월급 데이터 실종 해결) */
    import React, { useState, useEffect } from 'react';
    import { 
      Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
@@ -105,7 +105,6 @@
                } else {
                    if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
                    
-                   // 🚀 [CTO 보안] 한글/특수문자 ID 안전 인코딩 처리
                    const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
                    const email = `${safeId}@imperial.com`;
                    let authUid = '';
@@ -124,7 +123,7 @@
                    payload.authUid = authUid;
                    payload.createdAt = serverTimestamp();
                    
-                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.userId), payload);
+                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
                    showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
                }
                setIsModalOpen(false);
@@ -150,87 +149,54 @@
            }
        };
    
-       // 🚀 [CTO 특별 스크립트] 클라이언트 기반 비밀번호 마이그레이션 + DB 정규화 + 한글 ID 인코딩
+       // 🚀 [CTO 마스터 복구 스크립트] 월급 데이터 재연결 + ID 보안 정규화
        const handleRunMigration = async () => {
-           if (!window.confirm("⚠️ [보안 경고] 아직 처리되지 않은 평문 비밀번호를 Firebase Auth로 이전하시겠습니까?\n(랜덤 ID를 가진 문서는 정상적인 ID로 자동 교체됩니다.)")) return;
+           if (!window.confirm("⚠️ [데이터 복구 시작] 실종된 월급 내역을 모두 찾아내어 새 보안 계정에 연결하시겠습니까?")) return;
            
            setMigrationLoading(true);
-           let successCount = 0;
-           let failCount = 0;
-           let normalizedCount = 0; // 문서 이름이 고쳐진 횟수
-           showToast('마이그레이션 및 DB 정규화를 시작합니다...', 'info');
+           let userFixed = 0;
+           let payrollLinked = 0;
+           showToast('데이터 복구 및 재연결 중...', 'info');
    
            try {
-               const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-               const snapshot = await getDocs(q);
+               // 1. 전체 사용자 스캔 및 ID 보안 정규화 (최희원 -> safeId)
+               const userSnapshot = await getDocs(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
+               const userMap = {}; // 이름-아이디 매핑용
    
-               for (const userDoc of snapshot.docs) {
-                   const userData = userDoc.data();
-                   const currentDocId = userDoc.id;
-                   const userId = userData.userId || currentDocId;
+               for (const uDoc of userSnapshot.docs) {
+                   const data = uDoc.data();
+                   const realUserId = data.userId || uDoc.id;
+                   const safeId = encodeURIComponent(realUserId).replace(/[^a-zA-Z0-9]/g, 'x');
+                   userMap[data.name] = safeId; // 이름으로 검색할 수 있게 저장
    
-                   // 패스워드가 없거나 이미 마이그레이션 된 계정은 스킵
-                   if (!userData.password || userData.authUid) continue;
-   
-                   let password = userData.password;
-                   if (password.length < 6) password = password.padEnd(6, '0');
-                   
-                   // 🚀 [핵심 추가] 한글 아이디 등으로 인한 Invalid Email 에러 방지 인코딩
-                   const safeId = encodeURIComponent(userId).replace(/[^a-zA-Z0-9]/g, 'x');
-                   const email = `${safeId}@imperial.com`;
-   
-                   try {
-                       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-                       await signOut(secondaryAuth);
-   
-                       if (currentDocId !== userId) {
-                           const newPayload = { ...userData, authUid: userCredential.user.uid };
-                           delete newPayload.password;
-                           
-                           await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), newPayload);
-                           await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId));
-                           normalizedCount++;
-                       } else {
-                           await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId), {
-                               authUid: userCredential.user.uid,
-                               password: deleteField() 
-                           });
-                       }
-   
-                       successCount++;
-                       await new Promise(resolve => setTimeout(resolve, 2500)); 
-   
-                   } catch (err) {
-                       if (err.code === 'auth/email-already-in-use') {
-                           if (currentDocId !== userId) {
-                               const newPayload = { ...userData };
-                               delete newPayload.password;
-                               await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', userId), newPayload);
-                               await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId));
-                               normalizedCount++;
-                           } else {
-                               await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', currentDocId), {
-                                   password: deleteField() 
-                               });
-                           }
-                           successCount++;
-                       } else if (err.code === 'auth/too-many-requests') {
-                           alert(`🚨 구글 봇 방어 시스템 작동 (일시 차단)\n현재까지 ${successCount}명 성공 (문서정리 ${normalizedCount}건)\n1~2분 뒤 다시 눌러주세요.`);
-                           setMigrationLoading(false);
-                           return;
-                       } else {
-                           console.error(`[실패] ${userData.name}:`, err);
-                           failCount++;
-                           if (failCount === 1) { 
-                               alert(`🚨 [마이그레이션 실패 원인]\n이름: ${userData.name}\n에러: ${err.message}`);
-                           }
-                       }
+                   // 문서의 ID가 보안 인코딩된 safeId가 아니라면 교체
+                   if (uDoc.id !== safeId) {
+                       await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), { ...data, id: safeId }, { merge: true });
+                       await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', uDoc.id));
+                       userFixed++;
                    }
                }
-               alert(`🎉 [마이그레이션 및 정규화 완벽 종료!]\n성공: ${successCount}명 (이 중 이름 고쳐진 문서: ${normalizedCount}개)\n실패: ${failCount}명`);
+   
+               // 2. 전체 월급 내역 스캔 및 주인 찾아주기
+               const payrollSnapshot = await getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'));
+               
+               for (const pDoc of payrollSnapshot.docs) {
+                   const pData = pDoc.data();
+                   const ownerSafeId = userMap[pData.userName]; // 이름으로 주인의 새 ID를 찾음
+   
+                   // 월급 데이터의 주인이 있고, 기존 월급문서의 userId가 새 ownerSafeId와 다르다면 업데이트
+                   if (ownerSafeId && pData.userId !== ownerSafeId) {
+                       await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', pDoc.id), {
+                           userId: ownerSafeId
+                       });
+                       payrollLinked++;
+                   }
+               }
+   
+               alert(`🎉 [복구 완료]\n\n계정 보안 적용: ${userFixed}건\n실종된 월급 재연결: ${payrollLinked}건\n\n이제 월급 관리 메뉴에서 정상적으로 금액이 보일 것입니다!`);
            } catch (e) {
-               console.error("Migration Fatal Error:", e);
-               alert('치명적인 오류가 발생했습니다.');
+               console.error(e);
+               alert('복구 중 오류 발생: ' + e.message);
            } finally {
                setMigrationLoading(false);
            }
@@ -252,7 +218,7 @@
                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
                    <div className="flex gap-2 w-full md:w-auto">
                        <Button onClick={handleRunMigration} variant="secondary" className="border-red-500 text-red-500 hover:bg-red-50" icon={migrationLoading ? Loader : Shield} disabled={migrationLoading}>
-                           {migrationLoading ? '이전 중 (창 유지)...' : '보안 마이그레이션 (1회용)'}
+                           {migrationLoading ? '데이터 복구 중...' : '보안 마이그레이션 (복구)'}
                        </Button>
                        <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto" disabled={migrationLoading}>사용자 추가</Button>
                    </div>

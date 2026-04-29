@@ -19,9 +19,13 @@ const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
+
+// 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
+
+// 재무관리 시스템 컴포넌트 지연 로딩
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 
@@ -249,17 +253,31 @@ const AppContent = () => {
              authUid = userCredential.user.uid;
          } catch (authErr) {
              console.log("Auth 로그인 실패. 원인:", authErr.message);
-             throw new Error("비밀번호 또는 아이디 불일치");
+             // 마이그레이션 도중(과도기)을 위해 평문 로그인 검증을 위한 예외 통과 허용
          }
          
          // 4. 권한을 성공적으로 얻은 상태에서 DB 접근
          try {
-             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', loginForm.id);
+             // 🚀 [수정 포인트] loginForm.id 대신 안전하게 인코딩된 safeId로 문서를 조회합니다.
+             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId);
              let userDoc = await getDoc(userDocRef);
+             
+             // 만약 문서를 못 찾았다면 기존의 평문 방식 아이디로 한번 더 쿼리 (호환성 보장)
+             if (!userDoc.exists()) {
+                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id));
+                 const s = await getDocs(q);
+                 if (!s.empty) userDoc = s.docs[0];
+             }
              
              if(userDoc && userDoc.exists()) {
                  const docData = userDoc.data();
-                 const userData = { id: userDoc.id, ...docData, authUid: authUid };
+                 
+                 // 평문 검증 방어 로직
+                 if (!authUid && docData.password !== loginForm.password) {
+                     throw new Error("비밀번호 불일치 (평문 및 Auth 모두 실패)");
+                 }
+
+                 const userData = { id: userDoc.id, ...docData, authUid: authUid || docData.authUid };
 
                  // 접속 기록 남기기 (에러 나도 사용성 위해 패스)
                  updateDoc(userDocRef, { lastLogin: new Date().toISOString() }).catch(e => console.error("Update Login Time Error:", e));
