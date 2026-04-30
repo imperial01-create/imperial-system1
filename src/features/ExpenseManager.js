@@ -1,32 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Receipt, UploadCloud, CheckCircle, FileText, Calendar, 
-  CreditCard, DollarSign, List, Clock, XCircle, AlertCircle, Loader, ScanFace 
-} from 'lucide-react';
+import { collection, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase'; 
+import { Receipt, UploadCloud, CheckCircle, FileText, Calendar, CreditCard, DollarSign, List, Clock, XCircle, AlertCircle, Loader, Edit, Trash2 } from 'lucide-react';
 
-const ExpenseManager = () => {
-  // 폼 상태 관리
-  const [formData, setFormData] = useState({
-    expenseDate: '',
-    amount: '',
-    paymentMethod: 'CORPORATE_CARD',
-    purpose: '',
-  });
+const APP_ID = 'imperial-clinic-v1';
+
+const ExpenseManager = ({ currentUser }) => {
+  const [formData, setFormData] = useState({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' });
   const [receiptFile, setReceiptFile] = useState(null);
-  
-  // UI 상태 관리
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [ocrStatus, setOcrStatus] = useState(''); // AI 분석 상태 텍스트
   const [errorMsg, setErrorMsg] = useState('');
   const [expensesList, setExpensesList] = useState([]);
+  
+  // 🚀 수정 모드 상태 관리
+  const [editingId, setEditingId] = useState(null);
 
-  // 임시 데이터 로드
+  // 🚀 [진짜 데이터] 실시간 DB 연동
   useEffect(() => {
-    setExpensesList([
-      { id: '1', date: '2026-04-26', amount: 12000, method: '법인카드', purpose: '야근 식대', status: 'APPROVED' },
-      { id: '2', date: '2026-04-27', amount: 35000, method: '계좌이체', purpose: '복사용지 구매', status: 'PENDING' },
-    ]);
-  }, []);
+    if (!currentUser?.id) return;
+
+    // 현재 로그인한 사용자의 데이터만 가져옴
+    const q = query(
+      collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'),
+      where('userId', '==', currentUser.id)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const realData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // 클라이언트에서 최신순으로 정렬 (인덱스 에러 방지)
+      realData.sort((a, b) => new Date(b.expenseDate) - new Date(a.expenseDate));
+      setExpensesList(realData);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -47,169 +54,180 @@ const ExpenseManager = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg('');
-
-    if (!formData.expenseDate || !formData.amount || !formData.purpose || !receiptFile) {
-      setErrorMsg('모든 항목을 입력하고 영수증을 첨부해주세요.');
-      return;
+    if (!formData.expenseDate || !formData.amount || !formData.purpose) {
+      setErrorMsg('모든 항목을 입력해주세요.'); return;
     }
 
     setIsSubmitting(true);
-    
     try {
-      // [프로토타입 가상 로직] 1. 파일 업로드 대기
-      setOcrStatus('영수증 이미지를 서버에 업로드 중입니다...');
-      await new Promise(resolve => setTimeout(resolve, 800));
+      // (임시) 파일 URL - 실제 Storage 연동 시 교체
+      let fileUrl = 'https://via.placeholder.com/300x600?text=Receipt+Image'; 
 
-      // [프로토타입 가상 로직] 2. Cloud Vision AI OCR 분석 시뮬레이션
-      setOcrStatus('AI가 영수증 텍스트와 금액을 교차 검증하고 있습니다...');
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const methodLabel = formData.paymentMethod === 'CORPORATE_CARD' ? '법인카드' : (formData.paymentMethod === 'TRANSFER' ? '계좌이체' : '개인카드');
 
-      // 3. 리스트에 가짜 데이터 추가
-      const newExpense = {
-        id: `EXP-TEMP-${Date.now()}`,
-        date: formData.expenseDate,
-        amount: Number(formData.amount),
-        method: formData.paymentMethod === 'CORPORATE_CARD' ? '법인카드' : (formData.paymentMethod === 'TRANSFER' ? '계좌이체' : '개인카드'),
-        purpose: formData.purpose,
-        status: 'PENDING' // 대시보드에서 승인 대기 상태로 등록
-      };
+      if (editingId) {
+        // 🚀 기존 내역 수정 로직
+        const expRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'expenses', editingId);
+        await updateDoc(expRef, {
+          expenseDate: formData.expenseDate,
+          amount: Number(formData.amount),
+          method: methodLabel,
+          purpose: formData.purpose,
+          updatedAt: serverTimestamp()
+        });
+        alert('지출결의서가 성공적으로 수정되었습니다.');
+      } else {
+        // 🚀 신규 등록 로직
+        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), {
+          userId: currentUser.id,
+          userName: currentUser.name,
+          expenseDate: formData.expenseDate,
+          amount: Number(formData.amount),
+          method: methodLabel,
+          purpose: formData.purpose,
+          category: 'SUPPLIES', // 관리자가 대시보드에서 수정 가능
+          receiptUrl: fileUrl,
+          status: 'PENDING',
+          matchedTransactionId: null,
+          createdAt: serverTimestamp()
+        });
+        alert('지출결의서가 등록되어 대표님 결재 대기열에 추가되었습니다.');
+      }
 
-      setExpensesList(prev => [newExpense, ...prev]);
-      alert('AI 분석 및 지출결의서 제출이 완료되었습니다.\n관리자 대시보드에서 결재를 진행해주세요!');
-      
       // 폼 초기화
       setFormData({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' });
       setReceiptFile(null);
-      setOcrStatus('');
+      setEditingId(null);
 
     } catch (error) {
-      setErrorMsg('제출 중 오류가 발생했습니다.');
+      setErrorMsg('DB 전송 중 오류가 발생했습니다: ' + error.message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'APPROVED': 
-        return <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full"><CheckCircle size={12}/> 승인완료</span>;
-      case 'REJECTED': 
-        return <span className="flex items-center gap-1 text-xs font-bold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full"><XCircle size={12}/> 반려됨</span>;
-      default: 
-        return <span className="flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full"><Clock size={12}/> 결재대기</span>;
+  // 🚀 수정 버튼 클릭 핸들러
+  const handleEdit = (exp) => {
+    setFormData({
+      expenseDate: exp.expenseDate,
+      amount: exp.amount,
+      paymentMethod: exp.method === '법인카드' ? 'CORPORATE_CARD' : (exp.method === '계좌이체' ? 'TRANSFER' : 'PERSONAL_CARD'),
+      purpose: exp.purpose
+    });
+    setEditingId(exp.id);
+    window.scrollTo({ top: 0, behavior: 'smooth' }); // 화면 맨 위로 스크롤
+  };
+
+  // 🚀 삭제 버튼 클릭 핸들러
+  const handleDelete = async (id) => {
+    if (window.confirm('정말 이 지출결의서를 삭제하시겠습니까?')) {
+      try {
+        await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'expenses', id));
+        alert('삭제되었습니다.');
+        if (editingId === id) setEditingId(null); // 수정 중이던 항목을 삭제한 경우 폼 초기화
+      } catch (err) {
+        alert('삭제 실패: ' + err.message);
+      }
     }
+  };
+
+  const getStatusBadge = (status) => {
+    if (status === 'APPROVED') return <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full"><CheckCircle size={12}/> 승인완료</span>;
+    if (status === 'REJECTED') return <span className="flex items-center gap-1 text-xs font-bold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-full"><XCircle size={12}/> 반려됨</span>;
+    return <span className="flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full"><Clock size={12}/> 결재대기</span>;
   };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in">
-      
-      {/* 페이지 헤더 */}
       <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-6 rounded-2xl shadow-md">
-        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2"><Receipt size={28}/> 지출결의서 등록 (AI 자동화)</h1>
-        <p className="opacity-90 text-sm">영수증을 업로드하시면 AI가 자동으로 금액과 내역을 대조하여 교차 검증합니다.</p>
+        <h1 className="text-2xl font-bold mb-2 flex items-center gap-2"><Receipt size={28}/> 지출결의서 {editingId ? '수정' : '등록'}</h1>
+        <p className="opacity-90 text-sm">결재 대기 중인 항목에 한하여 수정 및 삭제가 가능합니다.</p>
       </div>
 
-      {/* 지출결의 입력 폼 카드 */}
-      <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-gray-100 relative">
-        
-        {/* 제출 중 오버레이 화면 (AI 분석 연출) */}
-        {isSubmitting && (
-          <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-10 flex flex-col items-center justify-center rounded-2xl animate-in fade-in">
-            <ScanFace className="text-emerald-500 animate-pulse mb-4" size={56} />
-            <h3 className="text-lg font-bold text-gray-800 mb-2">스마트 재무 처리 중...</h3>
-            <p className="text-sm text-emerald-600 font-semibold">{ocrStatus}</p>
-          </div>
-        )}
-
+      <div className={`bg-white p-6 sm:p-8 rounded-2xl shadow-sm border ${editingId ? 'border-amber-400 ring-4 ring-amber-50' : 'border-gray-100'}`}>
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-6 border-b pb-3">
-          <FileText className="text-emerald-600" size={20} /> 지출 내역 작성
+          <FileText className={editingId ? "text-amber-600" : "text-emerald-600"} size={20} /> 
+          {editingId ? '지출 내역 수정 중...' : '지출 내역 작성'}
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {errorMsg && (
-            <div className="bg-rose-50 text-rose-600 font-bold p-4 rounded-xl flex items-center gap-2 text-sm">
-              <AlertCircle size={18} /> {errorMsg}
-            </div>
-          )}
-
+          {errorMsg && <div className="bg-rose-50 text-rose-600 font-bold p-4 rounded-xl flex items-center gap-2 text-sm"><AlertCircle size={18} /> {errorMsg}</div>}
+          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><Calendar size={16}/> 결제 일자</label>
-              <input type="date" name="expenseDate" value={formData.expenseDate} onChange={handleInputChange} className="w-full border border-gray-300 p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500 font-semibold text-gray-800 transition-all" required />
+              <label className="block text-sm font-bold text-gray-700 mb-2">결제 일자</label>
+              <input type="date" name="expenseDate" value={formData.expenseDate} onChange={handleInputChange} className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500" required />
             </div>
-
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><DollarSign size={16}/> 결제 금액 (원)</label>
-              <input type="number" name="amount" min="1" value={formData.amount} onChange={handleInputChange} placeholder="예: 15000" className="w-full border border-gray-300 p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500 font-semibold text-gray-800 transition-all" required />
+              <label className="block text-sm font-bold text-gray-700 mb-2">결제 금액 (원)</label>
+              <input type="number" name="amount" value={formData.amount} onChange={handleInputChange} className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500" required />
             </div>
-
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><CreditCard size={16}/> 결제 수단</label>
-              <select name="paymentMethod" value={formData.paymentMethod} onChange={handleInputChange} className="w-full border border-gray-300 p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500 font-semibold text-gray-800 transition-all">
-                <option value="CORPORATE_CARD">법인카드</option>
-                <option value="PERSONAL_CARD">개인카드 (청구)</option>
-                <option value="TRANSFER">계좌이체</option>
+              <label className="block text-sm font-bold text-gray-700 mb-2">결제 수단</label>
+              <select name="paymentMethod" value={formData.paymentMethod} onChange={handleInputChange} className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500">
+                <option value="CORPORATE_CARD">법인카드</option><option value="TRANSFER">계좌이체</option><option value="PERSONAL_CARD">개인카드 (청구)</option>
               </select>
             </div>
-
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><FileText size={16}/> 지출 목적 (적요)</label>
-              <input type="text" name="purpose" value={formData.purpose} onChange={handleInputChange} placeholder="예: 학부모 상담용 다과 구매" className="w-full border border-gray-300 p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500 font-semibold text-gray-800 transition-all" required />
+              <label className="block text-sm font-bold text-gray-700 mb-2">지출 목적 (적요)</label>
+              <input type="text" name="purpose" value={formData.purpose} onChange={handleInputChange} placeholder="예: 상담용 다과 구매" className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-emerald-500" required />
             </div>
           </div>
-
-          <div className="mt-4">
-            <label className="block text-sm font-bold text-gray-700 mb-2">영수증 첨부 (필수)</label>
-            <label htmlFor="receipt-upload" className={`flex flex-col items-center justify-center w-full h-36 border-2 border-dashed rounded-xl cursor-pointer transition-all ${receiptFile ? 'border-emerald-500 bg-emerald-50' : 'border-gray-300 bg-gray-50 hover:bg-gray-100'}`}>
-              <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                {receiptFile ? (
-                  <>
-                    <CheckCircle className="text-emerald-500 mb-2" size={32} />
-                    <p className="text-sm text-emerald-700 font-bold">{receiptFile.name}</p>
-                  </>
-                ) : (
-                  <>
-                    <UploadCloud className="text-gray-400 mb-2" size={32} />
-                    <p className="text-sm text-gray-600 font-bold">클릭하여 영수증 이미지 촬영 또는 업로드</p>
-                  </>
-                )}
-              </div>
-              <input id="receipt-upload" type="file" accept="image/*,.pdf" className="hidden" onChange={handleFileChange} />
-            </label>
+          
+          <div className="flex gap-3 mt-4">
+            <button type="submit" disabled={isSubmitting} className={`flex-1 ${editingId ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-600 hover:bg-emerald-700'} text-white font-extrabold py-4 rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50`}>
+              {isSubmitting ? <Loader className="animate-spin" size={24}/> : <CheckCircle size={24} />} 
+              {editingId ? '지출결의서 수정 완료' : '지출결의서 실제 DB에 전송'}
+            </button>
+            {editingId && (
+              <button type="button" onClick={() => { setEditingId(null); setFormData({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' }); }} className="bg-gray-100 text-gray-600 font-bold py-4 px-6 rounded-xl hover:bg-gray-200 transition-colors">
+                수정 취소
+              </button>
+            )}
           </div>
-
-          <button type="submit" disabled={isSubmitting} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-lg py-4 rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 disabled:bg-emerald-400 mt-4">
-            {isSubmitting ? <Loader className="animate-spin" size={24}/> : <CheckCircle size={24} />} 
-            {isSubmitting ? 'AI 분석 중...' : '지출결의서 제출하기'}
-          </button>
         </form>
       </div>
 
-      {/* 나의 제출 내역 리스트 카드 */}
       <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-gray-100 mt-6">
-        <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-6 border-b pb-3">
-          <List className="text-indigo-600" size={20} /> 나의 지출결의 내역
-        </h3>
+        <h3 className="text-lg font-bold text-gray-800 mb-6 border-b pb-3 flex items-center gap-2"><List size={20} className="text-indigo-600"/> 나의 실제 제출 내역</h3>
         
         <div className="space-y-3">
-          {expensesList.map((item) => (
-            <div key={item.id} className="flex flex-col sm:flex-row justify-between sm:items-center p-4 border border-gray-100 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors gap-4">
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-gray-500 bg-white px-2 py-1 rounded-md border border-gray-200">{item.date}</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded-md">{item.method}</span>
+          {expensesList.length === 0 ? (
+             <p className="text-gray-400 font-bold text-center py-6">제출된 내역이 없습니다.</p>
+          ) : (
+            expensesList.map((item) => (
+              <div key={item.id} className="flex flex-col sm:flex-row justify-between sm:items-center p-4 border border-gray-200 rounded-xl bg-gray-50 hover:bg-white transition-colors shadow-sm gap-4">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-gray-600 bg-white px-2 py-1 border border-gray-200 rounded-md">{item.expenseDate}</span>
+                    <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded-md">{item.method}</span>
+                  </div>
+                  <strong className="text-lg text-gray-900 mt-1">{item.purpose}</strong>
                 </div>
-                <strong className="text-base sm:text-lg text-gray-800 mt-1">{item.purpose}</strong>
+                
+                <div className="flex flex-col items-end gap-2">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl font-black text-gray-900">{item.amount.toLocaleString()}원</span>
+                    {getStatusBadge(item.status)}
+                  </div>
+                  
+                  {/* 상태가 PENDING(결재대기)일 때만 수정/삭제 버튼 노출 */}
+                  {item.status === 'PENDING' && (
+                    <div className="flex gap-2 mt-1">
+                      <button onClick={() => handleEdit(item)} className="text-xs font-bold flex items-center gap-1 text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+                        <Edit size={14}/> 수정
+                      </button>
+                      <button onClick={() => handleDelete(item.id)} className="text-xs font-bold flex items-center gap-1 text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 transition-colors">
+                        <Trash2 size={14}/> 삭제
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2">
-                <span className="text-xl font-black text-gray-900">{item.amount.toLocaleString()}원</span>
-                {getStatusBadge(item.status)}
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
-
     </div>
   );
 };
