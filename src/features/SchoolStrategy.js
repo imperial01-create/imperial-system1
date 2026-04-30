@@ -22,13 +22,6 @@ const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" heig
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 띄어쓰기, '고등학교', '중학교' 등의 글자를 싹둑 잘라 핵심 키워드만 남기는 정규화 함수
-const normalizeSchoolName = (name) => {
-    let n = String(name || '').replace(/\s+/g, '');
-    n = n.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
-    return n;
-};
-
 const sortReports = (reportsList) => {
     return reportsList.sort((a, b) => {
         const yearA = parseInt(a.year) || 0;
@@ -71,7 +64,7 @@ export default function SchoolStrategy({ currentUser }) {
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
 
-  // 화면에 예쁘게 렌더링하기 위한 용도
+  // 화면 노출용
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
     const gradeNum = String(currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년').replace(/\D/g, '');
     let sem = "1";
@@ -79,6 +72,22 @@ export default function SchoolStrategy({ currentUser }) {
     let type = "중간고사";
     if (baseTerm.includes("기말")) type = "기말고사";
     return `${gradeNum}학년 ${sem}학기 ${type}`;
+  }, []);
+
+  const getStudentTargetTerm = useCallback((baseTerm, currentUserObj) => {
+    if (!baseTerm) return "";
+    const base = baseTerm.trim();
+    let gradeNum = "";
+    if (currentUserObj) {
+      const gradeStr = currentUserObj.childSnapshot?.grade || currentUserObj.childGrade || currentUserObj.grade;
+      if (gradeStr) {
+        const gradeMatch = String(gradeStr).match(/\d+/);
+        if (gradeMatch) gradeNum = gradeMatch[0];
+      }
+    }
+    if (!gradeNum) return base; 
+    if (base.startsWith('-')) return gradeNum + base; 
+    return base.replace(/^\d+/, gradeNum);
   }, []);
 
   const fetchInitialData = useCallback(async () => {
@@ -91,39 +100,53 @@ export default function SchoolStrategy({ currentUser }) {
               
               setTrendReports(sortReports(trends)); 
           } else if (isStudentOrParent) {
-              // 🚀 [CTO 패치] 학생의 겉주머니 또는 학부모의 안쪽 주머니에서 학교/학년 정보를 꺼내 정규화합니다.
               const rawUserSchool = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "";
-              const normUserSchool = normalizeSchoolName(rawUserSchool);
-
-              const studentGradeNum = String(user.childSnapshot?.grade || user.childGrade || user.grade || '1학년').replace(/\D/g, '');
               
-              let activeSem = "1";
-              if (activeTerm.includes("-2") || activeTerm.includes("2학기")) activeSem = "2";
-              let activeType = "중간고사";
-              if (activeTerm.includes("기말")) activeType = "기말고사";
+              // 🚀 1. 핵심 키워드 정규화
+              let baseSchool = rawUserSchool.replace(/\s+/g, '');
+              baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
+              
+              if (!baseSchool) {
+                  setTrendReports([]);
+                  setIndividualReports([]);
+                  setLoading(false);
+                  return;
+              }
 
-              // Firestore의 까다로운 완전 일치 검색을 우회하여 전체를 가져온 뒤 똑똑하게 로컬 필터링
-              const snap = await getDocs(collection(db, INTEGRATED_COLLECTION));
+              // 🚀 2. 다중 융단폭격 쿼리 배열 (띄어쓰기, 고등학교 등 모든 경우의 수 완벽 커버)
+              const schoolVariations = [...new Set([
+                  baseSchool,
+                  `${baseSchool}고`,
+                  `${baseSchool}고등학교`,
+                  `${baseSchool} 고등학교`,
+                  `${baseSchool}중`,
+                  `${baseSchool}중학교`,
+                  `${baseSchool} 중학교`,
+                  rawUserSchool
+              ])];
+
+              const qStudent = query(
+                  collection(db, INTEGRATED_COLLECTION), 
+                  where("schoolName", "in", schoolVariations)
+              );
+              
+              const snap = await getDocs(qStudent);
               const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
 
+              const targetTerm = getStudentTargetTerm(activeTerm, user);
+              
               const filtered = allDocs.filter(report => {
                   if (report.isDeleted || !report.type) return false;
 
-                  // 1. 학교명 일치 검사 ('고등학교', 띄어쓰기 떼고 핵심 키워드만 비교)
-                  const normReportSchool = normalizeSchoolName(report.schoolName || report.school);
-                  if (normReportSchool !== normUserSchool) return false;
-
-                  // 2. 학년/학기 일치 검사 (텍스트 형식에 구애받지 않고 숫자와 핵심 키워드만 비교)
-                  const reportGradeNum = String(report.grade || '1학년').replace(/\D/g, '');
-                  const reportSemNum = String(report.semester || '1학기').replace(/\D/g, '');
-                  const reportType = String(report.termType || report.term || '중간고사').includes('기말') ? '기말고사' : '중간고사';
-
+                  const reportGrade = String(report.grade || '1학년').replace('학년','');
+                  const reportSemester = String(report.semester || '1학기').replace('학기','');
+                  const reportTermType = String(report.termType || report.term || '중간고사');
+                  const generatedTerm = `${reportGrade}-${reportSemester} ${reportTermType}`;
+                  
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
 
-                  return (reportGradeNum === studentGradeNum) && 
-                         (reportSemNum === activeSem) && 
-                         (reportType === activeType);
+                  return generatedTerm === targetTerm;
               });
 
               setTrendReports(sortReports(filtered.filter(r => r.type === 'trend')));
@@ -134,7 +157,7 @@ export default function SchoolStrategy({ currentUser }) {
       } finally {
           setLoading(false);
       }
-  }, [isStaff, isStudentOrParent, user, activeTerm]);
+  }, [isStaff, isStudentOrParent, user, activeTerm, getStudentTargetTerm]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -185,36 +208,53 @@ export default function SchoolStrategy({ currentUser }) {
       setHasSearched(true);
       try {
           let q = collection(db, INTEGRATED_COLLECTION);
+          
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
+          
+          // 🚀 관리자 검색 시에도 다중 융단폭격 쿼리 적용 (오타 및 입력 방식 차이 방어)
+          if (filterInput.school.trim() !== '') {
+              const searchSchoolRaw = filterInput.school.trim();
+              let baseSchool = searchSchoolRaw.replace(/\s+/g, '');
+              baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
+              
+              const searchVariations = [...new Set([
+                  baseSchool,
+                  `${baseSchool}고`,
+                  `${baseSchool}고등학교`,
+                  `${baseSchool} 고등학교`,
+                  `${baseSchool}중`,
+                  `${baseSchool}중학교`,
+                  `${baseSchool} 중학교`,
+                  searchSchoolRaw
+              ])];
+              
+              q = query(q, where("schoolName", "in", searchVariations));
+          }
           
           const snap = await getDocs(q);
           let results = snap.docs.map(d => ({id: d.id, ...d.data()}));
 
-          // 🚀 [CTO 패치] 관리자 검색도 정규화된 키워드로 더 폭넓게 검색되도록 수정
-          if (filterInput.school.trim() !== '') {
-              const searchSchool = normalizeSchoolName(filterInput.school);
-              results = results.filter(r => normalizeSchoolName(r.schoolName || r.school).includes(searchSchool));
-          }
-
           if (filterInput.grade !== '전체' || filterInput.exam !== '전체') {
               results = results.filter(r => {
-                  const rGradeNum = String(r.grade || '1학년').replace(/\D/g, '');
-                  const rSemNum = String(r.semester || '1학기').replace(/\D/g, '');
-                  const rType = String(r.termType || r.term || '중간고사').includes('기말') ? '기말고사' : '중간고사';
+                  const rGrade = String(r.grade || '1학년').replace('학년', '');
+                  const rSemester = String(r.semester || '1학기').replace('학기', '');
+                  const rTermType = String(r.termType || r.term || '중간고사');
+                  const rTerm = `${rGrade}-${rSemester} ${rTermType}`;
 
                   let gradeMatch = true;
                   let examMatch = true;
 
                   if (filterInput.grade !== '전체') {
-                      gradeMatch = (rGradeNum === filterInput.grade.replace(/\D/g, ''));
+                      const g = filterInput.grade.replace('학년', '');
+                      gradeMatch = rTerm.startsWith(`${g}-`); 
                   }
                   if (filterInput.exam !== '전체') {
-                      let filterSem = "1";
-                      if (filterInput.exam.includes("2학기")) filterSem = "2";
-                      let filterType = "중간고사";
-                      if (filterInput.exam.includes("기말")) filterType = "기말고사";
-                      
-                      examMatch = (rSemNum === filterSem) && (rType === filterType);
+                      let suffix = '';
+                      if (filterInput.exam === '1학기 중간고사') suffix = '-1 중간고사';
+                      if (filterInput.exam === '1학기 기말고사') suffix = '-1 기말고사';
+                      if (filterInput.exam === '2학기 중간고사') suffix = '-2 중간고사';
+                      if (filterInput.exam === '2학기 기말고사') suffix = '-2 기말고사';
+                      examMatch = rTerm.includes(suffix);
                   }
                   return gradeMatch && examMatch;
               });
