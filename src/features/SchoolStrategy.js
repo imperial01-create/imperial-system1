@@ -64,12 +64,13 @@ export default function SchoolStrategy({ currentUser }) {
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
 
+  // 🚀 [CTO 로직] 학생은 겉주머니에서, 학부모는 안쪽 주머니(childSnapshot)에서 학년을 꺼내옵니다.
   const getStudentTargetTerm = useCallback((baseTerm, currentUserObj) => {
     if (!baseTerm) return "";
     const base = baseTerm.trim();
     let gradeNum = "";
     if (currentUserObj) {
-      const gradeStr = currentUserObj.childGrade || currentUserObj.grade;
+      const gradeStr = currentUserObj.childSnapshot?.grade || currentUserObj.childGrade || currentUserObj.grade;
       if (gradeStr) {
         const gradeMatch = String(gradeStr).match(/\d+/);
         if (gradeMatch) gradeNum = gradeMatch[0];
@@ -90,7 +91,9 @@ export default function SchoolStrategy({ currentUser }) {
               
               setTrendReports(sortReports(trends)); 
           } else if (isStudentOrParent) {
-              const userSchoolRaw = String(user.childSchool || user.schoolname || user.schoolName || user.school || "").trim();
+              // 🚀 [CTO 로직] 학생은 겉주머니에서, 학부모는 안쪽 주머니(childSnapshot)에서 학교명을 꺼내옵니다.
+              const userSchoolRaw = String(user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "").trim();
+              
               const qStudent = query(collection(db, INTEGRATED_COLLECTION), where("schoolName", "==", userSchoolRaw));
               const snap = await getDocs(qStudent);
               const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
@@ -296,7 +299,6 @@ export default function SchoolStrategy({ currentUser }) {
     return { totalIdi, level, percent };
   };
 
-  // 🚀 [CTO 버그 패치] 수정 시 고아 문서 방치 해결 (마이그레이션 적용)
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
     if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
@@ -343,7 +345,6 @@ export default function SchoolStrategy({ currentUser }) {
       const newId = generateExamDocId(baseData);
 
       if (oldId && oldId !== newId) {
-          // 문서의 ID를 구성하는 주요 정보가 바뀐 경우 -> 데이터를 새 ID로 이사시키고 과거 문서 삭제
           const oldDocRef = doc(db, INTEGRATED_COLLECTION, oldId);
           const oldDocSnap = await getDoc(oldDocRef);
           
@@ -361,7 +362,6 @@ export default function SchoolStrategy({ currentUser }) {
               await upsertExamData(baseData, strategyPayload);
           }
       } else {
-          // 주요 정보가 바뀌지 않은 경우 (기존 방식대로 업데이트)
           await upsertExamData(baseData, strategyPayload);
       }
 
@@ -444,7 +444,7 @@ export default function SchoolStrategy({ currentUser }) {
   if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
 
   const targetDisplayTerm = isStudentOrParent ? getStudentTargetTerm(activeTerm, user) : activeTerm;
-  const userSchoolName = user.childSchool || user.schoolname || user.schoolName || user.school || "소속 학교";
+  const userSchoolName = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "소속 학교";
 
   // ======================================================================
   // VIEW: LIST
