@@ -5,12 +5,49 @@ import { Receipt, UploadCloud, CheckCircle, FileText, Calendar, CreditCard, Doll
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 파일을 Base64 문자열로 변환하는 함수 (Storage 없이 DB에 직접 이미지를 저장하기 위한 꼼수)
-const fileToBase64 = (file) => new Promise((resolve, reject) => {
+// 🚀 [CTO 최적화] 프론트엔드 이미지 자동 압축 엔진 (1MB 제한 돌파)
+const compressImageToBase64 = (file) => new Promise((resolve, reject) => {
+  // PDF 파일인 경우 압축이 불가능하므로 용량만 체크 (700KB 제한)
+  if (file.type === 'application/pdf') {
+    if (file.size > 700 * 1024) {
+      reject(new Error("PDF 파일은 700KB 이하만 업로드 가능합니다. (이미지 캡처본을 권장합니다)"));
+      return;
+    }
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+    return;
+  }
+
+  // 이미지 파일인 경우 HTML5 Canvas를 이용해 리사이징 및 품질 압축 진행
   const reader = new FileReader();
   reader.readAsDataURL(file);
-  reader.onload = () => resolve(reader.result);
-  reader.onerror = error => reject(error);
+  reader.onload = (event) => {
+    const img = new Image();
+    img.src = event.target.result;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX_WIDTH = 800; // 가로 최대 800px로 제한하여 영수증 글씨는 보이되 용량은 대폭 감소
+      let width = img.width;
+      let height = img.height;
+
+      if (width > MAX_WIDTH) {
+        height *= MAX_WIDTH / width;
+        width = MAX_WIDTH;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // 품질 0.6(60%)의 JPEG 형태로 압축하여 Base64 반환 (통상 50~150KB 수준으로 압축됨)
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = (err) => reject(new Error("이미지 처리 중 오류가 발생했습니다."));
+  };
+  reader.onerror = (err) => reject(err);
 });
 
 const ExpenseManager = ({ currentUser }) => {
@@ -20,9 +57,8 @@ const ExpenseManager = ({ currentUser }) => {
   const [errorMsg, setErrorMsg] = useState('');
   const [expensesList, setExpensesList] = useState([]);
   
-  // 수정 모드 및 이미지 뷰어 상태
   const [editingId, setEditingId] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null); // 영수증 팝업 뷰어용
+  const [previewUrl, setPreviewUrl] = useState(null);
 
   useEffect(() => {
     if (!currentUser?.id) return;
@@ -75,15 +111,16 @@ const ExpenseManager = ({ currentUser }) => {
           purpose: formData.purpose,
           updatedAt: serverTimestamp()
         };
-        // 🚀 새로운 파일을 올렸다면 Base64로 변환하여 덮어쓰기
+        
+        // 새로운 파일을 올렸다면 압축 후 업데이트
         if (receiptFile) {
-          updateData.receiptUrl = await fileToBase64(receiptFile); 
+          updateData.receiptUrl = await compressImageToBase64(receiptFile); 
         }
         await updateDoc(expRef, updateData);
         alert('지출결의서가 성공적으로 수정되었습니다.');
       } else {
-        // 🚀 신규 등록 시 업로드한 파일을 Base64로 변환
-        const fileDataUrl = await fileToBase64(receiptFile);
+        // 신규 등록 시 업로드한 파일을 압축
+        const compressedFileUrl = await compressImageToBase64(receiptFile);
         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), {
           userId: currentUser.id,
           userName: currentUser.name,
@@ -92,7 +129,7 @@ const ExpenseManager = ({ currentUser }) => {
           method: methodLabel,
           purpose: formData.purpose,
           category: 'SUPPLIES', 
-          receiptUrl: fileDataUrl, // 변환된 실제 이미지 데이터 저장
+          receiptUrl: compressedFileUrl, 
           status: 'PENDING',
           matchedTransactionId: null,
           createdAt: serverTimestamp()
@@ -104,7 +141,7 @@ const ExpenseManager = ({ currentUser }) => {
       setReceiptFile(null);
       setEditingId(null);
     } catch (error) {
-      setErrorMsg('DB 전송 중 오류가 발생했습니다: ' + error.message);
+      setErrorMsg(error.message || 'DB 전송 중 오류가 발생했습니다.');
     } finally {
       setIsSubmitting(false);
     }
@@ -187,14 +224,14 @@ const ExpenseManager = ({ currentUser }) => {
                 {receiptFile ? (
                   <>
                     <CheckCircle className="text-emerald-500 mb-2" size={32} />
-                    <p className="text-sm text-emerald-700 font-bold">{receiptFile.name}</p>
+                    <p className="text-sm text-emerald-700 font-bold max-w-[200px] truncate">{receiptFile.name}</p>
                     <p className="text-xs text-emerald-500 mt-1">클릭하여 다른 영수증으로 변경</p>
                   </>
                 ) : (
                   <>
                     <UploadCloud className="text-gray-400 mb-2" size={32} />
                     <p className="text-sm text-gray-600 font-bold">클릭하여 영수증 이미지 촬영 또는 업로드</p>
-                    <p className="text-xs text-gray-400 mt-1">지원 형식: JPG, PNG, PDF (최대 1MB 권장)</p>
+                    <p className="text-xs text-gray-400 mt-1">AI가 자동으로 용량을 90% 압축합니다 (JPG, PNG)</p>
                   </>
                 )}
               </div>
@@ -266,12 +303,15 @@ const ExpenseManager = ({ currentUser }) => {
               <button onClick={() => setPreviewUrl(null)} className="text-gray-400 hover:text-gray-800 transition-colors"><XCircle size={28}/></button>
             </div>
             <div className="bg-gray-100 rounded-2xl overflow-hidden flex justify-center items-center flex-1 h-[65vh]">
-              <iframe src={previewUrl} className="w-full h-full border-0" title="receipt-preview" />
+              {previewUrl.startsWith('data:application/pdf') ? (
+                <iframe src={previewUrl} className="w-full h-full border-0" title="receipt-preview" />
+              ) : (
+                <img src={previewUrl} alt="Receipt Preview" className="max-w-full max-h-full object-contain" />
+              )}
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 };
