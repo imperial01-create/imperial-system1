@@ -5,6 +5,14 @@ import { Receipt, UploadCloud, CheckCircle, FileText, Calendar, CreditCard, Doll
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 파일을 Base64 문자열로 변환하는 함수 (Storage 없이 DB에 직접 이미지를 저장하기 위한 꼼수)
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.readAsDataURL(file);
+  reader.onload = () => resolve(reader.result);
+  reader.onerror = error => reject(error);
+});
+
 const ExpenseManager = ({ currentUser }) => {
   const [formData, setFormData] = useState({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' });
   const [receiptFile, setReceiptFile] = useState(null);
@@ -12,24 +20,18 @@ const ExpenseManager = ({ currentUser }) => {
   const [errorMsg, setErrorMsg] = useState('');
   const [expensesList, setExpensesList] = useState([]);
   
-  // 수정 모드 상태 관리
+  // 수정 모드 및 이미지 뷰어 상태
   const [editingId, setEditingId] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null); // 영수증 팝업 뷰어용
 
-  // 🚀 [진짜 데이터] 실시간 DB 연동
   useEffect(() => {
     if (!currentUser?.id) return;
-
-    const q = query(
-      collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'),
-      where('userId', '==', currentUser.id)
-    );
-
+    const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), where('userId', '==', currentUser.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const realData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       realData.sort((a, b) => new Date(b.expenseDate) - new Date(a.expenseDate));
       setExpensesList(realData);
     });
-
     return () => unsubscribe();
   }, [currentUser]);
 
@@ -53,28 +55,19 @@ const ExpenseManager = ({ currentUser }) => {
     e.preventDefault();
     setErrorMsg('');
 
-    // 신규 등록 시 영수증 필수 체크
     if (!editingId && !receiptFile) {
-      setErrorMsg('모든 항목을 입력하고 증빙 영수증을 첨부해주세요.'); 
-      return;
+      setErrorMsg('모든 항목을 입력하고 증빙 영수증을 첨부해주세요.'); return;
     }
     if (!formData.expenseDate || !formData.amount || !formData.purpose) {
-      setErrorMsg('모든 항목을 입력해주세요.'); 
-      return;
+      setErrorMsg('모든 항목을 입력해주세요.'); return;
     }
 
     setIsSubmitting(true);
     try {
-      // 🚀 실제 운영 시 Firebase Storage에 업로드하고 Download URL을 받아오는 로직이 들어갑니다.
-      // 현재는 StackBlitz 프로토타입을 위해 임시 URL을 사용합니다.
-      let fileUrl = 'https://via.placeholder.com/300x600?text=Receipt+Image'; 
-
       const methodLabel = formData.paymentMethod === 'CORPORATE_CARD' ? '법인카드' : (formData.paymentMethod === 'TRANSFER' ? '계좌이체' : '개인카드');
 
       if (editingId) {
-        // 기존 내역 수정 로직
         const expRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'expenses', editingId);
-        
         const updateData = {
           expenseDate: formData.expenseDate,
           amount: Number(formData.amount),
@@ -82,16 +75,15 @@ const ExpenseManager = ({ currentUser }) => {
           purpose: formData.purpose,
           updatedAt: serverTimestamp()
         };
-
-        // 수정 시 새로운 영수증을 올렸다면 URL 업데이트
+        // 🚀 새로운 파일을 올렸다면 Base64로 변환하여 덮어쓰기
         if (receiptFile) {
-          updateData.receiptUrl = fileUrl; 
+          updateData.receiptUrl = await fileToBase64(receiptFile); 
         }
-
         await updateDoc(expRef, updateData);
         alert('지출결의서가 성공적으로 수정되었습니다.');
       } else {
-        // 신규 등록 로직
+        // 🚀 신규 등록 시 업로드한 파일을 Base64로 변환
+        const fileDataUrl = await fileToBase64(receiptFile);
         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), {
           userId: currentUser.id,
           userName: currentUser.name,
@@ -99,8 +91,8 @@ const ExpenseManager = ({ currentUser }) => {
           amount: Number(formData.amount),
           method: methodLabel,
           purpose: formData.purpose,
-          category: 'SUPPLIES', // 관리자가 대시보드에서 최종 카테고리 수정 가능
-          receiptUrl: fileUrl,
+          category: 'SUPPLIES', 
+          receiptUrl: fileDataUrl, // 변환된 실제 이미지 데이터 저장
           status: 'PENDING',
           matchedTransactionId: null,
           createdAt: serverTimestamp()
@@ -108,11 +100,9 @@ const ExpenseManager = ({ currentUser }) => {
         alert('지출결의서가 등록되어 대표님 결재 대기열에 추가되었습니다.');
       }
 
-      // 폼 초기화
       setFormData({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' });
       setReceiptFile(null);
       setEditingId(null);
-
     } catch (error) {
       setErrorMsg('DB 전송 중 오류가 발생했습니다: ' + error.message);
     } finally {
@@ -128,7 +118,7 @@ const ExpenseManager = ({ currentUser }) => {
       purpose: exp.purpose
     });
     setEditingId(exp.id);
-    setReceiptFile(null); // 수정 시 영수증은 선택 사항이므로 초기화
+    setReceiptFile(null); 
     window.scrollTo({ top: 0, behavior: 'smooth' }); 
   };
 
@@ -141,9 +131,7 @@ const ExpenseManager = ({ currentUser }) => {
           setEditingId(null);
           setFormData({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '' });
         }
-      } catch (err) {
-        alert('삭제 실패: ' + err.message);
-      }
+      } catch (err) { alert('삭제 실패: ' + err.message); }
     }
   };
 
@@ -154,7 +142,7 @@ const ExpenseManager = ({ currentUser }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in">
+    <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in relative">
       <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-6 rounded-2xl shadow-md">
         <h1 className="text-2xl font-bold mb-2 flex items-center gap-2"><Receipt size={28}/> 지출결의서 {editingId ? '수정' : '등록'}</h1>
         <p className="opacity-90 text-sm">결재 대기 중인 항목에 한하여 수정 및 삭제가 가능합니다.</p>
@@ -190,7 +178,6 @@ const ExpenseManager = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 🚀 복구된 영수증 이미지 업로드 폼 */}
           <div className="mt-4">
             <label className="block text-sm font-bold text-gray-700 mb-2">
               영수증 첨부 {editingId ? <span className="text-gray-400 font-normal">(변경할 경우에만 새로 올려주세요)</span> : <span className="text-rose-500">(필수)</span>}
@@ -207,7 +194,7 @@ const ExpenseManager = ({ currentUser }) => {
                   <>
                     <UploadCloud className="text-gray-400 mb-2" size={32} />
                     <p className="text-sm text-gray-600 font-bold">클릭하여 영수증 이미지 촬영 또는 업로드</p>
-                    <p className="text-xs text-gray-400 mt-1">지원 형식: JPG, PNG, PDF</p>
+                    <p className="text-xs text-gray-400 mt-1">지원 형식: JPG, PNG, PDF (최대 1MB 권장)</p>
                   </>
                 )}
               </div>
@@ -244,11 +231,10 @@ const ExpenseManager = ({ currentUser }) => {
                     <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded-md">{item.method}</span>
                   </div>
                   <strong className="text-lg text-gray-900 mt-1">{item.purpose}</strong>
-                  {/* 🚀 업로드된 영수증 확인 링크 */}
                   {item.receiptUrl && (
-                    <a href={item.receiptUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1 font-semibold w-fit">
+                    <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1 font-semibold w-fit">
                       <ImageIcon size={14} /> 영수증 이미지 보기
-                    </a>
+                    </button>
                   )}
                 </div>
                 
@@ -260,12 +246,8 @@ const ExpenseManager = ({ currentUser }) => {
                   
                   {item.status === 'PENDING' && (
                     <div className="flex gap-2 mt-1">
-                      <button onClick={() => handleEdit(item)} className="text-xs font-bold flex items-center gap-1 text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
-                        <Edit size={14}/> 수정
-                      </button>
-                      <button onClick={() => handleDelete(item.id)} className="text-xs font-bold flex items-center gap-1 text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 transition-colors">
-                        <Trash2 size={14}/> 삭제
-                      </button>
+                      <button onClick={() => handleEdit(item)} className="text-xs font-bold flex items-center gap-1 text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"><Edit size={14}/> 수정</button>
+                      <button onClick={() => handleDelete(item.id)} className="text-xs font-bold flex items-center gap-1 text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100 transition-colors"><Trash2 size={14}/> 삭제</button>
                     </div>
                   )}
                 </div>
@@ -274,6 +256,22 @@ const ExpenseManager = ({ currentUser }) => {
           )}
         </div>
       </div>
+
+      {/* 🚀 인앱 영수증 뷰어 모달 */}
+      {previewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewUrl(null)}>
+          <div className="bg-white p-4 rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4 px-2">
+              <h3 className="font-bold text-lg flex items-center gap-2"><ImageIcon className="text-blue-600"/> 증빙 자료 확인</h3>
+              <button onClick={() => setPreviewUrl(null)} className="text-gray-400 hover:text-gray-800 transition-colors"><XCircle size={28}/></button>
+            </div>
+            <div className="bg-gray-100 rounded-2xl overflow-hidden flex justify-center items-center flex-1 h-[65vh]">
+              <iframe src={previewUrl} className="w-full h-full border-0" title="receipt-preview" />
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

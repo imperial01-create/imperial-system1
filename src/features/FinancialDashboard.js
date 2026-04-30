@@ -5,14 +5,13 @@ import { db } from '../firebase';
 import { 
   TrendingUp, AlertCircle, CheckCircle, XCircle, DollarSign, 
   PieChart, Calendar, ChevronLeft, ChevronRight, Receipt, 
-  Loader, Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, ShieldAlert
+  Loader, Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, ShieldAlert, Image as ImageIcon
 } from 'lucide-react';
 import { Modal, Button } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const FinancialDashboard = ({ currentUser }) => {
-  // [보안 최우선] 관리자 외 접근 원천 차단
   if (currentUser?.role !== 'admin') {
     return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
   }
@@ -29,15 +28,16 @@ const FinancialDashboard = ({ currentUser }) => {
 
   // 엑셀 업로드 및 모달 관련 상태
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadType, setUploadType] = useState('BANK'); // 'BANK', 'CARD', 'HOMETAX'
+  const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 🚀 DB 실시간 연동
+  // 🚀 영수증 뷰어용 상태
+  const [previewUrl, setPreviewUrl] = useState(null);
+
   useEffect(() => {
     setIsLoading(true);
-    // 예산 기초 세팅
     setBudgets({
       'MEALS': { name: '식대 및 다과', limit: 3000000 },
       'SUPPLIES': { name: '비품 및 교재', limit: 5000000 },
@@ -48,24 +48,13 @@ const FinancialDashboard = ({ currentUser }) => {
     const monthStart = `${selectedMonth}-01`;
     const monthEnd = `${selectedMonth}-31`;
 
-    // 1. 지출결의서 데이터
-    const expQuery = query(
-      collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), 
-      where('expenseDate', '>=', monthStart), 
-      where('expenseDate', '<=', monthEnd)
-    );
+    const expQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd));
     const unsubscribeExp = onSnapshot(expQuery, (snapshot) => {
       setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setIsLoading(false);
     });
 
-    // 2. 누락된 금융 내역 데이터
-    const trxQuery = query(
-      collection(db, 'artifacts', APP_ID, 'public', 'data', 'transactions'), 
-      where('transactionDate', '>=', monthStart), 
-      where('transactionDate', '<=', monthEnd), 
-      where('isMatched', '==', false)
-    );
+    const trxQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'transactions'), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd), where('isMatched', '==', false));
     const unsubscribeTrx = onSnapshot(trxQuery, (snapshot) => {
       setMissingReceipts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
@@ -73,40 +62,26 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  // 🚀 KPI 및 이상 지출 감지 (Anomaly Detection)
   const dashboardStats = useMemo(() => {
-    let totalApproved = 0;
-    let totalPendingAmount = 0;
-    let pendingCount = 0;
+    let totalApproved = 0; let totalPendingAmount = 0; let pendingCount = 0;
     const categoryUsage = { MEALS: 0, SUPPLIES: 0, MARKETING: 0, RENT: 0 };
-    const anomalies = []; // 이상 지출 리스트
+    const anomalies = [];
 
     expenses.forEach(exp => {
       if (exp.status === 'APPROVED') {
         totalApproved += exp.amount;
         if (categoryUsage[exp.category] !== undefined) categoryUsage[exp.category] += exp.amount;
-        
-        // 💡 [CTO 코드 수정] 50만 원 이상의 고액 단일 지출 건 감지
-        // 전자세금계산서(홈택스)로 발급된 적법한 항목(userId가 'SYSTEM_HOMETAX'인 경우)은 이상 감지에서 제외!
-        if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') {
-          anomalies.push(exp);
-        }
+        if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') anomalies.push(exp);
       } else if (exp.status === 'PENDING') {
-        totalPendingAmount += exp.amount; 
-        pendingCount += 1;
+        totalPendingAmount += exp.amount; pendingCount += 1;
       }
     });
-
     return { totalApproved, totalPendingAmount, pendingCount, categoryUsage, anomalies };
   }, [expenses]);
 
-  // =========================================================================
-  // 🚀 엑셀 파일 업로드 및 파싱 엔진
-  // =========================================================================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
     const reader = new FileReader();
     reader.onload = (evt) => {
       const bstr = evt.target.result;
@@ -129,13 +104,7 @@ const FinancialDashboard = ({ currentUser }) => {
             const amount = Number(String(data[i][outIdx]).replace(/,/g, ''));
             if (amount > 0) {
               const dateOnly = data[i][dateIdx].split(' ')[0].replace(/\./g, '-');
-              extracted.push({ 
-                transactionDate: dateOnly, 
-                amount, 
-                merchantName: data[i][nameIdx] || '알수없음', 
-                type: 'BANK', 
-                rawId: `${dateOnly}_${amount}_${i}` 
-              });
+              extracted.push({ transactionDate: dateOnly, amount, merchantName: data[i][nameIdx] || '알수없음', type: 'BANK', rawId: `${dateOnly}_${amount}_${i}` });
             }
           }
         } 
@@ -152,23 +121,17 @@ const FinancialDashboard = ({ currentUser }) => {
             const amount = Number(String(data[i][amountIdx]).replace(/,/g, ''));
             if (amount > 0) {
               const dateOnly = String(data[i][dateIdx]).replace(/\./g, '-');
-              extracted.push({ 
-                transactionDate: dateOnly, 
-                amount, 
-                merchantName: data[i][nameIdx] || '알수없음', 
-                type: 'CARD', 
-                rawId: `${dateOnly}_${amount}_${i}` 
-              });
+              extracted.push({ transactionDate: dateOnly, amount, merchantName: data[i][nameIdx] || '알수없음', type: 'CARD', rawId: `${dateOnly}_${amount}_${i}` });
             }
           }
         } 
         else if (uploadType === 'HOMETAX') {
           const headerIdx = data.findIndex(row => row && row.includes('승인번호'));
-          if (headerIdx === -1) throw new Error("홈택스 양식이 아닙니다. '승인번호' 열을 찾을 수 없습니다.");
+          if (headerIdx === -1) throw new Error("홈택스 양식이 아닙니다.");
           const dateIdx = data[headerIdx].indexOf('작성일자');
           const merchantIdx = data[headerIdx].indexOf('상호'); 
           const amountIdx = data[headerIdx].indexOf('합계금액');
-          const purposeIdx = data[headerIdx].indexOf('품목명'); // 품목명이 없을 경우 대비
+          const purposeIdx = data[headerIdx].indexOf('품목명');
           const approvalIdx = data[headerIdx].indexOf('승인번호');
 
           for (let i = headerIdx + 1; i < data.length; i++) {
@@ -177,14 +140,7 @@ const FinancialDashboard = ({ currentUser }) => {
             if (amount > 0) {
               const dateOnly = String(data[i][dateIdx]).replace(/\./g, '-');
               const purposeStr = purposeIdx > -1 && data[i][purposeIdx] ? data[i][purposeIdx] : '전자세금계산서 매입';
-              extracted.push({ 
-                transactionDate: dateOnly, 
-                amount, 
-                merchantName: data[i][merchantIdx] || '알수없음',
-                purpose: purposeStr,
-                type: 'HOMETAX', 
-                rawId: String(data[i][approvalIdx]) 
-              });
+              extracted.push({ transactionDate: dateOnly, amount, merchantName: data[i][merchantIdx] || '알수없음', purpose: purposeStr, type: 'HOMETAX', rawId: String(data[i][approvalIdx]) });
             }
           }
         }
@@ -194,9 +150,6 @@ const FinancialDashboard = ({ currentUser }) => {
     reader.readAsBinaryString(file);
   };
 
-  // =========================================================================
-  // 🚀 매칭 및 DB 자동 업데이트 
-  // =========================================================================
   const handleMatchAndUpload = async () => {
     if (parsedData.length === 0) return;
     setIsMatching(true);
@@ -209,17 +162,8 @@ const FinancialDashboard = ({ currentUser }) => {
         for (const item of parsedData) {
           const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.rawId);
           batch.set(expRef, {
-            userId: 'SYSTEM_HOMETAX', 
-            userName: '전자세금계산서(자동)', 
-            expenseDate: item.transactionDate, 
-            amount: item.amount, 
-            method: '계좌이체',
-            purpose: `[${item.merchantName}] ${item.purpose}`, 
-            category: 'RENT', // 기본적으로 홈택스는 임차료/관리비 등 고정비 성격이 큼
-            receiptUrl: '홈택스 증빙 (세금계산서)', 
-            status: 'APPROVED', 
-            matchedTransactionId: null, 
-            createdAt: new Date().toISOString()
+            userId: 'SYSTEM_HOMETAX', userName: '전자세금계산서(자동)', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체',
+            purpose: `[${item.merchantName}] ${item.purpose}`, category: 'RENT', receiptUrl: '홈택스 증빙 완료', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString()
           }, { merge: true });
           createdCount++;
         }
@@ -241,69 +185,35 @@ const FinancialDashboard = ({ currentUser }) => {
 
           if (matchCandidates && matchCandidates.length > 0) {
             const matchedExpense = matchCandidates.shift();
-            batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matchedExpense.id), { 
-              status: 'APPROVED', 
-              matchedTransactionId: trxDocRef.id, 
-              updatedAt: new Date().toISOString() 
-            });
-            batch.set(trxDocRef, { 
-              ...trx, 
-              isMatched: true, 
-              matchedExpenseId: matchedExpense.id, 
-              createdAt: new Date().toISOString() 
-            });
+            batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matchedExpense.id), { status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() });
+            batch.set(trxDocRef, { ...trx, isMatched: true, matchedExpenseId: matchedExpense.id, createdAt: new Date().toISOString() });
             matchCount++;
           } else {
-            batch.set(trxDocRef, { 
-              ...trx, 
-              isMatched: false, 
-              matchedExpenseId: null, 
-              createdAt: new Date().toISOString() 
-            });
+            batch.set(trxDocRef, { ...trx, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
             missingCount++;
           }
         }
         await batch.commit();
         alert(`장부 동기화 완료!\n✅ 자동 매칭: ${matchCount}건\n❌ 미증빙(누락): ${missingCount}건`);
       }
-      setIsUploadModalOpen(false); 
-      setParsedData([]);
+      setIsUploadModalOpen(false); setParsedData([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
-    } catch (error) { alert("매칭 오류: " + error.message); } 
-    finally { setIsMatching(false); }
+    } catch (error) { alert("매칭 오류: " + error.message); } finally { setIsMatching(false); }
   };
 
-  // =========================================================================
-  // 🚀 완벽한 장부 다운로드 (국세청 소명 및 대사 작업용)
-  // =========================================================================
   const handleDownloadPerfectLedger = () => {
-    // 1. 정상 승인 및 증빙이 완료된 안전한 내역
     const approvedData = expenses.filter(exp => exp.status === 'APPROVED').map(exp => ({
-      '거래일자': exp.expenseDate,
-      '계정과목': budgets[exp.category]?.name || '기타',
-      '적요(지출목적)': exp.purpose,
-      '출금금액': exp.amount,
-      '결제수단': exp.method,
-      '증빙유형': exp.userId === 'SYSTEM_HOMETAX' ? '전자세금계산서' : (exp.receiptUrl ? '카드/수기영수증' : '증빙없음'),
-      '담당자': exp.userName,
-      '매칭상태': exp.matchedTransactionId ? '통장/카드 대조완료' : '금융내역 미확인(주의)'
+      '거래일자': exp.expenseDate, '계정과목': budgets[exp.category]?.name || '기타', '적요(지출목적)': exp.purpose, '출금금액': exp.amount,
+      '결제수단': exp.method, '증빙유형': exp.userId === 'SYSTEM_HOMETAX' ? '전자세금계산서' : (exp.receiptUrl ? '카드/수기영수증' : '증빙없음'),
+      '담당자': exp.userName, '매칭상태': exp.matchedTransactionId ? '통장/카드 대조완료' : '금융내역 미확인(주의)'
     }));
 
-    // 2. 돈은 나갔지만 증빙 서류(영수증)가 없는 위험 내역
     const missingData = missingReceipts.map(miss => ({
-      '거래일자': miss.transactionDate,
-      '계정과목': '분류불가(미확인)',
-      '적요(지출목적)': `[증빙누락] ${miss.merchantName}`,
-      '출금금액': miss.amount,
-      '결제수단': miss.type === 'BANK' ? '계좌이체' : '법인카드',
-      '증빙유형': '증빙누락(위험)',
-      '담당자': '확인요망',
-      '매칭상태': '지출결의서 없음'
+      '거래일자': miss.transactionDate, '계정과목': '분류불가(미확인)', '적요(지출목적)': `[증빙누락] ${miss.merchantName}`, '출금금액': miss.amount,
+      '결제수단': miss.type === 'BANK' ? '계좌이체' : '법인카드', '증빙유형': '증빙누락(위험)', '담당자': '확인요망', '매칭상태': '지출결의서 없음'
     }));
 
-    // 날짜 오름차순 정렬하여 통합 장부 생성
     const combinedData = [...approvedData, ...missingData].sort((a, b) => new Date(a.거래일자) - new Date(b.거래일자));
-
     if (combinedData.length === 0) return alert("다운로드할 데이터가 없습니다.");
 
     const ws = XLSX.utils.json_to_sheet(combinedData);
@@ -321,31 +231,21 @@ const FinancialDashboard = ({ currentUser }) => {
 
   const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
-  // 개별 결재 승인 처리 로직
   const handleApproval = async (expenseId, newStatus) => {
     try {
       await writeBatch(db).update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, expenseId), {
-        status: newStatus,
-        updatedAt: new Date().toISOString()
+        status: newStatus, updatedAt: new Date().toISOString()
       }).commit();
     } catch(err) { alert("상태 변경 오류"); }
   };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
-      
-      {/* 1. 상단 헤더 및 다운로드, 업로드 버튼 컨트롤 */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
-        <div>
-          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><PieChart/> 실시간 재무 DB 타워</h1>
-        </div>
+        <div><h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><PieChart/> 실시간 재무 DB 타워</h1></div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
-            <UploadCloud size={18}/> 엑셀 일괄 업로드
-          </button>
-          <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.4)]">
-            <Download size={18}/> 소명용 완벽장부 다운로드
-          </button>
+          <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors"><UploadCloud size={18}/> 엑셀 일괄 업로드</button>
+          <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.4)]"><Download size={18}/> 소명용 완벽장부 다운로드</button>
           <div className="flex items-center gap-2 bg-white/10 px-4 rounded-xl ml-2">
             <button onClick={() => handleMonthChange(-1)} className="p-2"><ChevronLeft/></button>
             <span className="font-bold">{selectedMonth}</span>
@@ -356,15 +256,12 @@ const FinancialDashboard = ({ currentUser }) => {
 
       {isLoading ? <Loader className="animate-spin text-blue-600 mx-auto mt-20" size={48}/> : (
         <>
-          {/* 2. 🚨 세무 리스크 및 이상 감지 (Anomaly Detection) 패널 */}
           <div className="bg-rose-50 border border-rose-200 p-6 rounded-2xl shadow-sm relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-10"><ShieldAlert size={100} /></div>
             <h2 className="text-lg font-bold text-rose-800 mb-4 flex items-center gap-2 border-b border-rose-200 pb-2 relative z-10">
               <ShieldAlert className="text-rose-600" size={24} /> 세무 리스크 및 이상 지출 감지
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
-              
-              {/* 고액 지출 알림 (전자세금계산서 제외됨) */}
               <div>
                 <h3 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-1"><AlertCircle size={16}/> 고액 지출 (50만 원 이상) 주의내역</h3>
                 {dashboardStats.anomalies.length === 0 ? (
@@ -383,8 +280,6 @@ const FinancialDashboard = ({ currentUser }) => {
                   </ul>
                 )}
               </div>
-              
-              {/* 예산 초과 경고 알림 */}
               <div>
                 <h3 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-1"><TrendingUp size={16}/> 예산 초과 위험 카테고리 (90% 이상 소진)</h3>
                 <ul className="space-y-2">
@@ -399,9 +294,7 @@ const FinancialDashboard = ({ currentUser }) => {
                             <span className="font-bold text-gray-800">{budgets[cat].name}</span>
                             <span className="text-rose-600 font-black">{percent.toFixed(1)}% 소진</span>
                           </div>
-                          <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
-                            <div className="bg-rose-500 h-2 rounded-full" style={{ width: `${percent}%` }}></div>
-                          </div>
+                          <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden"><div className="bg-rose-500 h-2 rounded-full" style={{ width: `${percent}%` }}></div></div>
                         </li>
                       );
                     }
@@ -415,27 +308,14 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 3. 일반 KPI 요약 대시보드 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (승인/매칭완료)</p>
-              <span className="text-3xl font-black text-gray-900">{formatCurrency(dashboardStats.totalApproved)}</span>
-            </div>
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Receipt size={18}/> 지출결의 결재 대기</p>
-              <span className="text-3xl font-black text-amber-600">{formatCurrency(dashboardStats.totalPendingAmount)}</span>
-            </div>
-            <div className="bg-rose-50 p-6 rounded-2xl shadow-sm border border-rose-100">
-              <p className="text-rose-700 font-bold mb-2 flex items-center gap-2"><BellRing size={18}/> 영수증 미제출 (리스크 건수)</p>
-              <span className="text-3xl font-black text-rose-700">{missingReceipts.length}건</span>
-            </div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100"><p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (승인/매칭완료)</p><span className="text-3xl font-black text-gray-900">{formatCurrency(dashboardStats.totalApproved)}</span></div>
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100"><p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Receipt size={18}/> 지출결의 결재 대기</p><span className="text-3xl font-black text-amber-600">{formatCurrency(dashboardStats.totalPendingAmount)}</span></div>
+            <div className="bg-rose-50 p-6 rounded-2xl shadow-sm border border-rose-100"><p className="text-rose-700 font-bold mb-2 flex items-center gap-2"><BellRing size={18}/> 영수증 미제출 (리스크 건수)</p><span className="text-3xl font-black text-rose-700">{missingReceipts.length}건</span></div>
           </div>
           
-          {/* 4. 영수증 누락자 추적 리스트 */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3">
-              <BellRing className="text-rose-500" size={20} /> 엑셀 대조 결과 - 증빙 누락건 (스크래핑 ↔ 영수증 미스매치)
-            </h2>
+            <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3"><BellRing className="text-rose-500" size={20} /> 엑셀 대조 결과 - 증빙 누락건 (스크래핑 ↔ 영수증 미스매치)</h2>
             {missingReceipts.length === 0 ? (
                <p className="text-emerald-600 font-bold text-center py-6">모든 금융 내역에 영수증/세금계산서가 완벽히 증빙되었습니다.</p> 
             ) : (
@@ -453,11 +333,8 @@ const FinancialDashboard = ({ currentUser }) => {
             )}
           </div>
 
-          {/* 5. 지출결의 수동 결재 대기 문서 */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-            <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3">
-              <Receipt className="text-amber-500" size={20} /> 지출결의 결재 대기 ({dashboardStats.pendingCount}건)
-            </h2>
+            <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3"><Receipt className="text-amber-500" size={20} /> 지출결의 결재 대기 ({dashboardStats.pendingCount}건)</h2>
             <div className="space-y-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
               {expenses.filter(e => e.status === 'PENDING').length === 0 ? (
                 <p className="text-gray-400 font-bold text-center py-6">결재 대기 중인 문서가 없습니다.</p>
@@ -470,6 +347,13 @@ const FinancialDashboard = ({ currentUser }) => {
                         <span className="text-xs text-gray-500">{exp.expenseDate}</span>
                       </div>
                       <strong className="text-base text-gray-900 mt-1">{exp.purpose}</strong>
+                      
+                      {/* 🚀 대시보드 결재대기 목록에 복구된 영수증 보기 버튼 */}
+                      {exp.receiptUrl && exp.receiptUrl !== '홈택스 증빙 완료' && exp.receiptUrl !== '홈택스 증빙 (세금계산서)' && (
+                        <button onClick={() => setPreviewUrl(exp.receiptUrl)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1 font-semibold w-fit">
+                          <ImageIcon size={14} /> 영수증 이미지 보기
+                        </button>
+                      )}
                     </div>
                     <div className="flex gap-4 items-center justify-between md:justify-end border-t md:border-none pt-3 md:pt-0 border-amber-100">
                       <span className="text-xl font-black text-gray-900">{formatCurrency(exp.amount)}</span>
@@ -486,15 +370,15 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 엑셀 업로드 인터페이스 (모달) */}
+      {/* 엑셀 업로드 모달창 */}
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+          {/* ... (생략 없이 위에서 작성된 모달 코드와 동일하게 작동) ... */}
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-6 border-b flex justify-between items-center bg-gray-50">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><UploadCloud className="text-blue-600"/> 금융 엑셀 일괄 동기화</h3>
               <button onClick={() => setIsUploadModalOpen(false)} className="text-gray-400 hover:text-gray-700"><XCircle size={24}/></button>
             </div>
-            
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
               <div className="space-y-5">
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
@@ -502,39 +386,39 @@ const FinancialDashboard = ({ currentUser }) => {
                   <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold transition-all ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>법인카드 승인</button>
                   <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold transition-all ${uploadType === 'HOMETAX' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>홈택스 매입건</button>
                 </div>
-                
                 <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center group hover:bg-blue-50 transition-colors">
                   <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer transition-colors"/>
-                  <p className="text-xs text-gray-500 font-medium">
-                    {uploadType === 'HOMETAX' ? "국세청 홈택스의 '매입전자세금계산서' 엑셀을 올려주세요." : "해당 금융사의 표준 엑셀 다운로드 양식을 업로드해주세요."}
-                  </p>
+                  <p className="text-xs text-gray-500 font-medium">{uploadType === 'HOMETAX' ? "국세청 홈택스의 '매입전자세금계산서' 엑셀을 올려주세요." : "해당 금융사의 표준 엑셀 다운로드 양식을 업로드해주세요."}</p>
                 </div>
-
                 {parsedData.length > 0 && (
                   <div className="mt-4 animate-in slide-in-from-bottom-2">
-                    <h4 className="font-bold text-sm text-gray-800 mb-2 flex items-center justify-between">
-                      <span>분석된 내역 미리보기</span>
-                      <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{parsedData.length}건 확인됨</span>
-                    </h4>
+                    <h4 className="font-bold text-sm text-gray-800 mb-2 flex items-center justify-between"><span>분석된 내역 미리보기</span><span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{parsedData.length}건 확인됨</span></h4>
                     <div className="max-h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs space-y-2 custom-scrollbar">
                       {parsedData.map((d, i) => (
-                        <div key={i} className="flex justify-between border-b border-gray-100 pb-2 last:border-0 last:pb-0">
-                          <span className="truncate mr-2 text-gray-700 font-medium">{d.transactionDate} | {d.merchantName} {d.purpose && `(${d.purpose})`}</span>
-                          <span className="font-black text-blue-600 flex-shrink-0">{d.amount.toLocaleString()}원</span>
-                        </div>
+                        <div key={i} className="flex justify-between border-b border-gray-100 pb-2 last:border-0 last:pb-0"><span className="truncate mr-2 text-gray-700 font-medium">{d.transactionDate} | {d.merchantName} {d.purpose && `(${d.purpose})`}</span><span className="font-black text-blue-600 flex-shrink-0">{d.amount.toLocaleString()}원</span></div>
                       ))}
                     </div>
-                    <button 
-                      onClick={handleMatchAndUpload} 
-                      disabled={isMatching} 
-                      className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 shadow-lg"
-                    >
-                      {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>}
-                      {isMatching ? '처리 중...' : uploadType === 'HOMETAX' ? '전자세금계산서 증빙 자동 생성' : '지출결의서와 장부 자동 동기화'}
+                    <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 shadow-lg">
+                      {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>}{isMatching ? '처리 중...' : uploadType === 'HOMETAX' ? '전자세금계산서 증빙 자동 생성' : '지출결의서와 장부 자동 동기화'}
                     </button>
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🚀 인앱 영수증 뷰어 모달 (대시보드용) */}
+      {previewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewUrl(null)}>
+          <div className="bg-white p-4 rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4 px-2">
+              <h3 className="font-bold text-lg flex items-center gap-2"><ImageIcon className="text-blue-600"/> 증빙 자료 확인</h3>
+              <button onClick={() => setPreviewUrl(null)} className="text-gray-400 hover:text-gray-800 transition-colors"><XCircle size={28}/></button>
+            </div>
+            <div className="bg-gray-100 rounded-2xl overflow-hidden flex justify-center items-center flex-1 h-[65vh]">
+              <iframe src={previewUrl} className="w-full h-full border-0" title="receipt-preview" />
             </div>
           </div>
         </div>
