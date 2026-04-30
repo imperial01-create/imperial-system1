@@ -12,6 +12,7 @@ import { Modal, Button } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 
 const FinancialDashboard = ({ currentUser }) => {
+  // [보안 최우선] 관리자 외 접근 원천 차단
   if (currentUser?.role !== 'admin') {
     return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
   }
@@ -33,7 +34,7 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isMatching, setIsMatching] = useState(false);
   const fileInputRef = useRef(null);
 
-  // 🚀 영수증 뷰어용 상태
+  // 🚀 영수증 뷰어 상태
   const [previewUrl, setPreviewUrl] = useState(null);
 
   useEffect(() => {
@@ -63,7 +64,7 @@ const FinancialDashboard = ({ currentUser }) => {
   }, [selectedMonth]);
 
   const dashboardStats = useMemo(() => {
-    let totalApproved = 0; let totalPendingAmount = 0; let pendingCount = 0;
+    let totalApproved = 0, totalPendingAmount = 0, pendingCount = 0;
     const categoryUsage = { MEALS: 0, SUPPLIES: 0, MARKETING: 0, RENT: 0 };
     const anomalies = [];
 
@@ -71,11 +72,14 @@ const FinancialDashboard = ({ currentUser }) => {
       if (exp.status === 'APPROVED') {
         totalApproved += exp.amount;
         if (categoryUsage[exp.category] !== undefined) categoryUsage[exp.category] += exp.amount;
+        
+        // 홈택스 제외 50만원 이상 감지
         if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') anomalies.push(exp);
       } else if (exp.status === 'PENDING') {
         totalPendingAmount += exp.amount; pendingCount += 1;
       }
     });
+
     return { totalApproved, totalPendingAmount, pendingCount, categoryUsage, anomalies };
   }, [expenses]);
 
@@ -241,6 +245,8 @@ const FinancialDashboard = ({ currentUser }) => {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
+      
+      {/* 상단 컨트롤러 */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
         <div><h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><PieChart/> 실시간 재무 DB 타워</h1></div>
         <div className="flex flex-wrap gap-2">
@@ -256,6 +262,7 @@ const FinancialDashboard = ({ currentUser }) => {
 
       {isLoading ? <Loader className="animate-spin text-blue-600 mx-auto mt-20" size={48}/> : (
         <>
+          {/* 이상 지출 감지 대시보드 */}
           <div className="bg-rose-50 border border-rose-200 p-6 rounded-2xl shadow-sm relative overflow-hidden">
             <div className="absolute top-0 right-0 p-4 opacity-10"><ShieldAlert size={100} /></div>
             <h2 className="text-lg font-bold text-rose-800 mb-4 flex items-center gap-2 border-b border-rose-200 pb-2 relative z-10">
@@ -308,12 +315,14 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
+          {/* KPI 요약 대시보드 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100"><p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (승인/매칭완료)</p><span className="text-3xl font-black text-gray-900">{formatCurrency(dashboardStats.totalApproved)}</span></div>
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100"><p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Receipt size={18}/> 지출결의 결재 대기</p><span className="text-3xl font-black text-amber-600">{formatCurrency(dashboardStats.totalPendingAmount)}</span></div>
             <div className="bg-rose-50 p-6 rounded-2xl shadow-sm border border-rose-100"><p className="text-rose-700 font-bold mb-2 flex items-center gap-2"><BellRing size={18}/> 영수증 미제출 (리스크 건수)</p><span className="text-3xl font-black text-rose-700">{missingReceipts.length}건</span></div>
           </div>
           
+          {/* 영수증 누락자 리스트 */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3"><BellRing className="text-rose-500" size={20} /> 엑셀 대조 결과 - 증빙 누락건 (스크래핑 ↔ 영수증 미스매치)</h2>
             {missingReceipts.length === 0 ? (
@@ -333,6 +342,7 @@ const FinancialDashboard = ({ currentUser }) => {
             )}
           </div>
 
+          {/* 지출결의 결재 대기 리스트 */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
             <h2 className="text-lg font-bold text-gray-800 mb-5 flex items-center gap-2 border-b pb-3"><Receipt className="text-amber-500" size={20} /> 지출결의 결재 대기 ({dashboardStats.pendingCount}건)</h2>
             <div className="space-y-3 max-h-96 overflow-y-auto pr-2 custom-scrollbar">
@@ -348,10 +358,13 @@ const FinancialDashboard = ({ currentUser }) => {
                       </div>
                       <strong className="text-base text-gray-900 mt-1">{exp.purpose}</strong>
                       
-                      {/* 🚀 대시보드 결재대기 목록에 복구된 영수증 보기 버튼 */}
+                      {/* 🚀 눈에 잘 띄는 영수증 보기 버튼 */}
                       {exp.receiptUrl && exp.receiptUrl !== '홈택스 증빙 완료' && exp.receiptUrl !== '홈택스 증빙 (세금계산서)' && (
-                        <button onClick={() => setPreviewUrl(exp.receiptUrl)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 mt-1 font-semibold w-fit">
-                          <ImageIcon size={14} /> 영수증 이미지 보기
+                        <button 
+                          onClick={() => setPreviewUrl(exp.receiptUrl)} 
+                          className="text-sm text-blue-700 hover:text-blue-900 flex items-center gap-1 mt-2 font-bold w-fit bg-blue-100 px-3 py-1.5 rounded-lg transition-colors border border-blue-200 shadow-sm"
+                        >
+                          <ImageIcon size={16} /> 영수증 이미지 확인
                         </button>
                       )}
                     </div>
@@ -370,55 +383,63 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 엑셀 업로드 모달창 */}
-      {isUploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-          {/* ... (생략 없이 위에서 작성된 모달 코드와 동일하게 작동) ... */}
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b flex justify-between items-center bg-gray-50">
-              <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><UploadCloud className="text-blue-600"/> 금융 엑셀 일괄 동기화</h3>
-              <button onClick={() => setIsUploadModalOpen(false)} className="text-gray-400 hover:text-gray-700"><XCircle size={24}/></button>
-            </div>
-            <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
-              <div className="space-y-5">
-                <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
-                  <button onClick={() => { setUploadType('BANK'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold transition-all ${uploadType === 'BANK' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>KB은행 통장</button>
-                  <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold transition-all ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>법인카드 승인</button>
-                  <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold transition-all ${uploadType === 'HOMETAX' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>홈택스 매입건</button>
-                </div>
-                <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center group hover:bg-blue-50 transition-colors">
-                  <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer transition-colors"/>
-                  <p className="text-xs text-gray-500 font-medium">{uploadType === 'HOMETAX' ? "국세청 홈택스의 '매입전자세금계산서' 엑셀을 올려주세요." : "해당 금융사의 표준 엑셀 다운로드 양식을 업로드해주세요."}</p>
-                </div>
-                {parsedData.length > 0 && (
-                  <div className="mt-4 animate-in slide-in-from-bottom-2">
-                    <h4 className="font-bold text-sm text-gray-800 mb-2 flex items-center justify-between"><span>분석된 내역 미리보기</span><span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{parsedData.length}건 확인됨</span></h4>
-                    <div className="max-h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs space-y-2 custom-scrollbar">
-                      {parsedData.map((d, i) => (
-                        <div key={i} className="flex justify-between border-b border-gray-100 pb-2 last:border-0 last:pb-0"><span className="truncate mr-2 text-gray-700 font-medium">{d.transactionDate} | {d.merchantName} {d.purpose && `(${d.purpose})`}</span><span className="font-black text-blue-600 flex-shrink-0">{d.amount.toLocaleString()}원</span></div>
-                      ))}
-                    </div>
-                    <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 shadow-lg">
-                      {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>}{isMatching ? '처리 중...' : uploadType === 'HOMETAX' ? '전자세금계산서 증빙 자동 생성' : '지출결의서와 장부 자동 동기화'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+      {/* 엑셀 업로드 모달창 (기존 코드와 동일) */}
+      <Modal isOpen={isUploadModalOpen} onClose={() => setIsUploadModalOpen(false)} title="금융내역 엑셀 파일 업로드 및 장부 동기화">
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            <button onClick={() => { setUploadType('BANK'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold border transition-colors ${uploadType === 'BANK' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-gray-50 text-gray-500'}`}>KB은행 통장</button>
+            <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold border transition-colors ${uploadType === 'CARD' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-gray-50 text-gray-500'}`}>법인카드 승인</button>
+            <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-2 text-sm rounded-lg font-bold border transition-colors ${uploadType === 'HOMETAX' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-gray-50 text-gray-500'}`}>홈택스 매입건</button>
           </div>
-        </div>
-      )}
+          
+          <div className="border-2 border-dashed border-gray-300 bg-gray-50 p-6 rounded-xl text-center">
+            <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mb-2 cursor-pointer"/>
+          </div>
 
-      {/* 🚀 인앱 영수증 뷰어 모달 (대시보드용) */}
-      {previewUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewUrl(null)}>
-          <div className="bg-white p-4 rounded-3xl shadow-2xl max-w-2xl w-full flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4 px-2">
-              <h3 className="font-bold text-lg flex items-center gap-2"><ImageIcon className="text-blue-600"/> 증빙 자료 확인</h3>
-              <button onClick={() => setPreviewUrl(null)} className="text-gray-400 hover:text-gray-800 transition-colors"><XCircle size={28}/></button>
+          {parsedData.length > 0 && (
+            <div className="mt-4">
+              <h4 className="font-bold text-sm text-gray-800 mb-2 flex items-center justify-between"><span>분석된 내역 미리보기</span><span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{parsedData.length}건 확인됨</span></h4>
+              <div className="max-h-48 overflow-y-auto bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs space-y-2 custom-scrollbar">
+                {parsedData.map((d, i) => (
+                  <div key={i} className="flex justify-between border-b border-gray-100 pb-2 last:border-0 last:pb-0">
+                    <span className="truncate mr-2 text-gray-700 font-medium">{d.transactionDate} | {d.merchantName} {d.purpose && `(${d.purpose})`}</span>
+                    <span className="font-black text-blue-600 flex-shrink-0">{d.amount.toLocaleString()}원</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50">
+                {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>}
+                {isMatching ? '처리 중...' : uploadType === 'HOMETAX' ? '전자세금계산서 증빙 자동 생성' : '지출결의서와 장부 자동 동기화'}
+              </button>
             </div>
-            <div className="bg-gray-100 rounded-2xl overflow-hidden flex justify-center items-center flex-1 h-[65vh]">
-              <iframe src={previewUrl} className="w-full h-full border-0" title="receipt-preview" />
+          )}
+        </div>
+      </Modal>
+
+      {/* 🚀 풀스크린 해상도 영수증 뷰어 모달 (대폭 확장) */}
+      {previewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewUrl(null)}>
+          {/* max-w-5xl (1024px) 과 h-[90vh]를 적용하여 화면을 꽉 채우도록 설정 */}
+          <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4 px-3 border-b pb-3">
+              <h3 className="font-bold text-xl text-gray-900 flex items-center gap-2">
+                <ImageIcon className="text-blue-600" size={24}/> 영수증 상세 확인
+              </h3>
+              <button 
+                onClick={() => setPreviewUrl(null)} 
+                className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm"
+              >
+                닫기 <XCircle size={24}/>
+              </button>
+            </div>
+            
+            {/* 이미지가 찌그러지지 않고 원본 비율을 유지하며 화면에 꽉 차게 렌더링 (object-contain) */}
+            <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-center items-center flex-1 w-full h-full relative p-2 border border-gray-100">
+              {previewUrl.startsWith('data:application/pdf') || previewUrl.endsWith('.pdf') ? (
+                <iframe src={previewUrl} className="w-full h-full border-0 rounded-xl" title="receipt-preview" />
+              ) : (
+                <img src={previewUrl} alt="Receipt Preview" className="w-full h-full object-contain drop-shadow-sm rounded-xl" />
+              )}
             </div>
           </div>
         </div>
