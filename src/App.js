@@ -19,13 +19,9 @@ const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
-
-// 스마트 진단 시스템 컴포넌트 지연 로딩
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
-
-// 재무관리 시스템 컴포넌트 지연 로딩
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 
@@ -230,41 +226,56 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // 🚀 [CTO 로직: 자동 보정 로그인 패치 적용]
+  // 🚀 [CTO 로직: Mac/iOS(NFD) vs Windows(NFC) 한글 유니코드 인코딩 불일치 완벽 해결]
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
      setLoginProcessing(true);
      try {
-         // 1. 🚨 한글 아이디 특수 인코딩 자동 보정
-         const safeId = encodeURIComponent(loginForm.id).replace(/[^a-zA-Z0-9]/g, 'x');
-         const email = `${safeId}@imperial.com`;
+         const rawId = loginForm.id.trim();
          
-         // 2. 🚨 짧은 비밀번호(6자리 미만) 자동 보정 ('0' 채움)
          let loginPassword = loginForm.password;
          if (loginPassword.length < 6) {
-             loginPassword = loginPassword.padEnd(6, '0');
+             loginPassword = loginPassword.padEnd(6, '0'); // 짧은 비밀번호 6자리 보정
          }
 
-         let authUid = null;
+         // 스마트폰(아이폰 등)과 PC에서 한글 자음/모음을 쪼개고 합치는 방식이 달라 인코딩 값이 달라지는 현상을 막기 위해
+         // 3가지 유니코드(표준, NFC, NFD) 경우의 수를 모두 시도하여 100% 매칭시킵니다.
+         const idVariants = [...new Set([
+             rawId, 
+             rawId.normalize('NFC'), // Windows 스타일
+             rawId.normalize('NFD')  // Mac/iOS 스타일
+         ])];
 
-         try {
-             // 3. 보정된 정보로 안전하게 Auth 로그인 시도
-             const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
-             authUid = userCredential.user.uid;
-         } catch (authErr) {
-             console.log("Auth 로그인 실패. 원인:", authErr.message);
-             // 마이그레이션 도중(과도기)을 위해 평문 로그인 검증을 위한 예외 통과 허용
+         let authUid = null;
+         let finalSafeId = null;
+
+         for (const idVariant of idVariants) {
+             const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x');
+             const email = `${safeId}@imperial.com`;
+             try {
+                 // Auth 로그인에 성공하면, 현재 기기에 맞는 올바른 인코딩(safeId)을 찾아낸 것입니다!
+                 const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
+                 authUid = userCredential.user.uid;
+                 finalSafeId = safeId;
+                 break; // 성공 즉시 탈출
+             } catch (authErr) {
+                 // 실패하면 다음 유니코드 방식으로 재시도
+             }
+         }
+
+         // 만약 Auth 서버에서 모든 유니코드 방식으로도 못 찾았다면, 최후의 보루로 기존 safeId 사용 (평문 로그인/관리자 예외 처리용)
+         if (!finalSafeId) {
+             finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x');
          }
          
          // 4. 권한을 성공적으로 얻은 상태에서 DB 접근
          try {
-             // 🚀 [수정 포인트] loginForm.id 대신 안전하게 인코딩된 safeId로 문서를 조회합니다.
-             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId);
+             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
              let userDoc = await getDoc(userDocRef);
              
              // 만약 문서를 못 찾았다면 기존의 평문 방식 아이디로 한번 더 쿼리 (호환성 보장)
              if (!userDoc.exists()) {
-                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', loginForm.id));
+                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                  const s = await getDocs(q);
                  if (!s.empty) userDoc = s.docs[0];
              }
@@ -272,7 +283,7 @@ const AppContent = () => {
              if(userDoc && userDoc.exists()) {
                  const docData = userDoc.data();
                  
-                 // 평문 검증 방어 로직
+                 // 평문 검증 방어 로직 (마이그레이션이 안 된 극소수 계정 예외 처리)
                  if (!authUid && docData.password !== loginForm.password) {
                      throw new Error("비밀번호 불일치 (평문 및 Auth 모두 실패)");
                  }
