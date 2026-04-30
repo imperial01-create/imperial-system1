@@ -7,6 +7,7 @@ import {
   PieChart, Calendar, ChevronLeft, ChevronRight, Receipt, 
   Loader, Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, ShieldAlert
 } from 'lucide-react';
+import { Modal, Button } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -85,8 +86,9 @@ const FinancialDashboard = ({ currentUser }) => {
         totalApproved += exp.amount;
         if (categoryUsage[exp.category] !== undefined) categoryUsage[exp.category] += exp.amount;
         
-        // [이상 감지] 50만 원 이상의 고액 단일 지출 건 감지
-        if (exp.amount >= 500000) {
+        // 💡 [CTO 코드 수정] 50만 원 이상의 고액 단일 지출 건 감지
+        // 전자세금계산서(홈택스)로 발급된 적법한 항목(userId가 'SYSTEM_HOMETAX'인 경우)은 이상 감지에서 제외!
+        if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') {
           anomalies.push(exp);
         }
       } else if (exp.status === 'PENDING') {
@@ -213,7 +215,7 @@ const FinancialDashboard = ({ currentUser }) => {
             amount: item.amount, 
             method: '계좌이체',
             purpose: `[${item.merchantName}] ${item.purpose}`, 
-            category: 'SUPPLIES', 
+            category: 'RENT', // 기본적으로 홈택스는 임차료/관리비 등 고정비 성격이 큼
             receiptUrl: '홈택스 증빙 (세금계산서)', 
             status: 'APPROVED', 
             matchedTransactionId: null, 
@@ -362,7 +364,7 @@ const FinancialDashboard = ({ currentUser }) => {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
               
-              {/* 고액 지출 알림 */}
+              {/* 고액 지출 알림 (전자세금계산서 제외됨) */}
               <div>
                 <h3 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-1"><AlertCircle size={16}/> 고액 지출 (50만 원 이상) 주의내역</h3>
                 {dashboardStats.anomalies.length === 0 ? (
@@ -484,7 +486,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 엑셀 업로드 인터페이스 (모달) - Tailwind 퓨어 CSS 구현으로 오류 방지 */}
+      {/* 🚀 엑셀 업로드 인터페이스 (모달) */}
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
@@ -541,4 +543,5 @@ const FinancialDashboard = ({ currentUser }) => {
     </div>
   );
 };
+
 export default FinancialDashboard;
