@@ -5,17 +5,17 @@ import { db } from '../firebase';
 import { 
   TrendingUp, AlertCircle, CheckCircle, XCircle, DollarSign, 
   PieChart, Calendar, ChevronLeft, ChevronRight, Receipt, 
-  Loader, Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, ShieldAlert, Image as ImageIcon
+  Loader, Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, ShieldAlert, Image as ImageIcon, CreditCard
 } from 'lucide-react';
 import { Modal, Button } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 세무사 제공 엑셀 공식 계정과목
+// 🚀 세무사 제공 엑셀 공식 계정과목 (+ 카드대금 처리용 '미지급금' 추가)
 const OFFICIAL_ACCOUNTS = [
   '미분류', '직원급여', '상여금', '퇴직급여', '복리후생비', '여비교통비', '접대비', 
   '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '수선비', 
-  '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비'
+  '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
 const FinancialDashboard = ({ currentUser }) => {
@@ -42,7 +42,6 @@ const FinancialDashboard = ({ currentUser }) => {
 
   useEffect(() => {
     setIsLoading(true);
-    // 🚀 세무사 계정과목 기준으로 예산 모니터링 세팅
     setBudgets({
       '복리후생비': { name: '복리후생비 (직원 식대 등)', limit: 3000000 },
       '소모품비': { name: '소모품비 (비품/교재/간식)', limit: 2000000 },
@@ -75,12 +74,15 @@ const FinancialDashboard = ({ currentUser }) => {
 
     expenses.forEach(exp => {
       if (exp.status === 'APPROVED') {
-        totalApproved += exp.amount;
-        if (!categoryUsage[exp.category]) categoryUsage[exp.category] = 0;
-        categoryUsage[exp.category] += exp.amount;
-        
-        if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') {
-          anomalies.push(exp);
+        // 🚀 [CTO 회계 로직] '미지급금(카드대금)'은 이중 지출(Double Counting) 방지를 위해 총 지출액 및 예산에서 제외!
+        if (exp.category !== '미지급금') {
+          totalApproved += exp.amount;
+          if (!categoryUsage[exp.category]) categoryUsage[exp.category] = 0;
+          categoryUsage[exp.category] += exp.amount;
+          
+          if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') {
+            anomalies.push(exp);
+          }
         }
       } else if (exp.status === 'PENDING') {
         totalPendingAmount += exp.amount; 
@@ -90,7 +92,6 @@ const FinancialDashboard = ({ currentUser }) => {
     return { totalApproved, totalPendingAmount, pendingCount, categoryUsage, anomalies };
   }, [expenses]);
 
-  // 🚀 홈택스 엑셀 NLP 카테고리 자동 추론 함수
   const guessCategoryFromHometax = (merchant, purpose) => {
     const text = `${merchant} ${purpose}`.replace(/\s/g, '');
     if (text.includes('청소') || text.includes('기장') || text.includes('수수료') || text.includes('방역')) return '지급수수료';
@@ -123,12 +124,17 @@ const FinancialDashboard = ({ currentUser }) => {
             if (!data[i] || !data[i][data[headerIdx].indexOf('출금액(원)')]) continue;
             const amount = Number(String(data[i][data[headerIdx].indexOf('출금액(원)')]).replace(/,/g, ''));
             if (amount > 0) {
+              const merchantName = data[i][data[headerIdx].indexOf('보낸분/받는분')] || '알수없음';
+              // 🚀 [신규 엔진] 카드 대금 출금 여부 강력 식별 (대표님 엑셀 양식의 '롯데카드', '현870...', '우601...' 등 캐치)
+              const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협|현\d|우\d|삼\d|롯\d)/i.test(merchantName);
+              
               extracted.push({ 
                 transactionDate: data[i][data[headerIdx].indexOf('거래일시')].split(' ')[0].replace(/\./g, '-'), 
                 amount, 
-                merchantName: data[i][data[headerIdx].indexOf('보낸분/받는분')] || '알수없음', 
+                merchantName, 
                 type: 'BANK', 
-                rawId: `${amount}_${i}` 
+                rawId: `${amount}_${i}`,
+                isCardPayment 
               });
             }
           }
@@ -178,7 +184,6 @@ const FinancialDashboard = ({ currentUser }) => {
     reader.readAsBinaryString(file);
   };
 
-  // 홈택스 카테고리 수동 조작 핸들러
   const handleCategoryChange = (index, newCategory) => {
     const newData = [...parsedData];
     newData[index].category = newCategory;
@@ -191,24 +196,15 @@ const FinancialDashboard = ({ currentUser }) => {
 
     try {
       const batch = writeBatch(db); 
-      let matchCount = 0, missingCount = 0, createdCount = 0;
+      let matchCount = 0, missingCount = 0, createdCount = 0, cardPayCount = 0;
 
       if (uploadType === 'HOMETAX') {
         for (const item of parsedData) {
           const finalCategory = item.category === '미분류' ? '지급수수료' : item.category;
           const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.rawId);
           batch.set(expRef, {
-            userId: 'SYSTEM_HOMETAX', 
-            userName: '전자세금계산서', 
-            expenseDate: item.transactionDate, 
-            amount: item.amount, 
-            method: '계좌이체',
-            purpose: `[${item.merchantName}] ${item.purpose}`, 
-            category: finalCategory, 
-            receiptUrl: '홈택스 증빙 완료', 
-            status: 'APPROVED', 
-            matchedTransactionId: null, 
-            createdAt: new Date().toISOString()
+            userId: 'SYSTEM_HOMETAX', userName: '전자세금계산서', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체',
+            purpose: `[${item.merchantName}] ${item.purpose}`, category: finalCategory, receiptUrl: '홈택스 증빙 완료', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString()
           }, { merge: true });
           createdCount++;
         }
@@ -224,25 +220,37 @@ const FinancialDashboard = ({ currentUser }) => {
         });
 
         for (const trx of parsedData) {
-          const matchCandidates = expenseMap.get(`${trx.transactionDate}_${trx.amount}`);
           const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
           
-          if (matchCandidates && matchCandidates.length > 0) {
-            const matchedExpense = matchCandidates.shift();
-            batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matchedExpense.id), { 
-              status: 'APPROVED', 
-              matchedTransactionId: trxDocRef.id, 
-              updatedAt: new Date().toISOString() 
+          // 🚀 [핵심 엔진] 카드 대금 출금 건일 경우, 영수증을 찾지 않고 즉시 [미지급금] 카테고리로 승인 처리
+          if (trx.isCardPayment) {
+            const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+            batch.set(expRef, {
+              userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', expenseDate: trx.transactionDate, amount: trx.amount, method: '계좌이체',
+              purpose: `[${trx.merchantName}] 신용카드 대금 출금`, category: '미지급금', receiptUrl: '카드사 청구서로 갈음', status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString()
             });
-            batch.set(trxDocRef, { ...trx, isMatched: true, matchedExpenseId: matchedExpense.id, createdAt: new Date().toISOString() });
-            matchCount++;
-          } else {
-            batch.set(trxDocRef, { ...trx, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
-            missingCount++;
+            batch.set(trxDocRef, { ...trx, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
+            cardPayCount++;
+          } 
+          // 일반 결제/이체 건일 경우 기존 매칭 진행
+          else {
+            const matchCandidates = expenseMap.get(`${trx.transactionDate}_${trx.amount}`);
+            if (matchCandidates && matchCandidates.length > 0) {
+              const matchedExpense = matchCandidates.shift();
+              batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matchedExpense.id), { status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() });
+              batch.set(trxDocRef, { ...trx, isMatched: true, matchedExpenseId: matchedExpense.id, createdAt: new Date().toISOString() });
+              matchCount++;
+            } else {
+              batch.set(trxDocRef, { ...trx, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
+              missingCount++;
+            }
           }
         }
         await batch.commit(); 
-        alert(`✅ 자동 매칭: ${matchCount}건\n❌ 미증빙: ${missingCount}건`);
+        let alertMsg = `✅ 일반 지출 자동 매칭: ${matchCount}건\n`;
+        if (cardPayCount > 0) alertMsg += `💳 카드 대금 외상 결제 처리: ${cardPayCount}건\n`;
+        alertMsg += `❌ 증빙 누락: ${missingCount}건`;
+        alert(alertMsg);
       }
       setIsUploadModalOpen(false); 
       setParsedData([]); 
@@ -258,7 +266,7 @@ const FinancialDashboard = ({ currentUser }) => {
       '적요(지출목적)': exp.purpose, 
       '출금금액': exp.amount,
       '결제수단': exp.method, 
-      '증빙유형': exp.userId === 'SYSTEM_HOMETAX' ? '세금계산서' : (exp.receiptUrl ? '영수증/카드' : '증빙없음'), 
+      '증빙유형': exp.category === '미지급금' ? '카드사 청구서' : (exp.userId === 'SYSTEM_HOMETAX' ? '세금계산서' : (exp.receiptUrl ? '영수증/카드' : '증빙없음')), 
       '담당자': exp.userName, 
       '매칭상태': exp.matchedTransactionId ? '통장/카드 대조완료' : '금융내역 미확인'
     }));
@@ -378,7 +386,7 @@ const FinancialDashboard = ({ currentUser }) => {
           {/* 3. KPI 요약 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (승인)</p>
+              <p className="text-gray-500 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (카드대금 제외)</p>
               <span className="text-3xl font-black text-gray-900">{formatCurrency(dashboardStats.totalApproved)}</span>
             </div>
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -432,7 +440,7 @@ const FinancialDashboard = ({ currentUser }) => {
                       </div>
                       <strong className="text-base text-gray-900 mt-1">{exp.purpose}</strong>
                       
-                      {exp.receiptUrl && exp.receiptUrl !== '홈택스 증빙 완료' && exp.receiptUrl !== '홈택스 증빙 (세금계산서)' && (
+                      {exp.receiptUrl && exp.receiptUrl !== '홈택스 증빙 완료' && exp.receiptUrl !== '카드사 청구서 갈음' && (
                         <button 
                           onClick={() => setPreviewUrl(exp.receiptUrl)} 
                           className="text-sm text-blue-700 hover:text-blue-900 flex items-center gap-1 mt-2 font-bold w-fit bg-blue-100 px-3 py-1.5 rounded-lg transition-colors border border-blue-200 shadow-sm"
@@ -456,7 +464,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 엑셀 업로드 모달 (홈택스 수동 카테고리 맵핑 포함) */}
+      {/* 🚀 엑셀 업로드 모달 */}
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -489,7 +497,12 @@ const FinancialDashboard = ({ currentUser }) => {
                       {parsedData.map((d, i) => (
                         <div key={i} className="flex flex-col md:flex-row justify-between md:items-center border-b border-gray-200 pb-3 last:border-0 last:pb-0 gap-3">
                           <div className="flex flex-col">
-                            <span className="text-gray-800 font-bold truncate">{d.merchantName} <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span></span>
+                            <span className="text-gray-800 font-bold flex items-center gap-2">
+                              <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span> 
+                              <span className="text-gray-500 font-normal text-xs">({d.transactionDate})</span>
+                              {/* 🚀 카드 대금일 경우 뱃지 부착 */}
+                              {d.isCardPayment && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold ml-1 flex items-center gap-1"><CreditCard size={12}/> 카드대금 출금</span>}
+                            </span>
                             {d.purpose && <span className="text-xs text-gray-500 truncate max-w-[250px]">{d.purpose}</span>}
                           </div>
                           <div className="flex items-center gap-3">
