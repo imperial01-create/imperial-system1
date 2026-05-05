@@ -3,9 +3,10 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavig
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
+  Clock, Trash2 
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
@@ -109,6 +110,17 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
+                {/* 🚀 분리된 행정조교 근무 스케줄 카드 */}
+                {currentUser.role === 'admin_assistant' && (
+                    <div onClick={() => navigate('/work-schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-cyan-100 p-3 rounded-xl text-cyan-600 group-hover:bg-cyan-600 group-hover:text-white transition-colors"><Clock size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">나의 근무 스케줄</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">나의 근무 일정을 확인하고 관리자에게 추가/취소를 요청합니다.</p>
+                    </div>
+                )}
+
                 {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -140,12 +152,10 @@ const Dashboard = ({ currentUser }) => {
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">
-                           {currentUser.role === 'admin_assistant' ? '근무 스케줄/클리닉 센터' : '클리닉 센터'}
-                        </h2>
+                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
                     </div>
                     <p className="text-gray-500 leading-relaxed">
-                        {currentUser.role === 'admin_assistant' ? '나의 근무 일정을 확인하고 관리자에게 변경을 요청합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
+                        {['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교들의 스케줄을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
                     </p>
                 </div>
 
@@ -304,6 +314,7 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
+  // 🚀 분리된 메뉴 구조 적용
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
@@ -311,7 +322,8 @@ const AppContent = () => {
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
-    { path: '/clinic', label: currentUser.role === 'admin_assistant' ? '근무 스케줄' : '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, // 🚀 행정조교 전용
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
@@ -377,9 +389,14 @@ const AppContent = () => {
                             <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
                         )}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
-                        <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
-                        <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         
+                        {/* 🚀 라우팅 분리 적용 (모드 전달) */}
+                        <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
+                        {currentUser.role === 'admin_assistant' && (
+                            <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
+                        )}
+
+                        <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
                         
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}

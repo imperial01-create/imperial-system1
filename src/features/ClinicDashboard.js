@@ -49,21 +49,17 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
+// 🚀 [CTO 로직] props에 isAdminView와 isMyScheduleView를 명시적으로 전달받아 렌더링 통제
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView }) => {
   
-  const isTa = currentUser.role === 'ta';
-  const isAssistant = currentUser.role === 'admin_assistant';
-  const isWorker = isTa || isAssistant;
-
   const mySessions = useMemo(() => {
-     if (isWorker) {
+     if (isMyScheduleView) {
         return sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
      }
      return sessions.filter(s => s.date === selectedDateStr);
-  }, [sessions, currentUser, selectedDateStr, isWorker]);
+  }, [sessions, currentUser, selectedDateStr, isMyScheduleView]);
 
   const now = new Date();
-  const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser.role === 'parent';
   const isLecturer = currentUser.role === 'lecturer';
@@ -128,7 +124,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     });
                 } 
             }
-            else if (isWorker) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
+            else if (isMyScheduleView) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
             return (
@@ -173,7 +169,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {((isWorker || currentUser.role === 'admin') && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
+                            {((isMyScheduleView || isAdminView) && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
@@ -194,7 +190,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                    const isAsstSlot = workerRole === 'admin_assistant'; // 🚀 행정조교 슬롯 여부 판별
+                    const isAsstSlot = workerRole === 'admin_assistant'; 
                     const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
                     if (isStudent) {
@@ -245,31 +241,30 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
                             </div>
                             
-                            {/* 🚀 행정조교 맞춤 텍스트 및 UI 숨김 처리 */}
                             <div className="text-sm text-gray-600 font-medium">
                                 {isAsstSlot ? (
                                     <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
                                 ) : (
                                     <>
                                         {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
-                                        {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
+                                        {s.topic || (isAdminView ? `${s.taName} 근무` : '예약 대기 중')}
                                     </>
                                 )}
                             </div>
 
-                            {/* 클리닉 전용 학생/범위 정보 박스 (행정조교일 때는 안 보임) */}
-                            {(isAdmin || isLecturer || isWorker) && !isAsstSlot && s.studentName && (
+                            {/* 🚀 클리닉 전용 학생/범위 정보 박스 (행정조교일 때는 안 보임) */}
+                            {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
                               </div>
                             )}
 
-                            {isAdmin && (
+                            {isAdminView && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
-                                {/* 교실 배정은 행정조교에게는 보이지 않음 */}
+                                {/* 🚀 교실 배정은 행정조교에게 보이지 않음 */}
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
@@ -279,23 +274,23 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
                                 
-                                {/* 피드백은 행정조교에게 보이지 않음 */}
+                                {/* 🚀 피드백은 행정조교에게 보이지 않음 */}
                                 {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
                               </div>
                             )}
-                            {!isAdmin && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
+                            {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
-                            {/* 조교 본인 취소/추가 기능 (행정조교도 동일하게 사용) */}
+                            {/* 조교 본인 취소/추가 기능 */}
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             
-                            {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
+                            {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
-                            {/* 피드백 버튼은 행정조교에게 보이지 않음 */}
+                            {/* 🚀 피드백 버튼은 행정조교에게 보이지 않음 */}
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
                                 <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
@@ -316,7 +311,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   );
 });
 
-const ClinicDashboard = ({ currentUser, users }) => {
+const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
+    // 🚀 [CTO 로직] mode props를 바탕으로 화면을 스마트하게 분기
+    const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
+    const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
+
     const [sessionMap, setSessionMap] = useState({});
     const [sessions, setSessions] = useState([]);
     const [appLoading, setAppLoading] = useState(true);
@@ -505,7 +504,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); setFeedbackData({clinicContent:payload.clinicContent||'', feedback:payload.feedback||'', improvement:payload.improvement||''}); setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
-            // 🚀 관리자 편집 모달 호출 전 세팅
             setSelectedSession(payload); 
             setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
             setModalState({ type: 'admin_edit' });
@@ -581,7 +579,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
       } catch(e) { notify('예약 처리 중 오류가 발생했습니다.', 'error'); }
   };
 
-  // 🚀 [CTO 로직] 행정조교일 경우 학생 이름 등의 처리 우회
   const handleAdminEditSubmit = async () => {
     const isAsst = selectedSession.workerRole === 'admin_assistant';
     
@@ -613,12 +610,13 @@ const ClinicDashboard = ({ currentUser, users }) => {
   if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
   return (
-    <div className="space-y-6 w-full">
+    <div className="space-y-6 w-full animate-in fade-in">
        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4 space-y-2 pointer-events-none">
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
-       {['admin', 'admin_assistant'].includes(currentUser.role) && (
+       {/* 🚀 관리자 뷰 (행정조교가 클리닉 모드일 때 포함) */}
+       {isAdminView && (
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
                   <h2 className="text-2xl font-bold text-gray-900">클리닉/업무 관리자 대시보드</h2>
@@ -677,7 +675,14 @@ const ClinicDashboard = ({ currentUser, users }) => {
                   <Button onClick={handleSaveDefaultSchedule} className="w-full py-3 font-bold text-lg" size="sm">스케줄 생성 실행</Button>
               </Card>
 
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
+              <CalendarView 
+                  isInteractive={false} sessions={sessions} currentUser={currentUser} 
+                  currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                  selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
+                  onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
+                  onRefresh={() => fetchSessions(true)}
+                  isAdminView={true} isMyScheduleView={false} 
+              />
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
@@ -729,9 +734,11 @@ const ClinicDashboard = ({ currentUser, users }) => {
               </div>
            </div>
        )}
-       {['ta', 'admin_assistant'].includes(currentUser.role) && (
+
+       {/* 🚀 조교 개인 뷰 (수업조교 or 행정조교가 근무 스케줄 모드일 때) */}
+       {isMyScheduleView && (
             <>
-                <Card className={`bg-gradient-to-r ${currentUser.role === 'admin_assistant' ? 'from-indigo-600 to-purple-600' : 'from-blue-600 to-cyan-600'} text-white border-none w-full`}>
+                <Card className={`bg-gradient-to-r ${currentUser.role === 'admin_assistant' ? 'from-cyan-600 to-blue-600' : 'from-indigo-600 to-purple-600'} text-white border-none w-full`}>
                     <div className="flex justify-between items-end">
                         <div>
                             <h2 className="text-2xl font-bold mb-1">안녕하세요, {currentUser.name} {currentUser.role === 'admin_assistant' ? '행정조교' : '수업조교'}님</h2>
@@ -740,17 +747,35 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 배정 스케줄</div></div>
                     </div>
                 </Card>
-                <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
+                <CalendarView 
+                    isInteractive={true} sessions={sessions} currentUser={currentUser} 
+                    currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                    selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
+                    onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
+                    onRefresh={() => fetchSessions(true)}
+                    isAdminView={false} isMyScheduleView={true}
+                />
             </>
         )}
+
+       {/* 🚀 강사 열람 뷰 */}
        {currentUser.role === 'lecturer' && (
            <div className="space-y-8 w-full">
               <div className="bg-white border-b pb-4 mb-4">
                 <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 직원 통합 스케줄 (열람 전용)</h2>
               </div>
-              <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
+              <CalendarView 
+                  isInteractive={false} sessions={sessions} currentUser={currentUser} 
+                  currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                  selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
+                  onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} 
+                  onRefresh={() => fetchSessions(true)}
+                  isAdminView={false} isMyScheduleView={false}
+              />
            </div>
        )}
+
+       {/* 🚀 학생/학부모 예약 뷰 */}
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full">
@@ -804,6 +829,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
                         users={users}
                         taSubjectMap={taSubjectMap}
                         onRefresh={() => fetchSessions(true)}
+                        isAdminView={false} isMyScheduleView={false}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
@@ -823,7 +849,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
 
       {/* --- Modals --- */}
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 변경/취소 요청">
-        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="사유를 입력해 주세요 (예: 개인 사정으로 출근 불가)" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
+        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="사유를 입력해 주세요 (예: 개인 사정으로 출근 불가)" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
         <Button onClick={async()=>{ 
             if(!requestData.reason) return notify('사유입력','error'); 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
@@ -854,7 +880,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         <Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button>
       </Modal>
       
-      {/* 🚀 행정조교와 수업조교 편집 모달 분리 */}
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title={selectedSession?.workerRole === 'admin_assistant' ? "행정 업무 지시" : "예약/클리닉 수정"}>
         <div className="space-y-4">
             {selectedSession?.workerRole === 'admin_assistant' ? (
