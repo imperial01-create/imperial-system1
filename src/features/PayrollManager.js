@@ -8,7 +8,7 @@ import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFrom
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
-// PDF 자동 분석 컴포넌트 임포트
+// PDF 자동 분석 컴포넌트 임포트 (기존 기능 유지)
 import PdfAutoFiller from './PdfAutoFiller';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -29,6 +29,7 @@ const getMonthRange = (yearMonth) => {
     return { start, end, startStr, endStr };
 };
 
+// 기존 TA(수업 조교)용 세션 기반 주휴수당 계산 함수
 const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
     if (!sessions || sessions.length === 0) return { totalHours: 0, holidayPay: 0 };
 
@@ -75,10 +76,7 @@ const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
         }
     });
 
-    return {
-        totalHours: grandTotalHours,
-        holidayPay: Math.floor(totalHolidayPay)
-    };
+    return { totalHours: grandTotalHours, holidayPay: Math.floor(totalHolidayPay) };
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
@@ -92,6 +90,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [lastUpdated, setLastUpdated] = useState(null); 
     
     const [monthlySessions, setMonthlySessions] = useState([]);
+    const [workLogs, setWorkLogs] = useState([]); // 🚀 신규: 행정조교용 타임시트 상태 추가
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -100,26 +99,28 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const isManagementMode = viewMode === 'management';
 
+    // 🚀 역할 필터링에 'admin_assistant' 추가
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
-        const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta'].includes(u.role));
+        const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(u.role));
         
         const userMap = new Map();
         filtered.forEach(user => {
-            const existingUser = userMap.get(user.userId);
+            const existingUser = userMap.get(user.userId || user.id);
             if (!existingUser) {
-                userMap.set(user.userId, user);
+                userMap.set(user.userId || user.id, user);
             } else {
                 const isNewer = user.updatedAt && existingUser.updatedAt && (user.updatedAt > existingUser.updatedAt);
                 const hasAuth = user.authUid && !existingUser.authUid;
                 if (isNewer || hasAuth) {
-                    userMap.set(user.userId, user);
+                    userMap.set(user.userId || user.id, user);
                 }
             }
         });
         return Array.from(userMap.values());
     }, [isManagementMode, users, currentUser]);
 
+    // 기존 캐싱 및 Payroll 데이터 Fetch (변경 없음)
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
@@ -148,11 +149,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             if (isManagementMode) {
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), where('yearMonth', '==', selectedMonth));
                 let snapshot;
-                try {
-                    snapshot = await getDocsFromServer(q);
-                } catch (err) {
-                    snapshot = await getDocs(q);
-                }
+                try { snapshot = await getDocsFromServer(q); } catch (err) { snapshot = await getDocs(q); }
 
                 snapshot.forEach(docSnap => { 
                     const data = docSnap.data();
@@ -160,15 +157,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     if (!userId) return; 
 
                     const expectedDocId = `${userId}_${selectedMonth}`;
-
                     if (docSnap.id !== expectedDocId) {
                         setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', expectedDocId), data, { merge: true })
                             .then(() => deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docSnap.id)))
                             .catch(console.error);
-                        
-                        if (!fetchedData[userId] || fetchedData[userId]._docId !== expectedDocId) {
-                            fetchedData[userId] = { ...data, _docId: expectedDocId };
-                        }
+                        fetchedData[userId] = { ...data, _docId: expectedDocId };
                     } else {
                         fetchedData[userId] = { ...data, _docId: expectedDocId };
                     }
@@ -176,14 +169,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             } else {
                 const docId = `${currentUser.id}_${selectedMonth}`;
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
-                
                 let snapshot;
-                try {
-                    snapshot = await getDocFromServer(docRef);
-                } catch (err) {
-                    snapshot = await getDoc(docRef);
-                }
-
+                try { snapshot = await getDocFromServer(docRef); } catch (err) { snapshot = await getDoc(docRef); }
                 if (snapshot.exists()) {
                     fetchedData[currentUser.id] = { ...snapshot.data(), _docId: snapshot.id };
                 }
@@ -192,10 +179,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             setPayrolls(fetchedData);
             const now = Date.now();
             setLastUpdated(now);
-            
-            if (cacheTTL > 0) {
-                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
-            }
+            if (cacheTTL > 0) localStorage.setItem(cacheKey, JSON.stringify({ timestamp: now, data: fetchedData }));
 
         } catch (e) { 
             console.error("Payroll Fetch Error:", e); 
@@ -205,21 +189,30 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    const fetchMonthlySessions = useCallback(async () => {
-        if (!isManagementMode) { setMonthlySessions([]); return; }
+    // 수업 세션 및 🚀 신규: 조교 근무 기록(work_logs) Fetch
+    const fetchMonthlyData = useCallback(async () => {
+        if (!isManagementMode) { setMonthlySessions([]); setWorkLogs([]); return; }
         setIsSessionsLoading(true);
         try {
             const { startStr, endStr } = getMonthRange(selectedMonth);
-            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startStr), where('date', '<=', endStr));
-            const snapshot = await getDocs(q);
-            const sessions = snapshot.docs.map(d => d.data());
-            setMonthlySessions(sessions);
-        } catch (e) { console.error("Session Fetch Error:", e); } 
+            
+            // 기존 TA 세션
+            const sQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startStr), where('date', '<=', endStr));
+            const sSnap = await getDocs(sQuery);
+            setMonthlySessions(sSnap.docs.map(d => d.data()));
+
+            // 🚀 행정조교 타임시트(work_logs)
+            const wQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'work_logs'), where('date', '>=', startStr), where('date', '<=', endStr));
+            const wSnap = await getDocs(wQuery);
+            setWorkLogs(wSnap.docs.map(d => d.data()));
+
+        } catch (e) { console.error("Session/WorkLog Fetch Error:", e); } 
         finally { setIsSessionsLoading(false); }
     }, [selectedMonth, isManagementMode]);
 
-    useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlySessions(); }, [selectedMonth, fetchPayrolls, fetchMonthlySessions]);
+    useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
 
+    // 기존 PDF 자동 입력기 로직 (변경 없음)
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
         try {
@@ -229,157 +222,125 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const nowISO = new Date().toISOString(); 
 
             for (const user of targetUsers) {
-                const autoData = extractedData[user.id];
+                const autoData = extractedData[user.id || user.userId];
                 if (autoData) {
-                    let currentPayroll = updatedPayrolls[user.id];
+                    let currentPayroll = updatedPayrolls[user.id || user.userId];
                     
                     if (!currentPayroll) {
                         currentPayroll = {
-                            userId: user.id,
-                            userName: user.name,
-                            userRole: user.role,
-                            yearMonth: selectedMonth,
-                            hourlyRate: Number(user.hourlyRate) || 0,
-                            baseSalary: 0,
-                            totalHours: 0,
-                            weeklyHolidayPay: 0,
-                            mealAllowance: 0,
-                            bonus: 0,
-                            totalGross: 0,
+                            userId: user.id || user.userId, userName: user.name, userRole: user.role, yearMonth: selectedMonth, hourlyRate: Number(user.hourlyRate || user.hourlyWage) || 0,
+                            baseSalary: 0, totalHours: 0, weeklyHolidayPay: 0, mealAllowance: 0, bonus: 0, totalGross: 0,
                             deductions: { '국민연금': 0, '건강보험': 0, '고용보험': 0, '장기요양보험료': 0, '소득세': 0, '지방소득세': 0 },
-                            netSalary: 0,
-                            status: 'calculated'
+                            netSalary: 0, status: 'calculated'
                         };
                     }
 
                     const newDeductions = {
                         ...currentPayroll.deductions,
-                        '국민연금': autoData.nationalPension || 0,
-                        '건강보험': autoData.healthInsurance || 0,
-                        '고용보험': autoData.employmentInsurance || 0,
-                        '장기요양보험료': autoData.longTermCare || 0,
-                        '소득세': autoData.taxIncome || 0,
-                        '지방소득세': autoData.taxLocal || 0
+                        '국민연금': autoData.nationalPension || 0, '건강보험': autoData.healthInsurance || 0, '고용보험': autoData.employmentInsurance || 0,
+                        '장기요양보험료': autoData.longTermCare || 0, '소득세': autoData.taxIncome || 0, '지방소득세': autoData.taxLocal || 0
                     };
 
-                    const safeBaseSalary = Number(currentPayroll.baseSalary) || 0;
-                    const safeHolidayPay = Number(currentPayroll.weeklyHolidayPay) || 0;
-                    const safeBonus = Number(currentPayroll.bonus) || 0;
-                    const safeMeal = Number(currentPayroll.mealAllowance) || 0;
-                    const gross = safeBaseSalary + safeHolidayPay + safeBonus + safeMeal;
+                    const gross = (Number(currentPayroll.baseSalary) || 0) + (Number(currentPayroll.weeklyHolidayPay) || 0) + (Number(currentPayroll.bonus) || 0) + (Number(currentPayroll.mealAllowance) || 0);
                     const totalDeductions = Object.values(newDeductions).reduce((a, b) => a + (Number(b) || 0), 0);
                     const net = gross - totalDeductions;
 
-                    const dbPayload = {
-                        ...currentPayroll,
-                        totalGross: gross,
-                        deductions: newDeductions,
-                        netSalary: net,
-                        status: 'confirmed',
-                        updatedAt: serverTimestamp()
-                    };
+                    const dbPayload = { ...currentPayroll, totalGross: gross, deductions: newDeductions, netSalary: net, status: 'confirmed', updatedAt: serverTimestamp() };
                     delete dbPayload._docId; 
 
-                    const localPayload = {
-                        ...dbPayload,
-                        updatedAt: nowISO,
-                        _docId: `${user.id}_${selectedMonth}`
-                    };
-
-                    updatedPayrolls[user.id] = localPayload;
-                    const docId = `${user.id}_${selectedMonth}`;
+                    const localPayload = { ...dbPayload, updatedAt: nowISO, _docId: `${user.id || user.userId}_${selectedMonth}` };
+                    updatedPayrolls[user.id || user.userId] = localPayload;
                     
-                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true }));
+                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', localPayload._docId), dbPayload, { merge: true }));
                     updateCount++;
                 }
             }
-
             if (promises.length > 0) {
                 await Promise.all(promises);
                 setPayrolls(updatedPayrolls);
-                
-                const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
-                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
-                
-                alert(`성공! 총 ${updateCount}명의 공제 내역이 데이터베이스에 완벽하게 저장되었습니다.`);
+                localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
+                alert(`성공! 총 ${updateCount}명의 공제 내역이 적용되었습니다.`);
             }
-        } catch (e) {
-            console.error(e);
-            alert("공제 내역 자동 적용 중 오류가 발생했습니다: " + e.message);
-        } finally {
-            setCalcProcessing(false);
-        }
+        } catch (e) { alert("공제 내역 오류: " + e.message); } finally { setCalcProcessing(false); }
     };
 
+    // 🚀 [CTO 로직 병합] 자동 정산 엔진 (TA 세션 & 행정조교 타임시트 통합)
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
-        if (targetUser.role === 'ta' && !targetUser.hourlyRate) { 
-            alert(`${targetUser.name}님의 시급 정보가 없습니다. 먼저 사용자 관리에서 시급을 설정해주세요.`); 
+        const uid = targetUser.id || targetUser.userId;
+        const wage = targetUser.hourlyRate || targetUser.hourlyWage;
+
+        if ((targetUser.role === 'ta' || targetUser.role === 'admin_assistant') && !wage) { 
+            alert(`${targetUser.name}님의 시급 정보가 없습니다. 직원 관리 메뉴에서 시급을 설정해주세요.`); 
             return; 
         }
         
         setCalcProcessing(true);
-        
         try {
             let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
+            let completedHours = 0, expectedHours = 0; // 🚀 예정시간 분리용
+            const todayStr = new Date().toISOString().split('T')[0];
             
+            // 기존 수업 조교 (TA) 정산 로직
             if (targetUser.role === 'ta') {
-                const userSessions = monthlySessions.filter(s => s.taId === targetUser.id);
-                hourlyRate = parseInt(targetUser.hourlyRate || 0, 10);
+                const userSessions = monthlySessions.filter(s => s.taId === uid);
+                hourlyRate = parseInt(wage || 0, 10);
                 const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
                 totalHours = calcResult.totalHours; 
                 weeklyHolidayPay = calcResult.holidayPay; 
                 baseSalary = Math.floor(totalHours * hourlyRate);
             } 
+            // 🚀 신규 행정조교 타임시트(가마감) 정산 로직
+            else if (targetUser.role === 'admin_assistant') {
+                const uLogs = workLogs.filter(l => l.userId === uid);
+                hourlyRate = parseInt(wage || 10030, 10);
+
+                completedHours = uLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
+                expectedHours = uLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
+                totalHours = completedHours + expectedHours;
+
+                const weekGroups = {}; 
+                uLogs.forEach(log => {
+                    const d = new Date(log.date);
+                    const day = d.getDay(); 
+                    const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
+                    const weekKey = new Date(d.setDate(diff)).toISOString().split('T')[0];
+                    weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
+                });
+
+                Object.values(weekGroups).forEach(hours => {
+                    if (hours >= 15) { weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate; }
+                });
+
+                weeklyHolidayPay = Math.round(weeklyHolidayPay);
+                baseSalary = Math.floor(totalHours * hourlyRate);
+            }
             
             const initialDeductions = {}; 
             DEDUCTION_KEYS.forEach(key => initialDeductions[key] = 0);
             
-            const safeBaseSalary = Number(baseSalary) || 0;
-            const safeHolidayPay = Number(weeklyHolidayPay) || 0;
-            const safeTotalGross = safeBaseSalary + safeHolidayPay;
-
             const dbPayload = { 
-                userId: targetUser.id, 
-                userName: targetUser.name, 
-                userRole: targetUser.role, 
-                yearMonth: selectedMonth, 
-                hourlyRate: Number(hourlyRate) || 0, 
-                baseSalary: safeBaseSalary, 
-                totalHours: Number(totalHours) || 0, 
-                weeklyHolidayPay: safeHolidayPay, 
-                mealAllowance: 0, 
-                bonus: 0, 
-                totalGross: safeTotalGross, 
-                deductions: initialDeductions, 
-                netSalary: safeTotalGross, 
-                status: 'calculated',
-                updatedAt: serverTimestamp() 
+                userId: uid, userName: targetUser.name, userRole: targetUser.role, yearMonth: selectedMonth, 
+                hourlyRate: hourlyRate, baseSalary, totalHours, completedHours, expectedHours, // 🚀 DB에 가마감 데이터 저장
+                weeklyHolidayPay, mealAllowance: 0, bonus: 0, 
+                totalGross: baseSalary + weeklyHolidayPay, deductions: initialDeductions, netSalary: baseSalary + weeklyHolidayPay, 
+                status: 'calculated', updatedAt: serverTimestamp() 
             };
             
-            const docId = `${targetUser.id}_${selectedMonth}`;
+            const docId = `${uid}_${selectedMonth}`;
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), dbPayload, { merge: true });
             
             const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
-            const updatedPayrolls = { ...payrolls, [targetUser.id]: localPayload };
+            const updatedPayrolls = { ...payrolls, [uid]: localPayload };
             setPayrolls(updatedPayrolls);
+            localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
-            const cacheKey = `imperial_payroll_v7_${selectedMonth}_admin`;
-            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
-            
-        } catch (e) { 
-            console.error("Calculation Sync Error:", e);
-            alert("서버와 동기화 중 오류가 발생했습니다.\n" + e.message); 
-        } finally { 
-            setCalcProcessing(false); 
-        }
+        } catch (e) { alert("동기화 오류: " + e.message); } finally { setCalcProcessing(false); }
     };
 
     const handleSaveEdit = async () => {
         if (!editingPayroll) return;
-        
         setCalcProcessing(true);
-        
         try {
             const safeBaseSalary = Number(editingPayroll.baseSalary) || 0;
             const safeHolidayPay = Number(editingPayroll.weeklyHolidayPay) || 0;
@@ -390,16 +351,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const totalDeductions = Object.values(editingPayroll.deductions).reduce((a, b) => a + (Number(b) || 0), 0);
             const net = gross - totalDeductions;
             
-            const dbPayload = { 
-                ...editingPayroll, 
-                baseSalary: safeBaseSalary,
-                bonus: safeBonus,
-                mealAllowance: safeMeal,
-                totalGross: gross, 
-                netSalary: net, 
-                status: 'confirmed', 
-                updatedAt: serverTimestamp() 
-            };
+            const dbPayload = { ...editingPayroll, baseSalary: safeBaseSalary, bonus: safeBonus, mealAllowance: safeMeal, totalGross: gross, netSalary: net, status: 'confirmed', updatedAt: serverTimestamp() };
             delete dbPayload._docId;
             
             const docId = `${editingPayroll.userId}_${editingPayroll.yearMonth}`;
@@ -408,56 +360,36 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: localPayload };
             setPayrolls(updatedPayrolls);
-            
-            const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
-            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
-            
+            localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             setIsEditModalOpen(false);
-        } catch(e) { 
-            alert('상세 내역 저장에 실패했습니다: ' + e.message); 
-        } finally {
-            setCalcProcessing(false);
-        }
+        } catch(e) { alert('수정 실패: ' + e.message); } finally { setCalcProcessing(false); }
     };
 
-    // 🚀 [CTO 로직] '급여 이체대행 목록' 엑셀 다운로드 (은행/계좌 정보 포함)
+    // 기존 급여 이체 대행용 엑셀 다운로드 (유지)
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map((p, index) => {
-            // targetUsers(스냅샷)에서 이 사람의 은행/계좌 정보를 가져옴
-            const user = targetUsers.find(u => u.id === p.userId) || {};
-            
+            const user = targetUsers.find(u => (u.id || u.userId) === p.userId) || {};
             return {
-                '순번': index + 1,
-                '입금은행': user.bankName || '',
-                '입금계좌예금주명': p.userName,
-                '입금계좌번호': user.accountNumber || '',
-                '입금금액': p.netSalary
+                '순번': index + 1, '입금은행': user.bankName || '', '입금계좌예금주명': p.userName,
+                '입금계좌번호': user.accountNumber || '', '입금금액': p.netSalary
             };
         });
-        
-        const ws = XLSX.utils.json_to_sheet(data);
-        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "이체대행목록");
         XLSX.writeFile(wb, `급여 이체대행 목록_${selectedMonth}.xlsx`);
     };
 
     const handleMonthChange = (offset) => {
         const [yearStr, monthStr] = selectedMonth.split('-');
-        let year = parseInt(yearStr, 10);
-        let month = parseInt(monthStr, 10);
-        month += offset;
+        let year = parseInt(yearStr, 10); let month = parseInt(monthStr, 10) + offset;
         if (month > 12) { month = 1; year += 1; } else if (month < 1) { month = 12; year -= 1; }
-        const newMonthStr = `${year}-${String(month).padStart(2, '0')}`;
-        setSelectedMonth(newMonthStr);
+        setSelectedMonth(`${year}-${String(month).padStart(2, '0')}`);
     };
 
-    const formatTime = (ts) => {
-        if (!ts) return '';
-        return new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    };
+    const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '';
 
     return (
-        <div className="space-y-6 w-full animate-in fade-in">
+        <div className="space-y-6 w-full animate-in fade-in pb-20">
             {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
                 <div className="flex items-center gap-4">
@@ -465,15 +397,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     <h2 className="text-2xl font-bold text-gray-800">{selectedMonth.split('-')[0]}년 {selectedMonth.split('-')[1]}월 급여</h2>
                     <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-gray-100 rounded-full"><ChevronRight /></button>
                 </div>
-                
                 <div className="flex items-center gap-2">
                     <div className="text-xs text-gray-400 mr-2 flex items-center gap-1">
-                        {isLoading ? <span className="text-blue-500 flex items-center gap-1"><Loader size={12} className="animate-spin"/> 로딩 중</span> : 
-                         (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
+                        {isLoading ? <span className="text-blue-500 flex items-center gap-1"><Loader size={12} className="animate-spin"/> 로딩 중</span> : (lastUpdated ? `업데이트: ${formatTime(lastUpdated)}` : '')}
                     </div>
-                    <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlySessions(); }} title="데이터 새로고침" disabled={isLoading || isSessionsLoading} />
-                    {/* 🚀 다운로드 버튼 */}
-                    {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">엑셀 다운로드</Button>}
+                    <Button size="sm" variant="ghost" icon={RefreshCcw} onClick={() => { fetchPayrolls(true); fetchMonthlyData(); }} disabled={isLoading || isSessionsLoading} />
+                    {isManagementMode && <Button onClick={handleDownloadExcel} icon={Download} variant="outline" className="border-green-200 text-green-700 hover:bg-green-50 ml-2">이체용 엑셀</Button>}
                 </div>
             </div>
 
@@ -485,23 +414,32 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     <div className="md:hidden space-y-4">
                         {targetUsers.length === 0 && <div className="text-center py-10 text-gray-400">데이터가 없습니다.</div>}
                         {targetUsers.map(user => {
-                            const payroll = payrolls[user.id];
-                            const roleLabel = user.role === 'ta' ? '조교' : (user.role === 'lecturer' ? '강사' : '관리자');
+                            const uid = user.id || user.userId;
+                            const payroll = payrolls[uid];
+                            const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
+                            const wage = user.hourlyRate || user.hourlyWage;
                             return (
-                                <Card key={user.id} className="p-5 flex flex-col gap-3">
+                                <Card key={uid} className="p-5 flex flex-col gap-3">
                                     <div className="flex justify-between items-center border-b pb-2">
                                         <div>
                                             <span className="font-bold text-lg">{user.name}</span>
-                                            <span className="text-xs text-gray-400 ml-1">({roleLabel})</span>
+                                            <span className={`text-xs ml-2 px-2 py-0.5 rounded-full font-bold ${user.role==='admin_assistant' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{roleLabel}</span>
                                         </div>
                                         <div className="text-right">
                                             <span className="block text-xs text-gray-400">실수령액</span>
-                                            <span className="font-bold text-green-600">{payroll ? formatCurrency(payroll.netSalary) : '-'}</span>
+                                            <span className="font-bold text-green-600 text-lg">{payroll ? formatCurrency(payroll.netSalary) : '-'}</span>
                                         </div>
                                     </div>
                                     <div className="text-sm space-y-1 text-gray-600">
-                                        <div className="flex justify-between"><span>기본급/시급</span><span>{user.role === 'ta' ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</span></div>
-                                        <div className="flex justify-between"><span>근무시간</span><span>{payroll ? `${payroll.totalHours} hrs` : '-'}</span></div>
+                                        <div className="flex justify-between"><span>시급/기본급</span><span>{['ta', 'admin_assistant'].includes(user.role) ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</span></div>
+                                        <div className="flex justify-between items-center">
+                                            <span>근무시간</span>
+                                            <div className="text-right">
+                                                <span>{payroll ? `${payroll.totalHours} hrs` : '-'}</span>
+                                                {/* 🚀 가마감 예정 시간 표시 UI */}
+                                                {payroll && payroll.expectedHours > 0 && <p className="text-[10px] text-purple-500 font-bold">(예정 {payroll.expectedHours}h 포함)</p>}
+                                            </div>
+                                        </div>
                                         <div className="flex justify-between"><span>주휴수당</span><span className="text-blue-500">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</span></div>
                                         <div className="flex justify-between font-bold text-gray-800 border-t pt-1 mt-1"><span>지급총액(세전)</span><span>{payroll ? formatCurrency(payroll.totalGross) : '-'}</span></div>
                                     </div>
@@ -528,7 +466,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             <th className="p-4 whitespace-nowrap">이름</th>
                                             <th className="p-4 whitespace-nowrap">역할</th>
                                             <th className="p-4 whitespace-nowrap">시급/기본급</th>
-                                            <th className="p-4 whitespace-nowrap">근무시간</th>
+                                            <th className="p-4 whitespace-nowrap">근무시간 (가마감)</th>
                                             <th className="p-4 whitespace-nowrap">주휴수당</th>
                                             <th className="p-4 whitespace-nowrap">지급총액(세전)</th>
                                             <th className="p-4 whitespace-nowrap">실수령액(세후)</th>
@@ -537,17 +475,20 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                     </thead>
                                     <tbody className="divide-y">
                                         {targetUsers.map(user => {
-                                            const payroll = payrolls[user.id];
-                                            const roleLabel = user.role === 'ta' ? '조교' : (user.role === 'lecturer' ? '강사' : '관리자');
+                                            const uid = user.id || user.userId;
+                                            const payroll = payrolls[uid];
+                                            const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
+                                            const wage = user.hourlyRate || user.hourlyWage;
                                             return (
-                                                <tr key={user.id} className="hover:bg-gray-50">
+                                                <tr key={uid} className="hover:bg-gray-50">
                                                     <td className="p-4 font-bold">{user.name}</td>
-                                                    <td className="p-4 uppercase text-xs font-bold text-gray-400">{roleLabel}</td>
+                                                    <td className="p-4 text-xs font-bold"><span className={`px-2 py-1 rounded-md ${user.role==='admin_assistant' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{roleLabel}</span></td>
+                                                    <td className="p-4">{['ta', 'admin_assistant'].includes(user.role) ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</td>
                                                     <td className="p-4">
-                                                        {user.role === 'ta' ? (user.hourlyRate ? `${formatCurrency(user.hourlyRate)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}
+                                                        {payroll ? <span className="font-bold">{payroll.totalHours} hrs</span> : '-'}
+                                                        {payroll && payroll.expectedHours > 0 && <span className="ml-2 text-xs text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-bold">예정 {payroll.expectedHours}h 포함</span>}
                                                     </td>
-                                                    <td className="p-4">{payroll ? `${payroll.totalHours} hrs` : '-'}</td>
-                                                    <td className="p-4 text-blue-600">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
+                                                    <td className="p-4 text-blue-600 font-bold">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
                                                     <td className="p-4 font-bold">{payroll ? formatCurrency(payroll.totalGross) : '-'}</td>
                                                     <td className="p-4 font-bold text-green-600">{payroll ? formatCurrency(payroll.netSalary) : '-'}</td>
                                                     <td className="p-4 flex justify-end gap-2">
@@ -580,20 +521,16 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 </div>
                                 <div className="space-y-4">
                                     <div className="flex justify-between items-center text-lg p-3 bg-gray-50 rounded-xl">
-                                        <span className="text-gray-600">성명</span>
-                                        <span className="font-bold">{currentUser.name}</span>
+                                        <span className="text-gray-600">성명</span><span className="font-bold">{currentUser.name}</span>
                                     </div>
                                     <div className="bg-blue-600 text-white p-5 rounded-xl flex flex-col items-center justify-center shadow-md">
-                                        <span className="text-blue-100 text-sm mb-1">실수령액</span>
-                                        <span className="text-3xl font-bold">{formatCurrency(payrolls[currentUser.id].netSalary)}</span>
+                                        <span className="text-blue-100 text-sm mb-1">실수령액</span><span className="text-3xl font-bold">{formatCurrency(payrolls[currentUser.id].netSalary)}</span>
                                     </div>
                                 </div>
                             </Card>
 
                             <Card className="lg:col-span-2 h-fit">
-                                <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800">
-                                    <FileText className="text-gray-500"/> 상세 내역
-                                </h4>
+                                <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800"><FileText className="text-gray-500"/> 상세 내역</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
                                         <p className="font-bold text-blue-600 mb-3 flex items-center gap-2"><Plus size={16}/> 지급 내역</p>
@@ -609,9 +546,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         <p className="font-bold text-red-500 mb-3 flex items-center gap-2"><DollarSign size={16}/> 공제 내역</p>
                                         <div className="space-y-2">
                                             {DEDUCTION_KEYS.map((key) => (
-                                                <div key={key} className="flex justify-between text-sm text-gray-600">
-                                                    <span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span>
-                                                </div>
+                                                <div key={key} className="flex justify-between text-sm text-gray-600"><span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span></div>
                                             ))}
                                             <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg text-gray-700"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
                                         </div>
@@ -633,46 +568,23 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 {editingPayroll && (
                     <div className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">기본급 (수동 조정)</label>
-                                <input type="number" className="w-full border p-2 rounded" value={editingPayroll.baseSalary} onChange={e => setEditingPayroll({...editingPayroll, baseSalary: Number(e.target.value)})} />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">상여금</label>
-                                <input type="number" className="w-full border p-2 rounded" value={editingPayroll.bonus} onChange={e => setEditingPayroll({...editingPayroll, bonus: Number(e.target.value)})} />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">식대</label>
-                                <input type="number" className="w-full border p-2 rounded" value={editingPayroll.mealAllowance} onChange={e => setEditingPayroll({...editingPayroll, mealAllowance: Number(e.target.value)})} />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">주휴수당 (자동계산됨)</label>
-                                <input type="number" className="w-full border p-2 rounded bg-gray-100" value={editingPayroll.weeklyHolidayPay} readOnly />
-                            </div>
+                            <div><label className="block text-xs font-bold text-gray-500 mb-1">기본급 (수동 조정)</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.baseSalary} onChange={e => setEditingPayroll({...editingPayroll, baseSalary: Number(e.target.value)})} /></div>
+                            <div><label className="block text-xs font-bold text-gray-500 mb-1">상여금</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.bonus} onChange={e => setEditingPayroll({...editingPayroll, bonus: Number(e.target.value)})} /></div>
+                            <div><label className="block text-xs font-bold text-gray-500 mb-1">식대</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.mealAllowance} onChange={e => setEditingPayroll({...editingPayroll, mealAllowance: Number(e.target.value)})} /></div>
+                            <div><label className="block text-xs font-bold text-gray-500 mb-1">주휴수당 (자동계산됨)</label><input type="number" className="w-full border p-2 rounded bg-gray-100" value={editingPayroll.weeklyHolidayPay} readOnly /></div>
                         </div>
-                        
                         <div className="border-t pt-4">
-                            <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값)</h4>
+                            <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값 자동입력됨)</h4>
                             <div className="grid grid-cols-2 gap-2">
                                 {DEDUCTION_KEYS.map(key => (
                                     <div key={key}>
                                         <label className="block text-xs text-gray-500">{key}</label>
-                                        <input 
-                                            type="number" 
-                                            className="w-full border p-2 rounded text-right" 
-                                            value={editingPayroll.deductions?.[key] || 0} 
-                                            onChange={e => setEditingPayroll({
-                                                ...editingPayroll, 
-                                                deductions: { ...editingPayroll.deductions, [key]: Number(e.target.value) }
-                                            })} 
-                                        />
+                                        <input type="number" className="w-full border p-2 rounded text-right" value={editingPayroll.deductions?.[key] || 0} onChange={e => setEditingPayroll({...editingPayroll, deductions: { ...editingPayroll.deductions, [key]: Number(e.target.value) }})} />
                                     </div>
                                 ))}
                             </div>
                         </div>
-                        <Button className="w-full mt-4" onClick={handleSaveEdit} icon={calcProcessing ? Loader : Save} disabled={calcProcessing}>
-                            {calcProcessing ? '저장 및 동기화 중...' : '저장 및 확정'}
-                        </Button>
+                        <Button className="w-full mt-4" onClick={handleSaveEdit} icon={calcProcessing ? Loader : Save} disabled={calcProcessing}>{calcProcessing ? '저장 중...' : '저장 및 확정'}</Button>
                     </div>
                 )}
             </Modal>
