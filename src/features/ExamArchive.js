@@ -4,7 +4,7 @@ import {
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
   XCircle, Edit3, Trash2
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, limit, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
@@ -45,12 +45,10 @@ const ExamArchive = ({ currentUser }) => {
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
-    const isAdmin = currentUser.role === 'admin';
-    const isWorker = ['admin', 'lecturer', 'ta'].includes(currentUser.role);
-    const canAddExam = ['admin', 'ta'].includes(currentUser.role);
-
-    useEffect(() => {
-    }, []);
+    // 🚀 [수정점] 행정조교도 관리자처럼 모든 통제 권한 부여
+    const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
+    const isWorker = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role);
+    const canAddExam = ['admin', 'ta', 'admin_assistant'].includes(currentUser.role);
 
     const handleSearch = async () => {
         setLoading(true);
@@ -59,9 +57,11 @@ const ExamArchive = ({ currentUser }) => {
         
         try {
             const examsRef = collection(db, INTEGRATED_COLLECTION);
-            let q = query(examsRef, limit(50)); 
+            // 🚀 [수정점] limit(50) 삭제 (모든 데이터 정상적으로 불러옴)
+            let q = query(examsRef); 
 
             Object.keys(filters).forEach(key => {
+                if (key === 'schoolType') return; // 🚀 [수정점] schoolType은 구형 데이터 호환을 위해 클라이언트(JS)에서 필터링
                 if (key === 'combinedTerm' && filters.combinedTerm) {
                     const [sem, tm] = filters.combinedTerm.split(' ');
                     q = query(q, where('semester', '==', String(sem)), where('termType', '==', String(tm)));
@@ -71,8 +71,18 @@ const ExamArchive = ({ currentUser }) => {
             });
 
             const snapshot = await getDocs(q);
-            const results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
+            // 🚀 [수정점] 구형 데이터 호환성 보장 필터링 (schoolType이 없는 과거 데이터도 이름으로 판별하여 잡아냄)
+            if (filters.schoolType) {
+                results = results.filter(r => {
+                    if (r.schoolType) return r.schoolType === filters.schoolType;
+                    if (filters.schoolType === '고등학교') return r.schoolName?.includes('고');
+                    if (filters.schoolType === '중학교') return r.schoolName?.includes('중');
+                    return true;
+                });
+            }
+
             results.sort((a, b) => 
                 String(a.schoolName || "").localeCompare(String(b.schoolName || "")) || 
                 String(b.year || "").localeCompare(String(a.year || "")) || 
@@ -229,7 +239,6 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 스마트 병합 알고리즘] 쪼개진 문서 퓨전 및 유실 방지 로직
     const handleRunMergeMigration = async () => {
         if (!window.confirm("⚠️ [중복 데이터 안전 병합]\n\n같은 시험인데 문서가 2개로 쪼개진 경우, \n'PDF 파일 링크'와 '내신 분석 데이터'를 하나로 완벽하게 합친 후 빈 껍데기 문서를 삭제합니다.\n(데이터 유실 없음)\n\n진행하시겠습니까?")) return;
 
@@ -264,23 +273,18 @@ const ExamArchive = ({ currentUser }) => {
                     let mergedData = {};
                     let mergedFiles = {};
 
-                    // 배열을 순회하며 빈 값이 아닌 데이터를 모조리 끌어모음 (데이터 유실 철벽 방어)
                     group.forEach(exam => {
                         Object.keys(exam).forEach(key => {
                             if (key !== 'files' && key !== '_id') {
                                 if (exam[key] !== null && exam[key] !== undefined && exam[key] !== '') {
                                     if (Array.isArray(exam[key]) && exam[key].length === 0) return; 
                                     if (typeof exam[key] === 'object' && Object.keys(exam[key]).length === 0) return; 
-                                    
-                                    // 질문 배열(questions)의 경우 더 많이 작성된 쪽을 우선함
                                     if (key === 'questions' && mergedData.questions && mergedData.questions.length > exam.questions.length) return;
-
                                     mergedData[key] = exam[key];
                                 }
                             }
                         });
 
-                        // 파일 링크는 개별적으로 쪼개서 존재하는 URL을 퓨전
                         if (exam.files) {
                             Object.keys(exam.files).forEach(fKey => {
                                 const fileObj = exam.files[fKey];
@@ -299,7 +303,6 @@ const ExamArchive = ({ currentUser }) => {
                     await setDoc(doc(db, INTEGRATED_COLLECTION, logicalId), mergedData, { merge: true });
                     mergedCount++;
 
-                    // 합쳐졌으니 기존의 찌꺼기(다른 ID) 문서들은 모두 삭제
                     for (const exam of group) {
                         if (exam._id !== logicalId) {
                             await deleteDoc(doc(db, INTEGRATED_COLLECTION, exam._id));
@@ -307,7 +310,6 @@ const ExamArchive = ({ currentUser }) => {
                         }
                     }
                 } else if (group.length === 1 && group[0]._id !== logicalId) {
-                     // 중복은 아니지만 옛날 랜덤 ID로 저장된 고아 문서인 경우 -> ID 정규화 (이사)
                      const exam = group[0];
                      const examData = { ...exam };
                      delete examData._id;
@@ -510,7 +512,6 @@ const ExamArchive = ({ currentUser }) => {
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리 (학부모 접근 불가)</span>
                 </div>
                 <div className="flex gap-2">
-                    {/* 🚀 중복 시험 스마트 병합 버튼 추가 */}
                     {isAdmin && (
                         <Button onClick={handleRunMergeMigration} variant="secondary" className="border-orange-500 text-orange-600 hover:bg-orange-50" icon={isProcessing ? Loader : LinkIcon} disabled={isProcessing}>
                             <span className="hidden sm:inline">중복 시험 병합</span><span className="sm:hidden">병합</span>

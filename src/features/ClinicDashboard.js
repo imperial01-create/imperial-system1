@@ -4,7 +4,7 @@ import {
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw 
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, limit, getDocs } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
@@ -51,7 +51,6 @@ const getWeekOfMonth = (date) => {
 };
 
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
-  // 🚀 [CTO FIX] 조교 본인 확인 시 ID 불일치를 대비하여 이름(taName)으로도 확인 (하이브리드 매칭)
   const mySessions = useMemo(() => {
      if (currentUser.role === 'ta') {
         return sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
@@ -60,7 +59,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   }, [sessions, currentUser, selectedDateStr]);
 
   const now = new Date();
-  const isAdmin = currentUser.role === 'admin';
+  // 🚀 [수정점] 클리닉 센터에서 행정조교도 관리자처럼 스케줄 조정 가능하게 추가
+  const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser.role === 'parent';
   const isLecturer = currentUser.role === 'lecturer';
@@ -118,7 +118,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isToday = dStr === getLocalToday();
             let hasEvent = false;
             if (isStudent) { if (dStr >= getLocalToday()) hasEvent = sessions.some(s => s.date === dStr && s.status === 'open'); }
-            // 🚀 [CTO FIX] 이벤트 유무 확인할 때도 이름(taName) 포함 확인
             else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
@@ -176,7 +175,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    // 🚀 [CTO FIX] 조교 담당 과목 맵핑을 안전하게 수행 (이름으로도 찾음)
                     const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId] || taSubjectMap.byName?.[s.taName] || '개별 클리닉';
 
                     if (isStudent) {
@@ -194,13 +192,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                     </div>
                                 </div>
                                 <div className="ml-3">
-                                  <Button 
-                                      size="sm" 
-                                      variant={isSelected ? "selected" : "outline"}
-                                      onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }}
-                                      icon={isSelected ? Check : Plus}
-                                      disabled={isBlocked}
-                                  >
+                                  <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus} disabled={isBlocked}>
                                       {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
                                   </Button>
                                 </div>
@@ -262,15 +254,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
-                            {/* 🚀 [CTO FIX] 피드백 권한 검증 시 조교 이름도 함께 검사 */}
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && (
-                                <Button 
-                                    size="sm" 
-                                    variant={s.feedbackStatus==='submitted'?'secondary':'primary'} 
-                                    icon={CheckSquare} 
-                                    onClick={()=>onAction('write_feedback', s)} 
-                                    disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}
-                                >
+                                <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
                                 </Button>
                             )}
@@ -308,7 +293,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // 🚀 [CTO FIX] 조교 과목을 찾을 때 ID뿐만 아니라 이름으로도 찾을 수 있게 양방향 저장
     const taSubjectMap = useMemo(() => {
         const mapById = {};
         const mapByName = {};
@@ -352,44 +336,28 @@ const ClinicDashboard = ({ currentUser, users }) => {
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
                 const today = getLocalToday();
                 const endDate = getFutureDate(21);
-                sessionQuery = query(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), 
-                    where('date', '>=', today), 
-                    where('date', '<=', endDate) 
-                );
+                sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), where('date', '<=', endDate));
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
             }
 
             const snapshot = await getDocs(sessionQuery);
             const fetchedData = {};
-            snapshot.forEach(doc => {
-                fetchedData[doc.id] = { id: doc.id, ...doc.data() };
-            });
+            snapshot.forEach(doc => { fetchedData[doc.id] = { id: doc.id, ...doc.data() }; });
 
             setSessionMap(fetchedData);
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
 
-        } catch (e) {
-            console.error("Session Fetch Error:", e);
-        } finally {
-            setAppLoading(false);
-        }
+        } catch (e) { console.error(e); } finally { setAppLoading(false); }
     }, [currentDate, currentUser]);
 
-    useEffect(() => {
-        fetchSessions(false);
-    }, [fetchSessions]);
+    useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
-    // 🚀 [CTO DB 백그라운드 자가 치유] 조교가 화면을 볼 때, 자신의 옛날 ID로 된 문서를 새 ID로 싹 고침
     useEffect(() => {
         if (currentUser.role === 'ta' && sessions.length > 0) {
             const staleSessions = sessions.filter(s => s.taName === currentUser.name && s.taId !== currentUser.id);
             if (staleSessions.length > 0) {
-                staleSessions.forEach(s => {
-                    updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', s.id), { taId: currentUser.id })
-                    .catch(() => {}); // 사용성을 위해 에러는 조용히 무시
-                });
+                staleSessions.forEach(s => { updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', s.id), { taId: currentUser.id }).catch(()=>{}); });
             }
         }
     }, [sessions, currentUser]);
@@ -406,13 +374,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
     };
 
     useEffect(() => {
-        const sorted = Object.values(sessionMap).sort((a,b) => {
-            const dateA = a.date || '';
-            const dateB = b.date || '';
-            const timeA = a.startTime || '';
-            const timeB = b.startTime || '';
-            return dateA.localeCompare(dateB) || timeA.localeCompare(timeB);
-        });
+        const sorted = Object.values(sessionMap).sort((a,b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
         setSessions(sorted);
     }, [sessionMap]);
 
@@ -432,53 +394,26 @@ const ClinicDashboard = ({ currentUser, users }) => {
             });
 
             if (bookedSessions.length === 0) return;
-
             const studentName = bookedSessions[0].studentName;
             const topic = bookedSessions[0].topic;
             
             bookedSessions.sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
-
             let scheduleText = "";
-            bookedSessions.forEach(s => {
-                scheduleText += `- ${s.date} ${s.startTime} (${s.taName})\n`;
-            });
+            bookedSessions.forEach(s => { scheduleText += `- ${s.date} ${s.startTime} (${s.taName})\n`; });
 
-            const messageText = `
-<b>🔔 클리닉 신청 알림</b>
-
-<b>학생:</b> ${studentName}
-<b>내용:</b> ${topic}
-
-<b>신청 일정:</b>
-${scheduleText}
-            `.trim();
-
-            await fetch(TELEGRAM_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    chat_id: CHAT_ID,
-                    text: messageText,
-                    parse_mode: 'HTML'
-                })
-            });
-        } catch (e) {
-            console.error("Telegram Notification Error:", e);
-        }
+            const messageText = `<b>🔔 클리닉 신청 알림</b>\n\n<b>학생:</b> ${studentName}\n<b>내용:</b> ${topic}\n\n<b>신청 일정:</b>\n${scheduleText}`.trim();
+            await fetch(TELEGRAM_API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: CHAT_ID, text: messageText, parse_mode: 'HTML' }) });
+        } catch (e) { console.error(e); }
     };
 
-    const handleDateChange = (dStr) => {
-        setSelectedDateStr(dStr);
-        setStudentSelectedSlots([]); 
-    };
+    const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
     const handleAction = async (action, payload) => {
       try {
         if (action === 'toggle_slot') {
             const s = payload;
-            if (studentSelectedSlots.includes(s.id)) {
-                setStudentSelectedSlots(p => p.filter(id => id !== s.id));
-            } else {
+            if (studentSelectedSlots.includes(s.id)) { setStudentSelectedSlots(p => p.filter(id => id !== s.id)); } 
+            else {
                 if (studentSelectedSlots.length > 0) {
                     const first = sessions.find(sess => sess.id === studentSelectedSlots[0]);
                     if (first && first.date !== s.date) return notify('같은 날짜의 클리닉만 동시 신청 가능합니다.', 'error');
@@ -496,17 +431,12 @@ ${scheduleText}
             const ref = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), newSession);
             updateLocalAndCacheState(prev => ({ ...prev, [ref.id]: { id: ref.id, ...newSession } }));
             notify('근무 신청 완료');
-
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
             if(payload) askConfirm("정말 삭제하시겠습니까?", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
-                updateLocalAndCacheState(prev => {
-                    const next = { ...prev };
-                    delete next[payload];
-                    return next;
-                });
+                updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
             });
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
@@ -516,11 +446,7 @@ ${scheduleText}
         } else if (action === 'withdraw_add') {
             if(payload) askConfirm("철회하시겠습니까?", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
-                updateLocalAndCacheState(prev => {
-                    const next = { ...prev };
-                    delete next[payload];
-                    return next;
-                });
+                updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
             });
         } else if (action === 'approve_booking') {
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
@@ -542,7 +468,7 @@ ${scheduleText}
              if (payload.status === 'cancellation_requested') { 
                  await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
                  updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload.id]; return next; });
-                 notify('취소 요청 승인됨 (삭제 완료)'); 
+                 notify('취소 요청 승인됨'); 
              } 
              else if (payload.status === 'addition_requested') { 
                  await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); 
@@ -569,7 +495,6 @@ ${scheduleText}
           for (let h = sH; h < eH; h++) {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
-            // 🚀 [CTO FIX] 생성 중복 체크 시 이름도 확인
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', date: dStr, startTime: sT, endTime: eT, 
@@ -593,15 +518,7 @@ ${scheduleText}
       
       studentSelectedSlots.forEach(id => {
         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
-        const updateData = { 
-            status: 'pending', 
-            studentId: currentUser.id, 
-            studentName: currentUser.name, 
-            studentPhone: currentUser.phone || '', 
-            topic: formattedTopic, 
-            questionRange: formattedRange, 
-            source: 'app' 
-        };
+        const updateData = { status: 'pending', studentId: currentUser.id, studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' };
         batch.update(ref, updateData);
         updates[id] = { id, ...updateData }; 
       });
@@ -615,32 +532,18 @@ ${scheduleText}
           });
           sendClinicNotificationToTelegram(updates);
           setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
-      } catch(e) {
-          console.error("Student Booking Error:", e);
-          notify('예약 처리 중 오류가 발생했습니다. 권한을 확인해주세요.', 'error');
-      }
+      } catch(e) { notify('예약 처리 중 오류가 발생했습니다.', 'error'); }
   };
 
   const handleAdminEditSubmit = async () => {
-    const newStatus = adminEditData.studentName ? 
-                      (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 
-                      'open';
-
-    const updateData = {
-        studentName: adminEditData.studentName,
-        topic: adminEditData.topic,
-        questionRange: adminEditData.questionRange,
-        status: newStatus
-    };
+    const newStatus = adminEditData.studentName ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
+    const updateData = { studentName: adminEditData.studentName, topic: adminEditData.topic, questionRange: adminEditData.questionRange, status: newStatus };
     
     try {
         await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
         updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...updateData } }));
         setModalState({type:null}); notify('수정완료', 'success'); 
-    } catch (e) {
-        console.error("Admin Edit Error:", e);
-        notify('수정 권한이 거부되었습니다. 재시도 해주세요.', 'error');
-    }
+    } catch (e) { notify('수정 권한이 거부되었습니다.', 'error'); }
   };
 
   const pendingBookings = sessions.filter(s => s.status === 'pending');
@@ -658,10 +561,11 @@ ${scheduleText}
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
-       {currentUser.role === 'admin' && (
+       {/* 🚀 [수정점] 행정조교도 관리자 대시보드 화면을 볼 수 있도록 권한 확장 */}
+       {['admin', 'admin_assistant'].includes(currentUser.role) && (
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
-                  <h2 className="text-2xl font-bold text-gray-900">관리자 대시보드</h2>
+                  <h2 className="text-2xl font-bold text-gray-900">클리닉 관리자 대시보드</h2>
                   <div className="flex gap-2">
                       <Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'admin_stats'})}>통계</Button>
                   </div>
@@ -773,7 +677,6 @@ ${scheduleText}
                 <Card className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-none w-full">
                     <div className="flex justify-between items-end">
                         <div><h2 className="text-2xl font-bold mb-1">안녕하세요, {currentUser.name}님</h2><p className="text-white/80">오늘도 학생들의 성장을 위해 힘써주세요!</p></div>
-                        {/* 🚀 [CTO FIX] 조교 이달의 근무 계산 시에도 이름 확인 포함 */}
                         <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
                     </div>
                 </Card>
@@ -903,9 +806,7 @@ ${scheduleText}
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
         <div className="space-y-6">
             <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div>
-            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);
-            // 🚀 [CTO FIX] 관리자 근무 통계 계산 시 이름도 확인
-            return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
+            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
         </div>
       </Modal>
       

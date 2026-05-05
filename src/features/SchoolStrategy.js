@@ -56,15 +56,15 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  const isStaff = ['admin', 'lecturer', 'ta'].includes(user.role);
-  const isAdmin = user.role === 'admin';
+  // 🚀 [수정점] 행정조교도 관리자처럼 내신연구소를 통제할 수 있도록 배열에 추가
+  const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
+  const isAdmin = ['admin', 'admin_assistant'].includes(user.role);
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
   const currentYear = new Date().getFullYear();
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
 
-  // 화면 노출용
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
     const gradeNum = String(currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년').replace(/\D/g, '');
     let sem = "1";
@@ -102,7 +102,6 @@ export default function SchoolStrategy({ currentUser }) {
           } else if (isStudentOrParent) {
               const rawUserSchool = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "";
               
-              // 🚀 1. 핵심 키워드 정규화
               let baseSchool = rawUserSchool.replace(/\s+/g, '');
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
               
@@ -113,16 +112,9 @@ export default function SchoolStrategy({ currentUser }) {
                   return;
               }
 
-              // 🚀 2. 다중 융단폭격 쿼리 배열 (띄어쓰기, 고등학교 등 모든 경우의 수 완벽 커버)
               const schoolVariations = [...new Set([
-                  baseSchool,
-                  `${baseSchool}고`,
-                  `${baseSchool}고등학교`,
-                  `${baseSchool} 고등학교`,
-                  `${baseSchool}중`,
-                  `${baseSchool}중학교`,
-                  `${baseSchool} 중학교`,
-                  rawUserSchool
+                  baseSchool, `${baseSchool}고`, `${baseSchool}고등학교`, `${baseSchool} 고등학교`,
+                  `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, rawUserSchool
               ])];
 
               const qStudent = query(
@@ -211,21 +203,14 @@ export default function SchoolStrategy({ currentUser }) {
           
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
           
-          // 🚀 관리자 검색 시에도 다중 융단폭격 쿼리 적용 (오타 및 입력 방식 차이 방어)
           if (filterInput.school.trim() !== '') {
               const searchSchoolRaw = filterInput.school.trim();
               let baseSchool = searchSchoolRaw.replace(/\s+/g, '');
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
               
               const searchVariations = [...new Set([
-                  baseSchool,
-                  `${baseSchool}고`,
-                  `${baseSchool}고등학교`,
-                  `${baseSchool} 고등학교`,
-                  `${baseSchool}중`,
-                  `${baseSchool}중학교`,
-                  `${baseSchool} 중학교`,
-                  searchSchoolRaw
+                  baseSchool, `${baseSchool}고`, `${baseSchool}고등학교`, `${baseSchool} 고등학교`,
+                  `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, searchSchoolRaw
               ])];
               
               q = query(q, where("schoolName", "in", searchVariations));
@@ -404,12 +389,7 @@ export default function SchoolStrategy({ currentUser }) {
           
           if (oldDocSnap.exists()) {
               const oldData = oldDocSnap.data();
-              const mergedPayload = {
-                  ...oldData,
-                  ...baseData,
-                  ...strategyPayload,
-                  updatedAt: serverTimestamp()
-              };
+              const mergedPayload = { ...oldData, ...baseData, ...strategyPayload, updatedAt: serverTimestamp() };
               await setDoc(doc(db, INTEGRATED_COLLECTION, newId), mergedPayload);
               await deleteDoc(oldDocRef);
           } else {
@@ -567,6 +547,7 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
         )}
 
+        {/* ...이하 동일 (생략 없이 원본 유지) ... */}
         {isStudentOrParent && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
              <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>

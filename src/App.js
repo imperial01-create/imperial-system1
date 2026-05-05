@@ -4,14 +4,12 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
-  Clock, Trash2 // 🚀 타임시트용 아이콘 추가
+  Clock, Trash2 
 } from 'lucide-react';
-// 🚀 addDoc, serverTimestamp, deleteDoc, onSnapshot 추가 임포트
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
-// 기존 컴포넌트 지연 로딩
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -102,7 +100,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 admin_assistant 추가 */}
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -113,7 +110,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 admin_assistant 추가 */}
                 {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -150,7 +146,6 @@ const Dashboard = ({ currentUser }) => {
                     <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.</p>
                 </div>
 
-                {/* 🚀 admin_assistant 추가 */}
                 {(['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -163,7 +158,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 admin_assistant 추가 */}
                 {(['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -184,7 +178,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 admin_assistant 추가 */}
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -208,7 +201,6 @@ const AppContent = () => {
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
   
-  // 🚀 조교용 타임시트 상태
   const [isWorkLogModalOpen, setIsWorkLogModalOpen] = useState(false);
   const [workDate, setWorkLogDate] = useState(new Date().toISOString().split('T')[0]);
   const [workHours, setWorkHours] = useState('');
@@ -233,7 +225,6 @@ const AppContent = () => {
 
   useEffect(() => {
       if(!currentUser) return;
-      // admin_assistant도 사용자 목록을 받아오도록 추가
       if (['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role)) {
           const fetchUsers = async () => {
               try {
@@ -246,7 +237,6 @@ const AppContent = () => {
       }
   }, [currentUser]);
 
-  // 🚀 조교 본인의 타임시트 기록 실시간 구독
   useEffect(() => {
     if (isWorkLogModalOpen && currentUser?.role === 'admin_assistant') {
       const today = new Date();
@@ -261,7 +251,7 @@ const AppContent = () => {
       
       const unsub = onSnapshot(q, (snap) => {
         const logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        logs.sort((a, b) => new Date(b.date) - new Date(a.date)); // 최신순 정렬
+        logs.sort((a, b) => new Date(b.date) - new Date(a.date)); 
         setMyWorkLogs(logs);
       });
       return () => unsub();
@@ -273,18 +263,10 @@ const AppContent = () => {
      setLoginProcessing(true);
      try {
          const rawId = loginForm.id.trim();
-         
          let loginPassword = loginForm.password;
-         if (loginPassword.length < 6) {
-             loginPassword = loginPassword.padEnd(6, '0');
-         }
+         if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
 
-         const idVariants = [...new Set([
-             rawId, 
-             rawId.normalize('NFC'), 
-             rawId.normalize('NFD')  
-         ])];
-
+         const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
          let authUid = null;
          let finalSafeId = null;
 
@@ -296,14 +278,10 @@ const AppContent = () => {
                  authUid = userCredential.user.uid;
                  finalSafeId = safeId;
                  break; 
-             } catch (authErr) {
-                 // 시도 계속
-             }
+             } catch (authErr) {}
          }
 
-         if (!finalSafeId) {
-             finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x');
-         }
+         if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x'); }
          
          try {
              let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
@@ -317,14 +295,10 @@ const AppContent = () => {
              
              if(userDoc && userDoc.exists()) {
                  const docData = userDoc.data();
-                 
-                 if (!authUid && docData.password !== loginForm.password) {
-                     throw new Error("비밀번호 불일치 (평문 및 Auth 모두 실패)");
-                 }
+                 if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
 
                  const userData = { id: userDoc.id, ...docData, authUid: authUid || docData.authUid };
-
-                 updateDoc(userDocRef, { lastLogin: new Date().toISOString() }).catch(e => console.error("Update Login Time Error:", e));
+                 updateDoc(userDocRef, { lastLogin: new Date().toISOString() }).catch(e => console.error(e));
 
                  setCurrentUser(userData);
                  sessionStorage.setItem('imperial_user', JSON.stringify(userData));
@@ -344,17 +318,12 @@ const AppContent = () => {
   };
 
   const handleLogout = async () => { 
-      try {
-          await signOut(auth);
-      } catch (e) {
-          console.error("Sign Out Error:", e);
-      }
+      try { await signOut(auth); } catch (e) { console.error("Sign Out Error:", e); }
       sessionStorage.removeItem('imperial_user'); 
       setCurrentUser(null); 
       navigate('/'); 
   };
 
-  // 🚀 타임시트 데이터 조작 함수
   const handleSaveWorkLog = async () => {
     if (!workHours || workHours <= 0) return alert('근무 시간을 정확히 입력해주세요.');
     try {
@@ -366,7 +335,7 @@ const AppContent = () => {
         createdAt: serverTimestamp()
       });
       setWorkHours('');
-      alert('근무 기록이 리스트에 추가되었습니다.');
+      alert('근무 기록이 추가되었습니다.');
     } catch (err) { alert('저장 실패: ' + err.message); }
   };
 
@@ -381,7 +350,6 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 권한 통제 (menuItems)
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
@@ -416,7 +384,6 @@ const AppContent = () => {
            ))}
         </nav>
         
-        {/* 🚀 사이드바 하단 프로필 영역 (조교는 타임시트 팝업 트리거) */}
         <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
             <div 
                 onClick={() => currentUser.role === 'admin_assistant' && setIsWorkLogModalOpen(true)}
@@ -463,7 +430,10 @@ const AppContent = () => {
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                        <Route path="/lectures" element={ currentUser.role === 'admin' ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        
+                        {/* 🚀 행정조교도 관리자용 강의 관리(AdminLectureManager) 접속 권한 추가 */}
+                        <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
                         <Route path="/users" element={<UserManager currentUser={currentUser} />} />
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
@@ -478,12 +448,11 @@ const AppContent = () => {
         </main>
       </div>
 
-      {/* 🚀 조교용 월간 타임시트 팝업 (미래 예정 시간 포함) */}
+      {/* 조교용 월간 타임시트 팝업 */}
       {isWorkLogModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col md:flex-row transform animate-in zoom-in-95 h-[80vh] md:h-auto">
             
-            {/* 좌측: 신규 입력 폼 */}
             <div className="w-full md:w-1/2 p-6 md:p-8 bg-blue-50 border-b md:border-b-0 md:border-r border-blue-100 flex flex-col shrink-0">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-blue-900 flex items-center gap-2"><Clock size={20}/> 근무/예정 기록</h3>
@@ -504,7 +473,6 @@ const AppContent = () => {
               </div>
             </div>
 
-            {/* 우측: 리스트 뷰 */}
             <div className="w-full md:w-1/2 flex flex-col flex-1 min-h-0 bg-white">
               <div className="p-4 md:p-6 border-b flex justify-between items-center shrink-0">
                 <h4 className="font-bold text-sm text-gray-700">이번 달 나의 타임시트</h4>
@@ -539,7 +507,6 @@ const AppContent = () => {
           </div>
         </div>
       )}
-
     </div>
   );
 };
