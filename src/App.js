@@ -3,10 +3,9 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavig
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
-  Clock, Trash2 
+  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
@@ -141,9 +140,13 @@ const Dashboard = ({ currentUser }) => {
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
+                        <h2 className="text-xl font-bold text-gray-800">
+                           {currentUser.role === 'admin_assistant' ? '근무 스케줄/클리닉 센터' : '클리닉 센터'}
+                        </h2>
                     </div>
-                    <p className="text-gray-500 leading-relaxed">1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.</p>
+                    <p className="text-gray-500 leading-relaxed">
+                        {currentUser.role === 'admin_assistant' ? '나의 근무 일정을 확인하고 관리자에게 변경을 요청합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
+                    </p>
                 </div>
 
                 {(['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
@@ -200,11 +203,6 @@ const AppContent = () => {
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
-  
-  const [isWorkLogModalOpen, setIsWorkLogModalOpen] = useState(false);
-  const [workDate, setWorkLogDate] = useState(new Date().toISOString().split('T')[0]);
-  const [workHours, setWorkHours] = useState('');
-  const [myWorkLogs, setMyWorkLogs] = useState([]);
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -236,27 +234,6 @@ const AppContent = () => {
           fetchUsers();
       }
   }, [currentUser]);
-
-  useEffect(() => {
-    if (isWorkLogModalOpen && currentUser?.role === 'admin_assistant') {
-      const today = new Date();
-      const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-      const monthEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-31`;
-      
-      const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'work_logs'), 
-        where('userId', '==', currentUser.id),
-        where('date', '>=', monthStart),
-        where('date', '<=', monthEnd)
-      );
-      
-      const unsub = onSnapshot(q, (snap) => {
-        const logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        logs.sort((a, b) => new Date(b.date) - new Date(a.date)); 
-        setMyWorkLogs(logs);
-      });
-      return () => unsub();
-    }
-  }, [isWorkLogModalOpen, currentUser]);
 
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
@@ -324,29 +301,6 @@ const AppContent = () => {
       navigate('/'); 
   };
 
-  const handleSaveWorkLog = async () => {
-    if (!workHours || workHours <= 0) return alert('근무 시간을 정확히 입력해주세요.');
-    try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'work_logs'), {
-        userId: currentUser.id,
-        userName: currentUser.name,
-        date: workDate,
-        hours: Number(workHours),
-        createdAt: serverTimestamp()
-      });
-      setWorkHours('');
-      alert('근무 기록이 추가되었습니다.');
-    } catch (err) { alert('저장 실패: ' + err.message); }
-  };
-
-  const handleDeleteWorkLog = async (id) => {
-    if (window.confirm('이 근무 기록을 삭제하시겠습니까?')) {
-      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'work_logs', id));
-    }
-  };
-  
-  const getTodayString = () => new Date().toISOString().split('T')[0];
-
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
@@ -357,7 +311,7 @@ const AppContent = () => {
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
-    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/clinic', label: currentUser.role === 'admin_assistant' ? '근무 스케줄' : '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
@@ -385,11 +339,7 @@ const AppContent = () => {
         </nav>
         
         <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
-            <div 
-                onClick={() => currentUser.role === 'admin_assistant' && setIsWorkLogModalOpen(true)}
-                className={`flex items-center gap-3 mb-4 px-2 p-2 rounded-xl transition-colors ${currentUser.role === 'admin_assistant' ? 'cursor-pointer hover:bg-blue-50 border border-transparent hover:border-blue-100' : ''}`}
-                title={currentUser.role === 'admin_assistant' ? '클릭하여 타임시트 열기' : ''}
-            >
+            <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
                 <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser.name?.[0]}</div>
                 <div className="flex flex-col text-left flex-1">
                     <span className="font-bold text-sm text-gray-900 leading-tight">{currentUser.name}</span>
@@ -397,7 +347,6 @@ const AppContent = () => {
                         {currentUser.role === 'admin_assistant' ? 'ADMIN ASSISTANT' : currentUser.role}
                     </span>
                 </div>
-                {currentUser.role === 'admin_assistant' && <Clock size={16} className="text-blue-500 animate-pulse"/>}
             </div>
             <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 p-2 rounded-lg font-bold transition-colors">
                 <LogOut size={16}/> 로그아웃
@@ -431,7 +380,6 @@ const AppContent = () => {
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} />} />
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         
-                        {/* 🚀 행정조교도 관리자용 강의 관리(AdminLectureManager) 접속 권한 추가 */}
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
                         
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
@@ -447,66 +395,6 @@ const AppContent = () => {
             </div>
         </main>
       </div>
-
-      {/* 조교용 월간 타임시트 팝업 */}
-      {isWorkLogModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col md:flex-row transform animate-in zoom-in-95 h-[80vh] md:h-auto">
-            
-            <div className="w-full md:w-1/2 p-6 md:p-8 bg-blue-50 border-b md:border-b-0 md:border-r border-blue-100 flex flex-col shrink-0">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="font-black text-blue-900 flex items-center gap-2"><Clock size={20}/> 근무/예정 기록</h3>
-                <button className="md:hidden" onClick={() => setIsWorkLogModalOpen(false)}><XCircle className="text-blue-300 hover:text-blue-600"/></button>
-              </div>
-              <div className="space-y-5 flex-1">
-                <div>
-                  <label className="block text-xs font-bold text-blue-800 mb-1">날짜 (미래 선택 시 '예정' 등록)</label>
-                  <input type="date" value={workDate} onChange={(e) => setWorkLogDate(e.target.value)} className="w-full border-2 border-blue-200 p-3 rounded-xl focus:border-blue-500 outline-none font-bold text-gray-800 bg-white" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-blue-800 mb-1">근무 시간 (단위: 시간)</label>
-                  <input type="number" step="0.5" placeholder="예: 8 (또는 8.5)" value={workHours} onChange={(e) => setWorkHours(e.target.value)} className="w-full border-2 border-blue-200 p-3 rounded-xl focus:border-blue-500 outline-none font-black text-2xl text-blue-600 bg-white" />
-                </div>
-                <button onClick={handleSaveWorkLog} className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-black shadow-lg shadow-blue-200 transition-all active:scale-95 flex items-center justify-center gap-2">
-                  <CheckCircle size={20}/> 리스트에 추가
-                </button>
-              </div>
-            </div>
-
-            <div className="w-full md:w-1/2 flex flex-col flex-1 min-h-0 bg-white">
-              <div className="p-4 md:p-6 border-b flex justify-between items-center shrink-0">
-                <h4 className="font-bold text-sm text-gray-700">이번 달 나의 타임시트</h4>
-                <button className="hidden md:block" onClick={() => setIsWorkLogModalOpen(false)}><XCircle className="text-gray-400 hover:text-rose-500 transition-colors"/></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2 custom-scrollbar">
-                {myWorkLogs.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full opacity-50">
-                     <Clock size={40} className="mb-2 text-gray-400"/>
-                     <p className="text-sm font-bold text-gray-400">기록이 없습니다.</p>
-                  </div>
-                ) : (
-                  myWorkLogs.map(log => {
-                    const isFuture = log.date > getTodayString();
-                    return (
-                      <div key={log.id} className="flex justify-between items-center bg-gray-50 border border-gray-100 p-3 rounded-xl shadow-sm hover:border-blue-200 transition-colors">
-                        <div>
-                          <p className="text-sm font-bold text-gray-800 flex items-center gap-2">
-                            {log.date}
-                            {isFuture ? <span className="bg-purple-100 text-purple-700 text-[10px] px-1.5 py-0.5 rounded font-black">예정</span> : <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded font-black">완료</span>}
-                          </p>
-                          <p className="text-xs text-gray-500 font-semibold">{log.hours}시간 근무</p>
-                        </div>
-                        <button onClick={() => handleDeleteWorkLog(log.id)} className="text-gray-400 hover:text-rose-500 p-2 rounded-lg transition-colors bg-white border border-gray-200 hover:bg-rose-50"><Trash2 size={14}/></button>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-            
-          </div>
-        </div>
-      )}
     </div>
   );
 };

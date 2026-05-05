@@ -12,7 +12,6 @@ const APP_ID = 'imperial-clinic-v1';
 const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// [텔레그램 설정]
 const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
 const CHAT_ID = "8466973475";
 
@@ -51,20 +50,24 @@ const getWeekOfMonth = (date) => {
 };
 
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
+  
+  // 🚀 [CTO 로직 통합] 'ta'와 'admin_assistant'를 모두 'isWorker' 그룹으로 묶어 처리
+  const isTa = currentUser.role === 'ta';
+  const isAssistant = currentUser.role === 'admin_assistant';
+  const isWorker = isTa || isAssistant;
+
   const mySessions = useMemo(() => {
-     if (currentUser.role === 'ta') {
+     if (isWorker) {
         return sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
      }
      return sessions.filter(s => s.date === selectedDateStr);
-  }, [sessions, currentUser, selectedDateStr]);
+  }, [sessions, currentUser, selectedDateStr, isWorker]);
 
   const now = new Date();
-  // 🚀 [수정점] 클리닉 센터에서 행정조교도 관리자처럼 스케줄 조정 가능하게 추가
   const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser.role === 'parent';
   const isLecturer = currentUser.role === 'lecturer';
-  const isTa = currentUser.role === 'ta';
 
   const handlePrevMonth = () => {
       const newDate = new Date(currentDate);
@@ -117,8 +120,16 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
             let hasEvent = false;
-            if (isStudent) { if (dStr >= getLocalToday()) hasEvent = sessions.some(s => s.date === dStr && s.status === 'open'); }
-            else if (isTa) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
+            
+            if (isStudent) { 
+                if (dStr >= getLocalToday()) {
+                    hasEvent = sessions.some(s => {
+                        const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
+                        return s.date === dStr && s.status === 'open' && workerRole !== 'admin_assistant'; // 🚀 학생은 행정조교 슬롯 감지 불가
+                    });
+                } 
+            }
+            else if (isWorker) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
             return (
@@ -139,7 +150,16 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
-            const slots = mySessions.filter(s => s.startTime === t);
+            let slots = mySessions.filter(s => s.startTime === t);
+            
+            // 🚀 [CTO 로직] 학생과 학부모에게는 행정조교(admin_assistant)의 내부 스케줄을 아예 숨김
+            if (isStudent || isParent) {
+                slots = slots.filter(s => {
+                    const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
+                    return workerRole !== 'admin_assistant';
+                });
+            }
+
             const slotDateTime = new Date(`${selectedDateStr}T${t}`);
             const isSlotPast = slotDateTime < now;
             
@@ -155,7 +175,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
                         <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
                             <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {((isTa || isAdmin) && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
+                            {((isWorker || currentUser.role === 'admin') && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
                         </div>
                     </div>
                 ) : (
@@ -175,7 +195,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isSelected = selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
-                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId] || taSubjectMap.byName?.[s.taName] || '개별 클리닉';
+                    const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
+                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (workerRole === 'admin_assistant' ? '행정 업무' : '개별 클리닉');
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -222,12 +243,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                 <span className="font-bold text-lg text-gray-900">{s.studentName || s.taName}</span>
                                 <Badge status={s.status}/>
+                                {/* 🚀 관리자 뷰일 경우 해당 스케줄이 행정조교인지 표시 */}
+                                {workerRole === 'admin_assistant' && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
                             </div>
                             <div className="text-sm text-gray-600 font-medium">
                                 {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
-                                {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
+                                {s.topic || (isAdmin ? `${s.taName} 근무` : (workerRole === 'admin_assistant' ? '업무 배정 완료' : '예약 대기 중'))}
                             </div>
-                            {(isAdmin || isLecturer || isTa) && s.studentName && (
+                            {(isAdmin || isLecturer || isWorker) && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
@@ -237,11 +260,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
-                                  <option value="">강의실 미배정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                                  <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
                                 </select>
-                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="예약 정보 수정"><Edit2 size={18}/></button>
+                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
-                                {(s.status === 'confirmed' || s.status === 'completed') && (
+                                {(s.status === 'confirmed' || s.status === 'completed') && workerRole !== 'admin_assistant' && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
                               </div>
@@ -249,12 +272,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
+                            {/* 🚀 조교(행정,수업 공통) 본인 스케줄 조작 */}
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
+                            
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
-                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && (
+                            {/* 피드백 버튼은 행정조교에게 보이지 않음 */}
+                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && workerRole !== 'admin_assistant' && (
                                 <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
                                 </Button>
@@ -293,14 +319,15 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
+    // 🚀 [CTO 로직 통합] 행정조교도 시급/역할 맵핑에 포함
     const taSubjectMap = useMemo(() => {
         const mapById = {};
         const mapByName = {};
         if (users && users.length > 0) {
             users.forEach(u => {
-                if (u.role === 'ta') {
-                    mapById[u.id] = u.subject;
-                    mapByName[u.name] = u.subject;
+                if (u.role === 'ta' || u.role === 'admin_assistant') {
+                    mapById[u.id] = { subject: u.subject, role: u.role };
+                    mapByName[u.name] = { subject: u.subject, role: u.role };
                 }
             });
         }
@@ -354,7 +381,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
     useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
     useEffect(() => {
-        if (currentUser.role === 'ta' && sessions.length > 0) {
+        if (['ta', 'admin_assistant'].includes(currentUser.role) && sessions.length > 0) {
             const staleSessions = sessions.filter(s => s.taName === currentUser.name && s.taId !== currentUser.id);
             if (staleSessions.length > 0) {
                 staleSessions.forEach(s => { updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', s.id), { taId: currentUser.id }).catch(()=>{}); });
@@ -423,8 +450,9 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'add_request') {
             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
+            // 🚀 근무 요청 시 역할(workerRole) 같이 저장
             const newSession = {
-                taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '',
+                taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', workerRole: currentUser.role,
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
                 status: 'addition_requested', source: 'system', classroom: ''
             };
@@ -497,7 +525,9 @@ const ClinicDashboard = ({ currentUser, users }) => {
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
-                taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', date: dStr, startTime: sT, endTime: eT, 
+                // 🚀 일괄 생성 시 역할(workerRole) 기록하여 학생 노출 차단
+                taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
+                date: dStr, startTime: sT, endTime: eT, 
                 status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', classroom: ''
               });
               count++;
@@ -561,11 +591,11 @@ const ClinicDashboard = ({ currentUser, users }) => {
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
-       {/* 🚀 [수정점] 행정조교도 관리자 대시보드 화면을 볼 수 있도록 권한 확장 */}
+       {/* 관리자 뷰 (행정조교 포함) */}
        {['admin', 'admin_assistant'].includes(currentUser.role) && (
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
-                  <h2 className="text-2xl font-bold text-gray-900">클리닉 관리자 대시보드</h2>
+                  <h2 className="text-2xl font-bold text-gray-900">클리닉/업무 관리자 대시보드</h2>
                   <div className="flex gap-2">
                       <Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'admin_stats'})}>통계</Button>
                   </div>
@@ -588,8 +618,10 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 근무 일괄 생성</h3>
+                      {/* 🚀 드롭다운에 행정조교 표시 */}
                       <select className="border rounded-lg p-2 text-sm bg-white" value={selectedTaIdForSchedule} onChange={e=>setSelectedTaIdForSchedule(e.target.value)}>
-                          <option value="">조교 선택</option>{users.filter(u=>u.role==='ta').map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                          <option value="">조교 선택</option>
+                          {users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(u=><option key={u.id} value={u.id}>[{u.role==='admin_assistant'?'행정':'수업'}] {u.name}</option>)}
                       </select>
                   </div>
                   <div className="flex gap-2 mb-4">
@@ -672,12 +704,15 @@ const ClinicDashboard = ({ currentUser, users }) => {
               </div>
            </div>
        )}
-       {currentUser.role === 'ta' && (
+       {['ta', 'admin_assistant'].includes(currentUser.role) && (
             <>
-                <Card className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-none w-full">
+                <Card className={`bg-gradient-to-r ${currentUser.role === 'admin_assistant' ? 'from-indigo-600 to-purple-600' : 'from-blue-600 to-cyan-600'} text-white border-none w-full`}>
                     <div className="flex justify-between items-end">
-                        <div><h2 className="text-2xl font-bold mb-1">안녕하세요, {currentUser.name}님</h2><p className="text-white/80">오늘도 학생들의 성장을 위해 힘써주세요!</p></div>
-                        <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 근무</div></div>
+                        <div>
+                            <h2 className="text-2xl font-bold mb-1">안녕하세요, {currentUser.name} {currentUser.role === 'admin_assistant' ? '행정조교' : '수업조교'}님</h2>
+                            <p className="text-white/80">오늘도 학원을 위해 힘써주세요!</p>
+                        </div>
+                        <div className="text-right"><div className="text-4xl font-black">{sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date.startsWith(formatDate(currentDate).substring(0,7))).length}</div><div className="text-sm opacity-80">이달의 배정 스케줄</div></div>
                     </div>
                 </Card>
                 <CalendarView isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
@@ -686,7 +721,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
        {currentUser.role === 'lecturer' && (
            <div className="space-y-8 w-full">
               <div className="bg-white border-b pb-4 mb-4">
-                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 조교 통합 스케줄 (열람 전용)</h2>
+                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 직원 통합 스케줄 (열람 전용)</h2>
               </div>
               <CalendarView isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)}/>
            </div>
@@ -762,8 +797,8 @@ const ClinicDashboard = ({ currentUser, users }) => {
         )}
 
       {/* --- Modals --- */}
-      <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 취소">
-        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="취소 사유" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
+      <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 변경/취소 요청">
+        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg" placeholder="사유를 입력해 주세요 (예: 개인 사정으로 출근 불가)" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
         <Button onClick={async()=>{ 
             if(!requestData.reason) return notify('사유입력','error'); 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
@@ -806,7 +841,7 @@ const ClinicDashboard = ({ currentUser, users }) => {
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
         <div className="space-y-6">
             <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div>
-            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
+            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
         </div>
       </Modal>
       

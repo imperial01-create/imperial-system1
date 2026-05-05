@@ -7,8 +7,6 @@ import {
 import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
-
-// PDF 자동 분석 컴포넌트 임포트 (기존 기능 유지)
 import PdfAutoFiller from './PdfAutoFiller';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -17,7 +15,6 @@ const DEDUCTION_KEYS = [
     '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'
 ];
 
-// --- Helper Functions ---
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
 const getMonthRange = (yearMonth) => {
@@ -27,56 +24,6 @@ const getMonthRange = (yearMonth) => {
     const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
     const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
     return { start, end, startStr, endStr };
-};
-
-// 기존 TA(수업 조교)용 세션 기반 주휴수당 계산 함수
-const calculateWeeklyHolidayPay = (sessions, hourlyRate) => {
-    if (!sessions || sessions.length === 0) return { totalHours: 0, holidayPay: 0 };
-
-    const dailyHours = {};
-    sessions.forEach(s => {
-        const date = s.date; 
-        const startH = parseInt(s.startTime.split(':')[0], 10);
-        const endH = parseInt(s.endTime.split(':')[0], 10);
-        const duration = endH - startH;
-        dailyHours[date] = (dailyHours[date] || 0) + duration;
-    });
-
-    const sortedDates = Object.keys(dailyHours).sort();
-    if (sortedDates.length === 0) return { totalHours: 0, holidayPay: 0 };
-
-    const firstDateStr = sortedDates[0];
-    const [y, m] = firstDateStr.split('-').map(Number);
-    const monthEnd = new Date(y, m, 0);
-
-    const weeks = {}; 
-
-    for (let d = 1; d <= monthEnd.getDate(); d++) {
-        const currentDate = new Date(y, m - 1, d);
-        const dateStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-        
-        const dayOfWeek = currentDate.getDay(); 
-        const distToSat = 6 - dayOfWeek;
-        const saturdayDate = new Date(y, m - 1, d + distToSat);
-        const weekKey = saturdayDate.toISOString().split('T')[0];
-
-        if (!weeks[weekKey]) weeks[weekKey] = 0;
-        weeks[weekKey] += (dailyHours[dateStr] || 0);
-    }
-
-    let totalHolidayPay = 0;
-    let grandTotalHours = 0;
-
-    Object.values(weeks).forEach(hours => {
-        grandTotalHours += hours;
-        if (hours >= 15) {
-            const cappedHours = Math.min(hours, 40);
-            const pay = (cappedHours / 40) * 8 * hourlyRate;
-            totalHolidayPay += pay;
-        }
-    });
-
-    return { totalHours: grandTotalHours, holidayPay: Math.floor(totalHolidayPay) };
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
@@ -90,7 +37,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [lastUpdated, setLastUpdated] = useState(null); 
     
     const [monthlySessions, setMonthlySessions] = useState([]);
-    const [workLogs, setWorkLogs] = useState([]); // 🚀 신규: 행정조교용 타임시트 상태 추가
     const [isSessionsLoading, setIsSessionsLoading] = useState(false);
 
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -99,7 +45,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     const isManagementMode = viewMode === 'management';
 
-    // 🚀 역할 필터링에 'admin_assistant' 추가
     const targetUsers = useMemo(() => {
         if (!isManagementMode) return [currentUser];
         const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(u.role));
@@ -120,7 +65,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         return Array.from(userMap.values());
     }, [isManagementMode, users, currentUser]);
 
-    // 기존 캐싱 및 Payroll 데이터 Fetch (변경 없음)
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
@@ -128,7 +72,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         
         try {
             const cacheTTL = isManagementMode ? 300000 : 0;
-
             if (!forceRefresh && cacheTTL > 0) {
                 const cached = localStorage.getItem(cacheKey);
                 if (cached) {
@@ -145,7 +88,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             }
 
             const fetchedData = {};
-            
             if (isManagementMode) {
                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), where('yearMonth', '==', selectedMonth));
                 let snapshot;
@@ -189,30 +131,21 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    // 수업 세션 및 🚀 신규: 조교 근무 기록(work_logs) Fetch
+    // 🚀 [CTO 로직] 스케줄(sessions) 단일 파이프라인에서 데이터 확보 (work_logs는 이제 사용하지 않음)
     const fetchMonthlyData = useCallback(async () => {
-        if (!isManagementMode) { setMonthlySessions([]); setWorkLogs([]); return; }
+        if (!isManagementMode) { setMonthlySessions([]); return; }
         setIsSessionsLoading(true);
         try {
             const { startStr, endStr } = getMonthRange(selectedMonth);
-            
-            // 기존 TA 세션
             const sQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startStr), where('date', '<=', endStr));
             const sSnap = await getDocs(sQuery);
             setMonthlySessions(sSnap.docs.map(d => d.data()));
-
-            // 🚀 행정조교 타임시트(work_logs)
-            const wQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'work_logs'), where('date', '>=', startStr), where('date', '<=', endStr));
-            const wSnap = await getDocs(wQuery);
-            setWorkLogs(wSnap.docs.map(d => d.data()));
-
-        } catch (e) { console.error("Session/WorkLog Fetch Error:", e); } 
+        } catch (e) { console.error("Session Fetch Error:", e); } 
         finally { setIsSessionsLoading(false); }
     }, [selectedMonth, isManagementMode]);
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
 
-    // 기존 PDF 자동 입력기 로직 (변경 없음)
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
         try {
@@ -264,7 +197,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         } catch (e) { alert("공제 내역 오류: " + e.message); } finally { setCalcProcessing(false); }
     };
 
-    // 🚀 [CTO 로직 병합] 자동 정산 엔진 (TA 세션 & 행정조교 타임시트 통합)
+    // 🚀 [CTO 로직 통합] TA(수업조교)와 Admin Assistant(행정조교)의 계산 로직을 하나로 일원화
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         const uid = targetUser.id || targetUser.userId;
@@ -278,29 +211,31 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         setCalcProcessing(true);
         try {
             let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
-            let completedHours = 0, expectedHours = 0; // 🚀 예정시간 분리용
+            let completedHours = 0, expectedHours = 0;
             const todayStr = new Date().toISOString().split('T')[0];
             
-            // 기존 수업 조교 (TA) 정산 로직
-            if (targetUser.role === 'ta') {
-                const userSessions = monthlySessions.filter(s => s.taId === uid);
-                hourlyRate = parseInt(wage || 0, 10);
-                const calcResult = calculateWeeklyHolidayPay(userSessions, hourlyRate);
-                totalHours = calcResult.totalHours; 
-                weeklyHolidayPay = calcResult.holidayPay; 
-                baseSalary = Math.floor(totalHours * hourlyRate);
-            } 
-            // 🚀 신규 행정조교 타임시트(가마감) 정산 로직
-            else if (targetUser.role === 'admin_assistant') {
-                const uLogs = workLogs.filter(l => l.userId === uid);
+            // 두 조교 직군 모두 동일한 로직(sessions 기반)을 적용
+            if (targetUser.role === 'ta' || targetUser.role === 'admin_assistant') {
                 hourlyRate = parseInt(wage || 10030, 10);
 
-                completedHours = uLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
-                expectedHours = uLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
+                // 정상적으로 확정된(예정 포함) 스케줄만 필터링
+                const userSessions = monthlySessions.filter(s => 
+                    (s.taId === uid || s.taName === targetUser.name) && 
+                    ['open', 'confirmed', 'completed', 'pending'].includes(s.status)
+                );
+
+                const validLogs = userSessions.map(s => {
+                    const startH = parseInt(s.startTime.split(':')[0], 10);
+                    const endH = parseInt(s.endTime.split(':')[0], 10);
+                    return { date: s.date, hours: endH - startH };
+                });
+
+                completedHours = validLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
+                expectedHours = validLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
                 totalHours = completedHours + expectedHours;
 
                 const weekGroups = {}; 
-                uLogs.forEach(log => {
+                validLogs.forEach(log => {
                     const d = new Date(log.date);
                     const day = d.getDay(); 
                     const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
@@ -309,7 +244,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 });
 
                 Object.values(weekGroups).forEach(hours => {
-                    if (hours >= 15) { weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate; }
+                    if (hours >= 15) { 
+                        weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate; 
+                    }
                 });
 
                 weeklyHolidayPay = Math.round(weeklyHolidayPay);
@@ -321,7 +258,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             
             const dbPayload = { 
                 userId: uid, userName: targetUser.name, userRole: targetUser.role, yearMonth: selectedMonth, 
-                hourlyRate: hourlyRate, baseSalary, totalHours, completedHours, expectedHours, // 🚀 DB에 가마감 데이터 저장
+                hourlyRate: hourlyRate, baseSalary, totalHours, completedHours, expectedHours, 
                 weeklyHolidayPay, mealAllowance: 0, bonus: 0, 
                 totalGross: baseSalary + weeklyHolidayPay, deductions: initialDeductions, netSalary: baseSalary + weeklyHolidayPay, 
                 status: 'calculated', updatedAt: serverTimestamp() 
@@ -365,7 +302,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         } catch(e) { alert('수정 실패: ' + e.message); } finally { setCalcProcessing(false); }
     };
 
-    // 기존 급여 이체 대행용 엑셀 다운로드 (유지)
     const handleDownloadExcel = () => {
         const data = Object.values(payrolls).map((p, index) => {
             const user = targetUsers.find(u => (u.id || u.userId) === p.userId) || {};
@@ -436,7 +372,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             <span>근무시간</span>
                                             <div className="text-right">
                                                 <span>{payroll ? `${payroll.totalHours} hrs` : '-'}</span>
-                                                {/* 🚀 가마감 예정 시간 표시 UI */}
                                                 {payroll && payroll.expectedHours > 0 && <p className="text-[10px] text-purple-500 font-bold">(예정 {payroll.expectedHours}h 포함)</p>}
                                             </div>
                                         </div>
