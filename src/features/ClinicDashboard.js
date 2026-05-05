@@ -51,7 +51,6 @@ const getWeekOfMonth = (date) => {
 
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh }) => {
   
-  // 🚀 [CTO 로직 통합] 'ta'와 'admin_assistant'를 모두 'isWorker' 그룹으로 묶어 처리
   const isTa = currentUser.role === 'ta';
   const isAssistant = currentUser.role === 'admin_assistant';
   const isWorker = isTa || isAssistant;
@@ -125,7 +124,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 if (dStr >= getLocalToday()) {
                     hasEvent = sessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                        return s.date === dStr && s.status === 'open' && workerRole !== 'admin_assistant'; // 🚀 학생은 행정조교 슬롯 감지 불가
+                        return s.date === dStr && s.status === 'open' && workerRole !== 'admin_assistant'; 
                     });
                 } 
             }
@@ -152,7 +151,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
           {generateTimeSlots().map((t, i) => {
             let slots = mySessions.filter(s => s.startTime === t);
             
-            // 🚀 [CTO 로직] 학생과 학부모에게는 행정조교(admin_assistant)의 내부 스케줄을 아예 숨김
             if (isStudent || isParent) {
                 slots = slots.filter(s => {
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
@@ -196,7 +194,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (workerRole === 'admin_assistant' ? '행정 업무' : '개별 클리닉');
+                    const isAsstSlot = workerRole === 'admin_assistant'; // 🚀 행정조교 슬롯 여부 판별
+                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -243,36 +242,53 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                                 <span className="font-bold text-lg text-gray-900">{s.studentName || s.taName}</span>
                                 <Badge status={s.status}/>
-                                {/* 🚀 관리자 뷰일 경우 해당 스케줄이 행정조교인지 표시 */}
-                                {workerRole === 'admin_assistant' && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
+                                {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
                             </div>
+                            
+                            {/* 🚀 행정조교 맞춤 텍스트 및 UI 숨김 처리 */}
                             <div className="text-sm text-gray-600 font-medium">
-                                {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
-                                {s.topic || (isAdmin ? `${s.taName} 근무` : (workerRole === 'admin_assistant' ? '업무 배정 완료' : '예약 대기 중'))}
+                                {isAsstSlot ? (
+                                    <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
+                                ) : (
+                                    <>
+                                        {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
+                                        {s.topic || (isAdmin ? `${s.taName} 근무` : '예약 대기 중')}
+                                    </>
+                                )}
                             </div>
-                            {(isAdmin || isLecturer || isWorker) && s.studentName && (
+
+                            {/* 클리닉 전용 학생/범위 정보 박스 (행정조교일 때는 안 보임) */}
+                            {(isAdmin || isLecturer || isWorker) && !isAsstSlot && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
                               </div>
                             )}
+
                             {isAdmin && (
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
-                                  <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
-                                </select>
+                                
+                                {/* 교실 배정은 행정조교에게는 보이지 않음 */}
+                                {!isAsstSlot && (
+                                    <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
+                                      <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                                    </select>
+                                )}
+                                
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
-                                {(s.status === 'confirmed' || s.status === 'completed') && workerRole !== 'admin_assistant' && (
+                                
+                                {/* 피드백은 행정조교에게 보이지 않음 */}
+                                {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
                               </div>
                             )}
-                            {!isAdmin && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
+                            {!isAdmin && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
-                            {/* 🚀 조교(행정,수업 공통) 본인 스케줄 조작 */}
+                            {/* 조교 본인 취소/추가 기능 (행정조교도 동일하게 사용) */}
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
@@ -280,7 +296,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {isAdmin && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
                             {/* 피드백 버튼은 행정조교에게 보이지 않음 */}
-                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && workerRole !== 'admin_assistant' && (
+                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
                                 <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
                                 </Button>
@@ -319,7 +335,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // 🚀 [CTO 로직 통합] 행정조교도 시급/역할 맵핑에 포함
     const taSubjectMap = useMemo(() => {
         const mapById = {};
         const mapByName = {};
@@ -450,7 +465,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'add_request') {
             const h = parseInt(payload.time.split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
-            // 🚀 근무 요청 시 역할(workerRole) 같이 저장
             const newSession = {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', workerRole: currentUser.role,
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
@@ -491,7 +505,10 @@ const ClinicDashboard = ({ currentUser, users }) => {
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); setFeedbackData({clinicContent:payload.clinicContent||'', feedback:payload.feedback||'', improvement:payload.improvement||''}); setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
-            setSelectedSession(payload); setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); setModalState({ type: 'admin_edit' });
+            // 🚀 관리자 편집 모달 호출 전 세팅
+            setSelectedSession(payload); 
+            setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
+            setModalState({ type: 'admin_edit' });
         } else if (action === 'approve_schedule_change') { 
              if (payload.status === 'cancellation_requested') { 
                  await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
@@ -525,7 +542,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
-                // 🚀 일괄 생성 시 역할(workerRole) 기록하여 학생 노출 차단
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
                 date: dStr, startTime: sT, endTime: eT, 
                 status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', classroom: ''
@@ -565,9 +581,20 @@ const ClinicDashboard = ({ currentUser, users }) => {
       } catch(e) { notify('예약 처리 중 오류가 발생했습니다.', 'error'); }
   };
 
+  // 🚀 [CTO 로직] 행정조교일 경우 학생 이름 등의 처리 우회
   const handleAdminEditSubmit = async () => {
-    const newStatus = adminEditData.studentName ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
-    const updateData = { studentName: adminEditData.studentName, topic: adminEditData.topic, questionRange: adminEditData.questionRange, status: newStatus };
+    const isAsst = selectedSession.workerRole === 'admin_assistant';
+    
+    let newStatus = selectedSession.status;
+    let updateData = {};
+
+    if (isAsst) {
+        newStatus = (selectedSession.status === 'open' && adminEditData.topic) ? 'confirmed' : selectedSession.status;
+        updateData = { topic: adminEditData.topic, status: newStatus };
+    } else {
+        newStatus = adminEditData.studentName ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
+        updateData = { studentName: adminEditData.studentName, topic: adminEditData.topic, questionRange: adminEditData.questionRange, status: newStatus };
+    }
     
     try {
         await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
@@ -591,7 +618,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
-       {/* 관리자 뷰 (행정조교 포함) */}
        {['admin', 'admin_assistant'].includes(currentUser.role) && (
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
@@ -618,7 +644,6 @@ const ClinicDashboard = ({ currentUser, users }) => {
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 근무 일괄 생성</h3>
-                      {/* 🚀 드롭다운에 행정조교 표시 */}
                       <select className="border rounded-lg p-2 text-sm bg-white" value={selectedTaIdForSchedule} onChange={e=>setSelectedTaIdForSchedule(e.target.value)}>
                           <option value="">조교 선택</option>
                           {users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(u=><option key={u.id} value={u.id}>[{u.role==='admin_assistant'?'행정':'수업'}] {u.name}</option>)}
@@ -829,12 +854,22 @@ const ClinicDashboard = ({ currentUser, users }) => {
         <Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button>
       </Modal>
       
-      <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title="예약/클리닉 수정">
+      {/* 🚀 행정조교와 수업조교 편집 모달 분리 */}
+      <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title={selectedSession?.workerRole === 'admin_assistant' ? "행정 업무 지시" : "예약/클리닉 수정"}>
         <div className="space-y-4">
-            <div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약 처리됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div>
-            <div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div>
-            <div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div>
-            <Button className="w-full py-4 text-lg font-bold" onClick={handleAdminEditSubmit}>수정 정보 저장하기</Button>
+            {selectedSession?.workerRole === 'admin_assistant' ? (
+                <div>
+                    <label className="block text-sm font-bold text-gray-600 mb-1">오늘의 주요 업무 (예: 교재 복사, 결제 확인 등)</label>
+                    <input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="업무 내용을 입력하세요"/>
+                </div>
+            ) : (
+                <>
+                    <div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약 처리됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div>
+                    <div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div>
+                    <div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div>
+                </>
+            )}
+            <Button className="w-full py-4 text-lg font-bold" onClick={handleAdminEditSubmit}>저장하기</Button>
         </div>
       </Modal>
       
