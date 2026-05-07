@@ -49,7 +49,6 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 로직] props에 isAdminView와 isMyScheduleView를 명시적으로 전달받아 렌더링 통제
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView }) => {
   
   const mySessions = useMemo(() => {
@@ -231,8 +230,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         }
                     }
 
+                    // 🚀 [CTO 로직] 행정조교의 박스 배경색을 직관적이고 은은한 'Indigo' 톤으로 구별
+                    let cardBgClass = '';
+                    if (s.status === 'cancellation_requested') cardBgClass = 'bg-red-50 border-red-200';
+                    else if (s.status === 'addition_requested') cardBgClass = 'bg-purple-50 border-purple-200';
+                    else if (isConfirmed) cardBgClass = isAsstSlot ? 'bg-indigo-50 border-indigo-200' : 'bg-green-50/50 border-green-200';
+                    else cardBgClass = isAsstSlot ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white border-gray-200';
+
                     return (
-                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm transition-all w-full ${isConfirmed ? 'bg-green-50/50 border-green-200' : s.status==='cancellation_requested' ? 'bg-red-50 border-red-200' : s.status==='addition_requested' ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'}`}>
+                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm hover:shadow-md transition-all w-full ${cardBgClass}`}>
                         <div className="flex justify-between items-start w-full">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -252,7 +258,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 )}
                             </div>
 
-                            {/* 🚀 클리닉 전용 학생/범위 정보 박스 (행정조교일 때는 안 보임) */}
+                            {/* 클리닉 전용 학생/범위 정보 박스 */}
                             {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
@@ -261,10 +267,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             )}
 
                             {isAdminView && (
-                              <div className="mt-3 flex flex-wrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+                              <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
-                                {/* 🚀 교실 배정은 행정조교에게 보이지 않음 */}
+                                {/* 교실 배정 (행정조교는 숨김) */}
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
@@ -274,7 +280,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
                                 
-                                {/* 🚀 피드백은 행정조교에게 보이지 않음 */}
+                                {/* 피드백 (행정조교는 숨김) */}
                                 {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
@@ -283,14 +289,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
                           <div className="flex flex-col gap-2 ml-2">
-                            {/* 조교 본인 취소/추가 기능 */}
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             
                             {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
                             
-                            {/* 🚀 피드백 버튼은 행정조교에게 보이지 않음 */}
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
                                 <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
                                     {s.feedbackStatus==='submitted' ? '수정' : '작성'}
@@ -312,7 +316,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 });
 
 const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
-    // 🚀 [CTO 로직] mode props를 바탕으로 화면을 스마트하게 분기
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
     const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
 
@@ -615,7 +618,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
        </div>
        
-       {/* 🚀 관리자 뷰 (행정조교가 클리닉 모드일 때 포함) */}
        {isAdminView && (
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
@@ -735,7 +737,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
            </div>
        )}
 
-       {/* 🚀 조교 개인 뷰 (수업조교 or 행정조교가 근무 스케줄 모드일 때) */}
        {isMyScheduleView && (
             <>
                 <Card className={`bg-gradient-to-r ${currentUser.role === 'admin_assistant' ? 'from-cyan-600 to-blue-600' : 'from-indigo-600 to-purple-600'} text-white border-none w-full`}>
@@ -758,7 +759,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
             </>
         )}
 
-       {/* 🚀 강사 열람 뷰 */}
        {currentUser.role === 'lecturer' && (
            <div className="space-y-8 w-full">
               <div className="bg-white border-b pb-4 mb-4">
@@ -775,7 +775,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
            </div>
        )}
 
-       {/* 🚀 학생/학부모 예약 뷰 */}
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full">
