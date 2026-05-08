@@ -110,7 +110,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 분리된 행정조교 근무 스케줄 카드 */}
                 {currentUser.role === 'admin_assistant' && (
                     <div onClick={() => navigate('/work-schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -314,7 +313,7 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 분리된 메뉴 구조 적용
+  // 🚀 메뉴 리스트에 사용자 관리 권한 확장
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
@@ -323,11 +322,11 @@ const AppContent = () => {
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, // 🚀 행정조교 전용
+    { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin'] },
+    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, // 🚀 행정조교 접근 허용 (내부에서 필터링)
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
   ];
@@ -390,7 +389,6 @@ const AppContent = () => {
                         )}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         
-                        {/* 🚀 라우팅 분리 적용 (모드 전달) */}
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
                         {currentUser.role === 'admin_assistant' && (
                             <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
@@ -400,7 +398,10 @@ const AppContent = () => {
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
                         
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
-                        <Route path="/users" element={<UserManager currentUser={currentUser} />} />
+                        
+                        {/* 🚀 사용자 관리 권한 확장 (admin_assistant 추가) */}
+                        <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />

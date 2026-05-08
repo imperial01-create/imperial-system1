@@ -13,6 +13,18 @@
    const APP_ID = 'imperial-clinic-v1';
    
    const UserManager = ({ currentUser }) => {
+       // 🚀 권한 확인: 관리자 또는 행정조교만 접근 허용
+       if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
+           return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
+       }
+   
+       const isAssistant = currentUser.role === 'admin_assistant';
+   
+       // 🚀 권한별 표시할 탭 제어 (행정조교는 학생/학부모만 보임)
+       const ALLOWED_TABS = isAssistant 
+           ? ['student', 'parent'] 
+           : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
+   
        const [users, setUsers] = useState([]);
        const [searchQuery, setSearchQuery] = useState('');
        const [activeTab, setActiveTab] = useState('student'); 
@@ -65,7 +77,7 @@
                childId: user.childId || '',
                childName: user.childName || '',
                childSnapshot: user.childSnapshot || null, 
-               hourlyRate: user.hourlyRate || user.hourlyWage || '', // 🚀 기존/신규 호환
+               hourlyRate: user.hourlyRate || user.hourlyWage || '', 
                schoolName: user.schoolName || '',
                grade: user.grade || '1학년',
                authUid: user.authUid || '',
@@ -77,6 +89,11 @@
        };
    
        const handleSaveUser = async () => {
+           // 🚀 행정조교 보안: 강제 패킷 조작 등으로 직원 계정 수정 방지
+           if (isAssistant && !['student', 'parent'].includes(activeTab)) {
+               return showToast('행정조교는 학생과 학부모 계정만 관리할 수 있습니다.', 'error');
+           }
+   
            if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
            if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
            if (activeTab === 'parent' && !formData.childId) return showToast('학부모 계정은 반드시 자녀(학생)와 연결해야 합니다.', 'error');
@@ -90,7 +107,6 @@
                };
                if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
                
-               // 🚀 admin_assistant(행정조교)도 시급 및 계좌 정보 저장 로직에 포함
                if (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') { 
                    if (activeTab !== 'admin' && activeTab !== 'admin_assistant') payload.subject = formData.subject || '';
                    if (activeTab === 'ta' || activeTab === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
@@ -149,6 +165,14 @@
    
        const handleDeleteUser = async () => {
            if (!targetUserId) return;
+   
+           // 🚀 행정조교 보안: 삭제 권한 검증
+           const userToDelete = users.find(u => u.id === targetUserId);
+           if (isAssistant && userToDelete && !['student', 'parent'].includes(userToDelete.role)) {
+               setIsDeleteConfirmOpen(false);
+               return showToast('행정조교는 학생과 학부모 계정만 삭제할 수 있습니다.', 'error');
+           }
+   
            setLoading(true);
            try {
                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
@@ -167,7 +191,7 @@
        const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
    
        return (
-           <div className="space-y-6 w-full animate-in fade-in">
+           <div className="space-y-6 w-full animate-in fade-in pb-20">
                <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
    
                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -178,10 +202,10 @@
                </div>
    
                <div className="w-full overflow-x-auto">
-                   <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-[500px]">
-                       {/* 🚀 admin_assistant(행정조교) 탭 추가 */}
-                       {['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'].map(role => (
-                           <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-2 sm:px-4 text-sm sm:text-base font-bold text-center transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
+                   <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-max">
+                       {/* 🚀 권한에 따라 탭 렌더링 필터링 */}
+                       {ALLOWED_TABS.map(role => (
+                           <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-3 sm:px-6 text-sm sm:text-base font-bold text-center transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
                                {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '수업조교' : role === 'admin_assistant' ? '행정조교' : role === 'lecturer' ? '강사' : '관리자'}
                            </button>
                        ))}
@@ -249,7 +273,6 @@
                                            {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && (
                                                <div className="flex flex-col gap-1">
                                                    {u.subject && <span>{u.subject}</span>}
-                                                   {/* 🚀 시급 표시 추가 */}
                                                    {(activeTab === 'ta' || activeTab === 'admin_assistant') && <span className="text-xs font-bold text-emerald-600">시급: {(u.hourlyRate||0).toLocaleString()}원</span>}
                                                    {u.bankName && <span className="text-xs text-gray-500 bg-yellow-50 px-2 py-0.5 rounded-full border border-yellow-100 w-fit">🏦 {u.bankName} {u.accountNumber}</span>}
                                                </div>
@@ -315,10 +338,8 @@
                            </div>
                        )}
    
-                       {/* 🚀 행정조교, TA, 강사, 관리자 공통 추가 정보 입력란 */}
-                       {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && (
+                       {(!isAssistant && (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant')) && (
                            <div className="space-y-4 mt-2">
-                               {/* 과목 및 시급 */}
                                {(activeTab === 'ta' || activeTab === 'lecturer') && (
                                    <div className="grid grid-cols-2 gap-4">
                                        <input className="border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
@@ -326,7 +347,6 @@
                                    </div>
                                )}
    
-                               {/* 🚀 행정조교 시급 입력 전용 폼 */}
                                {activeTab === 'admin_assistant' && (
                                    <div className="animate-in slide-in-from-top-2 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
                                        <label className="block text-sm font-bold text-emerald-800 mb-2">행정조교 계약 시급 (원)</label>
@@ -335,7 +355,6 @@
                                    </div>
                                )}
    
-                               {/* 계좌 정보 */}
                                <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-xl border border-yellow-100">
                                    <div><label className="block text-xs font-bold text-gray-500 mb-1">입금은행</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="국민은행" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} /></div>
                                    <div><label className="block text-xs font-bold text-gray-500 mb-1">계좌번호</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="숫자만" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} /></div>
