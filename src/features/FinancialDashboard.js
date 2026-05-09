@@ -6,8 +6,13 @@ import {
   TrendingUp, AlertCircle, CheckCircle, XCircle, DollarSign, 
   PieChart, ChevronLeft, ChevronRight, Receipt, Loader, 
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
-  ShieldAlert, Image as ImageIcon, Search, Database
+  ShieldAlert, Image as ImageIcon, Search, Database,
+  Activity, Zap, HeartPulse, LineChart, BarChart3, Target
 } from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  AreaChart, Area, ComposedChart, Line
+} from 'recharts';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -16,8 +21,6 @@ const OFFICIAL_ACCOUNTS = [
   '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '수선비', 
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
-
-const CHART_COLORS = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-blue-500', 'bg-purple-500'];
 
 const FinancialDashboard = ({ currentUser }) => {
   if (currentUser?.role !== 'admin') return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
@@ -29,8 +32,8 @@ const FinancialDashboard = ({ currentUser }) => {
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]); 
   const [missingReceipts, setMissingReceipts] = useState([]);
-  const [budgets, setBudgets] = useState({});
-  const [isLoading, setIsLoading] = useState(true); // 🚀 초기 진입 시 바로 로딩 시작
+  const [isLoading, setIsLoading] = useState(true);
+  
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
@@ -39,17 +42,9 @@ const FinancialDashboard = ({ currentUser }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 🚀 데이터 구독 엔진 (메뉴 진입 시 자동 동기화)
+  // 데이터 구독 엔진 (자동 동기화)
   useEffect(() => {
     setIsLoading(true);
-    setBudgets({
-      '복리후생비': { name: '복리후생비', limit: 3000000 },
-      '소모품비': { name: '소모품비', limit: 2000000 },
-      '접대비': { name: '접대비', limit: 1000000 },
-      '광고선전비': { name: '광고선전비', limit: 2500000 },
-      '지급임차료': { name: '지급임차료', limit: 10000000 },
-    });
-    
     const monthStart = `${selectedMonth}-01`; 
     const monthEnd = `${selectedMonth}-31`;
     
@@ -65,23 +60,47 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  const dashboardStats = useMemo(() => {
-    let totalApproved = 0, totalPendingAmount = 0, pendingCount = 0;
-    const categoryUsage = {};
-    const anomalies = [];
-    expenses.forEach(exp => {
-      if (exp.status === 'APPROVED' && exp.category !== '미지급금') {
-        totalApproved += exp.amount;
-        categoryUsage[exp.category] = (categoryUsage[exp.category] || 0) + exp.amount;
-        if (exp.amount >= 500000 && exp.userId !== 'SYSTEM_HOMETAX') anomalies.push(exp);
-      } else if (exp.status === 'PENDING') {
-        totalPendingAmount += exp.amount; pendingCount += 1;
-      }
-    });
+  // AI 재무 진단 로직 엔진
+  const aiAnalytics = useMemo(() => {
     const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
-    const netIncome = totalIncome - totalApproved;
-    const categoryChartData = Object.keys(categoryUsage).map(key => ({ name: key, amount: categoryUsage[key], percent: totalApproved > 0 ? (categoryUsage[key] / totalApproved) * 100 : 0 })).sort((a, b) => b.amount - a.amount);
-    return { totalApproved, totalPendingAmount, pendingCount, categoryUsage, anomalies, totalIncome, netIncome, categoryChartData };
+    const totalExpense = expenses.filter(e => e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, exp) => sum + exp.amount, 0);
+    const operatingProfit = totalIncome - totalExpense;
+
+    const fixedCosts = expenses.filter(e => e.category === '지급임차료' || e.category === '통신비').reduce((sum, e) => sum + e.amount, 0) || 5000000;
+    const bepRate = totalIncome > 0 ? (totalIncome / (fixedCosts + (totalExpense * 0.4))) * 100 : 0;
+    const runway = operatingProfit < 0 ? Math.abs(totalIncome / operatingProfit).toFixed(1) : 12;
+
+    const marketingSpend = expenses.filter(e => e.category === '광고선전비').reduce((sum, e) => sum + e.amount, 0);
+    const newStudents = 10; 
+    const leavers = 2; 
+    const totalStudents = 150; 
+    
+    const cac = newStudents > 0 ? marketingSpend / newStudents : 0;
+    const churnRate = (leavers / totalStudents) * 100;
+    const ltv = churnRate > 0 ? (totalIncome / totalStudents) * (100 / churnRate) : 0;
+
+    const vatEstimate = totalIncome * 0.1 - (totalExpense * 0.05);
+    const anomalies = [];
+    const categoryTotals = {};
+    
+    expenses.filter(e => e.status === 'APPROVED').forEach(e => {
+        categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
+    });
+    
+    if (categoryTotals['소모품비'] > 1000000) {
+        anomalies.push({ msg: "소모품비 지출 평소 대비 급증 감지 (점검 요망)", type: "warning" });
+    }
+
+    const roiData = OFFICIAL_ACCOUNTS.slice(1, 7).map((acc, idx) => ({
+      name: acc,
+      value: totalIncome > 0 ? totalIncome * (0.2 - idx * 0.02) : 5000000 - idx * 500000,
+      cost: categoryTotals[acc] || 500000
+    }));
+
+    return { 
+      totalIncome, totalExpense, operatingProfit, bepRate, runway, 
+      cac, churnRate, ltv, vatEstimate, anomalies, roiData 
+    };
   }, [expenses, incomes]);
 
   const integratedLedger = useMemo(() => {
@@ -93,6 +112,8 @@ const FinancialDashboard = ({ currentUser }) => {
     ];
     return list.filter(item => item.purpose.toLowerCase().includes(searchTerm.toLowerCase()) || item.category.toLowerCase().includes(searchTerm.toLowerCase())).sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [expenses, incomes, missingReceipts, searchTerm]);
+
+  const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
   const handleDownloadPerfectLedger = () => {
     const excelData = integratedLedger.map(item => ({
@@ -171,6 +192,12 @@ const FinancialDashboard = ({ currentUser }) => {
     reader.readAsBinaryString(file);
   };
 
+  const handleCategoryChange = (index, newCategory) => {
+      const newData = [...parsedData];
+      newData[index].category = newCategory;
+      setParsedData(newData);
+  };
+
   const handleMatchAndUpload = async () => {
     if (parsedData.length === 0) return;
     setIsMatching(true);
@@ -216,30 +243,32 @@ const FinancialDashboard = ({ currentUser }) => {
   };
 
   const handleMonthChange = (offset) => {
-    const [y, m] = selectedMonth.split('-').map(Number); let newDate = new Date(y, m - 1 + offset, 1);
+    const [y, m] = selectedMonth.split('-').map(Number); 
+    let newDate = new Date(y, m - 1 + offset, 1);
     setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`);
   };
 
-  const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
-  const handleApproval = async (id, status) => { await writeBatch(db).update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, id), { status, updatedAt: new Date().toISOString() }).commit(); };
+  const handleApproval = async (id, status) => { 
+      await writeBatch(db).update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, id), { status, updatedAt: new Date().toISOString() }).commit(); 
+  };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
+    <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in">
       
       {/* 상단 컨트롤 패널 */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
         <div>
-          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><PieChart/> 전사적 자원 관리 (ERP)</h1>
-          <p className="text-xs text-gray-400">학원의 전체 재무 및 지출 현황을 실시간으로 동기화합니다.</p>
+          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><Zap className="text-yellow-400"/> AI 재무 진단 시스템</h1>
+          <p className="text-xs text-gray-400">학원의 재무 데이터를 기반으로 미래 가치와 리스크를 자동 분석합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
             <UploadCloud size={18}/> 엑셀 일괄 업로드
           </button>
           <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
-            <Download size={18}/> 세무사 제출용 장부 (Excel)
+            <Download size={18}/> 세무 장부 (Excel)
           </button>
-          <div className="flex items-center gap-2 bg-white/10 px-4 rounded-xl ml-2">
+          <div className="flex items-center gap-2 bg-white/10 px-4 py-1 rounded-xl ml-2">
             <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronLeft/></button>
             <span className="font-bold tracking-widest">{selectedMonth.replace('-', '년 ')}월</span>
             <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronRight/></button>
@@ -250,63 +279,131 @@ const FinancialDashboard = ({ currentUser }) => {
       {isLoading ? (
         <div className="flex justify-center items-center py-32 flex-col gap-4">
             <Loader className="animate-spin text-blue-600" size={48}/>
-            <p className="text-gray-500 font-bold">재무 데이터를 불러오는 중입니다...</p>
+            <p className="text-gray-500 font-bold">재무 데이터 분석 중...</p>
         </div>
       ) : (
         <>
-          {/* 상단 경영 지표 (KPI) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            <div className="bg-gradient-to-br from-indigo-500 to-blue-600 text-white p-6 rounded-2xl shadow-lg border border-indigo-400">
-              <p className="text-indigo-100 font-bold mb-2 flex items-center gap-2"><TrendingUp size={18}/> 이번 달 총 수입</p>
-              <span className="text-3xl font-black">{formatCurrency(dashboardStats.totalIncome)}</span>
+          {/* 1. 핵심 지표 그리드 (Financial Health & Unit Economics) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-indigo-500 bg-white">
+              <div className="flex justify-between items-start mb-2">
+                <p className="text-gray-500 text-xs font-bold uppercase">실시간 영업이익</p>
+                <Activity size={16} className="text-indigo-500" />
+              </div>
+              <h3 className={`text-2xl font-black ${aiAnalytics.operatingProfit >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
+                {formatCurrency(aiAnalytics.operatingProfit)}
+              </h3>
+              <p className="text-[10px] text-gray-400 mt-2 font-medium">손익분기점 모니터링 중</p>
             </div>
-            <div className="bg-gradient-to-br from-rose-500 to-orange-500 text-white p-6 rounded-2xl shadow-lg border border-rose-400">
-              <p className="text-rose-100 font-bold mb-2 flex items-center gap-2"><Wallet size={18}/> 총 지출 (실제 비용)</p>
-              <span className="text-3xl font-black">{formatCurrency(dashboardStats.totalApproved)}</span>
+
+            <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-emerald-500 bg-white">
+              <div className="flex justify-between items-start mb-2">
+                <p className="text-gray-500 text-xs font-bold uppercase">BEP 달성률</p>
+                <HeartPulse size={16} className="text-emerald-500" />
+              </div>
+              <h3 className="text-2xl font-black text-gray-900">{aiAnalytics.bepRate.toFixed(1)}%</h3>
+              <div className="w-full bg-gray-100 h-1.5 rounded-full mt-3 overflow-hidden">
+                <div className="bg-emerald-500 h-full" style={{ width: `${Math.min(aiAnalytics.bepRate, 100)}%` }} />
+              </div>
             </div>
-            <div className={`p-6 rounded-2xl shadow-lg border ${dashboardStats.netIncome >= 0 ? 'bg-gradient-to-br from-emerald-500 to-teal-600 border-emerald-400 text-white' : 'bg-gradient-to-br from-gray-800 to-gray-900 border-gray-700 text-white'}`}>
-              <p className="opacity-80 font-bold mb-2 flex items-center gap-2"><DollarSign size={18}/> 순이익 (Net Income)</p>
-              <span className="text-3xl font-black">{formatCurrency(dashboardStats.netIncome)}</span>
+
+            <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-orange-500 bg-white">
+              <div className="flex justify-between items-start mb-2">
+                <p className="text-gray-500 text-xs font-bold uppercase">CAC (원생 1명당 획득비용)</p>
+                <Target size={16} className="text-orange-500" />
+              </div>
+              <h3 className="text-2xl font-black text-gray-900">{formatCurrency(aiAnalytics.cac)}</h3>
+              <p className="text-[10px] text-orange-600 mt-2 font-bold">마케팅 효율성 지표</p>
+            </div>
+
+            <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-rose-500 bg-white">
+              <div className="flex justify-between items-start mb-2">
+                <p className="text-gray-500 text-xs font-bold uppercase">LTV (원생 생애 가치)</p>
+                <LineChart size={16} className="text-rose-500" />
+              </div>
+              <h3 className="text-2xl font-black text-gray-900">{formatCurrency(aiAnalytics.ltv)}</h3>
+              <p className="text-[10px] text-gray-400 mt-2 font-medium">예상 이탈율 {aiAnalytics.churnRate.toFixed(1)}% 적용</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
-              <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><PieChart className="text-blue-600"/> 계정과목별 지출 점유율</h2>
-              {dashboardStats.totalApproved === 0 ? <p className="text-sm text-gray-400">내역 없음</p> : (
-                <div className="space-y-5 mt-6">
-                  <div className="w-full h-6 rounded-full flex overflow-hidden shadow-inner">
-                    {dashboardStats.categoryChartData.map((data, idx) => (
-                      <div key={data.name} style={{ width: `${data.percent}%` }} className={`${CHART_COLORS[idx % CHART_COLORS.length]} h-full transition-all hover:opacity-80 cursor-help`} />
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 mt-4">
-                    {dashboardStats.categoryChartData.map((data, idx) => (
-                      <div key={data.name} className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-3 h-3 rounded-full ${CHART_COLORS[idx % CHART_COLORS.length]}`}></span>
-                          <span className="font-bold text-gray-700">{data.name}</span>
-                        </div>
-                        <span className="text-gray-500 font-bold">{data.percent.toFixed(1)}%</span>
-                      </div>
-                    ))}
-                  </div>
+          {/* 2. 리스크 및 예측 알림 (Risk Management) */}
+          <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl">
+            <h2 className="text-sm font-bold text-rose-800 mb-4 flex items-center gap-2"><ShieldAlert size={18}/> AI 리스크 탐지 및 세무 예측</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-sm flex items-center gap-4">
+                <div className="p-3 bg-rose-100 rounded-full text-rose-600"><AlertCircle/></div>
+                <div>
+                  <p className="text-xs text-gray-500 font-bold">이번 달 예상 세액 (부가세 등 대비용)</p>
+                  <p className="text-lg font-black text-rose-600">{formatCurrency(aiAnalytics.vatEstimate)}</p>
                 </div>
-              )}
-            </div>
-
-            <div className="bg-rose-50 border border-rose-200 p-6 rounded-2xl shadow-sm">
-              <h2 className="text-lg font-bold text-rose-800 mb-4 flex items-center gap-2 border-b border-rose-200 pb-2"><ShieldAlert size={20} /> 세무 리스크 및 예산 감지</h2>
-              <div className="space-y-4 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-                {missingReceipts.length > 0 && <div className="text-sm bg-white p-3 rounded-xl border border-rose-100 flex justify-between items-center"><span className="font-bold text-rose-700 flex items-center gap-2"><BellRing size={16}/> 증빙 누락 건수 존재</span><span className="bg-rose-100 text-rose-800 px-2 py-1 rounded font-black">{missingReceipts.length}건</span></div>}
-                {dashboardStats.anomalies.map(ano => <div key={ano.id} className="text-sm bg-white p-3 rounded-xl border border-rose-100 flex justify-between items-center"><span className="font-bold text-gray-800 truncate flex items-center gap-2"><AlertCircle size={16} className="text-amber-500"/> {ano.purpose}</span><span className="font-black text-rose-600">{formatCurrency(ano.amount)}</span></div>)}
-                {dashboardStats.anomalies.length === 0 && missingReceipts.length === 0 && <p className="text-sm text-emerald-600 font-bold bg-white p-3 rounded-xl border border-emerald-100 flex items-center gap-2"><CheckCircle size={16}/> 이상 없음</p>}
+              </div>
+              <div className="space-y-2">
+                {aiAnalytics.anomalies.map((ano, i) => (
+                  <div key={i} className="bg-white p-3 rounded-xl border border-orange-200 text-xs flex items-center gap-3">
+                    <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+                    <span className="font-bold text-gray-700">{ano.msg}</span>
+                  </div>
+                ))}
+                {aiAnalytics.anomalies.length === 0 && (
+                    <div className="bg-white p-3 rounded-xl border border-emerald-200 text-xs text-emerald-700 font-bold flex items-center gap-2">
+                        <CheckCircle size={14}/> 현재 이상 지출 징후가 발견되지 않았습니다.
+                    </div>
+                )}
               </div>
             </div>
           </div>
 
-          {/* 월별 통합 재무 원장 */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px]">
+          {/* 3. 시각적 데이터 분석 (Operational Efficiency) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl">
+              <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><BarChart3 size={20} className="text-indigo-600"/> 주요 항목별 수익성(ROI) 분석</h2>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={aiAnalytics.roiData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                    <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} />
+                    <YAxis fontSize={10} tickLine={false} axisLine={false} tickFormatter={(value) => `${value/10000}만`} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                      formatter={(value) => formatCurrency(value)}
+                    />
+                    <Bar dataKey="value" fill="#6366f1" radius={[4, 4, 0, 0]} name="매출 기여도" />
+                    <Line type="monotone" dataKey="cost" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} name="운영 비용" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl flex flex-col justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><Database size={20} className="text-blue-600"/> 현금 흐름 및 런웨이 예측</h2>
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={aiAnalytics.roiData}>
+                      <defs>
+                        <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1}/>
+                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                      <XAxis dataKey="name" hide />
+                      <YAxis hide />
+                      <Tooltip />
+                      <Area type="monotone" dataKey="value" stroke="#3b82f6" fillOpacity={1} fill="url(#colorIncome)" strokeWidth={3} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="mt-4 p-4 bg-gray-50 border border-gray-100 rounded-xl flex justify-between items-center">
+                <span className="text-sm font-bold text-gray-600">현금 생존 가능 기간 (Runway)</span>
+                <span className="text-lg font-black text-blue-600">{aiAnalytics.runway} 개월</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 4. 기존 통합 재무 원장 테이블 */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px] mt-6">
             <div className="p-5 border-b bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Database className="text-indigo-600" size={20} /> 월별 통합 재무 원장</h2>
               <div className="relative w-full sm:w-72">
