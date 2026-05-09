@@ -16,9 +16,10 @@ import {
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 건물관리비 추가
 const OFFICIAL_ACCOUNTS = [
   '미분류', '직원급여', '상여금', '퇴직급여', '복리후생비', '여비교통비', '접대비', 
-  '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '수선비', 
+  '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '건물관리비', '수선비', 
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
@@ -68,7 +69,6 @@ const FinancialDashboard = ({ currentUser }) => {
 
   const fileInputRef = useRef(null);
   
-  // 🚀 다중 영수증 뷰어를 위한 상태 (배열 형태)
   const [previewReceipts, setPreviewReceipts] = useState([]);
   const [previewIndex, setPreviewIndex] = useState(0);
 
@@ -100,10 +100,102 @@ const FinancialDashboard = ({ currentUser }) => {
     loadSettings();
   }, []);
 
+  // 🚀 [핵심 추가] 기존 누락 내역 재매칭 및 소급 적용 엔진
+  const handleReverifyMissing = async (isSilent = false) => {
+    setIsProcessingCleanup(!isSilent);
+    try {
+        const dynamicAutoProofKeywords = [
+            ...AUTO_PROOF_KEYWORDS,
+            ...(finSettings.customAutoProof || []).map(k => ({ key: new RegExp(k.key), cat: k.cat, note: k.note }))
+        ];
+
+        const batch = writeBatch(db);
+        let updatedCount = 0;
+        
+        // 대기 중인 모든 지출결의서 스캔
+        const unmatchedExps = expenses.filter(e => e.status === 'PENDING' && !e.matchedTransactionId);
+
+        // 누락된 통장 내역(에러 상태)을 모두 재검사
+        for (const trx of missingReceipts) {
+            let isMatched = false;
+
+            // 1. 사후에 올라온 지출결의서가 있는지 확인
+            const expIdx = unmatchedExps.findIndex(e => 
+                normalizeDateStr(e.expenseDate) === normalizeDateStr(trx.transactionDate) && 
+                Number(e.amount) === Number(trx.amount)
+            );
+
+            if (expIdx > -1) {
+                const matchedExp = unmatchedExps.splice(expIdx, 1)[0];
+                batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matchedExp.id), {
+                    status: 'APPROVED',
+                    matchedTransactionId: trx.id,
+                    updatedAt: new Date().toISOString()
+                });
+                batch.update(doc(db, `artifacts/${APP_ID}/public/data/transactions`, trx.id), {
+                    isMatched: true,
+                    matchedExpenseId: matchedExp.id,
+                    updatedAt: new Date().toISOString()
+                });
+                updatedCount++;
+                isMatched = true;
+            }
+
+            // 2. 키워드 설정이 바뀌어서 자동 증빙 대상이 되었는지 확인
+            if (!isMatched) {
+                for (const rule of dynamicAutoProofKeywords) {
+                    if (rule.key.test(trx.merchantName)) {
+                        const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                        batch.set(expRef, {
+                            userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)',
+                            expenseDate: trx.transactionDate, amount: trx.amount,
+                            method: '자동이체', purpose: `[${trx.merchantName}] 자동 증빙 완료건`,
+                            category: rule.cat, receiptUrl: rule.note, receiptUrls: [],
+                            status: 'APPROVED', matchedTransactionId: trx.id,
+                            createdAt: new Date().toISOString()
+                        });
+                        batch.update(doc(db, `artifacts/${APP_ID}/public/data/transactions`, trx.id), {
+                            isMatched: true,
+                            matchedExpenseId: expRef.id,
+                            updatedAt: new Date().toISOString()
+                        });
+                        updatedCount++;
+                        isMatched = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (updatedCount > 0) {
+            await batch.commit();
+            if (!isSilent) alert(`완료되었습니다!\n총 ${updatedCount}건의 누락 지출이 결의서 또는 자동 증빙과 재매칭되었습니다.`);
+        } else {
+            if (!isSilent) alert('새롭게 매칭할 누락 내역이 없습니다.');
+        }
+    } catch(e) {
+        if (!isSilent) alert("재매칭 중 오류 발생: " + e.message);
+    } finally {
+        setIsProcessingCleanup(false);
+    }
+  };
+
+  // 🚀 설정값 저장 시 누락건 소급 적용(handleReverifyMissing) 자동 실행
   const handleSaveSettings = async () => {
-    await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), finSettings, { merge: true });
-    setIsSettingsOpen(false);
-    alert('재무 환경 설정이 저장되었습니다.');
+    setIsProcessingCleanup(true);
+    try {
+        await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), finSettings, { merge: true });
+        
+        // 설정이 저장된 후 사후 소급 적용 (Silent 모드로 돌리고 결과만 합쳐서 보고)
+        await handleReverifyMissing(true); 
+        
+        setIsSettingsOpen(false);
+        alert('재무 환경 설정이 저장되었으며, 과거 누락 내역에 설정값이 소급 반영되었습니다!');
+    } catch (err) {
+        alert('설정 저장 중 오류가 발생했습니다.');
+    } finally {
+        setIsProcessingCleanup(false);
+    }
   };
 
   const handleAddKeyword = () => {
@@ -243,7 +335,6 @@ const FinancialDashboard = ({ currentUser }) => {
   }, [expenses, incomes, finSettings, selectedMonth]);
 
   const integratedLedger = useMemo(() => {
-    // 🚀 다중 영수증 배열 처리 추가 (receiptUrls)
     const list = [
       ...incomes.map(i => ({ id: `inc_${i.id}`, realId: i.id, date: i.transactionDate || '', type: i.isPgSettlement ? 'PG정산(참고용)' : '수입(매출)', category: i.isPgSettlement ? '미수금회수' : '사업소득', purpose: i.source || '알수없음', amount: Number(i.amount) || 0, method: i.method || '계좌입금', status: 'COMPLETED', receiptUrl: '', receiptUrls: [] })),
       ...expenses.filter(e => e.status === 'APPROVED').map(e => ({ id: `exp_${e.id}`, realId: e.id, date: e.expenseDate || '', type: e.category === '미지급금' ? '카드대금결제' : '지출(정상)', category: e.category || '미분류', purpose: e.purpose || '알수없음', amount: Number(e.amount) || 0, method: e.method || '알수없음', receiptUrl: e.receiptUrl || '', receiptUrls: e.receiptUrls || [], status: 'COMPLETED' })),
@@ -273,7 +364,6 @@ const FinancialDashboard = ({ currentUser }) => {
       if (isIncome) currentBalance += item.amount;
       else currentBalance -= item.amount;
 
-      // 다중 영수증일 경우 대표 1장만 엑셀에 연결
       const primaryUrl = (item.receiptUrls && item.receiptUrls.length > 0) ? item.receiptUrls[0] : item.receiptUrl;
       const isElectronic = primaryUrl && String(primaryUrl).includes('data:');
 
@@ -544,6 +634,10 @@ const FinancialDashboard = ({ currentUser }) => {
           <p className="text-xs text-gray-400">통장 입출금 기반으로 학원의 진짜 현금 흐름을 분석합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* 🚀 누락건 재매칭 버튼 신설 */}
+          <button onClick={() => handleReverifyMissing(false)} className="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-amber-900/20">
+            <RefreshCcw size={18}/> 누락건 재매칭
+          </button>
           <button onClick={() => setIsSettingsOpen(true)} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
             <Settings size={18}/> 설정
           </button>
@@ -717,7 +811,6 @@ const FinancialDashboard = ({ currentUser }) => {
                       <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${(item.type || '').includes('수입') ? 'text-blue-600' : 'text-gray-900'}`}>{(item.type || '').includes('수입') ? '+' : ''}{item.amount.toLocaleString()}원</td>
                       <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
                       
-                      {/* 🚀 다중 영수증을 처리하는 테이블 셀 */}
                       <td className="px-4 py-3 text-center">
                         {(() => {
                             const urls = item.receiptUrls?.length > 0 ? item.receiptUrls : (item.receiptUrl && String(item.receiptUrl).startsWith('data:') ? [item.receiptUrl] : []);
@@ -746,7 +839,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 설정 모달 (키워드 사전 포함) */}
+      {/* 🚀 설정 모달 */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
@@ -802,7 +895,9 @@ const FinancialDashboard = ({ currentUser }) => {
 
             <div className="flex gap-2 mt-4 pt-4 border-t">
               <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
-              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">설정값 저장</button>
+              <button onClick={handleSaveSettings} disabled={isProcessingCleanup} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50">
+                  {isProcessingCleanup ? '처리 중...' : '설정값 저장 및 소급 반영'}
+              </button>
             </div>
           </div>
         </div>
@@ -863,7 +958,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 🚀 다중 영수증 뷰어 모달 (슬라이더 적용) */}
+      {/* 다중 영수증 슬라이더 모달 (Viewer) */}
       {previewReceipts.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewReceipts([])}>
           <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
@@ -877,14 +972,12 @@ const FinancialDashboard = ({ currentUser }) => {
             
             <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-between items-center flex-1 w-full h-full relative p-2 border border-gray-200">
               
-              {/* 왼쪽 넘기기 버튼 */}
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.max(0, prev - 1)); }} disabled={previewIndex === 0} className="absolute left-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronLeft size={32} className="text-gray-800"/>
                   </button>
               )}
               
-              {/* 이미지/PDF 표시 영역 */}
               <div className="w-full h-full flex justify-center items-center">
                   {String(previewReceipts[previewIndex]).startsWith('data:application/pdf') || String(previewReceipts[previewIndex]).endsWith('.pdf') ? 
                     <iframe src={previewReceipts[previewIndex]} className="w-full h-full border-0 rounded-xl" title="receipt-preview" /> : 
@@ -892,7 +985,6 @@ const FinancialDashboard = ({ currentUser }) => {
                   }
               </div>
 
-              {/* 오른쪽 넘기기 버튼 */}
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.min(previewReceipts.length - 1, prev + 1)); }} disabled={previewIndex === previewReceipts.length - 1} className="absolute right-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronRight size={32} className="text-gray-800"/>
@@ -900,7 +992,6 @@ const FinancialDashboard = ({ currentUser }) => {
               )}
             </div>
 
-            {/* 하단 페이지 인디케이터 (점) */}
             {previewReceipts.length > 1 && (
                 <div className="flex justify-center gap-2 mt-4">
                     {previewReceipts.map((_, idx) => (
