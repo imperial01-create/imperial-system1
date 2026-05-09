@@ -7,7 +7,7 @@ import {
   PieChart, ChevronLeft, ChevronRight, Receipt, Loader, 
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
-  Activity, Zap, HeartPulse, LineChart, BarChart3, Target, Settings
+  Activity, Zap, HeartPulse, LineChart, BarChart3, Target, Settings, RefreshCcw
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -35,18 +35,17 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isLoading, setIsLoading] = useState(true);
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadType, setUploadType] = useState('TONGTONG'); // 기본값을 통통통으로 변경
+  const [uploadType, setUploadType] = useState('TONGTONG'); 
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
   const fileInputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 🚀 재무 환경 설정 (고정비 및 수수료율)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000, cardFeeRate: 1.5 });
+  const [isRecalculatingFee, setIsRecalculatingFee] = useState(false); // 🚀 수수료 재계산 로딩 상태
 
-  // 1. 재무 환경 설정 불러오기
   useEffect(() => {
     const loadSettings = async () => {
       const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance');
@@ -62,7 +61,57 @@ const FinancialDashboard = ({ currentUser }) => {
     alert('재무 환경 설정이 저장되었습니다.');
   };
 
-  // 2. 통합 데이터 구독 엔진 (자동 동기화)
+  // 🚀 [CTO 핵심 로직] 과거 수수료 일괄 역산 및 덮어쓰기 기능
+  const handleRecalculateFees = async () => {
+    const newRate = Number(finSettings.cardFeeRate);
+    if (!window.confirm(`현재 입력된 수수료율(${newRate}%)을 적용하여 기존 장부의 모든 통통통 수수료 내역을 역산하여 덮어쓰시겠습니까?\n(수입/매출 데이터는 건드리지 않고 오직 수수료만 정정됩니다.)`)) return;
+    
+    setIsRecalculatingFee(true);
+    try {
+        const batch = writeBatch(db);
+        let updateCount = 0;
+
+        expenses.forEach(exp => {
+            // 통통통 엑셀로 자동 적재된 수수료 지출건만 타겟팅
+            if (exp.userId === 'SYSTEM_TONGTONG' && exp.category === '지급수수료') {
+                const match = exp.purpose.match(/\(([\d.]+)%\)/); // 기존 요율 파싱 (예: 1.5%)
+                if (match && match[1]) {
+                    const oldRate = parseFloat(match[1]);
+                    
+                    if (oldRate !== newRate && oldRate > 0) {
+                        // 1. 역산: 수수료 / (기존 요율 / 100) = 원금
+                        const principal = Math.round(exp.amount / (oldRate / 100));
+                        // 2. 재계산: 원금 * (신규 요율 / 100)
+                        const newFee = Math.round(principal * (newRate / 100));
+                        // 3. 적요 텍스트 교체
+                        const newPurpose = exp.purpose.replace(`(${oldRate}%)`, `(${newRate}%)`);
+
+                        const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, exp.id);
+                        batch.update(expRef, {
+                            amount: newFee,
+                            purpose: newPurpose,
+                            updatedAt: new Date().toISOString()
+                        });
+                        updateCount++;
+                    }
+                }
+            }
+        });
+
+        if (updateCount > 0) {
+            await batch.commit();
+            alert(`완벽합니다!\n총 ${updateCount}건의 수수료 내역이 ${newRate}% 기준으로 오차 없이 소급 재계산되었습니다.`);
+        } else {
+            alert("재계산할 내역이 없거나 이미 현재 수수료율과 일치합니다.");
+        }
+    } catch (error) {
+        console.error(error);
+        alert("수수료 재계산 중 오류가 발생했습니다: " + error.message);
+    } finally {
+        setIsRecalculatingFee(false);
+    }
+  };
+
   useEffect(() => {
     setIsLoading(true);
     const monthStart = `${selectedMonth}-01`; 
@@ -80,23 +129,20 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  // 3. AI 재무 진단 로직 엔진 (고정비, 수수료, 일자별 BEP 반영)
   const aiAnalytics = useMemo(() => {
-    // 🚀 이중 매출 방지: 은행으로 들어온 PG 정산금(isPgSettlement)은 순매출에서 제외
     const pureIncomes = incomes.filter(i => !i.isPgSettlement);
     const totalIncome = pureIncomes.reduce((sum, inc) => sum + inc.amount, 0);
     const totalExpense = expenses.filter(e => e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, exp) => sum + exp.amount, 0);
     
-    // 고정비 적용
     const fixedCosts = Number(finSettings.rent) + Number(finSettings.maintenance);
-    const operatingProfit = totalIncome - totalExpense - fixedCosts; // 🚀 고정비 차감된 '진짜' 영업이익
+    const operatingProfit = totalIncome - totalExpense - fixedCosts;
 
     const bepRate = totalIncome > 0 ? (totalIncome / (fixedCosts + totalExpense)) * 100 : 0;
     const runway = operatingProfit < 0 ? Math.abs(totalIncome / operatingProfit).toFixed(1) : 12;
 
     const marketingSpend = expenses.filter(e => e.category === '광고선전비').reduce((sum, e) => sum + e.amount, 0);
-    const cac = marketingSpend / 10; // 가상 원생 10명 기준
-    const ltv = totalIncome > 0 ? (totalIncome / 150) * (100 / 2) : 0; // 가상 이탈율 적용
+    const cac = marketingSpend / 10; 
+    const ltv = totalIncome > 0 ? (totalIncome / 150) * (100 / 2) : 0; 
 
     const vatEstimate = totalIncome * 0.1 - (totalExpense * 0.05);
     const anomalies = [];
@@ -113,9 +159,8 @@ const FinancialDashboard = ({ currentUser }) => {
       cost: categoryTotals[acc] || 500000
     }));
 
-    // 🚀 일자별 현금 흐름 및 BEP 돌파 차트 데이터 생성
     const dailyFlowData = [];
-    let cumulative = -fixedCosts; // 매월 1일은 마이너스 고정비에서 시작
+    let cumulative = -fixedCosts; 
     const [y, m] = selectedMonth.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
 
@@ -128,7 +173,7 @@ const FinancialDashboard = ({ currentUser }) => {
         dailyFlowData.push({
             day: `${d}일`,
             cumulative: cumulative,
-            bep: 0 // BEP 기준선 (0원)
+            bep: 0 
         });
     }
 
@@ -174,7 +219,6 @@ const FinancialDashboard = ({ currentUser }) => {
     XLSX.writeFile(wb, `임페리얼_세무소명장부_${selectedMonth}.xlsx`);
   };
 
-  // 🚀 4. 엑셀 파싱 로직 (통통통 & 은행 이중매출 필터링)
   const handleFileUpload = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -218,7 +262,6 @@ const FinancialDashboard = ({ currentUser }) => {
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) {
               const senderName = data[i][nameIdx] || '알수없음';
-              // 🚀 이중 매출 방지: PG사나 카드사에서 입금된 돈은 제외시킴
               const isPgSettlement = /(카드|KCP|토스|나이스|KSNET|다날|PG|정산)/i.test(senderName);
               extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', isPgSettlement, rawId: `IN_${inAmount}_${i}` });
             }
@@ -230,11 +273,31 @@ const FinancialDashboard = ({ currentUser }) => {
             const amount = Number(String(data[i][data[headerIdx].indexOf('승인금액')]).replace(/,/g, ''));
             if (amount > 0) extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('승인일')]).replace(/\./g, '-'), amount, merchantName: data[i][data[headerIdx].indexOf('가맹점명')] || '알수없음', type: 'CARD', rawId: `CARD_${amount}_${i}` });
           }
+        } else if (uploadType === 'HOMETAX') {
+          const headerIdx = data.findIndex(row => row && row.includes('승인번호'));
+          for (let i = headerIdx + 1; i < data.length; i++) {
+            if (!data[i] || !data[i][data[headerIdx].indexOf('승인번호')]) continue;
+            const amount = Number(String(data[i][data[headerIdx].indexOf('합계금액')]).replace(/,/g, ''));
+            if (amount > 0) {
+              const merchant = data[i][data[headerIdx].indexOf('상호')] || '알수없음', purposeStr = data[i][data[headerIdx].indexOf('품목명')] || '전자세금계산서 매입';
+              let cat = '미분류'; const txt = `${merchant} ${purposeStr}`.replace(/\s/g, '');
+              if (txt.includes('청소') || txt.includes('기장') || txt.includes('방역')) cat = '지급수수료';
+              else if (txt.includes('임대') || txt.includes('월세')) cat = '지급임차료';
+              else if (txt.includes('인쇄') || txt.includes('복사')) cat = '도서인쇄비';
+              extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('작성일자')]).replace(/\./g, '-'), amount, merchantName: merchant, purpose: purposeStr, type: 'HOMETAX', rawId: String(data[i][data[headerIdx].indexOf('승인번호')]), category: cat });
+            }
+          }
         }
         setParsedData(extracted);
       } catch (err) { alert(err.message || "엑셀 변환 오류"); }
     };
     reader.readAsBinaryString(file);
+  };
+
+  const handleCategoryChange = (index, newCategory) => {
+      const newData = [...parsedData];
+      newData[index].category = newCategory;
+      setParsedData(newData);
   };
 
   const handleMatchAndUpload = async () => {
@@ -245,11 +308,9 @@ const FinancialDashboard = ({ currentUser }) => {
       
       if (uploadType === 'TONGTONG') {
         for (const item of parsedData) {
-            // 1. 수납액을 매출(incomes)로 등록
             const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
             batch.set(incRef, { transactionDate: item.transactionDate, amount: item.amount, source: `[${item.merchantName}] ${item.purpose}`, method: item.method, isPgSettlement: false, createdAt: new Date().toISOString() });
             
-            // 2. 카드로 결제된 내역은 수수료를 변동비(expenses)로 자동 적재 (환불도 동일 적용)
             if (item.method.includes('카드')) {
                 const fee = Math.round(item.amount * (Number(finSettings.cardFeeRate) / 100));
                 const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
@@ -264,7 +325,6 @@ const FinancialDashboard = ({ currentUser }) => {
         for (const trx of parsedData) {
           if (trx.type === 'BANK_INCOME') {
             const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
-            // 🚀 이중 매출 방지 태그(isPgSettlement) 포함하여 저장
             batch.set(incRef, { transactionDate: trx.transactionDate, amount: trx.amount, source: trx.merchantName, isPgSettlement: trx.isPgSettlement, createdAt: new Date().toISOString() });
             iCount++; continue;
           }
@@ -310,7 +370,6 @@ const FinancialDashboard = ({ currentUser }) => {
           <p className="text-xs text-gray-400">학원의 전체 재무 현황을 실시간으로 분석하고 예측합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* 🚀 재무 환경 설정 버튼 */}
           <button onClick={() => setIsSettingsOpen(true)} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
             <Settings size={18}/> 설정
           </button>
@@ -423,7 +482,6 @@ const FinancialDashboard = ({ currentUser }) => {
               </div>
             </div>
 
-            {/* 🚀 일자별 현금 흐름 및 BEP 차트 */}
             <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl flex flex-col justify-between">
               <div>
                 <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><Database size={20} className="text-blue-600"/> 일자별 누적 순이익 (BEP 추적)</h2>
@@ -440,7 +498,6 @@ const FinancialDashboard = ({ currentUser }) => {
                       <XAxis dataKey="day" fontSize={10} tickLine={false} axisLine={false} minTickGap={3}/>
                       <YAxis hide domain={['dataMin', 'dataMax']} />
                       <Tooltip formatter={(value) => formatCurrency(value)} />
-                      {/* BEP (0원) 라인 */}
                       <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'top', value: 'BEP (손익분기점)', fill: '#ef4444', fontSize: 10 }} />
                       <Area type="monotone" dataKey="cumulative" stroke="#3b82f6" fillOpacity={1} fill="url(#colorCumulative)" strokeWidth={3} name="누적 이익" />
                     </AreaChart>
@@ -456,7 +513,7 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 4. 기존 통합 재무 원장 테이블 */}
+          {/* 4. 통합 재무 원장 테이블 */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px] mt-6">
             <div className="p-5 border-b bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Database className="text-indigo-600" size={20} /> 월별 통합 재무 원장</h2>
@@ -502,28 +559,42 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 재무 환경 설정 모달 */}
+      {/* 🚀 재무 환경 설정 및 수수료 재계산 모달 */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden p-6">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative">
             <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-4"><Settings className="text-gray-600"/> 재무 환경 설정</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">월 고정 임대료 (원)</label>
-                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.rent} onChange={e => setFinSettings({...finSettings, rent: e.target.value})} />
+                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.rent} onChange={e => setFinSettings({...finSettings, rent: e.target.value})} />
               </div>
               <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1">월 평균 관리비 (원)</label>
-                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.maintenance} onChange={e => setFinSettings({...finSettings, maintenance: e.target.value})} />
+                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.maintenance} onChange={e => setFinSettings({...finSettings, maintenance: e.target.value})} />
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">LMS (통통통) 평균 카드 수수료율 (%)</label>
-                <input type="number" step="0.1" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.cardFeeRate} onChange={e => setFinSettings({...finSettings, cardFeeRate: e.target.value})} />
+                <label className="block text-sm font-bold text-gray-700 mb-1">통통통 카드 수수료율 (%)</label>
+                <input type="number" step="0.1" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold text-blue-600" value={finSettings.cardFeeRate} onChange={e => setFinSettings({...finSettings, cardFeeRate: e.target.value})} />
               </div>
             </div>
             <div className="flex gap-2 mt-6">
-              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
-              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">저장</button>
+              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
+              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">설정값 저장</button>
+            </div>
+
+            <hr className="my-6 border-gray-200" />
+            
+            {/* 🚀 과거 수수료 일괄 재계산 구역 */}
+            <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
+                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 장부 소급 재계산</h4>
+                <p className="text-xs text-gray-600 mb-3 leading-relaxed">
+                    수수료율을 잘못 입력하여 과거 장부가 틀어졌을 경우, 위에서 수수료율을 수정한 후 아래 버튼을 누르면 과거의 모든 통통통 수수료 내역이 <strong>{finSettings.cardFeeRate}%</strong>로 소급 역산되어 덮어쓰기 됩니다. (매출액은 변동 없음)
+                </p>
+                <button onClick={handleRecalculateFees} disabled={isRecalculatingFee} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                    {isRecalculatingFee ? <Loader size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
+                    {isRecalculatingFee ? '재계산 중...' : `기존 장부 ${finSettings.cardFeeRate}%로 일괄 소급 재계산`}
+                </button>
             </div>
           </div>
         </div>
@@ -540,7 +611,6 @@ const FinancialDashboard = ({ currentUser }) => {
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
               <div className="space-y-5">
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
-                  {/* 🚀 통통통 수납조회 탭 최우선 배치 */}
                   <button onClick={() => { setUploadType('TONGTONG'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'TONGTONG' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>통통통 수납</button>
                   <button onClick={() => { setUploadType('BANK'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'BANK' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>KB은행 통장</button>
                   <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>법인카드 승인</button>
