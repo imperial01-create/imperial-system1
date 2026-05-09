@@ -35,7 +35,7 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isLoading, setIsLoading] = useState(true);
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadType, setUploadType] = useState('BANK'); // 🚀 통통통 탭 제거, 은행 중심
+  const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
   const fileInputRef = useRef(null);
@@ -45,6 +45,8 @@ const FinancialDashboard = ({ currentUser }) => {
   // 🚀 재무 환경 설정 (임대료 및 관리비 등 고정비)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000 });
+  
+  // 🚀 삭제 진행 상태
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
 
   useEffect(() => {
@@ -65,35 +67,27 @@ const FinancialDashboard = ({ currentUser }) => {
     alert('재무 환경 설정이 저장되었습니다.');
   };
 
-  // 🚀 기존 꼬여있던 통통통 데이터 클렌징(초기화) 로직
-  const handleCleanupTongTong = async () => {
-    if (!window.confirm("⚠️ 기존에 잘못 적재된 '통통통(LMS)' 관련 수입 및 수수료 지출 내역을 모두 삭제하시겠습니까?\n(은행 통장 및 법인카드 업로드 내역은 100% 안전하게 유지됩니다.)")) return;
+  // 🚀 [신규 추가] 과거 엑셀 업로드로 인해 중복/단독 생성된 카드 지출 내역 초기화
+  const handleCleanupDuplicateCards = async () => {
+    if (!window.confirm("⚠️ 과거 엑셀 업로드 시 지출결의서와 병합되지 않고 '시스템(법인카드)'으로 단독 생성된 [영수증 없는 지출 내역]을 모두 삭제하시겠습니까?\n\n* 삭제 후 법인카드 엑셀을 다시 업로드하시면 기존 지출결의서들과 정상적으로 자동 병합됩니다.")) return;
     
     setIsProcessingCleanup(true);
     try {
         const batch = writeBatch(db);
         let deleteCount = 0;
         
-        // 1. 통통통으로 생성된 지출(수수료) 삭제
-        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('userId', '==', 'SYSTEM_TONGTONG')));
-        expSnap.forEach(d => { batch.delete(d.ref); deleteCount++; });
-        
-        // 2. 통통통으로 생성된 수입 삭제 (과거 로직에서 등록된 수입)
-        const incSnap = await getDocs(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
-        incSnap.forEach(d => {
-            const data = d.data();
-            // 과거에 통통통 엑셀로 올렸던 수입은 method 필드가 명시되어 있거나, source에 '학원 수강료'라고 적혀있음
-            if (data.method || (data.source && data.source.includes('학원 수강료'))) {
-                batch.delete(d.ref);
-                deleteCount++;
-            }
+        // SYSTEM_CARD 로 등록된 자동생성 내역들만 가져오기
+        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('userId', '==', 'SYSTEM_CARD')));
+        expSnap.forEach(d => {
+            batch.delete(d.ref);
+            deleteCount++;
         });
 
         if (deleteCount > 0) {
             await batch.commit();
-            alert(`완벽하게 처리되었습니다!\n총 ${deleteCount}건의 기존 통통통 연동 데이터가 깔끔하게 삭제되었습니다.\n이제 엑셀 업로드 메뉴에서 은행 통장 내역만 올려주세요.`);
+            alert(`완벽하게 처리되었습니다!\n총 ${deleteCount}건의 중복/단독 카드 지출 내역이 깔끔하게 삭제되었습니다.\n이제 엑셀 업로드 메뉴에서 법인카드 내역을 다시 올려주시면 지출결의서와 매칭됩니다.`);
         } else {
-            alert("삭제할 통통통 데이터가 없습니다. (이미 장부가 깨끗합니다.)");
+            alert("삭제할 시스템 생성 카드 내역이 없습니다. (이미 장부가 깨끗합니다.)");
         }
     } catch (e) {
         alert("삭제 중 오류 발생: " + e.message);
@@ -120,9 +114,8 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  // AI 재무 진단 로직 엔진 (완전 현금주의 기반)
+  // AI 재무 진단 로직 엔진
   const aiAnalytics = useMemo(() => {
-    // 은행 통장에 입금된 모든 내역을 진성 매출(Total Income)으로 파악
     const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
     const totalExpense = expenses.filter(e => e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, exp) => sum + exp.amount, 0);
     
@@ -206,7 +199,6 @@ const FinancialDashboard = ({ currentUser }) => {
     XLSX.writeFile(wb, `임페리얼_세무소명장부_${selectedMonth}.xlsx`);
   };
 
-  // 🚀 엑셀 파싱 로직 (현금주의 기반 은행 엑셀 전용)
   const handleFileUpload = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -214,24 +206,28 @@ const FinancialDashboard = ({ currentUser }) => {
       const bstr = evt.target.result; const workbook = XLSX.read(bstr, { type: 'binary' });
       const ws = workbook.Sheets[workbook.SheetNames[0]]; const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       const extracted = [];
+      
+      // 🚀 사전 매칭을 위해 대기 중인 지출결의서 리스트 확보
+      const unmatchedExps = [...expenses.filter(e => e.status === 'PENDING' && !e.matchedTransactionId)];
+
       try {
         if (uploadType === 'BANK') {
           const headerIdx = data.findIndex(row => row && row.includes('거래일시'));
           const dateIdx = data[headerIdx].indexOf('거래일시'), nameIdx = data[headerIdx].indexOf('보낸분/받는분'), outIdx = data[headerIdx].indexOf('출금액(원)'), inIdx = data[headerIdx].indexOf('입금액(원)');
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i]) continue;
-            // 지출(출금액) 파싱
+            // 지출 파싱
             const outAmount = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
             if (outAmount > 0) {
               const merchantName = data[i][nameIdx] || '알수없음';
               const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협)/i.test(merchantName);
               extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment });
             }
-            // 수입(입금액) 파싱 -> 모두 순매출로 간주
+            // 수입 파싱
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) {
               const senderName = data[i][nameIdx] || '알수없음';
-              extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
+              extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', isPgSettlement: false, rawId: `IN_${inAmount}_${i}` });
             }
           }
         } else if (uploadType === 'CARD') {
@@ -239,7 +235,23 @@ const FinancialDashboard = ({ currentUser }) => {
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i] || data[i][data[headerIdx].indexOf('상태')] !== '정상') continue;
             const amount = Number(String(data[i][data[headerIdx].indexOf('승인금액')]).replace(/,/g, ''));
-            if (amount > 0) extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('승인일')]).replace(/\./g, '-'), amount, merchantName: data[i][data[headerIdx].indexOf('가맹점명')] || '알수없음', type: 'CARD', rawId: `CARD_${amount}_${i}` });
+            if (amount > 0) {
+                const transactionDate = String(data[i][data[headerIdx].indexOf('승인일')]).replace(/\./g, '-');
+                const merchantName = data[i][data[headerIdx].indexOf('가맹점명')] || '알수없음';
+
+                // 🚀 핵심: 대기 중인 지출결의서(금액+날짜)와 엑셀 내역을 사전 매칭
+                const matchIdx = unmatchedExps.findIndex(e => e.expenseDate === transactionDate && e.amount === amount);
+                let matchedExpense = null;
+                if (matchIdx > -1) {
+                    matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; // 중복 방지를 위해 꺼내기
+                }
+
+                extracted.push({ 
+                    transactionDate, amount, merchantName, type: 'CARD', 
+                    rawId: `CARD_${amount}_${i}`,
+                    matchedExpense 
+                });
+            }
           }
         } else if (uploadType === 'HOMETAX') {
           const headerIdx = data.findIndex(row => row && row.includes('승인번호'));
@@ -285,18 +297,33 @@ const FinancialDashboard = ({ currentUser }) => {
             batch.set(expRef, { userId: 'SYSTEM_HOMETAX', userName: '전자세금계산서', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체', purpose: `[${item.merchantName}] ${item.purpose}`, category: item.category === '미분류' ? '지급수수료' : item.category, receiptUrl: '홈택스 증빙 완료', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString() }, { merge: true });
             addedCount++;
         } else if (item.type === 'CARD') {
-            const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
-            batch.set(expRef, { userId: 'SYSTEM_CARD', userName: '법인카드', expenseDate: item.transactionDate, amount: item.amount, method: '법인카드', purpose: `[${item.merchantName}] 법인카드 지출`, category: '미분류', receiptUrl: '카드 승인 내역', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString() });
+            // 🚀 매칭된 결의서가 있다면 상태만 업데이트, 없다면 미등록 지출로 신규 생성
+            if (item.matchedExpense) {
+                const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id);
+                batch.update(expRef, { 
+                    status: 'APPROVED', 
+                    matchedTransactionId: 'SYSTEM_CARD_VERIFIED',
+                    updatedAt: new Date().toISOString() 
+                });
+            } else {
+                const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                batch.set(expRef, { 
+                    userId: 'SYSTEM_CARD', userName: '미등록 법인카드', 
+                    expenseDate: item.transactionDate, amount: item.amount, 
+                    method: '법인카드', purpose: `[${item.merchantName}] 증빙 누락 지출`, 
+                    category: '미분류', receiptUrl: '증빙 필요', 
+                    status: 'APPROVED', matchedTransactionId: 'SYSTEM_CARD_VERIFIED', 
+                    createdAt: new Date().toISOString() 
+                });
+            }
             addedCount++;
         } else if (item.type === 'BANK_INCOME') {
-            // 🚀 은행 입금은 전부 매출로 잡음
             const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
-            batch.set(incRef, { transactionDate: item.transactionDate, amount: item.amount, source: item.merchantName, createdAt: new Date().toISOString() });
+            batch.set(incRef, { transactionDate: item.transactionDate, amount: item.amount, source: item.merchantName, isPgSettlement: false, createdAt: new Date().toISOString() });
             addedCount++;
         } else if (item.type === 'BANK') {
             const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
             if (item.isCardPayment) {
-                // 카드대금 결제는 이중지출 방지를 위해 '미지급금'으로 처리
                 const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
                 batch.set(expRef, { userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체', purpose: `[${item.merchantName}] 카드대금 결제`, category: '미지급금', receiptUrl: '카드사 청구서 갈음', status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
                 batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
@@ -314,7 +341,7 @@ const FinancialDashboard = ({ currentUser }) => {
         }
       }
       await batch.commit(); 
-      alert(`총 ${addedCount}건의 장부 적재가 완료되었습니다!`); 
+      alert(`총 ${addedCount}건의 장부 적재 및 병합이 완료되었습니다!`); 
       setIsUploadModalOpen(false); 
       setParsedData([]);
     } catch (error) { alert("오류 발생: " + error.message); } finally { setIsMatching(false); }
@@ -339,7 +366,6 @@ const FinancialDashboard = ({ currentUser }) => {
           <p className="text-xs text-gray-400">통장 입출금 기반으로 학원의 진짜 현금 흐름을 분석합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* 재무 환경 설정 버튼 */}
           <button onClick={() => setIsSettingsOpen(true)} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
             <Settings size={18}/> 설정
           </button>
@@ -511,7 +537,7 @@ const FinancialDashboard = ({ currentUser }) => {
                     <tr key={item.id} className={`border-b hover:bg-gray-50 transition-colors ${item.type.includes('수입') ? 'bg-blue-50/30' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
                       <td className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">{item.date}</td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type.includes('수입') ? 'bg-blue-100 text-blue-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : (item.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700'))}`}>
+                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type.includes('수입') ? 'bg-blue-100 text-blue-700' : (item.type.includes('PG정산') ? 'bg-purple-100 text-purple-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : (item.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700')))}`}>
                           {item.type}
                         </span>
                       </td>
@@ -529,7 +555,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 재무 환경 설정 모달 */}
+      {/* 🚀 재무 환경 설정 및 데이터 클렌징 모달 */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative">
@@ -551,15 +577,15 @@ const FinancialDashboard = ({ currentUser }) => {
 
             <hr className="my-6 border-gray-200" />
             
-            {/* 🚀 통통통 연동 찌꺼기 삭제 구역 */}
+            {/* 🚀 중복 법인카드 지출 클렌징 버튼으로 대체 */}
             <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
-                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 장부 초기화 (통통통 엑셀)</h4>
+                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 중복 카드 내역 초기화</h4>
                 <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-                    과거 통통통 엑셀을 업로드하여 잘못 생성된 <strong>수입(매출) 및 수수료 지출</strong> 데이터만 깔끔하게 삭제합니다. (정상 은행/카드 내역은 삭제되지 않습니다.)
+                    과거에 엑셀 업로드로 잘못 생성된 <strong>영수증 없는 중복 카드 지출 내역</strong>들만 쏙 골라내어 깔끔하게 삭제합니다. (정상 지출결의서는 삭제되지 않습니다.)
                 </p>
-                <button onClick={handleCleanupTongTong} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                <button onClick={handleCleanupDuplicateCards} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
                     {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                    {isProcessingCleanup ? '삭제 처리 중...' : `기존 통통통 연동 데이터 일괄 삭제`}
+                    {isProcessingCleanup ? '삭제 처리 중...' : `시스템 자동생성 내역 일괄 삭제`}
                 </button>
             </div>
           </div>
@@ -577,7 +603,7 @@ const FinancialDashboard = ({ currentUser }) => {
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
               <div className="space-y-5">
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
-                  {/* 🚀 통통통 탭 제거, 은행 중심 UI 구성 */}
+                  {/* 은행과 법인카드, 홈택스 탭 */}
                   <button onClick={() => { setUploadType('BANK'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'BANK' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>KB은행 통장</button>
                   <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>법인카드 승인</button>
                   <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'HOMETAX' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>홈택스 매입건</button>
@@ -597,8 +623,18 @@ const FinancialDashboard = ({ currentUser }) => {
                               <span className="text-gray-800 font-bold flex items-center gap-2">
                                 <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span>
                                 <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span>
+                                
+                                {/* 🚀 매칭 여부에 따른 시각적 뱃지 */}
+                                {d.type === 'CARD' && (
+                                    d.matchedExpense 
+                                    ? <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">✅ 결의서 자동 매칭</span>
+                                    : <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-rose-200">⚠️ 미등록 지출 (신규)</span>
+                                )}
                               </span>
                               {d.purpose && <span className="text-xs text-gray-500 truncate max-w-[250px]">{d.purpose}</span>}
+                              
+                              {/* 매칭된 지출결의서 정보 표시 */}
+                              {d.matchedExpense && <span className="text-[10px] text-emerald-600 font-medium">↳ 제출자: {d.matchedExpense.userName} / {d.matchedExpense.purpose}</span>}
                           </div>
                           <div className="flex items-center gap-3">
                             <span className={`font-black flex-shrink-0 text-right w-24 ${d.type.includes('INCOME') ? 'text-blue-600' : 'text-red-500'}`}>{d.amount.toLocaleString()}원</span>
@@ -617,7 +653,7 @@ const FinancialDashboard = ({ currentUser }) => {
                     </div>
                     <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-transform active:scale-95">
                         {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 
-                        장부 자동 동기화 시작
+                        장부 자동 동기화 시작 (사전 병합 적용)
                     </button>
                   </div>
                 )}
