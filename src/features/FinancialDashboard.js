@@ -22,6 +22,28 @@ const OFFICIAL_ACCOUNTS = [
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
+// 🚀 [CTO 핵심 로직] 어떤 포맷의 날짜가 들어와도 무조건 'YYYY-MM-DD'로 강제 변환하는 함수
+const normalizeDateStr = (dateVal) => {
+    if (!dateVal) return '';
+    const s = String(dateVal).trim();
+    
+    // 엑셀 고유 일련번호(Serial Date) 형식인 경우 (예: 44000)
+    if (!isNaN(s) && Number(s) > 10000 && Number(s) < 99999) {
+        const excelEpoch = new Date(1899, 11, 30);
+        const dateObj = new Date(excelEpoch.getTime() + Number(s) * 86400000);
+        return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+    }
+    
+    // 일반 텍스트 날짜 추출 (2026.05.09, 2026. 5. 9 등 모두 대응)
+    const matches = s.match(/(\d{4})[^0-9]*(\d{1,2})[^0-9]*(\d{1,2})/);
+    if (matches) {
+        return `${matches[1]}-${matches[2].padStart(2, '0')}-${matches[3].padStart(2, '0')}`;
+    }
+    
+    // 최후의 보루 (단순 치환)
+    return s.replace(/\./g, '-').replace(/\//g, '-').split(' ')[0];
+};
+
 const FinancialDashboard = ({ currentUser }) => {
   if (currentUser?.role !== 'admin') return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
 
@@ -42,11 +64,9 @@ const FinancialDashboard = ({ currentUser }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 🚀 재무 환경 설정 (임대료 및 관리비 등 고정비)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000 });
   
-  // 🚀 삭제 진행 상태
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
 
   useEffect(() => {
@@ -67,7 +87,6 @@ const FinancialDashboard = ({ currentUser }) => {
     alert('재무 환경 설정이 저장되었습니다.');
   };
 
-  // 🚀 [신규 추가] 과거 엑셀 업로드로 인해 중복/단독 생성된 카드 지출 내역 초기화
   const handleCleanupDuplicateCards = async () => {
     if (!window.confirm("⚠️ 과거 엑셀 업로드 시 지출결의서와 병합되지 않고 '시스템(법인카드)'으로 단독 생성된 [영수증 없는 지출 내역]을 모두 삭제하시겠습니까?\n\n* 삭제 후 법인카드 엑셀을 다시 업로드하시면 기존 지출결의서들과 정상적으로 자동 병합됩니다.")) return;
     
@@ -76,7 +95,6 @@ const FinancialDashboard = ({ currentUser }) => {
         const batch = writeBatch(db);
         let deleteCount = 0;
         
-        // SYSTEM_CARD 로 등록된 자동생성 내역들만 가져오기
         const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('userId', '==', 'SYSTEM_CARD')));
         expSnap.forEach(d => {
             batch.delete(d.ref);
@@ -96,7 +114,6 @@ const FinancialDashboard = ({ currentUser }) => {
     }
   };
 
-  // 통합 데이터 구독 엔진
   useEffect(() => {
     setIsLoading(true);
     const monthStart = `${selectedMonth}-01`; 
@@ -114,7 +131,6 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  // AI 재무 진단 로직 엔진
   const aiAnalytics = useMemo(() => {
     const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
     const totalExpense = expenses.filter(e => e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, exp) => sum + exp.amount, 0);
@@ -142,7 +158,6 @@ const FinancialDashboard = ({ currentUser }) => {
       cost: categoryTotals[acc] || 500000
     }));
 
-    // 일자별 현금 흐름 및 BEP 돌파 차트
     const dailyFlowData = [];
     let cumulative = -fixedCosts; 
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -207,7 +222,7 @@ const FinancialDashboard = ({ currentUser }) => {
       const ws = workbook.Sheets[workbook.SheetNames[0]]; const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       const extracted = [];
       
-      // 🚀 사전 매칭을 위해 대기 중인 지출결의서 리스트 확보
+      // 대기 중인 지출결의서 복사본
       const unmatchedExps = [...expenses.filter(e => e.status === 'PENDING' && !e.matchedTransactionId)];
 
       try {
@@ -221,29 +236,37 @@ const FinancialDashboard = ({ currentUser }) => {
             if (outAmount > 0) {
               const merchantName = data[i][nameIdx] || '알수없음';
               const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협)/i.test(merchantName);
-              extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment });
+              const transactionDate = normalizeDateStr(data[i][dateIdx]);
+              extracted.push({ transactionDate, amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment });
             }
             // 수입 파싱
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) {
               const senderName = data[i][nameIdx] || '알수없음';
-              extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', isPgSettlement: false, rawId: `IN_${inAmount}_${i}` });
+              const transactionDate = normalizeDateStr(data[i][dateIdx]);
+              extracted.push({ transactionDate, amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', isPgSettlement: false, rawId: `IN_${inAmount}_${i}` });
             }
           }
         } else if (uploadType === 'CARD') {
           const headerIdx = data.findIndex(row => row && row.includes('승인일'));
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i] || data[i][data[headerIdx].indexOf('상태')] !== '정상') continue;
+            
             const amount = Number(String(data[i][data[headerIdx].indexOf('승인금액')]).replace(/,/g, ''));
             if (amount > 0) {
-                const transactionDate = String(data[i][data[headerIdx].indexOf('승인일')]).replace(/\./g, '-');
+                // 🚀 스마트 정규화 (날짜 찌꺼기 제거 및 YYYY-MM-DD 맞춤)
+                const transactionDate = normalizeDateStr(data[i][data[headerIdx].indexOf('승인일')]);
                 const merchantName = data[i][data[headerIdx].indexOf('가맹점명')] || '알수없음';
 
-                // 🚀 핵심: 대기 중인 지출결의서(금액+날짜)와 엑셀 내역을 사전 매칭
-                const matchIdx = unmatchedExps.findIndex(e => e.expenseDate === transactionDate && e.amount === amount);
+                // 🚀 날짜와 금액의 완벽한 멱등성 보장 매칭
+                const matchIdx = unmatchedExps.findIndex(e => 
+                    normalizeDateStr(e.expenseDate) === transactionDate && 
+                    Number(e.amount) === amount
+                );
+
                 let matchedExpense = null;
                 if (matchIdx > -1) {
-                    matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; // 중복 방지를 위해 꺼내기
+                    matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
                 }
 
                 extracted.push({ 
@@ -264,7 +287,8 @@ const FinancialDashboard = ({ currentUser }) => {
               if (txt.includes('청소') || txt.includes('기장') || txt.includes('방역')) cat = '지급수수료';
               else if (txt.includes('임대') || txt.includes('월세')) cat = '지급임차료';
               else if (txt.includes('인쇄') || txt.includes('복사')) cat = '도서인쇄비';
-              extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('작성일자')]).replace(/\./g, '-'), amount, merchantName: merchant, purpose: purposeStr, type: 'HOMETAX', rawId: String(data[i][data[headerIdx].indexOf('승인번호')]), category: cat });
+              const transactionDate = normalizeDateStr(data[i][data[headerIdx].indexOf('작성일자')]);
+              extracted.push({ transactionDate, amount, merchantName: merchant, purpose: purposeStr, type: 'HOMETAX', rawId: String(data[i][data[headerIdx].indexOf('승인번호')]), category: cat });
             }
           }
         }
@@ -287,7 +311,12 @@ const FinancialDashboard = ({ currentUser }) => {
       const batch = writeBatch(db); 
       const unmatched = expenses.filter(e => !e.matchedTransactionId && e.status === 'PENDING');
       const expMap = new Map(); 
-      unmatched.forEach(e => { const k = `${e.expenseDate}_${e.amount}`; if(!expMap.has(k)) expMap.set(k, []); expMap.get(k).push(e); });
+      // BANK 매칭을 위한 맵 (날짜와 금액 정규화 적용)
+      unmatched.forEach(e => { 
+          const k = `${normalizeDateStr(e.expenseDate)}_${Number(e.amount)}`; 
+          if(!expMap.has(k)) expMap.set(k, []); 
+          expMap.get(k).push(e); 
+      });
 
       let addedCount = 0;
 
@@ -297,7 +326,6 @@ const FinancialDashboard = ({ currentUser }) => {
             batch.set(expRef, { userId: 'SYSTEM_HOMETAX', userName: '전자세금계산서', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체', purpose: `[${item.merchantName}] ${item.purpose}`, category: item.category === '미분류' ? '지급수수료' : item.category, receiptUrl: '홈택스 증빙 완료', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString() }, { merge: true });
             addedCount++;
         } else if (item.type === 'CARD') {
-            // 🚀 매칭된 결의서가 있다면 상태만 업데이트, 없다면 미등록 지출로 신규 생성
             if (item.matchedExpense) {
                 const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id);
                 batch.update(expRef, { 
@@ -328,7 +356,9 @@ const FinancialDashboard = ({ currentUser }) => {
                 batch.set(expRef, { userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체', purpose: `[${item.merchantName}] 카드대금 결제`, category: '미지급금', receiptUrl: '카드사 청구서 갈음', status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
                 batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
             } else {
-                const matchCandidates = expMap.get(`${item.transactionDate}_${item.amount}`);
+                // BANK 지출 매칭에도 정규화된 Key 적용
+                const trxKey = `${item.transactionDate}_${item.amount}`;
+                const matchCandidates = expMap.get(trxKey);
                 if (matchCandidates && matchCandidates.length > 0) {
                     const matched = matchCandidates.shift();
                     batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, matched.id), { status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() });
@@ -577,7 +607,7 @@ const FinancialDashboard = ({ currentUser }) => {
 
             <hr className="my-6 border-gray-200" />
             
-            {/* 🚀 중복 법인카드 지출 클렌징 버튼으로 대체 */}
+            {/* 🚀 중복 법인카드 지출 클렌징 버튼 */}
             <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
                 <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 중복 카드 내역 초기화</h4>
                 <p className="text-xs text-gray-600 mb-3 leading-relaxed">
