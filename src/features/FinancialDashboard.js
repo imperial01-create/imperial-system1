@@ -26,12 +26,11 @@ const FinancialDashboard = ({ currentUser }) => {
     const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
 
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]); 
   const [missingReceipts, setMissingReceipts] = useState([]);
   const [budgets, setBudgets] = useState({});
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // 🚀 초기 진입 시 바로 로딩 시작
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
@@ -40,9 +39,8 @@ const FinancialDashboard = ({ currentUser }) => {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 🚀 데이터 구독 엔진 (비용 절감형)
+  // 🚀 데이터 구독 엔진 (메뉴 진입 시 자동 동기화)
   useEffect(() => {
-    if (!isDataLoaded) { setExpenses([]); setIncomes([]); setMissingReceipts([]); return; }
     setIsLoading(true);
     setBudgets({
       '복리후생비': { name: '복리후생비', limit: 3000000 },
@@ -51,15 +49,21 @@ const FinancialDashboard = ({ currentUser }) => {
       '광고선전비': { name: '광고선전비', limit: 2500000 },
       '지급임차료': { name: '지급임차료', limit: 10000000 },
     });
-    const monthStart = `${selectedMonth}-01`; const monthEnd = `${selectedMonth}-31`;
+    
+    const monthStart = `${selectedMonth}-01`; 
+    const monthEnd = `${selectedMonth}-31`;
+    
     const expQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd));
     const unsubscribeExp = onSnapshot(expQuery, (snapshot) => { setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); setIsLoading(false); });
+    
     const incQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'incomes'), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd));
     const unsubscribeInc = onSnapshot(incQuery, (snapshot) => { setIncomes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
+    
     const trxQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'transactions'), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd), where('isMatched', '==', false));
     const unsubscribeTrx = onSnapshot(trxQuery, (snapshot) => { setMissingReceipts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); });
+    
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
-  }, [selectedMonth, isDataLoaded]);
+  }, [selectedMonth]);
 
   const dashboardStats = useMemo(() => {
     let totalApproved = 0, totalPendingAmount = 0, pendingCount = 0;
@@ -90,7 +94,6 @@ const FinancialDashboard = ({ currentUser }) => {
     return list.filter(item => item.purpose.toLowerCase().includes(searchTerm.toLowerCase()) || item.category.toLowerCase().includes(searchTerm.toLowerCase())).sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [expenses, incomes, missingReceipts, searchTerm]);
 
-  // 🚀 [CTO 핵심 기능] 영수증 하이퍼링크가 포함된 세무사용 엑셀 생성
   const handleDownloadPerfectLedger = () => {
     const excelData = integratedLedger.map(item => ({
       '거래일자': item.date,
@@ -106,10 +109,9 @@ const FinancialDashboard = ({ currentUser }) => {
 
     const ws = XLSX.utils.json_to_sheet(excelData);
     
-    // 영수증 주소가 있는 행에 클릭 가능한 하이퍼링크 삽입
     integratedLedger.forEach((item, idx) => {
       if (item.receiptUrl && item.receiptUrl.startsWith('data:')) {
-        const cellRef = XLSX.utils.encode_cell({ c: 6, r: idx + 1 }); // '증빙유형' 열 (G열)
+        const cellRef = XLSX.utils.encode_cell({ c: 6, r: idx + 1 });
         ws[cellRef].l = { Target: item.receiptUrl, Tooltip: "영수증 원본 보기" };
       }
     });
@@ -216,7 +218,6 @@ const FinancialDashboard = ({ currentUser }) => {
   const handleMonthChange = (offset) => {
     const [y, m] = selectedMonth.split('-').map(Number); let newDate = new Date(y, m - 1 + offset, 1);
     setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`);
-    setIsDataLoaded(false);
   };
 
   const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
@@ -225,43 +226,32 @@ const FinancialDashboard = ({ currentUser }) => {
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
       
-      {/* 1. 상단 컨트롤 패널 (복구된 버튼 포함) */}
+      {/* 상단 컨트롤 패널 */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><PieChart/> 전사적 자원 관리 (ERP)</h1>
-          <p className="text-xs text-gray-400">데이터 비용을 절약하는 Lazy Load 아키텍처 가동 중</p>
+          <p className="text-xs text-gray-400">학원의 전체 재무 및 지출 현황을 실시간으로 동기화합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* 🚀 데이터가 로드된 상태에서만 버튼 노출 */}
-          {isDataLoaded && (
-            <>
-              <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
-                <UploadCloud size={18}/> 엑셀 일괄 업로드
-              </button>
-              <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
-                <Download size={18}/> 세무사 제출용 장부 (Excel)
-              </button>
-            </>
-          )}
+          <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
+            <UploadCloud size={18}/> 엑셀 일괄 업로드
+          </button>
+          <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
+            <Download size={18}/> 세무사 제출용 장부 (Excel)
+          </button>
           <div className="flex items-center gap-2 bg-white/10 px-4 rounded-xl ml-2">
-            <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg"><ChevronLeft/></button>
+            <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronLeft/></button>
             <span className="font-bold tracking-widest">{selectedMonth.replace('-', '년 ')}월</span>
-            <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-white/10 rounded-lg"><ChevronRight/></button>
+            <button onClick={() => handleMonthChange(1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronRight/></button>
           </div>
         </div>
       </div>
 
-      {!isDataLoaded ? (
-        <div className="bg-white p-16 rounded-3xl border border-gray-200 shadow-sm text-center flex flex-col items-center justify-center">
-          <Database size={64} className="text-gray-300 mb-4" />
-          <h2 className="text-2xl font-black text-gray-800 mb-2">{selectedMonth} 재무 데이터를 불러오시겠습니까?</h2>
-          <p className="text-gray-500 mb-8 max-w-md">불필요한 과금을 방지하기 위해 요청 시에만 통합 장부를 동기화합니다.</p>
-          <button onClick={() => setIsDataLoaded(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-lg px-8 py-4 rounded-xl shadow-xl flex items-center gap-2">
-            <PieChart size={24} /> 장부 및 통계 불러오기
-          </button>
+      {isLoading ? (
+        <div className="flex justify-center items-center py-32 flex-col gap-4">
+            <Loader className="animate-spin text-blue-600" size={48}/>
+            <p className="text-gray-500 font-bold">재무 데이터를 불러오는 중입니다...</p>
         </div>
-      ) : isLoading ? (
-        <div className="flex justify-center py-20"><Loader className="animate-spin text-blue-600" size={48}/></div>
       ) : (
         <>
           {/* 상단 경영 지표 (KPI) */}
@@ -315,7 +305,7 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 월별 통합 재무 원장 (검색 및 영수증 상시 조회) */}
+          {/* 월별 통합 재무 원장 */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px]">
             <div className="p-5 border-b bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Database className="text-indigo-600" size={20} /> 월별 통합 재무 원장</h2>
@@ -327,7 +317,7 @@ const FinancialDashboard = ({ currentUser }) => {
             
             <div className="flex-1 overflow-auto bg-white custom-scrollbar">
               <table className="w-full text-sm text-left">
-                <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10">
+                <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10 shadow-sm">
                   <tr>
                     <th className="px-4 py-3">일자</th>
                     <th className="px-4 py-3">구분</th>
@@ -340,14 +330,14 @@ const FinancialDashboard = ({ currentUser }) => {
                 </thead>
                 <tbody>
                   {integratedLedger.length === 0 ? <tr><td colSpan="7" className="text-center py-10 text-gray-400 font-bold">내역이 없습니다.</td></tr> : integratedLedger.map((item) => (
-                    <tr key={item.id} className={`border-b hover:bg-gray-50 ${item.type === '수입' ? 'bg-blue-50/20' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
-                      <td className="px-4 py-3 font-semibold text-gray-600">{item.date}</td>
-                      <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type === '수입' ? 'bg-blue-100 text-blue-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : 'bg-gray-100 text-gray-700')}`}>{item.type}</span></td>
-                      <td className="px-4 py-3 font-bold text-indigo-700">{item.category}</td>
+                    <tr key={item.id} className={`border-b hover:bg-gray-50 transition-colors ${item.type === '수입' ? 'bg-blue-50/30' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
+                      <td className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">{item.date}</td>
+                      <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type === '수입' ? 'bg-blue-100 text-blue-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : (item.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700'))}`}>{item.type}</span></td>
+                      <td className="px-4 py-3 font-bold text-indigo-700 whitespace-nowrap">{item.category}</td>
                       <td className="px-4 py-3 font-semibold text-gray-900 truncate max-w-xs">{item.purpose}</td>
-                      <td className={`px-4 py-3 font-black text-right ${item.type === '수입' ? 'text-blue-600' : 'text-gray-900'}`}>{item.type === '수입' ? '+' : ''}{item.amount.toLocaleString()}원</td>
-                      <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
-                      <td className="px-4 py-3 text-center">{item.receiptUrl && !item.receiptUrl.includes('증빙') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:bg-blue-50 border border-blue-200 px-2 py-1 rounded-md text-xs font-bold transition-colors">조회</button> : <span className="text-gray-400 text-xs">-</span>}</td>
+                      <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${item.type === '수입' ? 'text-blue-600' : 'text-gray-900'}`}>{item.type === '수입' ? '+' : ''}{item.amount.toLocaleString()}원</td>
+                      <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
+                      <td className="px-4 py-3 text-center">{item.receiptUrl && !item.receiptUrl.includes('증빙') && !item.receiptUrl.includes('갈음') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs">{item.receiptUrl || '없음'}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -357,7 +347,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 엑셀 업로드 모달 (기존 로직 유지) */}
+      {/* 엑셀 업로드 모달 */}
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -372,23 +362,40 @@ const FinancialDashboard = ({ currentUser }) => {
                   <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>법인카드 승인</button>
                   <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'HOMETAX' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>홈택스 매입건</button>
                 </div>
-                <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center">
-                  <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer"/>
+                <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center hover:bg-blue-50 transition-colors">
+                  <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer transition-colors"/>
                 </div>
                 {parsedData.length > 0 && (
-                  <div className="mt-4">
+                  <div className="mt-4 animate-in slide-in-from-bottom-2">
                     <div className="max-h-80 overflow-y-auto bg-gray-50 border border-gray-200 rounded-xl p-3 text-sm space-y-3 custom-scrollbar">
                       {parsedData.map((d, i) => (
                         <div key={i} className="flex flex-col md:flex-row justify-between md:items-center border-b border-gray-200 pb-3 last:border-0 last:pb-0 gap-3">
-                          <div className="flex flex-col"><span className="text-gray-800 font-bold truncate">{d.merchantName} <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span></span>{d.purpose && <span className="text-xs text-gray-500 truncate max-w-[250px]">{d.purpose}</span>}</div>
+                          <div className="flex flex-col">
+                              <span className="text-gray-800 font-bold flex items-center gap-2">
+                                <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span>
+                                <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span>
+                              </span>
+                              {d.purpose && <span className="text-xs text-gray-500 truncate max-w-[250px]">{d.purpose}</span>}
+                          </div>
                           <div className="flex items-center gap-3">
                             <span className="font-black text-blue-600 flex-shrink-0 text-right w-24">{d.amount.toLocaleString()}원</span>
-                            {uploadType === 'HOMETAX' && <select value={d.category} onChange={(e) => handleCategoryChange(i, e.target.value)} className="border p-2 rounded-lg text-xs font-bold outline-none cursor-pointer">{OFFICIAL_ACCOUNTS.map(acc => <option key={acc} value={acc}>{acc}</option>)}</select>}
+                            {uploadType === 'HOMETAX' && (
+                                <select 
+                                    value={d.category} 
+                                    onChange={(e) => handleCategoryChange(i, e.target.value)} 
+                                    className={`border p-2 rounded-lg text-xs font-bold outline-none cursor-pointer transition-colors ${d.category === '미분류' ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-gray-300 bg-white text-indigo-700 hover:border-indigo-400'}`}
+                                >
+                                    {OFFICIAL_ACCOUNTS.map(acc => <option key={acc} value={acc}>{acc}</option>)}
+                                </select>
+                            )}
                           </div>
                         </div>
                       ))}
                     </div>
-                    <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-transform active:scale-95">{isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 장부 자동 동기화 시작</button>
+                    <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-transform active:scale-95">
+                        {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 
+                        {uploadType === 'HOMETAX' ? '세금계산서 장부 강제 적재 (계정 적용)' : '장부 자동 동기화 시작'}
+                    </button>
                   </div>
                 )}
               </div>
