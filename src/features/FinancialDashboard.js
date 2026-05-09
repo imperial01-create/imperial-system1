@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { collection, query, where, onSnapshot, doc, writeBatch } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, writeBatch, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   TrendingUp, AlertCircle, CheckCircle, XCircle, DollarSign, 
   PieChart, ChevronLeft, ChevronRight, Receipt, Loader, 
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
-  Activity, Zap, HeartPulse, LineChart, BarChart3, Target
+  Activity, Zap, HeartPulse, LineChart, BarChart3, Target, Settings
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  AreaChart, Area, ComposedChart, Line
+  AreaChart, Area, ComposedChart, Line, ReferenceLine
 } from 'recharts';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -35,14 +35,34 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isLoading, setIsLoading] = useState(true);
   
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [uploadType, setUploadType] = useState('BANK'); 
+  const [uploadType, setUploadType] = useState('TONGTONG'); // 기본값을 통통통으로 변경
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
   const fileInputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 데이터 구독 엔진 (자동 동기화)
+  // 🚀 재무 환경 설정 (고정비 및 수수료율)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000, cardFeeRate: 1.5 });
+
+  // 1. 재무 환경 설정 불러오기
+  useEffect(() => {
+    const loadSettings = async () => {
+      const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) setFinSettings(docSnap.data());
+    };
+    loadSettings();
+  }, []);
+
+  const handleSaveSettings = async () => {
+    await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), finSettings);
+    setIsSettingsOpen(false);
+    alert('재무 환경 설정이 저장되었습니다.');
+  };
+
+  // 2. 통합 데이터 구독 엔진 (자동 동기화)
   useEffect(() => {
     setIsLoading(true);
     const monthStart = `${selectedMonth}-01`; 
@@ -60,32 +80,28 @@ const FinancialDashboard = ({ currentUser }) => {
     return () => { unsubscribeExp(); unsubscribeInc(); unsubscribeTrx(); };
   }, [selectedMonth]);
 
-  // AI 재무 진단 로직 엔진
+  // 3. AI 재무 진단 로직 엔진 (고정비, 수수료, 일자별 BEP 반영)
   const aiAnalytics = useMemo(() => {
-    const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
+    // 🚀 이중 매출 방지: 은행으로 들어온 PG 정산금(isPgSettlement)은 순매출에서 제외
+    const pureIncomes = incomes.filter(i => !i.isPgSettlement);
+    const totalIncome = pureIncomes.reduce((sum, inc) => sum + inc.amount, 0);
     const totalExpense = expenses.filter(e => e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, exp) => sum + exp.amount, 0);
-    const operatingProfit = totalIncome - totalExpense;
+    
+    // 고정비 적용
+    const fixedCosts = Number(finSettings.rent) + Number(finSettings.maintenance);
+    const operatingProfit = totalIncome - totalExpense - fixedCosts; // 🚀 고정비 차감된 '진짜' 영업이익
 
-    const fixedCosts = expenses.filter(e => e.category === '지급임차료' || e.category === '통신비').reduce((sum, e) => sum + e.amount, 0) || 5000000;
-    const bepRate = totalIncome > 0 ? (totalIncome / (fixedCosts + (totalExpense * 0.4))) * 100 : 0;
+    const bepRate = totalIncome > 0 ? (totalIncome / (fixedCosts + totalExpense)) * 100 : 0;
     const runway = operatingProfit < 0 ? Math.abs(totalIncome / operatingProfit).toFixed(1) : 12;
 
     const marketingSpend = expenses.filter(e => e.category === '광고선전비').reduce((sum, e) => sum + e.amount, 0);
-    const newStudents = 10; 
-    const leavers = 2; 
-    const totalStudents = 150; 
-    
-    const cac = newStudents > 0 ? marketingSpend / newStudents : 0;
-    const churnRate = (leavers / totalStudents) * 100;
-    const ltv = churnRate > 0 ? (totalIncome / totalStudents) * (100 / churnRate) : 0;
+    const cac = marketingSpend / 10; // 가상 원생 10명 기준
+    const ltv = totalIncome > 0 ? (totalIncome / 150) * (100 / 2) : 0; // 가상 이탈율 적용
 
     const vatEstimate = totalIncome * 0.1 - (totalExpense * 0.05);
     const anomalies = [];
     const categoryTotals = {};
-    
-    expenses.filter(e => e.status === 'APPROVED').forEach(e => {
-        categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
-    });
+    expenses.filter(e => e.status === 'APPROVED').forEach(e => { categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount; });
     
     if (categoryTotals['소모품비'] > 1000000) {
         anomalies.push({ msg: "소모품비 지출 평소 대비 급증 감지 (점검 요망)", type: "warning" });
@@ -97,15 +113,34 @@ const FinancialDashboard = ({ currentUser }) => {
       cost: categoryTotals[acc] || 500000
     }));
 
+    // 🚀 일자별 현금 흐름 및 BEP 돌파 차트 데이터 생성
+    const dailyFlowData = [];
+    let cumulative = -fixedCosts; // 매월 1일은 마이너스 고정비에서 시작
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dailyInc = pureIncomes.filter(i => i.transactionDate === dateStr).reduce((sum, i) => sum + i.amount, 0);
+        const dailyExp = expenses.filter(e => e.expenseDate === dateStr && e.status === 'APPROVED' && e.category !== '미지급금').reduce((sum, e) => sum + e.amount, 0);
+        
+        cumulative += (dailyInc - dailyExp);
+        dailyFlowData.push({
+            day: `${d}일`,
+            cumulative: cumulative,
+            bep: 0 // BEP 기준선 (0원)
+        });
+    }
+
     return { 
-      totalIncome, totalExpense, operatingProfit, bepRate, runway, 
-      cac, churnRate, ltv, vatEstimate, anomalies, roiData 
+      totalIncome, totalExpense, fixedCosts, operatingProfit, bepRate, runway, 
+      cac, churnRate: 2, ltv, vatEstimate, anomalies, roiData, dailyFlowData 
     };
-  }, [expenses, incomes]);
+  }, [expenses, incomes, finSettings, selectedMonth]);
 
   const integratedLedger = useMemo(() => {
     const list = [
-      ...incomes.map(i => ({ id: i.id, date: i.transactionDate, type: '수입', category: '사업소득', purpose: i.source, amount: i.amount, method: '계좌입금', status: 'COMPLETED' })),
+      ...incomes.map(i => ({ id: i.id, date: i.transactionDate, type: i.isPgSettlement ? 'PG정산(참고용)' : '수입(매출)', category: i.isPgSettlement ? '미수금회수' : '사업소득', purpose: i.source, amount: i.amount, method: i.method || '계좌입금', status: 'COMPLETED' })),
       ...expenses.filter(e => e.status === 'APPROVED').map(e => ({ id: e.id, date: e.expenseDate, type: '지출(정상)', category: e.category, purpose: e.purpose, amount: e.amount, method: e.method, receiptUrl: e.receiptUrl, status: 'COMPLETED' })),
       ...missingReceipts.map(m => ({ id: m.id, date: m.transactionDate, type: '지출(누락)', category: '미확인', purpose: m.merchantName, amount: m.amount, method: m.type, status: 'ERROR' })),
       ...expenses.filter(e => e.status === 'PENDING').map(e => ({ id: e.id, date: e.expenseDate, type: '지출(대기)', category: e.category, purpose: e.purpose, amount: e.amount, method: e.method, receiptUrl: e.receiptUrl, status: 'PENDING' }))
@@ -127,21 +162,19 @@ const FinancialDashboard = ({ currentUser }) => {
     }));
 
     if (excelData.length === 0) return alert("다운로드할 데이터가 없습니다.");
-
     const ws = XLSX.utils.json_to_sheet(excelData);
-    
     integratedLedger.forEach((item, idx) => {
       if (item.receiptUrl && item.receiptUrl.startsWith('data:')) {
         const cellRef = XLSX.utils.encode_cell({ c: 6, r: idx + 1 });
         ws[cellRef].l = { Target: item.receiptUrl, Tooltip: "영수증 원본 보기" };
       }
     });
-
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "임페리얼_통합재무원장");
     XLSX.writeFile(wb, `임페리얼_세무소명장부_${selectedMonth}.xlsx`);
   };
 
+  // 🚀 4. 엑셀 파싱 로직 (통통통 & 은행 이중매출 필터링)
   const handleFileUpload = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -150,7 +183,28 @@ const FinancialDashboard = ({ currentUser }) => {
       const ws = workbook.Sheets[workbook.SheetNames[0]]; const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
       const extracted = [];
       try {
-        if (uploadType === 'BANK') {
+        if (uploadType === 'TONGTONG') {
+            const headerIdx = data.findIndex(row => row && row.includes('수납일자'));
+            if(headerIdx > -1) {
+                const dateIdx = data[headerIdx].indexOf('수납일자'), nameIdx = data[headerIdx].indexOf('성명'), classIdx = data[headerIdx].indexOf('반명'), amountIdx = data[headerIdx].indexOf('수납금액'), methodIdx = data[headerIdx].indexOf('수납방법');
+                for (let i = headerIdx + 1; i < data.length; i++) {
+                    if (!data[i] || !data[i][dateIdx]) continue;
+                    const amount = Number(String(data[i][amountIdx] || 0).replace(/,/g, ''));
+                    if (amount !== 0) {
+                        extracted.push({
+                            transactionDate: String(data[i][dateIdx]).replace(/\./g, '-'),
+                            amount: amount,
+                            merchantName: data[i][nameIdx],
+                            purpose: data[i][classIdx] || '학원 수강료',
+                            type: 'TONGTONG',
+                            method: data[i][methodIdx] || '',
+                            rawId: `TTT_${i}_${amount}`
+                        });
+                    }
+                }
+            } else throw new Error("통통통 엑셀 양식이 아닙니다.");
+        }
+        else if (uploadType === 'BANK') {
           const headerIdx = data.findIndex(row => row && row.includes('거래일시'));
           const dateIdx = data[headerIdx].indexOf('거래일시'), nameIdx = data[headerIdx].indexOf('보낸분/받는분'), outIdx = data[headerIdx].indexOf('출금액(원)'), inIdx = data[headerIdx].indexOf('입금액(원)');
           for (let i = headerIdx + 1; i < data.length; i++) {
@@ -162,7 +216,12 @@ const FinancialDashboard = ({ currentUser }) => {
               extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment });
             }
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
-            if (inAmount > 0) extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: data[i][nameIdx] || '알수없음', type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
+            if (inAmount > 0) {
+              const senderName = data[i][nameIdx] || '알수없음';
+              // 🚀 이중 매출 방지: PG사나 카드사에서 입금된 돈은 제외시킴
+              const isPgSettlement = /(카드|KCP|토스|나이스|KSNET|다날|PG|정산)/i.test(senderName);
+              extracted.push({ transactionDate: data[i][dateIdx].split(' ')[0].replace(/\./g, '-'), amount: inAmount, merchantName: senderName, type: 'BANK_INCOME', isPgSettlement, rawId: `IN_${inAmount}_${i}` });
+            }
           }
         } else if (uploadType === 'CARD') {
           const headerIdx = data.findIndex(row => row && row.includes('승인일'));
@@ -171,51 +230,42 @@ const FinancialDashboard = ({ currentUser }) => {
             const amount = Number(String(data[i][data[headerIdx].indexOf('승인금액')]).replace(/,/g, ''));
             if (amount > 0) extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('승인일')]).replace(/\./g, '-'), amount, merchantName: data[i][data[headerIdx].indexOf('가맹점명')] || '알수없음', type: 'CARD', rawId: `CARD_${amount}_${i}` });
           }
-        } else if (uploadType === 'HOMETAX') {
-          const headerIdx = data.findIndex(row => row && row.includes('승인번호'));
-          for (let i = headerIdx + 1; i < data.length; i++) {
-            if (!data[i] || !data[i][data[headerIdx].indexOf('승인번호')]) continue;
-            const amount = Number(String(data[i][data[headerIdx].indexOf('합계금액')]).replace(/,/g, ''));
-            if (amount > 0) {
-              const merchant = data[i][data[headerIdx].indexOf('상호')] || '알수없음', purposeStr = data[i][data[headerIdx].indexOf('품목명')] || '전자세금계산서 매입';
-              let cat = '미분류'; const txt = `${merchant} ${purposeStr}`.replace(/\s/g, '');
-              if (txt.includes('청소') || txt.includes('기장') || txt.includes('방역')) cat = '지급수수료';
-              else if (txt.includes('임대') || txt.includes('월세')) cat = '지급임차료';
-              else if (txt.includes('인쇄') || txt.includes('복사')) cat = '도서인쇄비';
-              extracted.push({ transactionDate: String(data[i][data[headerIdx].indexOf('작성일자')]).replace(/\./g, '-'), amount, merchantName: merchant, purpose: purposeStr, type: 'HOMETAX', rawId: String(data[i][data[headerIdx].indexOf('승인번호')]), category: cat });
-            }
-          }
         }
         setParsedData(extracted);
-      } catch (err) { alert("엑셀 변환 오류"); }
+      } catch (err) { alert(err.message || "엑셀 변환 오류"); }
     };
     reader.readAsBinaryString(file);
-  };
-
-  const handleCategoryChange = (index, newCategory) => {
-      const newData = [...parsedData];
-      newData[index].category = newCategory;
-      setParsedData(newData);
   };
 
   const handleMatchAndUpload = async () => {
     if (parsedData.length === 0) return;
     setIsMatching(true);
     try {
-      const batch = writeBatch(db); let mCount = 0, iCount = 0, cCount = 0, misCount = 0;
-      if (uploadType === 'HOMETAX') {
+      const batch = writeBatch(db); let mCount = 0, iCount = 0, cCount = 0;
+      
+      if (uploadType === 'TONGTONG') {
         for (const item of parsedData) {
-          const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.rawId);
-          batch.set(expRef, { userId: 'SYSTEM_HOMETAX', userName: '전자세금계산서', expenseDate: item.transactionDate, amount: item.amount, method: '계좌이체', purpose: `[${item.merchantName}] ${item.purpose}`, category: item.category === '미분류' ? '지급수수료' : item.category, receiptUrl: '홈택스 증빙 완료', status: 'APPROVED', matchedTransactionId: null, createdAt: new Date().toISOString() }, { merge: true });
-          mCount++;
+            // 1. 수납액을 매출(incomes)로 등록
+            const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
+            batch.set(incRef, { transactionDate: item.transactionDate, amount: item.amount, source: `[${item.merchantName}] ${item.purpose}`, method: item.method, isPgSettlement: false, createdAt: new Date().toISOString() });
+            
+            // 2. 카드로 결제된 내역은 수수료를 변동비(expenses)로 자동 적재 (환불도 동일 적용)
+            if (item.method.includes('카드')) {
+                const fee = Math.round(item.amount * (Number(finSettings.cardFeeRate) / 100));
+                const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                batch.set(expRef, { userId: 'SYSTEM_TONGTONG', userName: '시스템(LMS)', expenseDate: item.transactionDate, amount: fee, method: '자동공제', purpose: `[${item.merchantName}] 결제 수수료 (${finSettings.cardFeeRate}%)`, category: '지급수수료', receiptUrl: 'LMS 자동정산', status: 'APPROVED', createdAt: new Date().toISOString() });
+            }
+            mCount++;
         }
       } else {
         const unmatched = expenses.filter(e => !e.matchedTransactionId);
         const expMap = new Map(); unmatched.forEach(e => { const k = `${e.expenseDate}_${e.amount}`; if(!expMap.has(k)) expMap.set(k, []); expMap.get(k).push(e); });
+        
         for (const trx of parsedData) {
           if (trx.type === 'BANK_INCOME') {
             const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
-            batch.set(incRef, { transactionDate: trx.transactionDate, amount: trx.amount, source: trx.merchantName, createdAt: new Date().toISOString() });
+            // 🚀 이중 매출 방지 태그(isPgSettlement) 포함하여 저장
+            batch.set(incRef, { transactionDate: trx.transactionDate, amount: trx.amount, source: trx.merchantName, isPgSettlement: trx.isPgSettlement, createdAt: new Date().toISOString() });
             iCount++; continue;
           }
           const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
@@ -233,18 +283,16 @@ const FinancialDashboard = ({ currentUser }) => {
               mCount++;
             } else {
               batch.set(trxDocRef, { ...trx, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
-              misCount++;
             }
           }
         }
       }
-      await batch.commit(); alert("적재 완료!"); setIsUploadModalOpen(false); setParsedData([]);
-    } catch (error) { alert("오류 발생"); } finally { setIsMatching(false); }
+      await batch.commit(); alert("장부 적재 완료!"); setIsUploadModalOpen(false); setParsedData([]);
+    } catch (error) { alert("오류 발생: " + error.message); } finally { setIsMatching(false); }
   };
 
   const handleMonthChange = (offset) => {
-    const [y, m] = selectedMonth.split('-').map(Number); 
-    let newDate = new Date(y, m - 1 + offset, 1);
+    const [y, m] = selectedMonth.split('-').map(Number); let newDate = new Date(y, m - 1 + offset, 1);
     setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, '0')}`);
   };
 
@@ -259,14 +307,18 @@ const FinancialDashboard = ({ currentUser }) => {
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><Zap className="text-yellow-400"/> AI 재무 진단 시스템</h1>
-          <p className="text-xs text-gray-400">학원의 재무 데이터를 기반으로 미래 가치와 리스크를 자동 분석합니다.</p>
+          <p className="text-xs text-gray-400">학원의 전체 재무 현황을 실시간으로 분석하고 예측합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
-            <UploadCloud size={18}/> 엑셀 일괄 업로드
+          {/* 🚀 재무 환경 설정 버튼 */}
+          <button onClick={() => setIsSettingsOpen(true)} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors">
+            <Settings size={18}/> 설정
+          </button>
+          <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-blue-900/20">
+            <UploadCloud size={18}/> 장부 동기화 (엑셀)
           </button>
           <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
-            <Download size={18}/> 세무 장부 (Excel)
+            <Download size={18}/> 세무 장부 다운
           </button>
           <div className="flex items-center gap-2 bg-white/10 px-4 py-1 rounded-xl ml-2">
             <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronLeft/></button>
@@ -283,11 +335,11 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       ) : (
         <>
-          {/* 1. 핵심 지표 그리드 (Financial Health & Unit Economics) */}
+          {/* 1. 핵심 지표 그리드 */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-indigo-500 bg-white">
               <div className="flex justify-between items-start mb-2">
-                <p className="text-gray-500 text-xs font-bold uppercase">실시간 영업이익</p>
+                <p className="text-gray-500 text-xs font-bold uppercase">실질 영업 이익 (고정비 제외)</p>
                 <Activity size={16} className="text-indigo-500" />
               </div>
               <h3 className={`text-2xl font-black ${aiAnalytics.operatingProfit >= 0 ? 'text-gray-900' : 'text-red-500'}`}>
@@ -298,7 +350,7 @@ const FinancialDashboard = ({ currentUser }) => {
 
             <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-emerald-500 bg-white">
               <div className="flex justify-between items-start mb-2">
-                <p className="text-gray-500 text-xs font-bold uppercase">BEP 달성률</p>
+                <p className="text-gray-500 text-xs font-bold uppercase">BEP 달성률 (고정비 {formatCurrency(aiAnalytics.fixedCosts)})</p>
                 <HeartPulse size={16} className="text-emerald-500" />
               </div>
               <h3 className="text-2xl font-black text-gray-900">{aiAnalytics.bepRate.toFixed(1)}%</h3>
@@ -326,7 +378,7 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 2. 리스크 및 예측 알림 (Risk Management) */}
+          {/* 2. 리스크 및 예측 알림 */}
           <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl">
             <h2 className="text-sm font-bold text-rose-800 mb-4 flex items-center gap-2"><ShieldAlert size={18}/> AI 리스크 탐지 및 세무 예측</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -353,7 +405,7 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 3. 시각적 데이터 분석 (Operational Efficiency) */}
+          {/* 3. 시각적 데이터 분석 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl">
               <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><BarChart3 size={20} className="text-indigo-600"/> 주요 항목별 수익성(ROI) 분석</h2>
@@ -363,10 +415,7 @@ const FinancialDashboard = ({ currentUser }) => {
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                     <XAxis dataKey="name" fontSize={10} tickLine={false} axisLine={false} />
                     <YAxis fontSize={10} tickLine={false} axisLine={false} tickFormatter={(value) => `${value/10000}만`} />
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                      formatter={(value) => formatCurrency(value)}
-                    />
+                    <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} formatter={(value) => formatCurrency(value)} />
                     <Bar dataKey="value" fill="#6366f1" radius={[4, 4, 0, 0]} name="매출 기여도" />
                     <Line type="monotone" dataKey="cost" stroke="#ef4444" strokeWidth={2} dot={{ r: 4 }} name="운영 비용" />
                   </ComposedChart>
@@ -374,30 +423,35 @@ const FinancialDashboard = ({ currentUser }) => {
               </div>
             </div>
 
+            {/* 🚀 일자별 현금 흐름 및 BEP 차트 */}
             <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl flex flex-col justify-between">
               <div>
-                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><Database size={20} className="text-blue-600"/> 현금 흐름 및 런웨이 예측</h2>
+                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><Database size={20} className="text-blue-600"/> 일자별 누적 순이익 (BEP 추적)</h2>
                 <div className="h-48 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={aiAnalytics.roiData}>
+                    <AreaChart data={aiAnalytics.dailyFlowData}>
                       <defs>
-                        <linearGradient id="colorIncome" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1}/>
+                        <linearGradient id="colorCumulative" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
                           <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                      <XAxis dataKey="name" hide />
-                      <YAxis hide />
-                      <Tooltip />
-                      <Area type="monotone" dataKey="value" stroke="#3b82f6" fillOpacity={1} fill="url(#colorIncome)" strokeWidth={3} />
+                      <XAxis dataKey="day" fontSize={10} tickLine={false} axisLine={false} minTickGap={3}/>
+                      <YAxis hide domain={['dataMin', 'dataMax']} />
+                      <Tooltip formatter={(value) => formatCurrency(value)} />
+                      {/* BEP (0원) 라인 */}
+                      <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'top', value: 'BEP (손익분기점)', fill: '#ef4444', fontSize: 10 }} />
+                      <Area type="monotone" dataKey="cumulative" stroke="#3b82f6" fillOpacity={1} fill="url(#colorCumulative)" strokeWidth={3} name="누적 이익" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
               </div>
               <div className="mt-4 p-4 bg-gray-50 border border-gray-100 rounded-xl flex justify-between items-center">
-                <span className="text-sm font-bold text-gray-600">현금 생존 가능 기간 (Runway)</span>
-                <span className="text-lg font-black text-blue-600">{aiAnalytics.runway} 개월</span>
+                <span className="text-sm font-bold text-gray-600">현재 누적 상황</span>
+                <span className={`text-lg font-black ${aiAnalytics.operatingProfit >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
+                    {aiAnalytics.operatingProfit >= 0 ? 'BEP 돌파 🚀' : `${formatCurrency(Math.abs(aiAnalytics.operatingProfit))} 부족`}
+                </span>
               </div>
             </div>
           </div>
@@ -427,14 +481,18 @@ const FinancialDashboard = ({ currentUser }) => {
                 </thead>
                 <tbody>
                   {integratedLedger.length === 0 ? <tr><td colSpan="7" className="text-center py-10 text-gray-400 font-bold">내역이 없습니다.</td></tr> : integratedLedger.map((item) => (
-                    <tr key={item.id} className={`border-b hover:bg-gray-50 transition-colors ${item.type === '수입' ? 'bg-blue-50/30' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
+                    <tr key={item.id} className={`border-b hover:bg-gray-50 transition-colors ${item.type.includes('수입') ? 'bg-blue-50/30' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
                       <td className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">{item.date}</td>
-                      <td className="px-4 py-3"><span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type === '수입' ? 'bg-blue-100 text-blue-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : (item.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700'))}`}>{item.type}</span></td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${item.type.includes('수입') ? 'bg-blue-100 text-blue-700' : (item.type.includes('PG정산') ? 'bg-purple-100 text-purple-700' : (item.status === 'ERROR' ? 'bg-rose-100 text-rose-700' : (item.status === 'PENDING' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-700')))}`}>
+                          {item.type}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 font-bold text-indigo-700 whitespace-nowrap">{item.category}</td>
                       <td className="px-4 py-3 font-semibold text-gray-900 truncate max-w-xs">{item.purpose}</td>
-                      <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${item.type === '수입' ? 'text-blue-600' : 'text-gray-900'}`}>{item.type === '수입' ? '+' : ''}{item.amount.toLocaleString()}원</td>
+                      <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${item.type.includes('수입') ? 'text-blue-600' : 'text-gray-900'}`}>{item.type.includes('수입') ? '+' : ''}{item.amount.toLocaleString()}원</td>
                       <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
-                      <td className="px-4 py-3 text-center">{item.receiptUrl && !item.receiptUrl.includes('증빙') && !item.receiptUrl.includes('갈음') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs">{item.receiptUrl || '없음'}</span>}</td>
+                      <td className="px-4 py-3 text-center">{item.receiptUrl && !item.receiptUrl.includes('증빙') && !item.receiptUrl.includes('갈음') && !item.receiptUrl.includes('자동정산') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs">{item.receiptUrl || '없음'}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -442,6 +500,33 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
         </>
+      )}
+
+      {/* 🚀 재무 환경 설정 모달 */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden p-6">
+            <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-4"><Settings className="text-gray-600"/> 재무 환경 설정</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">월 고정 임대료 (원)</label>
+                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.rent} onChange={e => setFinSettings({...finSettings, rent: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">월 평균 관리비 (원)</label>
+                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.maintenance} onChange={e => setFinSettings({...finSettings, maintenance: e.target.value})} />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1">LMS (통통통) 평균 카드 수수료율 (%)</label>
+                <input type="number" step="0.1" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200" value={finSettings.cardFeeRate} onChange={e => setFinSettings({...finSettings, cardFeeRate: e.target.value})} />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
+              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">저장</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 엑셀 업로드 모달 */}
@@ -455,12 +540,17 @@ const FinancialDashboard = ({ currentUser }) => {
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
               <div className="space-y-5">
                 <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+                  {/* 🚀 통통통 수납조회 탭 최우선 배치 */}
+                  <button onClick={() => { setUploadType('TONGTONG'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'TONGTONG' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>통통통 수납</button>
                   <button onClick={() => { setUploadType('BANK'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'BANK' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>KB은행 통장</button>
                   <button onClick={() => { setUploadType('CARD'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'CARD' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>법인카드 승인</button>
-                  <button onClick={() => { setUploadType('HOMETAX'); setParsedData([]); }} className={`flex-1 py-3 text-sm rounded-lg font-bold transition-colors ${uploadType === 'HOMETAX' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-800'}`}>홈택스 매입건</button>
                 </div>
                 <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center hover:bg-blue-50 transition-colors">
                   <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer transition-colors"/>
+                  <p className="text-xs text-gray-500 mt-2">
+                      {uploadType === 'TONGTONG' && '통통통에서 다운받은 "일별수납조회.csv"를 올려주세요. 매출과 수수료가 분리되어 자동 적재됩니다.'}
+                      {uploadType === 'BANK' && 'KB은행 통장 내역 엑셀을 올려주세요. PG사 입금 내역은 이중 매출 방지를 위해 필터링됩니다.'}
+                  </p>
                 </div>
                 {parsedData.length > 0 && (
                   <div className="mt-4 animate-in slide-in-from-bottom-2">
@@ -471,27 +561,19 @@ const FinancialDashboard = ({ currentUser }) => {
                               <span className="text-gray-800 font-bold flex items-center gap-2">
                                 <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span>
                                 <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span>
+                                {d.isPgSettlement && <span className="bg-purple-100 text-purple-700 px-1 rounded text-[10px]">정산금(매출제외)</span>}
                               </span>
                               {d.purpose && <span className="text-xs text-gray-500 truncate max-w-[250px]">{d.purpose}</span>}
                           </div>
                           <div className="flex items-center gap-3">
-                            <span className="font-black text-blue-600 flex-shrink-0 text-right w-24">{d.amount.toLocaleString()}원</span>
-                            {uploadType === 'HOMETAX' && (
-                                <select 
-                                    value={d.category} 
-                                    onChange={(e) => handleCategoryChange(i, e.target.value)} 
-                                    className={`border p-2 rounded-lg text-xs font-bold outline-none cursor-pointer transition-colors ${d.category === '미분류' ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-gray-300 bg-white text-indigo-700 hover:border-indigo-400'}`}
-                                >
-                                    {OFFICIAL_ACCOUNTS.map(acc => <option key={acc} value={acc}>{acc}</option>)}
-                                </select>
-                            )}
+                            <span className={`font-black flex-shrink-0 text-right w-24 ${d.amount < 0 ? 'text-red-500' : 'text-blue-600'}`}>{d.amount.toLocaleString()}원</span>
                           </div>
                         </div>
                       ))}
                     </div>
                     <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-transform active:scale-95">
                         {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 
-                        {uploadType === 'HOMETAX' ? '세금계산서 장부 강제 적재 (계정 적용)' : '장부 자동 동기화 시작'}
+                        {uploadType === 'TONGTONG' ? `통통통 매출 및 수수료(${finSettings.cardFeeRate}%) 적재 시작` : '장부 자동 동기화 시작'}
                     </button>
                   </div>
                 )}
