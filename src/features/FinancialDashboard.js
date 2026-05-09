@@ -16,7 +16,6 @@ import {
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 건물관리비 추가
 const OFFICIAL_ACCOUNTS = [
   '미분류', '직원급여', '상여금', '퇴직급여', '복리후생비', '여비교통비', '접대비', 
   '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '건물관리비', '수선비', 
@@ -100,7 +99,6 @@ const FinancialDashboard = ({ currentUser }) => {
     loadSettings();
   }, []);
 
-  // 🚀 [핵심 추가] 기존 누락 내역 재매칭 및 소급 적용 엔진
   const handleReverifyMissing = async (isSilent = false) => {
     setIsProcessingCleanup(!isSilent);
     try {
@@ -112,14 +110,11 @@ const FinancialDashboard = ({ currentUser }) => {
         const batch = writeBatch(db);
         let updatedCount = 0;
         
-        // 대기 중인 모든 지출결의서 스캔
         const unmatchedExps = expenses.filter(e => e.status === 'PENDING' && !e.matchedTransactionId);
 
-        // 누락된 통장 내역(에러 상태)을 모두 재검사
         for (const trx of missingReceipts) {
             let isMatched = false;
 
-            // 1. 사후에 올라온 지출결의서가 있는지 확인
             const expIdx = unmatchedExps.findIndex(e => 
                 normalizeDateStr(e.expenseDate) === normalizeDateStr(trx.transactionDate) && 
                 Number(e.amount) === Number(trx.amount)
@@ -141,7 +136,6 @@ const FinancialDashboard = ({ currentUser }) => {
                 isMatched = true;
             }
 
-            // 2. 키워드 설정이 바뀌어서 자동 증빙 대상이 되었는지 확인
             if (!isMatched) {
                 for (const rule of dynamicAutoProofKeywords) {
                     if (rule.key.test(trx.merchantName)) {
@@ -180,15 +174,11 @@ const FinancialDashboard = ({ currentUser }) => {
     }
   };
 
-  // 🚀 설정값 저장 시 누락건 소급 적용(handleReverifyMissing) 자동 실행
   const handleSaveSettings = async () => {
     setIsProcessingCleanup(true);
     try {
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), finSettings, { merge: true });
-        
-        // 설정이 저장된 후 사후 소급 적용 (Silent 모드로 돌리고 결과만 합쳐서 보고)
         await handleReverifyMissing(true); 
-        
         setIsSettingsOpen(false);
         alert('재무 환경 설정이 저장되었으며, 과거 누락 내역에 설정값이 소급 반영되었습니다!');
     } catch (err) {
@@ -215,8 +205,9 @@ const FinancialDashboard = ({ currentUser }) => {
       });
   };
 
+  // 🚀 [해결 2] 더욱 강력해진 초기화 엔진 (월에 상관없이 교차 매칭된 것까지 모두 롤백)
   const handleResetExcelData = async () => {
-    if (!window.confirm(`⚠️ [${selectedMonth}월]의 모든 엑셀 업로드 내역을 초기화하시겠습니까?\n\n* 은행 통장(수입) 및 카드 엑셀(누락 지출) 데이터가 삭제됩니다.\n* 직원들이 올린 지출결의서(영수증)는 삭제되지 않으며 다시 '대기' 상태로 복구됩니다.\n* 초기화 후 엑셀을 다시 업로드하면 정상적으로 재매칭됩니다.`)) return;
+    if (!window.confirm(`⚠️ [${selectedMonth}월]의 모든 엑셀 업로드 내역을 초기화하시겠습니까?\n\n* 통장(수입) 및 누락 지출 데이터가 삭제됩니다.\n* 지출결의서는 안전하게 '대기' 상태로 복구됩니다.`)) return;
     
     setIsProcessingCleanup(true);
     try {
@@ -225,12 +216,27 @@ const FinancialDashboard = ({ currentUser }) => {
         const monthStart = `${selectedMonth}-01`; 
         const monthEnd = `${selectedMonth}-31`;
         
+        // 1. 해당 월 수입 모두 삭제
         const incSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/incomes`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
         incSnap.forEach(d => { batch.delete(d.ref); opCount++; });
         
+        // 2. 해당 월 통장 출금(Transactions) 삭제 및 연결된 결의서 강제 롤백!
         const trxSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/transactions`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
-        trxSnap.forEach(d => { batch.delete(d.ref); opCount++; });
+        trxSnap.forEach(d => { 
+            const data = d.data();
+            batch.delete(d.ref); 
+            opCount++; 
+            // 🚀 통장 출금과 연결된 결의서가 있다면, 그 결의서가 저번 달에 작성되었더라도 강제로 대기로 돌림
+            if (data.matchedExpenseId) {
+                batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, data.matchedExpenseId), {
+                    matchedTransactionId: null,
+                    status: 'PENDING',
+                    updatedAt: new Date().toISOString()
+                });
+            }
+        });
 
+        // 3. 해당 월 지출결의서 스캔 (SYSTEM 삭제 및 수동 승인건 롤백)
         const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd)));
         expSnap.forEach(d => {
             const data = d.data();
@@ -238,7 +244,8 @@ const FinancialDashboard = ({ currentUser }) => {
                 batch.delete(d.ref);
                 opCount++;
             } 
-            else if (data.matchedTransactionId) {
+            else if (data.matchedTransactionId || data.status === 'APPROVED') {
+                // 🚀 수동 승인한 것, 카드 엑셀로 매칭된 것 모두 롤백시킴
                 batch.update(d.ref, { matchedTransactionId: null, status: 'PENDING', updatedAt: new Date().toISOString() });
                 opCount++;
             }
@@ -246,7 +253,7 @@ const FinancialDashboard = ({ currentUser }) => {
 
         if (opCount > 0) {
             await batch.commit();
-            alert(`초기화 완료!\n총 ${opCount}건의 데이터가 정리 및 복구되었습니다.\n이제 엑셀을 다시 업로드해 주세요.`);
+            alert(`초기화 완료!\n총 ${opCount}건의 데이터가 정리 및 롤백되었습니다.\n이제 엑셀을 다시 업로드해 주세요.`);
         } else {
             alert(`[${selectedMonth}월]에는 초기화할 엑셀 연동 데이터가 없습니다.`);
         }
@@ -533,6 +540,9 @@ const FinancialDashboard = ({ currentUser }) => {
       }
 
       for (const item of parsedData) {
+        // 🚀 [해결 1] RegExp 등 DB에 들어갈 수 없는 객체를 분리하여 안전한 순수 데이터만 저장
+        const { matchedExpense, matchedRule, isAutoProof, ...safeItem } = item;
+
         if (item.type === 'CARD') {
             if (item.matchedExpense) {
                 const expRef = doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id);
@@ -545,8 +555,8 @@ const FinancialDashboard = ({ currentUser }) => {
                 const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
                 batch.set(expRef, { 
                     userId: 'SYSTEM_CARD', userName: '미등록 법인카드', 
-                    expenseDate: item.transactionDate, amount: item.amount, 
-                    method: '법인카드', purpose: `[${item.merchantName}] 증빙 누락 지출`, 
+                    expenseDate: safeItem.transactionDate, amount: safeItem.amount, 
+                    method: '법인카드', purpose: `[${safeItem.merchantName}] 증빙 누락 지출`, 
                     category: '미분류', receiptUrl: '증빙 필요', receiptUrls: [],
                     status: 'APPROVED', matchedTransactionId: 'SYSTEM_CARD_VERIFIED', 
                     createdAt: new Date().toISOString() 
@@ -555,7 +565,7 @@ const FinancialDashboard = ({ currentUser }) => {
             addedCount++;
         } else if (item.type === 'BANK_INCOME') {
             const incRef = doc(collection(db, `artifacts/${APP_ID}/public/data/incomes`));
-            batch.set(incRef, { transactionDate: item.transactionDate, amount: item.amount, source: item.merchantName, createdAt: new Date().toISOString() });
+            batch.set(incRef, { transactionDate: safeItem.transactionDate, amount: safeItem.amount, source: safeItem.merchantName, createdAt: new Date().toISOString() });
             addedCount++;
         } else if (item.type === 'BANK') {
             const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
@@ -564,35 +574,35 @@ const FinancialDashboard = ({ currentUser }) => {
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id), { 
                     status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() 
                 });
-                batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: item.matchedExpense.id, createdAt: new Date().toISOString() });
+                batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: item.matchedExpense.id, createdAt: new Date().toISOString() });
             } else {
-                const isCardBill = /(카드|결제|대금|삼성|현대|롯데|신한|국민|KB|하나|비씨|BC|농협)/i.test(item.merchantName);
+                const isCardBill = /(카드|결제|대금|삼성|현대|롯데|신한|국민|KB|하나|비씨|BC|농협)/i.test(safeItem.merchantName);
                 if (isCardBill) {
                     const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
                     batch.set(expRef, { 
                         userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', 
-                        expenseDate: item.transactionDate, amount: item.amount, 
-                        method: '계좌이체', purpose: `[${item.merchantName}] 신용카드 대금 일괄 납부`, 
+                        expenseDate: safeItem.transactionDate, amount: safeItem.amount, 
+                        method: '계좌이체', purpose: `[${safeItem.merchantName}] 신용카드 대금 일괄 납부`, 
                         category: '미지급금', receiptUrl: '카드사 청구서 갈음', receiptUrls: [],
                         status: 'APPROVED', matchedTransactionId: trxDocRef.id, 
                         createdAt: new Date().toISOString() 
                     });
-                    batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
+                    batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
                 } 
                 else if (item.isAutoProof && item.matchedRule) {
                     const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
                     batch.set(expRef, {
                         userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)',
-                        expenseDate: item.transactionDate, amount: item.amount,
-                        method: '자동이체', purpose: `[${item.merchantName}] 자동 증빙 완료건`,
+                        expenseDate: safeItem.transactionDate, amount: safeItem.amount,
+                        method: '자동이체', purpose: `[${safeItem.merchantName}] 자동 증빙 완료건`,
                         category: item.matchedRule.cat, receiptUrl: item.matchedRule.note, receiptUrls: [],
                         status: 'APPROVED', matchedTransactionId: trxDocRef.id,
                         createdAt: new Date().toISOString()
                     });
-                    batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
+                    batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
                 }
                 else {
-                    batch.set(trxDocRef, { ...item, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
+                    batch.set(trxDocRef, { ...safeItem, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
                     missingProofCount++;
                 }
             }
@@ -634,7 +644,6 @@ const FinancialDashboard = ({ currentUser }) => {
           <p className="text-xs text-gray-400">통장 입출금 기반으로 학원의 진짜 현금 흐름을 분석합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* 🚀 누락건 재매칭 버튼 신설 */}
           <button onClick={() => handleReverifyMissing(false)} className="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-amber-900/20">
             <RefreshCcw size={18}/> 누락건 재매칭
           </button>
@@ -839,7 +848,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 설정 모달 */}
+      {/* 설정 모달 */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
