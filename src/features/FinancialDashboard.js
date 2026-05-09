@@ -22,7 +22,6 @@ const OFFICIAL_ACCOUNTS = [
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
-// 기본 탑재 자동 증빙 키워드
 const AUTO_PROOF_KEYWORDS = [
   { key: /(월세|임대료)/, cat: '지급임차료', note: '전자세금계산서 갈음' },
   { key: /(관리비)/, cat: '수도광열비', note: '전자세금계산서 갈음' },
@@ -65,16 +64,17 @@ const FinancialDashboard = ({ currentUser }) => {
   const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
-  
-  // 🚀 통장 엑셀에서 자동 추출된 기초 잔액을 임시 저장하는 상태
   const [extractedInitialBalance, setExtractedInitialBalance] = useState(null);
 
   const fileInputRef = useRef(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
+  
+  // 🚀 다중 영수증 뷰어를 위한 상태 (배열 형태)
+  const [previewReceipts, setPreviewReceipts] = useState([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
+
   const [searchTerm, setSearchTerm] = useState('');
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  // 🚀 설정에 커스텀 자동 증빙(customAutoProof) 배열 추가
   const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000, initialBalance: 0, customAutoProof: [] });
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
   const [newKeyword, setNewKeyword] = useState({ key: '', cat: '지급수수료', note: '전자세금계산서 갈음' });
@@ -243,11 +243,12 @@ const FinancialDashboard = ({ currentUser }) => {
   }, [expenses, incomes, finSettings, selectedMonth]);
 
   const integratedLedger = useMemo(() => {
+    // 🚀 다중 영수증 배열 처리 추가 (receiptUrls)
     const list = [
-      ...incomes.map(i => ({ id: `inc_${i.id}`, realId: i.id, date: i.transactionDate || '', type: i.isPgSettlement ? 'PG정산(참고용)' : '수입(매출)', category: i.isPgSettlement ? '미수금회수' : '사업소득', purpose: i.source || '알수없음', amount: Number(i.amount) || 0, method: i.method || '계좌입금', status: 'COMPLETED', receiptUrl: '' })),
-      ...expenses.filter(e => e.status === 'APPROVED').map(e => ({ id: `exp_${e.id}`, realId: e.id, date: e.expenseDate || '', type: e.category === '미지급금' ? '카드대금결제' : '지출(정상)', category: e.category || '미분류', purpose: e.purpose || '알수없음', amount: Number(e.amount) || 0, method: e.method || '알수없음', receiptUrl: e.receiptUrl || '', status: 'COMPLETED' })),
-      ...missingReceipts.map(m => ({ id: `mis_${m.id}`, realId: m.id, date: m.transactionDate || '', type: '지출(누락)', category: '미확인', purpose: m.merchantName || '알수없음', amount: Number(m.amount) || 0, method: m.type || '알수없음', status: 'ERROR', receiptUrl: '' })),
-      ...expenses.filter(e => e.status === 'PENDING').map(e => ({ id: `pen_${e.id}`, realId: e.id, date: e.expenseDate || '', type: '지출(대기)', category: e.category || '미분류', purpose: e.purpose || '알수없음', amount: Number(e.amount) || 0, method: e.method || '알수없음', receiptUrl: e.receiptUrl || '', status: 'PENDING' }))
+      ...incomes.map(i => ({ id: `inc_${i.id}`, realId: i.id, date: i.transactionDate || '', type: i.isPgSettlement ? 'PG정산(참고용)' : '수입(매출)', category: i.isPgSettlement ? '미수금회수' : '사업소득', purpose: i.source || '알수없음', amount: Number(i.amount) || 0, method: i.method || '계좌입금', status: 'COMPLETED', receiptUrl: '', receiptUrls: [] })),
+      ...expenses.filter(e => e.status === 'APPROVED').map(e => ({ id: `exp_${e.id}`, realId: e.id, date: e.expenseDate || '', type: e.category === '미지급금' ? '카드대금결제' : '지출(정상)', category: e.category || '미분류', purpose: e.purpose || '알수없음', amount: Number(e.amount) || 0, method: e.method || '알수없음', receiptUrl: e.receiptUrl || '', receiptUrls: e.receiptUrls || [], status: 'COMPLETED' })),
+      ...missingReceipts.map(m => ({ id: `mis_${m.id}`, realId: m.id, date: m.transactionDate || '', type: '지출(누락)', category: '미확인', purpose: m.merchantName || '알수없음', amount: Number(m.amount) || 0, method: m.type || '알수없음', status: 'ERROR', receiptUrl: '', receiptUrls: [] })),
+      ...expenses.filter(e => e.status === 'PENDING').map(e => ({ id: `pen_${e.id}`, realId: e.id, date: e.expenseDate || '', type: '지출(대기)', category: e.category || '미분류', purpose: e.purpose || '알수없음', amount: Number(e.amount) || 0, method: e.method || '알수없음', receiptUrl: e.receiptUrl || '', receiptUrls: e.receiptUrls || [], status: 'PENDING' }))
     ];
 
     const safeSearch = (searchTerm || '').toLowerCase();
@@ -272,6 +273,10 @@ const FinancialDashboard = ({ currentUser }) => {
       if (isIncome) currentBalance += item.amount;
       else currentBalance -= item.amount;
 
+      // 다중 영수증일 경우 대표 1장만 엑셀에 연결
+      const primaryUrl = (item.receiptUrls && item.receiptUrls.length > 0) ? item.receiptUrls[0] : item.receiptUrl;
+      const isElectronic = primaryUrl && String(primaryUrl).includes('data:');
+
       return {
         '거래일자': item.date,
         '구분': item.type,
@@ -281,7 +286,7 @@ const FinancialDashboard = ({ currentUser }) => {
         '출금액(대변)': !isIncome ? item.amount : 0,
         '통장잔액': currentBalance,
         '결제수단': item.method,
-        '증빙유형': (item.receiptUrl && String(item.receiptUrl).includes('data:')) ? '전자영수증(클릭)' : (item.receiptUrl || '없음')
+        '증빙유형': isElectronic ? `전자영수증(${(item.receiptUrls?.length || 1)}장)` : (primaryUrl || '없음')
       };
     });
 
@@ -291,9 +296,10 @@ const FinancialDashboard = ({ currentUser }) => {
     ws['!cols'] = [ {wch: 12}, {wch: 15}, {wch: 12}, {wch: 25}, {wch: 12}, {wch: 12}, {wch: 15}, {wch: 10}, {wch: 20} ];
 
     integratedLedger.forEach((item, idx) => {
-      if (item.receiptUrl && String(item.receiptUrl).startsWith('data:')) {
+      const primaryUrl = (item.receiptUrls && item.receiptUrls.length > 0) ? item.receiptUrls[0] : item.receiptUrl;
+      if (primaryUrl && String(primaryUrl).startsWith('data:')) {
         const cellRef = XLSX.utils.encode_cell({ c: 8, r: idx + 1 });
-        ws[cellRef].l = { Target: item.receiptUrl, Tooltip: "영수증 원본 보기" };
+        ws[cellRef].l = { Target: primaryUrl, Tooltip: "영수증 원본 보기" };
       }
     });
     
@@ -312,13 +318,12 @@ const FinancialDashboard = ({ currentUser }) => {
       
       const unmatchedExps = [...expenses.filter(e => !e.matchedTransactionId || e.matchedTransactionId === 'SYSTEM_CARD_VERIFIED')];
       
-      // 🚀 설정된 기본 키워드 + 사용자 커스텀 키워드를 합쳐서 강력한 자동 증빙 사전을 만듭니다.
       const dynamicAutoProofKeywords = [
           ...AUTO_PROOF_KEYWORDS,
           ...(finSettings.customAutoProof || []).map(k => ({ key: new RegExp(k.key), cat: k.cat, note: k.note }))
       ];
 
-      setExtractedInitialBalance(null); // 초기화
+      setExtractedInitialBalance(null);
 
       try {
         if (uploadType === 'BANK') {
@@ -327,17 +332,14 @@ const FinancialDashboard = ({ currentUser }) => {
           
           const dateIdx = data[headerIdx].indexOf('거래일시'), nameIdx = data[headerIdx].indexOf('보낸분/받는분'), outIdx = data[headerIdx].indexOf('출금액(원)'), inIdx = data[headerIdx].indexOf('입금액(원)');
           
-          // 🚀 통장 잔액 자동 추출 로직 (역산)
           const balIdx = data[headerIdx].findIndex(col => String(col || '').includes('잔액'));
           if (balIdx > -1) {
-              // 가장 오래된 내역(엑셀의 맨 밑 데이터)을 찾음
               for (let i = data.length - 1; i > headerIdx; i--) {
                   if (data[i] && data[i][dateIdx]) {
                       const oldestBal = Number(String(data[i][balIdx] || 0).replace(/,/g, ''));
                       const oldestOut = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
                       const oldestIn = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
                       
-                      // 가장 마지막 거래의 이전 잔액(기초잔액) = 잔액 + 출금 - 입금
                       const calcInitial = oldestBal + oldestOut - oldestIn;
                       setExtractedInitialBalance(calcInitial);
                       break;
@@ -366,7 +368,6 @@ const FinancialDashboard = ({ currentUser }) => {
                   if (matchIdx > -1) {
                       matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
                   } else {
-                      // 🚀 다이나믹 오토 프루프(사용자 커스텀 키워드 포함) 매칭 스캔
                       for (const rule of dynamicAutoProofKeywords) {
                           if (rule.key.test(merchantName)) {
                               isAutoProof = true;
@@ -435,7 +436,6 @@ const FinancialDashboard = ({ currentUser }) => {
       let addedCount = 0;
       let missingProofCount = 0;
 
-      // 🚀 기초잔액 자동 저장 로직 (BANK 엑셀 업로드 시에만 작동)
       if (uploadType === 'BANK' && extractedInitialBalance !== null) {
           const newSettings = { ...finSettings, initialBalance: extractedInitialBalance };
           await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), newSettings, { merge: true });
@@ -457,7 +457,7 @@ const FinancialDashboard = ({ currentUser }) => {
                     userId: 'SYSTEM_CARD', userName: '미등록 법인카드', 
                     expenseDate: item.transactionDate, amount: item.amount, 
                     method: '법인카드', purpose: `[${item.merchantName}] 증빙 누락 지출`, 
-                    category: '미분류', receiptUrl: '증빙 필요', 
+                    category: '미분류', receiptUrl: '증빙 필요', receiptUrls: [],
                     status: 'APPROVED', matchedTransactionId: 'SYSTEM_CARD_VERIFIED', 
                     createdAt: new Date().toISOString() 
                 });
@@ -483,20 +483,19 @@ const FinancialDashboard = ({ currentUser }) => {
                         userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', 
                         expenseDate: item.transactionDate, amount: item.amount, 
                         method: '계좌이체', purpose: `[${item.merchantName}] 신용카드 대금 일괄 납부`, 
-                        category: '미지급금', receiptUrl: '카드사 청구서 갈음', 
+                        category: '미지급금', receiptUrl: '카드사 청구서 갈음', receiptUrls: [],
                         status: 'APPROVED', matchedTransactionId: trxDocRef.id, 
                         createdAt: new Date().toISOString() 
                     });
                     batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
                 } 
                 else if (item.isAutoProof && item.matchedRule) {
-                    // 🚀 커스텀/기본 키워드 기반 자동 증빙 승인!
                     const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
                     batch.set(expRef, {
                         userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)',
                         expenseDate: item.transactionDate, amount: item.amount,
                         method: '자동이체', purpose: `[${item.merchantName}] 자동 증빙 완료건`,
-                        category: item.matchedRule.cat, receiptUrl: item.matchedRule.note,
+                        category: item.matchedRule.cat, receiptUrl: item.matchedRule.note, receiptUrls: [],
                         status: 'APPROVED', matchedTransactionId: trxDocRef.id,
                         createdAt: new Date().toISOString()
                     });
@@ -717,7 +716,27 @@ const FinancialDashboard = ({ currentUser }) => {
                       <td className="px-4 py-3 font-semibold text-gray-900 truncate max-w-xs">{item.purpose}</td>
                       <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${(item.type || '').includes('수입') ? 'text-blue-600' : 'text-gray-900'}`}>{(item.type || '').includes('수입') ? '+' : ''}{item.amount.toLocaleString()}원</td>
                       <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
-                      <td className="px-4 py-3 text-center">{item.receiptUrl && !String(item.receiptUrl).includes('증빙') && !String(item.receiptUrl).includes('갈음') && !String(item.receiptUrl).includes('자동정산') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs font-bold">{item.receiptUrl || '없음'}</span>}</td>
+                      
+                      {/* 🚀 다중 영수증을 처리하는 테이블 셀 */}
+                      <td className="px-4 py-3 text-center">
+                        {(() => {
+                            const urls = item.receiptUrls?.length > 0 ? item.receiptUrls : (item.receiptUrl && String(item.receiptUrl).startsWith('data:') ? [item.receiptUrl] : []);
+                            const isTextOnly = item.receiptUrl && !String(item.receiptUrl).startsWith('data:');
+
+                            if (urls.length > 0) {
+                                return (
+                                    <button onClick={() => { setPreviewReceipts(urls); setPreviewIndex(0); }} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm">
+                                        <ImageIcon size={12}/> 조회 {urls.length > 1 ? `(${urls.length}장)` : ''}
+                                    </button>
+                                );
+                            } else if (isTextOnly) {
+                                return <span className="text-gray-400 text-[10px] font-bold">{item.receiptUrl}</span>;
+                            } else {
+                                return <span className="text-gray-400 text-xs font-bold">없음</span>;
+                            }
+                        })()}
+                      </td>
+
                     </tr>
                   ))}
                 </tbody>
@@ -727,7 +746,7 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 재무 환경 설정 모달 (사용자 커스텀 키워드 UI 탑재) */}
+      {/* 🚀 설정 모달 (키워드 사전 포함) */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
@@ -748,7 +767,6 @@ const FinancialDashboard = ({ currentUser }) => {
                     <p className="text-[10px] text-blue-600">통장 엑셀을 업로드하시면 시스템이 역산하여 자동으로 세팅합니다. 수동 입력이 필요 없습니다.</p>
                 </div>
 
-                {/* 🚀 커스텀 자동 증빙 관리 섹션 */}
                 <div className="mt-4 border-t pt-4">
                     <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><Activity size={14}/> 자동 증빙 키워드 (개인사업자 등)</label>
                     <div className="flex gap-2 mb-3">
@@ -845,16 +863,51 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {previewUrl && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewUrl(null)}>
+      {/* 🚀 다중 영수증 뷰어 모달 (슬라이더 적용) */}
+      {previewReceipts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewReceipts([])}>
           <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4 px-3 border-b pb-3">
-              <h3 className="font-bold text-xl text-gray-900 flex items-center gap-2"><ImageIcon className="text-blue-600" size={24}/> 영수증 상세 확인</h3>
-              <button onClick={() => setPreviewUrl(null)} className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm">닫기 <XCircle size={24}/></button>
+              <h3 className="font-bold text-xl text-gray-900 flex items-center gap-2">
+                  <ImageIcon className="text-blue-600" size={24}/> 영수증 상세 확인 
+                  {previewReceipts.length > 1 && <span className="text-sm font-bold text-blue-600 ml-2 bg-blue-100 px-2 py-0.5 rounded-full">({previewIndex + 1} / {previewReceipts.length})</span>}
+              </h3>
+              <button onClick={() => setPreviewReceipts([])} className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm">닫기 <XCircle size={24}/></button>
             </div>
-            <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-center items-center flex-1 w-full h-full relative p-2 border border-gray-200">
-              {String(previewUrl).startsWith('data:application/pdf') || String(previewUrl).endsWith('.pdf') ? <iframe src={previewUrl} className="w-full h-full border-0 rounded-xl" title="receipt-preview" /> : <img src={previewUrl} alt="Receipt Preview" className="w-full h-full object-contain drop-shadow-sm rounded-xl" />}
+            
+            <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-between items-center flex-1 w-full h-full relative p-2 border border-gray-200">
+              
+              {/* 왼쪽 넘기기 버튼 */}
+              {previewReceipts.length > 1 && (
+                  <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.max(0, prev - 1)); }} disabled={previewIndex === 0} className="absolute left-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
+                      <ChevronLeft size={32} className="text-gray-800"/>
+                  </button>
+              )}
+              
+              {/* 이미지/PDF 표시 영역 */}
+              <div className="w-full h-full flex justify-center items-center">
+                  {String(previewReceipts[previewIndex]).startsWith('data:application/pdf') || String(previewReceipts[previewIndex]).endsWith('.pdf') ? 
+                    <iframe src={previewReceipts[previewIndex]} className="w-full h-full border-0 rounded-xl" title="receipt-preview" /> : 
+                    <img src={previewReceipts[previewIndex]} alt="Receipt Preview" className="max-w-full max-h-full object-contain drop-shadow-sm rounded-xl" />
+                  }
+              </div>
+
+              {/* 오른쪽 넘기기 버튼 */}
+              {previewReceipts.length > 1 && (
+                  <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.min(previewReceipts.length - 1, prev + 1)); }} disabled={previewIndex === previewReceipts.length - 1} className="absolute right-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
+                      <ChevronRight size={32} className="text-gray-800"/>
+                  </button>
+              )}
             </div>
+
+            {/* 하단 페이지 인디케이터 (점) */}
+            {previewReceipts.length > 1 && (
+                <div className="flex justify-center gap-2 mt-4">
+                    {previewReceipts.map((_, idx) => (
+                        <button key={idx} onClick={() => setPreviewIndex(idx)} className={`w-3 h-3 rounded-full transition-all ${previewIndex === idx ? 'bg-blue-600 scale-125' : 'bg-gray-300 hover:bg-gray-400'}`} />
+                    ))}
+                </div>
+            )}
           </div>
         </div>
       )}
