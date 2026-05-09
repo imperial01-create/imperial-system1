@@ -7,7 +7,7 @@ import {
   PieChart, ChevronLeft, ChevronRight, Receipt, Loader, 
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
-  Activity, LineChart, Settings, RefreshCcw
+  Activity, LineChart, Settings, RefreshCcw, Trash2
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -85,47 +85,25 @@ const FinancialDashboard = ({ currentUser }) => {
     alert('재무 환경 설정이 저장되었습니다.');
   };
 
-  const handleResetExcelData = async () => {
-    if (!window.confirm(`⚠️ [${selectedMonth}월]의 모든 엑셀 업로드 내역을 초기화하시겠습니까?\n\n* 은행 통장(수입) 및 카드 엑셀(누락 지출) 데이터가 삭제됩니다.\n* 직원들이 올린 지출결의서(영수증)는 삭제되지 않으며 다시 '대기' 상태로 복구됩니다.\n* 초기화 후 엑셀을 다시 업로드하면 정상적으로 재매칭됩니다.`)) return;
+  const handleCleanupDuplicateCards = async () => {
+    if (!window.confirm("⚠️ 과거에 결의서와 합쳐지지 않고 단독 생성된 '영수증 없는 시스템 카드 지출'을 모두 삭제하시겠습니까?\n\n* 삭제 후 법인카드 엑셀을 다시 올리시면 지출결의서와 정상적으로 병합됩니다.")) return;
     
     setIsProcessingCleanup(true);
     try {
         const batch = writeBatch(db);
-        let opCount = 0;
-        const monthStart = `${selectedMonth}-01`; 
-        const monthEnd = `${selectedMonth}-31`;
+        let deleteCount = 0;
         
-        const incSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/incomes`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
-        incSnap.forEach(d => { batch.delete(d.ref); opCount++; });
-        
-        const trxSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/transactions`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
-        trxSnap.forEach(d => { batch.delete(d.ref); opCount++; });
+        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('userId', '==', 'SYSTEM_CARD')));
+        expSnap.forEach(d => { batch.delete(d.ref); deleteCount++; });
 
-        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd)));
-        expSnap.forEach(d => {
-            const data = d.data();
-            if (data.userId && String(data.userId).startsWith('SYSTEM_')) {
-                batch.delete(d.ref);
-                opCount++;
-            } 
-            else if (data.matchedTransactionId) {
-                batch.update(d.ref, { 
-                    matchedTransactionId: null, 
-                    status: 'PENDING',
-                    updatedAt: new Date().toISOString()
-                });
-                opCount++;
-            }
-        });
-
-        if (opCount > 0) {
+        if (deleteCount > 0) {
             await batch.commit();
-            alert(`초기화 완료!\n총 ${opCount}건의 데이터가 정리 및 복구되었습니다.\n이제 엑셀을 다시 업로드해 주세요.`);
+            alert(`총 ${deleteCount}건의 중복/단독 카드 지출 내역이 삭제되었습니다.\n장부가 초기화되었으니 엑셀을 다시 업로드해 주세요.`);
         } else {
-            alert(`[${selectedMonth}월]에는 초기화할 엑셀 연동 데이터가 없습니다.`);
+            alert("삭제할 시스템 생성 카드 내역이 없습니다. 장부가 깨끗합니다.");
         }
     } catch (e) {
-        alert("초기화 중 오류 발생: " + e.message);
+        alert("삭제 중 오류 발생: " + e.message);
     } finally {
         setIsProcessingCleanup(false);
     }
@@ -275,14 +253,13 @@ const FinancialDashboard = ({ currentUser }) => {
             if (!data[i]) continue;
             const transactionDate = normalizeDateStr(data[i][dateIdx]);
             
-            // 🚀 통장 출금액 파싱 및 [결의서 사전 매칭 로직 추가]
             const outAmount = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
             if (outAmount > 0) {
               const merchantName = data[i][nameIdx] || '알수없음';
               const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협)/i.test(merchantName);
               
               let matchedExpense = null;
-              if (!isCardPayment) { // 카드대금 출금이 아니면 지출결의서 매칭 시도
+              if (!isCardPayment) { 
                   const matchIdx = unmatchedExps.findIndex(e => 
                       normalizeDateStr(e.expenseDate) === transactionDate && 
                       Number(e.amount) === outAmount
@@ -296,7 +273,6 @@ const FinancialDashboard = ({ currentUser }) => {
               });
             }
             
-            // 수입(입금액) 파싱
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) {
               const senderName = data[i][nameIdx] || '알수없음';
@@ -307,16 +283,18 @@ const FinancialDashboard = ({ currentUser }) => {
           const headerIdx = data.findIndex(row => row && row.includes('승인일'));
           if (headerIdx === -1) throw new Error("법인카드 엑셀 형식이 아닙니다.");
           
-          // 🚀 [해결1] 체크카드 구분을 위한 부서번호 인덱스 찾기
-          const deptCodeIdx = data[headerIdx].indexOf('부서번호');
+          // '부서번호'나 '부서'가 포함된 열 찾기
+          const deptCodeIdx = data[headerIdx].findIndex(col => String(col || '').includes('부서'));
           
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i] || data[i][data[headerIdx].indexOf('상태')] !== '정상') continue;
             
-            // 🚀 [해결1] 부서번호가 00001 (또는 1)이면 체크카드이므로 건너뛰기!
+            // 🚀 [해결] 홑따옴표('), 쌍따옴표(")를 완벽하게 제거하여 순수 글자/숫자만 비교
             if (deptCodeIdx > -1) {
-                const deptCode = String(data[i][deptCodeIdx] || '').trim();
-                if (deptCode === '00001' || deptCode === '1') continue;
+                const rawDeptCode = String(data[i][deptCodeIdx] || '').trim();
+                const cleanDeptCode = rawDeptCode.replace(/['"]/g, ''); // 찌꺼기 따옴표 제거
+                // 00001, 1 등 체크카드를 의미하는 부서번호는 엑셀 적재 대상에서 완전 무시!
+                if (cleanDeptCode === '00001' || cleanDeptCode === '1' || cleanDeptCode === '0001') continue;
             }
 
             const amount = Number(String(data[i][data[headerIdx].indexOf('승인금액')]).replace(/,/g, ''));
@@ -348,7 +326,7 @@ const FinancialDashboard = ({ currentUser }) => {
     try {
       const batch = writeBatch(db); 
       let addedCount = 0;
-      let missingProofCount = 0; // 🚀 누락 건수 카운트용
+      let missingProofCount = 0;
 
       for (const item of parsedData) {
         if (item.type === 'CARD') {
@@ -379,7 +357,6 @@ const FinancialDashboard = ({ currentUser }) => {
             const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
 
             if (item.matchedExpense) {
-                // 🚀 이미 사전 매칭된 은행 출금 내역 병합 처리
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id), { 
                     status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() 
                 });
@@ -398,7 +375,6 @@ const FinancialDashboard = ({ currentUser }) => {
                     });
                     batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
                 } else {
-                    // 🚀 증빙 없는 통장 출금 (누락 발생!)
                     batch.set(trxDocRef, { ...item, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
                     missingProofCount++;
                 }
@@ -408,10 +384,9 @@ const FinancialDashboard = ({ currentUser }) => {
       }
       await batch.commit(); 
       
-      // 🚀 [해결2] 결과 알림창 개선 (누락 건수 경고)
       let alertMsg = `총 ${addedCount}건의 장부 적재 및 병합이 완료되었습니다!`;
       if (missingProofCount > 0) {
-          alertMsg += `\n\n⚠️ 주의: ${missingProofCount}건의 통장 출금 내역이 증빙 자료(지출결의서)를 찾지 못해 누락 지출로 등록되었습니다. 장부를 확인해 주세요.`;
+          alertMsg += `\n\n⚠️ 주의: ${missingProofCount}건의 통장 출금 내역이 증빙 자료(지출결의서)를 찾지 못해 누락 지출로 등록되었습니다.`;
       }
       alert(alertMsg); 
       
@@ -644,13 +619,13 @@ const FinancialDashboard = ({ currentUser }) => {
             <hr className="my-6 border-gray-200" />
             
             <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
-                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 엑셀 데이터 초기화</h4>
+                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 중복 카드 내역 초기화</h4>
                 <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-                    선택하신 <strong>[{selectedMonth}월]</strong>에 엑셀로 잘못 업로드된 내역을 모두 지우고, 직원들이 올린 영수증 결의서만 <strong>안전하게 '대기' 상태로 되돌립니다.</strong>
+                    과거에 엑셀 업로드로 잘못 생성된 <strong>영수증 없는 중복 카드 지출 내역</strong>들만 골라 삭제합니다. (정상 지출결의서는 안전합니다)
                 </p>
-                <button onClick={handleResetExcelData} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
-                    {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
-                    {isProcessingCleanup ? '초기화 처리 중...' : `[${selectedMonth}월] 엑셀 연동 초기화`}
+                <button onClick={handleCleanupDuplicateCards} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                    {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                    {isProcessingCleanup ? '삭제 처리 중...' : `시스템 자동생성 내역 일괄 삭제`}
                 </button>
             </div>
           </div>
@@ -687,7 +662,6 @@ const FinancialDashboard = ({ currentUser }) => {
                                 <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span>
                                 <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span>
                                 
-                                {/* 🚀 매칭 여부 UI 뱃지 추가 (통장 탭, 카드 탭 모두 호환) */}
                                 {(d.type === 'CARD' || (d.type === 'BANK' && d.amount > 0 && !d.isCardPayment)) && (
                                     d.matchedExpense 
                                     ? <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">✅ 결의서 병합</span>
