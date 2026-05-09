@@ -22,20 +22,30 @@ const OFFICIAL_ACCOUNTS = [
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
+// 기본 탑재 자동 증빙 키워드
+const AUTO_PROOF_KEYWORDS = [
+  { key: /(월세|임대료)/, cat: '지급임차료', note: '전자세금계산서 갈음' },
+  { key: /(관리비)/, cat: '수도광열비', note: '전자세금계산서 갈음' },
+  { key: /(전기|한국전력|가스)/, cat: '수도광열비', note: '전자세금계산서/지로 갈음' },
+  { key: /(CCTV|에스원|캡스|세콤)/, cat: '지급수수료', note: '전자세금계산서 갈음' },
+  { key: /(급여|월급)/, cat: '직원급여', note: '급여대장/명세서 갈음' },
+  { key: /(세무|회계|기장)/, cat: '지급수수료', note: '전자세금계산서 갈음' },
+  { key: /(프로그램|LMS|통통통)/, cat: '지급수수료', note: '전자세금계산서 갈음' },
+  { key: /(렌탈|복사기|정수기)/, cat: '지급임차료', note: '전자세금계산서 갈음' },
+  { key: /(건강보험|국민연금|고용보험|산재보험|보험료|국민건강)/, cat: '세금과공과금', note: '자동이체 고지서 갈음' },
+  { key: /(청소|방역)/, cat: '지급수수료', note: '전자세금계산서 갈음' },
+];
+
 const normalizeDateStr = (dateVal) => {
     if (!dateVal) return '';
     const s = String(dateVal).trim();
-    
     if (!isNaN(s) && Number(s) > 10000 && Number(s) < 99999) {
         const excelEpoch = new Date(1899, 11, 30);
         const dateObj = new Date(excelEpoch.getTime() + Number(s) * 86400000);
         return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
     }
-    
     const matches = s.match(/(\d{4})[^0-9]*(\d{1,2})[^0-9]*(\d{1,2})/);
-    if (matches) {
-        return `${matches[1]}-${matches[2].padStart(2, '0')}-${matches[3].padStart(2, '0')}`;
-    }
+    if (matches) return `${matches[1]}-${matches[2].padStart(2, '0')}-${matches[3].padStart(2, '0')}`;
     return s.replace(/\./g, '-').replace(/\//g, '-').split(' ')[0];
 };
 
@@ -55,13 +65,19 @@ const FinancialDashboard = ({ currentUser }) => {
   const [uploadType, setUploadType] = useState('BANK'); 
   const [parsedData, setParsedData] = useState([]);
   const [isMatching, setIsMatching] = useState(false);
+  
+  // 🚀 통장 엑셀에서 자동 추출된 기초 잔액을 임시 저장하는 상태
+  const [extractedInitialBalance, setExtractedInitialBalance] = useState(null);
+
   const fileInputRef = useRef(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000 });
+  // 🚀 설정에 커스텀 자동 증빙(customAutoProof) 배열 추가
+  const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000, initialBalance: 0, customAutoProof: [] });
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
+  const [newKeyword, setNewKeyword] = useState({ key: '', cat: '지급수수료', note: '전자세금계산서 갈음' });
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -70,7 +86,12 @@ const FinancialDashboard = ({ currentUser }) => {
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
               const data = docSnap.data();
-              setFinSettings({ rent: data.rent || 4000000, maintenance: data.maintenance || 500000 });
+              setFinSettings({ 
+                  rent: data.rent || 4000000, 
+                  maintenance: data.maintenance || 500000, 
+                  initialBalance: data.initialBalance || 0,
+                  customAutoProof: data.customAutoProof || []
+              });
           }
       } catch (err) {
           console.error("설정 로드 실패:", err);
@@ -85,25 +106,60 @@ const FinancialDashboard = ({ currentUser }) => {
     alert('재무 환경 설정이 저장되었습니다.');
   };
 
-  const handleCleanupDuplicateCards = async () => {
-    if (!window.confirm("⚠️ 과거에 결의서와 합쳐지지 않고 단독 생성된 '영수증 없는 시스템 카드 지출'을 모두 삭제하시겠습니까?\n\n* 삭제 후 법인카드 엑셀을 다시 올리시면 지출결의서와 정상적으로 병합됩니다.")) return;
+  const handleAddKeyword = () => {
+      if (!newKeyword.key.trim()) return;
+      setFinSettings(prev => ({
+          ...prev,
+          customAutoProof: [...(prev.customAutoProof || []), { ...newKeyword, key: newKeyword.key.trim() }]
+      }));
+      setNewKeyword({ key: '', cat: '지급수수료', note: '전자세금계산서 갈음' });
+  };
+
+  const handleRemoveKeyword = (index) => {
+      setFinSettings(prev => {
+          const newArr = [...prev.customAutoProof];
+          newArr.splice(index, 1);
+          return { ...prev, customAutoProof: newArr };
+      });
+  };
+
+  const handleResetExcelData = async () => {
+    if (!window.confirm(`⚠️ [${selectedMonth}월]의 모든 엑셀 업로드 내역을 초기화하시겠습니까?\n\n* 은행 통장(수입) 및 카드 엑셀(누락 지출) 데이터가 삭제됩니다.\n* 직원들이 올린 지출결의서(영수증)는 삭제되지 않으며 다시 '대기' 상태로 복구됩니다.\n* 초기화 후 엑셀을 다시 업로드하면 정상적으로 재매칭됩니다.`)) return;
     
     setIsProcessingCleanup(true);
     try {
         const batch = writeBatch(db);
-        let deleteCount = 0;
+        let opCount = 0;
+        const monthStart = `${selectedMonth}-01`; 
+        const monthEnd = `${selectedMonth}-31`;
         
-        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('userId', '==', 'SYSTEM_CARD')));
-        expSnap.forEach(d => { batch.delete(d.ref); deleteCount++; });
+        const incSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/incomes`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
+        incSnap.forEach(d => { batch.delete(d.ref); opCount++; });
+        
+        const trxSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/transactions`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
+        trxSnap.forEach(d => { batch.delete(d.ref); opCount++; });
 
-        if (deleteCount > 0) {
+        const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd)));
+        expSnap.forEach(d => {
+            const data = d.data();
+            if (data.userId && (String(data.userId).startsWith('SYSTEM_') || data.userId === 'SYSTEM_AUTO')) {
+                batch.delete(d.ref);
+                opCount++;
+            } 
+            else if (data.matchedTransactionId) {
+                batch.update(d.ref, { matchedTransactionId: null, status: 'PENDING', updatedAt: new Date().toISOString() });
+                opCount++;
+            }
+        });
+
+        if (opCount > 0) {
             await batch.commit();
-            alert(`총 ${deleteCount}건의 중복/단독 카드 지출 내역이 삭제되었습니다.\n장부가 초기화되었으니 엑셀을 다시 업로드해 주세요.`);
+            alert(`초기화 완료!\n총 ${opCount}건의 데이터가 정리 및 복구되었습니다.\n이제 엑셀을 다시 업로드해 주세요.`);
         } else {
-            alert("삭제할 시스템 생성 카드 내역이 없습니다. 장부가 깨끗합니다.");
+            alert(`[${selectedMonth}월]에는 초기화할 엑셀 연동 데이터가 없습니다.`);
         }
     } catch (e) {
-        alert("삭제 중 오류 발생: " + e.message);
+        alert("초기화 중 오류 발생: " + e.message);
     } finally {
         setIsProcessingCleanup(false);
     }
@@ -208,29 +264,42 @@ const FinancialDashboard = ({ currentUser }) => {
   };
 
   const handleDownloadPerfectLedger = () => {
-    const excelData = integratedLedger.map(item => ({
-      '거래일자': item.date,
-      '구분': item.type,
-      '계정과목': item.category,
-      '적요/거래처': item.purpose,
-      '금액': item.amount,
-      '결제수단': item.method,
-      '증빙유형': (item.receiptUrl && String(item.receiptUrl).includes('data:')) ? '전자영수증(클릭)' : (item.receiptUrl || '없음')
-    }));
+    const sortedList = [...integratedLedger].sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+    let currentBalance = Number(finSettings.initialBalance || 0);
+
+    const excelData = sortedList.map(item => {
+      const isIncome = (item.type || '').includes('수입');
+      if (isIncome) currentBalance += item.amount;
+      else currentBalance -= item.amount;
+
+      return {
+        '거래일자': item.date,
+        '구분': item.type,
+        '계정과목': item.category,
+        '적요/거래처': item.purpose,
+        '입금액(차변)': isIncome ? item.amount : 0,
+        '출금액(대변)': !isIncome ? item.amount : 0,
+        '통장잔액': currentBalance,
+        '결제수단': item.method,
+        '증빙유형': (item.receiptUrl && String(item.receiptUrl).includes('data:')) ? '전자영수증(클릭)' : (item.receiptUrl || '없음')
+      };
+    });
 
     if (excelData.length === 0) return alert("다운로드할 데이터가 없습니다.");
     const ws = XLSX.utils.json_to_sheet(excelData);
     
+    ws['!cols'] = [ {wch: 12}, {wch: 15}, {wch: 12}, {wch: 25}, {wch: 12}, {wch: 12}, {wch: 15}, {wch: 10}, {wch: 20} ];
+
     integratedLedger.forEach((item, idx) => {
       if (item.receiptUrl && String(item.receiptUrl).startsWith('data:')) {
-        const cellRef = XLSX.utils.encode_cell({ c: 6, r: idx + 1 });
+        const cellRef = XLSX.utils.encode_cell({ c: 8, r: idx + 1 });
         ws[cellRef].l = { Target: item.receiptUrl, Tooltip: "영수증 원본 보기" };
       }
     });
     
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "임페리얼_통합재무원장");
-    XLSX.writeFile(wb, `임페리얼_세무소명장부_${selectedMonth}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "임페리얼_통합재무원장(복식)");
+    XLSX.writeFile(wb, `임페리얼_복식장부_${selectedMonth}.xlsx`);
   };
 
   const handleFileUpload = (e) => {
@@ -242,12 +311,39 @@ const FinancialDashboard = ({ currentUser }) => {
       const extracted = [];
       
       const unmatchedExps = [...expenses.filter(e => !e.matchedTransactionId || e.matchedTransactionId === 'SYSTEM_CARD_VERIFIED')];
+      
+      // 🚀 설정된 기본 키워드 + 사용자 커스텀 키워드를 합쳐서 강력한 자동 증빙 사전을 만듭니다.
+      const dynamicAutoProofKeywords = [
+          ...AUTO_PROOF_KEYWORDS,
+          ...(finSettings.customAutoProof || []).map(k => ({ key: new RegExp(k.key), cat: k.cat, note: k.note }))
+      ];
+
+      setExtractedInitialBalance(null); // 초기화
 
       try {
         if (uploadType === 'BANK') {
           const headerIdx = data.findIndex(row => row && row.includes('거래일시'));
           if (headerIdx === -1) throw new Error("은행 엑셀 형식이 아닙니다.");
+          
           const dateIdx = data[headerIdx].indexOf('거래일시'), nameIdx = data[headerIdx].indexOf('보낸분/받는분'), outIdx = data[headerIdx].indexOf('출금액(원)'), inIdx = data[headerIdx].indexOf('입금액(원)');
+          
+          // 🚀 통장 잔액 자동 추출 로직 (역산)
+          const balIdx = data[headerIdx].findIndex(col => String(col || '').includes('잔액'));
+          if (balIdx > -1) {
+              // 가장 오래된 내역(엑셀의 맨 밑 데이터)을 찾음
+              for (let i = data.length - 1; i > headerIdx; i--) {
+                  if (data[i] && data[i][dateIdx]) {
+                      const oldestBal = Number(String(data[i][balIdx] || 0).replace(/,/g, ''));
+                      const oldestOut = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
+                      const oldestIn = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
+                      
+                      // 가장 마지막 거래의 이전 잔액(기초잔액) = 잔액 + 출금 - 입금
+                      const calcInitial = oldestBal + oldestOut - oldestIn;
+                      setExtractedInitialBalance(calcInitial);
+                      break;
+                  }
+              }
+          }
           
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i]) continue;
@@ -259,17 +355,31 @@ const FinancialDashboard = ({ currentUser }) => {
               const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협)/i.test(merchantName);
               
               let matchedExpense = null;
+              let isAutoProof = false; 
+              let matchedRule = null;
+
               if (!isCardPayment) { 
                   const matchIdx = unmatchedExps.findIndex(e => 
                       normalizeDateStr(e.expenseDate) === transactionDate && 
                       Number(e.amount) === outAmount
                   );
-                  if (matchIdx > -1) matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
+                  if (matchIdx > -1) {
+                      matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
+                  } else {
+                      // 🚀 다이나믹 오토 프루프(사용자 커스텀 키워드 포함) 매칭 스캔
+                      for (const rule of dynamicAutoProofKeywords) {
+                          if (rule.key.test(merchantName)) {
+                              isAutoProof = true;
+                              matchedRule = rule;
+                              break;
+                          }
+                      }
+                  }
               }
 
               extracted.push({ 
                   transactionDate, amount: outAmount, merchantName, type: 'BANK', 
-                  rawId: `OUT_${outAmount}_${i}`, isCardPayment, matchedExpense 
+                  rawId: `OUT_${outAmount}_${i}`, isCardPayment, matchedExpense, isAutoProof, matchedRule 
               });
             }
             
@@ -283,17 +393,14 @@ const FinancialDashboard = ({ currentUser }) => {
           const headerIdx = data.findIndex(row => row && row.includes('승인일'));
           if (headerIdx === -1) throw new Error("법인카드 엑셀 형식이 아닙니다.");
           
-          // '부서번호'나 '부서'가 포함된 열 찾기
           const deptCodeIdx = data[headerIdx].findIndex(col => String(col || '').includes('부서'));
           
           for (let i = headerIdx + 1; i < data.length; i++) {
             if (!data[i] || data[i][data[headerIdx].indexOf('상태')] !== '정상') continue;
             
-            // 🚀 [해결] 홑따옴표('), 쌍따옴표(")를 완벽하게 제거하여 순수 글자/숫자만 비교
             if (deptCodeIdx > -1) {
                 const rawDeptCode = String(data[i][deptCodeIdx] || '').trim();
-                const cleanDeptCode = rawDeptCode.replace(/['"]/g, ''); // 찌꺼기 따옴표 제거
-                // 00001, 1 등 체크카드를 의미하는 부서번호는 엑셀 적재 대상에서 완전 무시!
+                const cleanDeptCode = rawDeptCode.replace(/['"]/g, ''); 
                 if (cleanDeptCode === '00001' || cleanDeptCode === '1' || cleanDeptCode === '0001') continue;
             }
 
@@ -327,6 +434,13 @@ const FinancialDashboard = ({ currentUser }) => {
       const batch = writeBatch(db); 
       let addedCount = 0;
       let missingProofCount = 0;
+
+      // 🚀 기초잔액 자동 저장 로직 (BANK 엑셀 업로드 시에만 작동)
+      if (uploadType === 'BANK' && extractedInitialBalance !== null) {
+          const newSettings = { ...finSettings, initialBalance: extractedInitialBalance };
+          await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), newSettings, { merge: true });
+          setFinSettings(newSettings);
+      }
 
       for (const item of parsedData) {
         if (item.type === 'CARD') {
@@ -374,7 +488,21 @@ const FinancialDashboard = ({ currentUser }) => {
                         createdAt: new Date().toISOString() 
                     });
                     batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
-                } else {
+                } 
+                else if (item.isAutoProof && item.matchedRule) {
+                    // 🚀 커스텀/기본 키워드 기반 자동 증빙 승인!
+                    const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                    batch.set(expRef, {
+                        userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)',
+                        expenseDate: item.transactionDate, amount: item.amount,
+                        method: '자동이체', purpose: `[${item.merchantName}] 자동 증빙 완료건`,
+                        category: item.matchedRule.cat, receiptUrl: item.matchedRule.note,
+                        status: 'APPROVED', matchedTransactionId: trxDocRef.id,
+                        createdAt: new Date().toISOString()
+                    });
+                    batch.set(trxDocRef, { ...item, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
+                }
+                else {
                     batch.set(trxDocRef, { ...item, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
                     missingProofCount++;
                 }
@@ -384,9 +512,12 @@ const FinancialDashboard = ({ currentUser }) => {
       }
       await batch.commit(); 
       
-      let alertMsg = `총 ${addedCount}건의 장부 적재 및 병합이 완료되었습니다!`;
+      let alertMsg = `총 ${addedCount}건의 장부 적재가 완료되었습니다!`;
+      if (extractedInitialBalance !== null && uploadType === 'BANK') {
+          alertMsg += `\n✅ 엑셀에서 월초 기초 잔액(${formatCurrency(extractedInitialBalance)})을 성공적으로 추출하여 자동 설정했습니다.`;
+      }
       if (missingProofCount > 0) {
-          alertMsg += `\n\n⚠️ 주의: ${missingProofCount}건의 통장 출금 내역이 증빙 자료(지출결의서)를 찾지 못해 누락 지출로 등록되었습니다.`;
+          alertMsg += `\n\n⚠️ 주의: ${missingProofCount}건의 통장 출금 내역이 증빙 자료를 찾지 못해 누락으로 등록되었습니다. (자동증빙 항목 제외)`;
       }
       alert(alertMsg); 
       
@@ -421,7 +552,7 @@ const FinancialDashboard = ({ currentUser }) => {
             <UploadCloud size={18}/> 장부 동기화 (엑셀)
           </button>
           <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
-            <Download size={18}/> 세무 장부 다운
+            <Download size={18}/> 세무 장부 다운 (복식부기)
           </button>
           <div className="flex items-center gap-2 bg-white/10 px-4 py-1 rounded-xl ml-2">
             <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronLeft/></button>
@@ -586,7 +717,7 @@ const FinancialDashboard = ({ currentUser }) => {
                       <td className="px-4 py-3 font-semibold text-gray-900 truncate max-w-xs">{item.purpose}</td>
                       <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${(item.type || '').includes('수입') ? 'text-blue-600' : 'text-gray-900'}`}>{(item.type || '').includes('수입') ? '+' : ''}{item.amount.toLocaleString()}원</td>
                       <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
-                      <td className="px-4 py-3 text-center">{item.receiptUrl && !String(item.receiptUrl).includes('증빙') && !String(item.receiptUrl).includes('갈음') && !String(item.receiptUrl).includes('자동정산') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs">{item.receiptUrl || '없음'}</span>}</td>
+                      <td className="px-4 py-3 text-center">{item.receiptUrl && !String(item.receiptUrl).includes('증빙') && !String(item.receiptUrl).includes('갈음') && !String(item.receiptUrl).includes('자동정산') ? <button onClick={() => setPreviewUrl(item.receiptUrl)} className="text-blue-600 hover:text-blue-800 flex items-center justify-center gap-1 font-bold text-xs mx-auto border border-blue-200 bg-white px-2 py-1 rounded-md transition-colors hover:bg-blue-50 shadow-sm"><ImageIcon size={12}/> 조회</button> : <span className="text-gray-400 text-xs font-bold">{item.receiptUrl || '없음'}</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -596,37 +727,64 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 설정 모달 */}
+      {/* 🚀 재무 환경 설정 모달 (사용자 커스텀 키워드 UI 탑재) */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
             <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-4"><Settings className="text-gray-600"/> 재무 환경 설정</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">월 고정 임대료 (원)</label>
-                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.rent} onChange={e => setFinSettings({...finSettings, rent: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-1">월 평균 관리비 (원)</label>
-                <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.maintenance} onChange={e => setFinSettings({...finSettings, maintenance: e.target.value})} />
-              </div>
-            </div>
-            <div className="flex gap-2 mt-6">
-              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
-              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">설정값 저장</button>
+            
+            <div className="overflow-y-auto custom-scrollbar flex-1 pr-2 space-y-4">
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">월 고정 임대료 (원)</label>
+                    <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.rent} onChange={e => setFinSettings({...finSettings, rent: e.target.value})} />
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1">월 평균 관리비 (원)</label>
+                    <input type="number" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-200 font-bold" value={finSettings.maintenance} onChange={e => setFinSettings({...finSettings, maintenance: e.target.value})} />
+                </div>
+                
+                <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl">
+                    <p className="text-xs font-bold text-blue-800 flex items-center gap-1 mb-1"><Database size={14}/> 기초 잔액 자동화</p>
+                    <p className="text-[10px] text-blue-600">통장 엑셀을 업로드하시면 시스템이 역산하여 자동으로 세팅합니다. 수동 입력이 필요 없습니다.</p>
+                </div>
+
+                {/* 🚀 커스텀 자동 증빙 관리 섹션 */}
+                <div className="mt-4 border-t pt-4">
+                    <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><Activity size={14}/> 자동 증빙 키워드 (개인사업자 등)</label>
+                    <div className="flex gap-2 mb-3">
+                        <input type="text" placeholder="키워드(예: 홍길동)" className="border p-2 rounded-lg w-1/3 text-xs" value={newKeyword.key} onChange={e => setNewKeyword({...newKeyword, key: e.target.value})} />
+                        <select className="border p-2 rounded-lg w-1/3 text-xs outline-none" value={newKeyword.cat} onChange={e => setNewKeyword({...newKeyword, cat: e.target.value})}>
+                            {OFFICIAL_ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+                        </select>
+                        <button onClick={handleAddKeyword} className="bg-gray-800 text-white flex-1 rounded-lg text-xs font-bold hover:bg-black transition-colors">추가</button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        {(finSettings.customAutoProof || []).map((k, i) => (
+                            <span key={i} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded-md text-[10px] font-bold flex items-center gap-1 border border-indigo-100 shadow-sm">
+                                {k.key} ({k.cat})
+                                <button onClick={() => handleRemoveKeyword(i)} className="text-rose-500 hover:text-rose-700 ml-1"><XCircle size={12}/></button>
+                            </span>
+                        ))}
+                    </div>
+                </div>
+
+                <hr className="my-2 border-gray-200" />
+                
+                <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
+                    <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 엑셀 데이터 초기화</h4>
+                    <p className="text-xs text-gray-600 mb-3 leading-relaxed">
+                        선택하신 <strong>[{selectedMonth}월]</strong>에 엑셀로 잘못 업로드된 내역을 모두 지우고, 영수증 결의서만 <strong>안전하게 '대기'로 복구</strong>합니다.
+                    </p>
+                    <button onClick={handleResetExcelData} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                        {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
+                        {isProcessingCleanup ? '초기화 처리 중...' : `[${selectedMonth}월] 엑셀 연동 초기화`}
+                    </button>
+                </div>
             </div>
 
-            <hr className="my-6 border-gray-200" />
-            
-            <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
-                <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 중복 카드 내역 초기화</h4>
-                <p className="text-xs text-gray-600 mb-3 leading-relaxed">
-                    과거에 엑셀 업로드로 잘못 생성된 <strong>영수증 없는 중복 카드 지출 내역</strong>들만 골라 삭제합니다. (정상 지출결의서는 안전합니다)
-                </p>
-                <button onClick={handleCleanupDuplicateCards} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
-                    {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <Trash2 size={16} />}
-                    {isProcessingCleanup ? '삭제 처리 중...' : `시스템 자동생성 내역 일괄 삭제`}
-                </button>
+            <div className="flex gap-2 mt-4 pt-4 border-t">
+              <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
+              <button onClick={handleSaveSettings} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700">설정값 저장</button>
             </div>
           </div>
         </div>
@@ -649,7 +807,7 @@ const FinancialDashboard = ({ currentUser }) => {
                 <div className="border-2 border-dashed border-blue-200 bg-blue-50/50 p-8 rounded-2xl text-center hover:bg-blue-50 transition-colors">
                   <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFileUpload} ref={fileInputRef} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-5 file:rounded-full file:border-0 file:text-sm file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 mb-3 cursor-pointer transition-colors"/>
                   <p className="text-xs text-gray-500 mt-2 font-medium">
-                      {uploadType === 'BANK' ? '통장 출금 내역 중 결의서가 없는 항목은 미리보기에 에러 뱃지가 표시됩니다.' : '카드 내역 중 체크카드(부서:00001)는 자동 무시되어 중복을 방지합니다.'}
+                      {uploadType === 'BANK' ? '통장 엑셀 업로드 시 기초 잔액이 자동 추출되어 복식부기 장부에 반영됩니다.' : '카드 내역 중 체크카드(부서:00001)는 자동 무시되어 중복을 방지합니다.'}
                   </p>
                 </div>
                 {parsedData.length > 0 && (
@@ -665,7 +823,7 @@ const FinancialDashboard = ({ currentUser }) => {
                                 {(d.type === 'CARD' || (d.type === 'BANK' && d.amount > 0 && !d.isCardPayment)) && (
                                     d.matchedExpense 
                                     ? <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">✅ 결의서 병합</span>
-                                    : <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-rose-200">⚠️ 증빙 누락</span>
+                                    : (d.isAutoProof ? <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200">🤖 자동 증빙 (세금계산서)</span> : <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-rose-200">⚠️ 증빙 누락</span>)
                                 )}
                               </span>
                           </div>
