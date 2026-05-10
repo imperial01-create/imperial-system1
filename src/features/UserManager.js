@@ -1,385 +1,457 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
    (Updated: 자가 치유(Self-Healing) 저장 로직 탑재 - No document 에러 완벽 해결) */
-   import React, { useState, useEffect } from 'react';
-   import { 
-     Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader
-   } from 'lucide-react';
-   import { collection, doc, setDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
-   import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-   import { db, secondaryAuth } from '../firebase';
-   import { Button, Card, Modal, Toast } from '../components/UI';
-   
-   const APP_ID = 'imperial-clinic-v1';
-   
-   const UserManager = ({ currentUser }) => {
-       // 🚀 권한 확인: 관리자 또는 행정조교만 접근 허용
-       if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
-           return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
-       }
-   
-       const isAssistant = currentUser.role === 'admin_assistant';
-   
-       // 🚀 권한별 표시할 탭 제어 (행정조교는 학생/학부모만 보임)
-       const ALLOWED_TABS = isAssistant 
-           ? ['student', 'parent'] 
-           : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
-   
-       const [users, setUsers] = useState([]);
-       const [searchQuery, setSearchQuery] = useState('');
-       const [activeTab, setActiveTab] = useState('student'); 
-       const [isModalOpen, setIsModalOpen] = useState(false);
-       const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-       const [targetUserId, setTargetUserId] = useState(null);
-       const [loading, setLoading] = useState(true);
-       
-       const [toast, setToast] = useState({ message: '', type: 'info' });
-   
-       const [formData, setFormData] = useState({ 
-           id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
-           schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: ''
-       });
-       const [isEditMode, setIsEditMode] = useState(false);
-       
-       const [studentList, setStudentList] = useState([]);
-       const [studentSearch, setStudentSearch] = useState('');
-   
-       const showToast = (message, type = 'error') => setToast({ message, type });
-   
-       useEffect(() => {
-           const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-           
-           const unsubscribe = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
-               const userList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-               setUsers(userList);
-               setStudentList(userList.filter(u => u.role === 'student'));
-               setLoading(false);
-           }, (error) => {
-               console.error("User Sync Error:", error);
-               showToast('데이터 동기화 중 오류가 발생했습니다.', 'error');
-               setLoading(false);
-           });
-   
-           return () => unsubscribe();
-       }, []);
-   
-       const handleOpenCreate = () => {
-           setFormData({ id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '' });
-           setIsEditMode(false);
-           setIsModalOpen(true);
-       };
-   
-       const handleOpenEdit = (user) => {
-           setFormData({ 
-               ...user, 
-               id: user.id,
-               password: user.password || '', 
-               childId: user.childId || '',
-               childName: user.childName || '',
-               childSnapshot: user.childSnapshot || null, 
-               hourlyRate: user.hourlyRate || user.hourlyWage || '', 
-               schoolName: user.schoolName || '',
-               grade: user.grade || '1학년',
-               authUid: user.authUid || '',
-               bankName: user.bankName || '',
-               accountNumber: user.accountNumber || ''
-           });
-           setIsEditMode(true);
-           setIsModalOpen(true);
-       };
-   
-       const handleSaveUser = async () => {
-           // 🚀 행정조교 보안: 강제 패킷 조작 등으로 직원 계정 수정 방지
-           if (isAssistant && !['student', 'parent'].includes(activeTab)) {
-               return showToast('행정조교는 학생과 학부모 계정만 관리할 수 있습니다.', 'error');
-           }
-   
-           if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
-           if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
-           if (activeTab === 'parent' && !formData.childId) return showToast('학부모 계정은 반드시 자녀(학생)와 연결해야 합니다.', 'error');
-           if (activeTab === 'student' && !formData.schoolName) return showToast('학생의 학교명을 입력해주세요.', 'error');
-   
-           setLoading(true);
-           try {
-               const payload = {
-                   name: formData.name, userId: formData.userId, role: activeTab,
-                   phone: formData.phone || '', updatedAt: serverTimestamp()
-               };
-               if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
-               
-               if (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') { 
-                   if (activeTab !== 'admin' && activeTab !== 'admin_assistant') payload.subject = formData.subject || '';
-                   if (activeTab === 'ta' || activeTab === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
-                   payload.bankName = formData.bankName || '';
-                   payload.accountNumber = formData.accountNumber || '';
-               }
-               
-               if (activeTab === 'parent') { 
-                   payload.childId = formData.childId; 
-                   payload.childName = formData.childName; 
-                   payload.childSnapshot = formData.childSnapshot; 
-               }
-   
-               const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
-   
-               if (isEditMode) {
-                   if (formData.password && !formData.authUid) {
-                       payload.password = formData.password;
-                   }
-                   
-                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload, { merge: true });
-                   
-                   if (formData.id && formData.id !== safeId) {
-                       try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id)); } 
-                       catch (e) { console.log("찌꺼기 문서 삭제 스킵:", e); }
-                   }
-                   
-                   showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
-               } else {
-                   if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
-                   
-                   const email = `${safeId}@imperial.com`;
-                   let authUid = '';
-   
-                   try {
-                       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
-                       authUid = userCredential.user.uid;
-                       await signOut(secondaryAuth);
-                   } catch (authError) {
-                       if (authError.code === 'auth/email-already-in-use') throw new Error("이미 인증서버에 등록된 계정입니다.");
-                       throw authError;
-                   }
-                   
-                   payload.authUid = authUid;
-                   payload.createdAt = serverTimestamp();
-                   
-                   await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
-                   showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
-               }
-               setIsModalOpen(false);
-           } catch (e) { 
-               console.error(e);
-               showToast(e.message || '저장에 실패했습니다.', 'error'); 
-           } finally { setLoading(false); }
-       };
-   
-       const handleDeleteUser = async () => {
-           if (!targetUserId) return;
-   
-           // 🚀 행정조교 보안: 삭제 권한 검증
-           const userToDelete = users.find(u => u.id === targetUserId);
-           if (isAssistant && userToDelete && !['student', 'parent'].includes(userToDelete.role)) {
-               setIsDeleteConfirmOpen(false);
-               return showToast('행정조교는 학생과 학부모 계정만 삭제할 수 있습니다.', 'error');
-           }
-   
-           setLoading(true);
-           try {
-               await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
-               showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
-               setIsDeleteConfirmOpen(false);
-           } catch (e) { showToast('삭제 실패: ' + e.message, 'error'); } 
-           finally { setLoading(false); setTargetUserId(null); }
-       };
-   
-       const duplicateCounts = React.useMemo(() => {
-           const counts = {};
-           users.forEach(u => { counts[u.userId] = (counts[u.userId] || 0) + 1; });
-           return counts;
-       }, [users]);
-   
-       const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
-   
-       return (
-           <div className="space-y-6 w-full animate-in fade-in pb-20">
-               <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
-   
-               <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                   <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
-                   <div className="flex gap-2 w-full md:w-auto">
-                       <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
-                   </div>
-               </div>
-   
-               <div className="w-full overflow-x-auto">
-                   <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-max">
-                       {/* 🚀 권한에 따라 탭 렌더링 필터링 */}
-                       {ALLOWED_TABS.map(role => (
-                           <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-3 sm:px-6 text-sm sm:text-base font-bold text-center transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
-                               {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '수업조교' : role === 'admin_assistant' ? '행정조교' : role === 'lecturer' ? '강사' : '관리자'}
-                           </button>
-                       ))}
-                   </div>
-               </div>
-   
-               <div className="relative">
-                   <input className="w-full border p-3 pl-10 rounded-xl bg-white shadow-sm outline-none" placeholder="이름 또는 아이디 검색" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
-               </div>
-   
-               <div className="md:hidden space-y-4">
-                   {filteredUsers.map(u => (
-                       <Card key={u.id} className="p-5 flex flex-col gap-3">
-                           <div className="flex justify-between items-start">
-                               <div className="flex items-center gap-2">
-                                   <div className="bg-blue-100 p-2 rounded-full text-blue-600"><User size={18} /></div>
-                                   <div>
-                                       <div className="font-bold text-lg">{u.name}</div>
-                                       <div className="text-xs text-gray-400 flex items-center gap-1">
-                                           {u.userId}
-                                           {duplicateCounts[u.userId] > 1 && <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[8px] font-bold rounded-full animate-pulse">중복!</span>}
-                                       </div>
-                                   </div>
-                               </div>
-                               <div className="flex gap-2">
-                                   <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg hover:bg-gray-50"><Edit2 size={16}/></button>
-                                   <button onClick={() => {setTargetUserId(u.id); setIsDeleteConfirmOpen(true);}} className="p-2 border rounded-lg hover:bg-gray-50 text-red-500"><Trash2 size={16}/></button>
-                               </div>
-                           </div>
-                           <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm">
-                               {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
-                               {activeTab === 'parent' && <div className="flex items-center gap-2 font-bold text-green-600"><User size={14}/> 자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName})` : u.childName}</div>}
-                               <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
-                               {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && u.bankName && (
-                                   <div className="text-xs text-gray-500 bg-yellow-50 p-1.5 rounded inline-block">🏦 {u.bankName} {u.accountNumber}</div>
-                               )}
-                           </div>
-                       </Card>
-                   ))}
-               </div>
-   
-               <div className="hidden md:block">
-                   <Card className="p-0 overflow-hidden shadow-sm">
-                       <table className="w-full text-left border-collapse">
-                           <thead><tr className="bg-gray-50 text-gray-500 text-sm border-b"><th className="p-4">이름</th><th className="p-4">아이디</th><th className="p-4">전화번호</th><th className="p-4">정보</th><th className="p-4 text-right">관리</th></tr></thead>
-                           <tbody className="divide-y">
-                               {filteredUsers.length === 0 ? <tr><td colSpan="5" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr> :
-                               filteredUsers.map(u => (
-                                   <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                                       <td className="p-4 font-bold">
-                                           {u.name}
-                                           {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-gray-300" title="초기 계정"/>}
-                                       </td>
-                                       <td className="p-4">
-                                           <div className="flex items-center gap-2">
-                                               <span>{u.userId}</span>
-                                               {duplicateCounts[u.userId] > 1 && <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200 animate-pulse">중복 계정!</span>}
-                                           </div>
-                                       </td>
-                                       <td className="p-4 text-gray-500">{u.phone || '-'}</td>
-                                       <td className="p-4">
-                                           {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
-                                           {activeTab === 'parent' && <span className="text-green-600 font-bold">자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName} ${u.childSnapshot.grade})` : u.childName}</span>}
-                                           {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && (
-                                               <div className="flex flex-col gap-1">
-                                                   {u.subject && <span>{u.subject}</span>}
-                                                   {(activeTab === 'ta' || activeTab === 'admin_assistant') && <span className="text-xs font-bold text-emerald-600">시급: {(u.hourlyRate||0).toLocaleString()}원</span>}
-                                                   {u.bankName && <span className="text-xs text-gray-500 bg-yellow-50 px-2 py-0.5 rounded-full border border-yellow-100 w-fit">🏦 {u.bankName} {u.accountNumber}</span>}
-                                               </div>
-                                           )}
-                                       </td>
-                                       <td className="p-4 flex justify-end gap-2">
-                                           <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg text-gray-400 hover:text-blue-600 hover:border-blue-100"><Edit2 size={18}/></button>
-                                           <button onClick={() => {setTargetUserId(u.id); setIsDeleteConfirmOpen(true);}} className="p-2 border rounded-lg text-gray-400 hover:text-red-600 hover:border-red-100"><Trash2 size={18}/></button>
-                                       </td>
-                                   </tr>
-                               ))}
-                           </tbody>
-                       </table>
-                   </Card>
-               </div>
-   
-               <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 관리`}>
-                   <div className="space-y-4 p-2">
-                       <div className="grid grid-cols-2 gap-4">
-                           <input className="border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-                           <input className="border p-3 rounded-xl" placeholder="전화번호" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
-                       </div>
-                       <input className="w-full border p-3 rounded-xl bg-gray-50" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
-                       
-                       {!formData.authUid && (
-                           <input className="w-full border p-3 rounded-xl" placeholder="초기 비밀번호 (6자리 이상)" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
-                       )}
-                       
-                       {activeTab === 'student' && (
-                           <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl">
-                               <input className="border p-2 rounded-lg bg-white" placeholder="학교명" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />
-                               <select className="border p-2 rounded-lg bg-white" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
-                                   <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-                               </select>
-                           </div>
-                       )}
-   
-                       {activeTab === 'parent' && (
-                           <div className="bg-gray-50 p-4 border rounded-xl space-y-3">
-                                <label className="text-xs font-bold text-gray-500">연결된 자녀(학생)</label>
-                                {formData.childName ? (
-                                   <div className="flex justify-between items-center font-bold bg-white p-2 rounded-lg border">
-                                       <span className="text-blue-600">{formData.childSnapshot ? `${formData.childSnapshot.name} (${formData.childSnapshot.schoolName})` : formData.childName}</span>
-                                       <button onClick={()=>setFormData({...formData, childId:'', childName:'', childSnapshot: null})}><X size={16}/></button>
-                                   </div>
-                                ) : (
-                                   <div className="space-y-2">
-                                       <input className="w-full border p-2 rounded-lg text-sm" placeholder="학생 이름으로 검색" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)}/>
-                                       {studentSearch && (
-                                           <div className="border bg-white max-h-32 overflow-y-auto rounded-lg shadow-inner">
-                                               {studentList.filter(s=>s.name.includes(studentSearch)).map(s=> (
-                                                   <div key={s.id} onClick={()=>{
-                                                       setFormData({ ...formData, childId: s.id, childName: s.name, childSnapshot: { name: s.name, schoolName: s.schoolName, grade: s.grade }}); 
-                                                       setStudentSearch('');
-                                                   }} className="p-2 hover:bg-blue-50 cursor-pointer text-sm border-b flex justify-between">
-                                                       <span>{s.name}</span><span className="text-gray-400 text-xs">{s.schoolName}</span>
-                                                   </div>
-                                               ))}
-                                           </div>
-                                       )}
-                                   </div>
-                                )}
-                           </div>
-                       )}
-   
-                       {(!isAssistant && (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant')) && (
-                           <div className="space-y-4 mt-2">
-                               {(activeTab === 'ta' || activeTab === 'lecturer') && (
-                                   <div className="grid grid-cols-2 gap-4">
-                                       <input className="border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
-                                       {activeTab === 'ta' && <input className="border p-3 rounded-xl" type="number" placeholder="시급 (원)" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />}
-                                   </div>
-                               )}
-   
-                               {activeTab === 'admin_assistant' && (
-                                   <div className="animate-in slide-in-from-top-2 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
-                                       <label className="block text-sm font-bold text-emerald-800 mb-2">행정조교 계약 시급 (원)</label>
-                                       <input type="number" name="hourlyRate" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} placeholder="예: 10030" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-black text-xl text-emerald-700 bg-white" required />
-                                       <p className="text-xs text-emerald-600 mt-2 font-semibold">* 조교가 입력한 근무 시간과 이 시급을 바탕으로 월말 급여와 주휴수당이 자동 계산됩니다.</p>
-                                   </div>
-                               )}
-   
-                               <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-xl border border-yellow-100">
-                                   <div><label className="block text-xs font-bold text-gray-500 mb-1">입금은행</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="국민은행" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} /></div>
-                                   <div><label className="block text-xs font-bold text-gray-500 mb-1">계좌번호</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="숫자만" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} /></div>
-                               </div>
-                           </div>
-                       )}
-                       
-                       <Button className="w-full py-4 text-lg font-bold mt-4" onClick={handleSaveUser} disabled={loading}>
-                           {loading ? <Loader className="animate-spin mx-auto"/> : '사용자 정보 저장'}
-                       </Button>
-                   </div>
-               </Modal>
-   
-               <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="사용자 계정 삭제">
-                   <div className="text-center space-y-6 p-4">
-                       <div className="bg-red-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto text-red-500"><Trash2 size={40} /></div>
-                       <p className="text-lg font-medium">정말로 삭제하시겠습니까?<br/><span className="text-red-500 font-bold">연결된 모든 데이터가 접근 불가 상태가 됩니다.</span></p>
-                       <div className="flex gap-3">
-                           <Button variant="secondary" className="flex-1 py-3" onClick={() => setIsDeleteConfirmOpen(false)}>취소</Button>
-                           <Button variant="danger" className="flex-1 py-3" onClick={handleDeleteUser} disabled={loading}>네, 삭제하겠습니다</Button>
-                       </div>
-                   </div>
-               </Modal>
-           </div>
-       );
-   };
-   
-   export default UserManager;
+import React, { useState, useEffect } from 'react';
+import { 
+  Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key
+} from 'lucide-react'; // 🚀 Key 아이콘 추가됨
+import { collection, doc, setDoc, deleteDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+// 🚀 서버 함수 호출용 라이브러리 추가
+import { httpsCallable } from 'firebase/functions'; 
+import { db, secondaryAuth, functions } from '../firebase'; // 🚀 functions 추가됨
+import { Button, Card, Modal, Toast } from '../components/UI';
+
+const APP_ID = 'imperial-clinic-v1';
+
+const UserManager = ({ currentUser }) => {
+    // 🚀 권한 확인: 관리자 또는 행정조교만 접근 허용
+    if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
+        return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
+    }
+
+    const isAssistant = currentUser.role === 'admin_assistant';
+
+    // 🚀 권한별 표시할 탭 제어 (행정조교는 학생/학부모만 보임)
+    const ALLOWED_TABS = isAssistant 
+        ? ['student', 'parent'] 
+        : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
+
+    const [users, setUsers] = useState([]);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [activeTab, setActiveTab] = useState('student'); 
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+    const [targetUserId, setTargetUserId] = useState(null);
+    const [loading, setLoading] = useState(true);
+    
+    const [toast, setToast] = useState({ message: '', type: 'info' });
+
+    const [formData, setFormData] = useState({ 
+        id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
+        schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: ''
+    });
+    const [isEditMode, setIsEditMode] = useState(false);
+    
+    const [studentList, setStudentList] = useState([]);
+    const [studentSearch, setStudentSearch] = useState('');
+
+    const showToast = (message, type = 'error') => setToast({ message, type });
+
+    useEffect(() => {
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
+        
+        const unsubscribe = onSnapshot(q, { includeMetadataChanges: true }, (snapshot) => {
+            const userList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+            setUsers(userList);
+            setStudentList(userList.filter(u => u.role === 'student'));
+            setLoading(false);
+        }, (error) => {
+            console.error("User Sync Error:", error);
+            showToast('데이터 동기화 중 오류가 발생했습니다.', 'error');
+            setLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    // 🚀 [CTO 신규 로직] Firebase Auth 비밀번호 강제 초기화 (서버 연동)
+    const handleForcePasswordReset = async (user) => {
+        const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상)`);
+        
+        if (!newPassword) return; // 취소 누름
+        if (newPassword.length < 6) {
+            return showToast('비밀번호는 최소 6자리 이상이어야 합니다.', 'error');
+        }
+
+        const confirmMsg = `정말 [${user.name}] 사용자의 비밀번호를 '${newPassword}'(으)로 강제 변경하시겠습니까?\n\n이 작업은 즉시 반영되며 되돌릴 수 없습니다.`;
+        if (!window.confirm(confirmMsg)) return;
+
+        setLoading(true);
+        try {
+            // 1. Cloud Functions(백엔드 서버) 호출하여 비밀번호 강제 변경
+            const resetPasswordFn = httpsCallable(functions, 'adminResetPassword');
+            
+            // Firebase Auth의 고유 UID (없으면 기존 id 사용)
+            const targetUid = user.authUid || user.id; 
+            await resetPasswordFn({ uid: targetUid, newPassword: newPassword });
+
+            // 2. 원장님이 나중에 확인할 수 있도록 Firestore 장부의 'password' 텍스트도 업데이트
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
+                password: newPassword,
+                updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            showToast(`✅ 성공적으로 변경되었습니다! 학생에게 [${newPassword}] 로 로그인하라고 안내해 주세요.`, 'success');
+        } catch (error) {
+            console.error(error);
+            showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleOpenCreate = () => {
+        setFormData({ id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '' });
+        setIsEditMode(false);
+        setIsModalOpen(true);
+    };
+
+    const handleOpenEdit = (user) => {
+        setFormData({ 
+            ...user, 
+            id: user.id,
+            password: user.password || '', 
+            childId: user.childId || '',
+            childName: user.childName || '',
+            childSnapshot: user.childSnapshot || null, 
+            hourlyRate: user.hourlyRate || user.hourlyWage || '', 
+            schoolName: user.schoolName || '',
+            grade: user.grade || '1학년',
+            authUid: user.authUid || '',
+            bankName: user.bankName || '',
+            accountNumber: user.accountNumber || ''
+        });
+        setIsEditMode(true);
+        setIsModalOpen(true);
+    };
+
+    const handleSaveUser = async () => {
+        // 🚀 행정조교 보안: 강제 패킷 조작 등으로 직원 계정 수정 방지
+        if (isAssistant && !['student', 'parent'].includes(activeTab)) {
+            return showToast('행정조교는 학생과 학부모 계정만 관리할 수 있습니다.', 'error');
+        }
+
+        if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
+        if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
+        if (activeTab === 'parent' && !formData.childId) return showToast('학부모 계정은 반드시 자녀(학생)와 연결해야 합니다.', 'error');
+        if (activeTab === 'student' && !formData.schoolName) return showToast('학생의 학교명을 입력해주세요.', 'error');
+
+        setLoading(true);
+        try {
+            const payload = {
+                name: formData.name, userId: formData.userId, role: activeTab,
+                phone: formData.phone || '', updatedAt: serverTimestamp()
+            };
+            if (activeTab === 'student') { payload.schoolName = formData.schoolName; payload.grade = formData.grade; }
+            
+            if (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') { 
+                if (activeTab !== 'admin' && activeTab !== 'admin_assistant') payload.subject = formData.subject || '';
+                if (activeTab === 'ta' || activeTab === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
+                payload.bankName = formData.bankName || '';
+                payload.accountNumber = formData.accountNumber || '';
+            }
+            
+            if (activeTab === 'parent') { 
+                payload.childId = formData.childId; 
+                payload.childName = formData.childName; 
+                payload.childSnapshot = formData.childSnapshot; 
+            }
+
+            const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
+
+            if (isEditMode) {
+                if (formData.password && !formData.authUid) {
+                    payload.password = formData.password;
+                }
+                
+                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload, { merge: true });
+                
+                if (formData.id && formData.id !== safeId) {
+                    try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id)); } 
+                    catch (e) { console.log("찌꺼기 문서 삭제 스킵:", e); }
+                }
+                
+                showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
+            } else {
+                if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
+                
+                const email = `${safeId}@imperial.com`;
+                let authUid = '';
+
+                try {
+                    const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
+                    authUid = userCredential.user.uid;
+                    await signOut(secondaryAuth);
+                } catch (authError) {
+                    if (authError.code === 'auth/email-already-in-use') throw new Error("이미 인증서버에 등록된 계정입니다.");
+                    throw authError;
+                }
+                
+                payload.authUid = authUid;
+                payload.password = formData.password; // 원장님 확인용 초기 비번 저장
+                payload.createdAt = serverTimestamp();
+                
+                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
+                showToast('새로운 사용자가 성공적으로 추가되었습니다.', 'success');
+            }
+            setIsModalOpen(false);
+        } catch (e) { 
+            console.error(e);
+            showToast(e.message || '저장에 실패했습니다.', 'error'); 
+        } finally { setLoading(false); }
+    };
+
+    const handleDeleteUser = async () => {
+        if (!targetUserId) return;
+
+        // 🚀 행정조교 보안: 삭제 권한 검증
+        const userToDelete = users.find(u => u.id === targetUserId);
+        if (isAssistant && userToDelete && !['student', 'parent'].includes(userToDelete.role)) {
+            setIsDeleteConfirmOpen(false);
+            return showToast('행정조교는 학생과 학부모 계정만 삭제할 수 있습니다.', 'error');
+        }
+
+        setLoading(true);
+        try {
+            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
+            showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
+            setIsDeleteConfirmOpen(false);
+        } catch (e) { showToast('삭제 실패: ' + e.message, 'error'); } 
+        finally { setLoading(false); setTargetUserId(null); }
+    };
+
+    const duplicateCounts = React.useMemo(() => {
+        const counts = {};
+        users.forEach(u => { counts[u.userId] = (counts[u.userId] || 0) + 1; });
+        return counts;
+    }, [users]);
+
+    const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || u.userId.includes(searchQuery)));
+
+    return (
+        <div className="space-y-6 w-full animate-in fade-in pb-20">
+            <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
+
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 사용자 관리</h2>
+                <div className="flex gap-2 w-full md:w-auto">
+                    <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
+                </div>
+            </div>
+
+            <div className="w-full overflow-x-auto">
+                <div className="flex border-b border-gray-200 bg-white rounded-t-xl min-w-max">
+                    {/* 🚀 권한에 따라 탭 렌더링 필터링 */}
+                    {ALLOWED_TABS.map(role => (
+                        <button key={role} onClick={() => setActiveTab(role)} className={`flex-1 py-4 px-3 sm:px-6 text-sm sm:text-base font-bold text-center transition-colors whitespace-nowrap ${activeTab === role ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}>
+                            {role === 'student' ? '학생' : role === 'parent' ? '학부모' : role === 'ta' ? '수업조교' : role === 'admin_assistant' ? '행정조교' : role === 'lecturer' ? '강사' : '관리자'}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="relative">
+                <input className="w-full border p-3 pl-10 rounded-xl bg-white shadow-sm outline-none" placeholder="이름 또는 아이디 검색" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
+            </div>
+
+            {/* 모바일 뷰 (Card 형태) */}
+            <div className="md:hidden space-y-4">
+                {filteredUsers.map(u => (
+                    <Card key={u.id} className="p-5 flex flex-col gap-3">
+                        <div className="flex justify-between items-start">
+                            <div className="flex items-center gap-2">
+                                <div className="bg-blue-100 p-2 rounded-full text-blue-600"><User size={18} /></div>
+                                <div>
+                                    <div className="font-bold text-lg">{u.name}</div>
+                                    <div className="text-xs text-gray-400 flex items-center gap-1">
+                                        {u.userId}
+                                        {duplicateCounts[u.userId] > 1 && <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[8px] font-bold rounded-full animate-pulse">중복!</span>}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg hover:bg-gray-50"><Edit2 size={16}/></button>
+                                <button onClick={() => {setTargetUserId(u.id); setIsDeleteConfirmOpen(true);}} className="p-2 border rounded-lg hover:bg-gray-50 text-red-500"><Trash2 size={16}/></button>
+                            </div>
+                        </div>
+                        <div className="bg-gray-50 p-3 rounded-xl space-y-2 text-sm">
+                            {activeTab === 'student' && <div className="flex items-center gap-2 font-bold text-blue-600"><School size={14}/> {u.schoolName} ({u.grade})</div>}
+                            {activeTab === 'parent' && <div className="flex items-center gap-2 font-bold text-green-600"><User size={14}/> 자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName})` : u.childName}</div>}
+                            <div className="flex items-center gap-2"><Phone size={14}/> {u.phone || '-'}</div>
+                            {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && u.bankName && (
+                                <div className="text-xs text-gray-500 bg-yellow-50 p-1.5 rounded inline-block">🏦 {u.bankName} {u.accountNumber}</div>
+                            )}
+                        </div>
+                        
+                        {/* 🚀 모바일용 비밀번호 강제 변경 버튼 */}
+                        <div className="mt-1 pt-3 border-t border-gray-100">
+                            <button 
+                                onClick={() => handleForcePasswordReset(u)}
+                                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-100"
+                            >
+                                <Key size={14} /> 비밀번호 강제 변경
+                            </button>
+                        </div>
+                    </Card>
+                ))}
+            </div>
+
+            {/* 데스크톱 뷰 (Table 형태) */}
+            <div className="hidden md:block">
+                <Card className="p-0 overflow-hidden shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="bg-gray-50 text-gray-500 text-sm border-b">
+                                <th className="p-4">이름</th>
+                                <th className="p-4">아이디</th>
+                                <th className="p-4">전화번호</th>
+                                <th className="p-4">정보</th>
+                                <th className="p-4 text-center">보안/비밀번호</th> {/* 🚀 신규 컬럼 추가 */}
+                                <th className="p-4 text-right">관리</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                            {filteredUsers.length === 0 ? <tr><td colSpan="6" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr> :
+                            filteredUsers.map(u => (
+                                <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="p-4 font-bold">
+                                        {u.name}
+                                        {u.authUid ? <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/> : <Shield size={12} className="inline ml-2 text-gray-300" title="초기 계정"/>}
+                                    </td>
+                                    <td className="p-4">
+                                        <div className="flex items-center gap-2">
+                                            <span>{u.userId}</span>
+                                            {duplicateCounts[u.userId] > 1 && <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded-full border border-red-200 animate-pulse">중복 계정!</span>}
+                                        </div>
+                                    </td>
+                                    <td className="p-4 text-gray-500">{u.phone || '-'}</td>
+                                    <td className="p-4">
+                                        {activeTab === 'student' && <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>}
+                                        {activeTab === 'parent' && <span className="text-green-600 font-bold">자녀: {u.childSnapshot ? `${u.childSnapshot.name} (${u.childSnapshot.schoolName} ${u.childSnapshot.grade})` : u.childName}</span>}
+                                        {(activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant') && (
+                                            <div className="flex flex-col gap-1">
+                                                {u.subject && <span>{u.subject}</span>}
+                                                {(activeTab === 'ta' || activeTab === 'admin_assistant') && <span className="text-xs font-bold text-emerald-600">시급: {(u.hourlyRate||0).toLocaleString()}원</span>}
+                                                {u.bankName && <span className="text-xs text-gray-500 bg-yellow-50 px-2 py-0.5 rounded-full border border-yellow-100 w-fit">🏦 {u.bankName} {u.accountNumber}</span>}
+                                            </div>
+                                        )}
+                                    </td>
+                                    
+                                    {/* 🚀 신규 보안 컬럼 (강제 변경 버튼) */}
+                                    <td className="p-4 text-center">
+                                        <button 
+                                            onClick={() => handleForcePasswordReset(u)}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-100"
+                                            title="이메일 인증 없이 즉시 비밀번호를 변경합니다"
+                                        >
+                                            <Key size={14} /> 비번 변경
+                                        </button>
+                                    </td>
+
+                                    <td className="p-4 flex justify-end gap-2">
+                                        <button onClick={() => handleOpenEdit(u)} className="p-2 border rounded-lg text-gray-400 hover:text-blue-600 hover:border-blue-100"><Edit2 size={18}/></button>
+                                        <button onClick={() => {setTargetUserId(u.id); setIsDeleteConfirmOpen(true);}} className="p-2 border rounded-lg text-gray-400 hover:text-red-600 hover:border-red-100"><Trash2 size={18}/></button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </Card>
+            </div>
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 관리`}>
+                <div className="space-y-4 p-2">
+                    <div className="grid grid-cols-2 gap-4">
+                        <input className="border p-3 rounded-xl" placeholder="이름" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                        <input className="border p-3 rounded-xl" placeholder="전화번호" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
+                    </div>
+                    <input className="w-full border p-3 rounded-xl bg-gray-50" placeholder="아이디" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} />
+                    
+                    {!formData.authUid && (
+                        <input className="w-full border p-3 rounded-xl" placeholder="초기 비밀번호 (6자리 이상)" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} />
+                    )}
+                    
+                    {activeTab === 'student' && (
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl">
+                            <input className="border p-2 rounded-lg bg-white" placeholder="학교명" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />
+                            <select className="border p-2 rounded-lg bg-white" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
+                                <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                            </select>
+                        </div>
+                    )}
+
+                    {activeTab === 'parent' && (
+                        <div className="bg-gray-50 p-4 border rounded-xl space-y-3">
+                             <label className="text-xs font-bold text-gray-500">연결된 자녀(학생)</label>
+                             {formData.childName ? (
+                                <div className="flex justify-between items-center font-bold bg-white p-2 rounded-lg border">
+                                    <span className="text-blue-600">{formData.childSnapshot ? `${formData.childSnapshot.name} (${formData.childSnapshot.schoolName})` : formData.childName}</span>
+                                    <button onClick={()=>setFormData({...formData, childId:'', childName:'', childSnapshot: null})}><X size={16}/></button>
+                                </div>
+                             ) : (
+                                <div className="space-y-2">
+                                    <input className="w-full border p-2 rounded-lg text-sm" placeholder="학생 이름으로 검색" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)}/>
+                                    {studentSearch && (
+                                        <div className="border bg-white max-h-32 overflow-y-auto rounded-lg shadow-inner">
+                                            {studentList.filter(s=>s.name.includes(studentSearch)).map(s=> (
+                                                <div key={s.id} onClick={()=>{
+                                                    setFormData({ ...formData, childId: s.id, childName: s.name, childSnapshot: { name: s.name, schoolName: s.schoolName, grade: s.grade }}); 
+                                                    setStudentSearch('');
+                                                }} className="p-2 hover:bg-blue-50 cursor-pointer text-sm border-b flex justify-between">
+                                                    <span>{s.name}</span><span className="text-gray-400 text-xs">{s.schoolName}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                             )}
+                        </div>
+                    )}
+
+                    {(!isAssistant && (activeTab === 'ta' || activeTab === 'lecturer' || activeTab === 'admin' || activeTab === 'admin_assistant')) && (
+                        <div className="space-y-4 mt-2">
+                            {(activeTab === 'ta' || activeTab === 'lecturer') && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <input className="border p-3 rounded-xl" placeholder="담당 과목" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                                    {activeTab === 'ta' && <input className="border p-3 rounded-xl" type="number" placeholder="시급 (원)" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />}
+                                </div>
+                            )}
+
+                            {activeTab === 'admin_assistant' && (
+                                <div className="animate-in slide-in-from-top-2 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
+                                    <label className="block text-sm font-bold text-emerald-800 mb-2">행정조교 계약 시급 (원)</label>
+                                    <input type="number" name="hourlyRate" value={formData.hourlyRate} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} placeholder="예: 10030" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-black text-xl text-emerald-700 bg-white" required />
+                                    <p className="text-xs text-emerald-600 mt-2 font-semibold">* 조교가 입력한 근무 시간과 이 시급을 바탕으로 월말 급여와 주휴수당이 자동 계산됩니다.</p>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-4 p-4 bg-yellow-50 rounded-xl border border-yellow-100">
+                                <div><label className="block text-xs font-bold text-gray-500 mb-1">입금은행</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="국민은행" value={formData.bankName} onChange={e => setFormData({...formData, bankName: e.target.value})} /></div>
+                                <div><label className="block text-xs font-bold text-gray-500 mb-1">계좌번호</label><input className="w-full border p-2 rounded-lg bg-white" placeholder="숫자만" value={formData.accountNumber} onChange={e => setFormData({...formData, accountNumber: e.target.value})} /></div>
+                            </div>
+                        </div>
+                    )}
+                    
+                    <Button className="w-full py-4 text-lg font-bold mt-4" onClick={handleSaveUser} disabled={loading}>
+                        {loading ? <Loader className="animate-spin mx-auto"/> : '사용자 정보 저장'}
+                    </Button>
+                </div>
+            </Modal>
+
+            <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="사용자 계정 삭제">
+                <div className="text-center space-y-6 p-4">
+                    <div className="bg-red-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto text-red-500"><Trash2 size={40} /></div>
+                    <p className="text-lg font-medium">정말로 삭제하시겠습니까?<br/><span className="text-red-500 font-bold">연결된 모든 데이터가 접근 불가 상태가 됩니다.</span></p>
+                    <div className="flex gap-3">
+                        <Button variant="secondary" className="flex-1 py-3" onClick={() => setIsDeleteConfirmOpen(false)}>취소</Button>
+                        <Button variant="danger" className="flex-1 py-3" onClick={handleDeleteUser} disabled={loading}>네, 삭제하겠습니다</Button>
+                    </div>
+                </div>
+            </Modal>
+        </div>
+    );
+};
+
+export default UserManager;

@@ -5,8 +5,9 @@ import {
   persistentLocalCache, 
   persistentMultipleTabManager 
 } from "firebase/firestore";
-// 🚀 [CTO 추가] Firebase Auth 모듈 임포트
 import { getAuth } from "firebase/auth"; 
+// 🚀 [CTO 추가] 서버(Cloud Functions) 모듈 임포트
+import { getFunctions } from "firebase/functions"; 
 
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
@@ -33,5 +34,8 @@ export const db = initializeFirestore(app, {
 // 3. Auth 인스턴스 추출 (Export)
 export const auth = getAuth(app); // 학부모/학생 등 일반 로그인용
 export const secondaryAuth = getAuth(secondaryApp); // 관리자의 사용자 계정 발급 전용
+
+// 🚀 4. [신규 추가] 비밀번호 강제 변경 등 백엔드 기능용 Functions 인스턴스 추출
+export const functions = getFunctions(app);
 
 export default app;
