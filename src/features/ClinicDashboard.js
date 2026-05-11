@@ -342,9 +342,9 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // 🚀 [CTO 로직] 스케줄 관제탑 데이터 불러오기 (교실 충돌 방지용)
+    // 🚀 [CTO 로직 변수명 수정됨] 스케줄 관제탑 데이터 불러오기 (교실 충돌 방지용)
     const [baseSchedules, setBaseSchedules] = useState([]);
-    const [scheduleRequests, setScheduleRequests] = useState([]);
+    const [masterScheduleRequests, setMasterScheduleRequests] = useState([]);
 
     useEffect(() => {
         if (!isAdminView) return; // 관리자에게만 필요
@@ -357,14 +357,14 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
         loadSchedules();
 
         const unsubReq = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`)), (snap) => {
-            setScheduleRequests(snap.docs.map(d => ({id: d.id, ...d.data()})));
+            setMasterScheduleRequests(snap.docs.map(d => ({id: d.id, ...d.data()})));
         });
         return () => unsubReq();
     }, [isAdminView]);
 
     const activeSchedules = useMemo(() => {
         let list = [...baseSchedules];
-        scheduleRequests.filter(r => r.status === 'APPROVED').forEach(req => {
+        masterScheduleRequests.filter(r => r.status === 'APPROVED').forEach(req => {
             if (req.type === 'PERMANENT') {
                 const idx = list.findIndex(s => s.id === req.originalScheduleId);
                 if (idx > -1) list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom };
@@ -373,7 +373,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
             }
         });
         return list;
-    }, [baseSchedules, scheduleRequests]);
+    }, [baseSchedules, masterScheduleRequests]);
 
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom) => {
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
@@ -757,7 +757,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                                             onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
-                                            {/* [CTO 적용] 스케줄 관제탑 정규 수업과 겹치는지 체크하여 비활성화 */}
                                             {CLASSROOMS.map(r => {
                                                 const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                                 return (
