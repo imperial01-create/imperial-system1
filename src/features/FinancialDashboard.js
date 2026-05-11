@@ -7,7 +7,7 @@ import {
   PieChart, ChevronLeft, ChevronRight, Receipt, Loader, 
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
-  Activity, LineChart, Settings, RefreshCcw, Trash2
+  Activity, LineChart, Settings, RefreshCcw, Trash2, AlertTriangle, Target
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -20,6 +20,15 @@ const OFFICIAL_ACCOUNTS = [
   '미분류', '직원급여', '상여금', '퇴직급여', '복리후생비', '여비교통비', '접대비', 
   '통신비', '수도광열비', '세금과공과금', '감가상각비', '지급임차료', '건물관리비', '수선비', 
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
+];
+
+// 🚀 [신규 기능] 카테고리별 예산 분배 비율 (매출 100% 기준)
+const BUDGET_CATEGORIES = [
+    { id: 'labor', name: '인건비', ratio: 0.50, accounts: ['직원급여', '상여금', '퇴직급여', '보험료', '세금과공과금'] },
+    { id: 'facility', name: '시설/공간비', ratio: 0.10, accounts: ['지급임차료', '건물관리비', '수도광열비', '수선비'] },
+    { id: 'marketing', name: '마케팅비용', ratio: 0.10, accounts: ['광고선전비', '도서인쇄비'] },
+    { id: 'operation', name: '학원운영비', ratio: 0.10, accounts: ['지급수수료', '통신비', '차량유지비', '운반비', '여비교통비'] },
+    { id: 'welfare', name: '복리후생/소모품', ratio: 0.05, accounts: ['복리후생비', '소모품비', '접대비'] },
 ];
 
 const AUTO_PROOF_KEYWORDS = [
@@ -77,6 +86,9 @@ const FinancialDashboard = ({ currentUser }) => {
   const [finSettings, setFinSettings] = useState({ rent: 4000000, maintenance: 500000, initialBalance: 0, customAutoProof: [] });
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
   const [newKeyword, setNewKeyword] = useState({ key: '', cat: '지급수수료', note: '전자세금계산서 갈음' });
+
+  // 🚀 [신규 기능] 원인 지출 내역 모달 데이터
+  const [culpritModalData, setCulpritModalData] = useState(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -205,7 +217,6 @@ const FinancialDashboard = ({ currentUser }) => {
       });
   };
 
-  // 🚀 [해결 2] 더욱 강력해진 초기화 엔진 (월에 상관없이 교차 매칭된 것까지 모두 롤백)
   const handleResetExcelData = async () => {
     if (!window.confirm(`⚠️ [${selectedMonth}월]의 모든 엑셀 업로드 내역을 초기화하시겠습니까?\n\n* 통장(수입) 및 누락 지출 데이터가 삭제됩니다.\n* 지출결의서는 안전하게 '대기' 상태로 복구됩니다.`)) return;
     
@@ -216,17 +227,14 @@ const FinancialDashboard = ({ currentUser }) => {
         const monthStart = `${selectedMonth}-01`; 
         const monthEnd = `${selectedMonth}-31`;
         
-        // 1. 해당 월 수입 모두 삭제
         const incSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/incomes`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
         incSnap.forEach(d => { batch.delete(d.ref); opCount++; });
         
-        // 2. 해당 월 통장 출금(Transactions) 삭제 및 연결된 결의서 강제 롤백!
         const trxSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/transactions`), where('transactionDate', '>=', monthStart), where('transactionDate', '<=', monthEnd)));
         trxSnap.forEach(d => { 
             const data = d.data();
             batch.delete(d.ref); 
             opCount++; 
-            // 🚀 통장 출금과 연결된 결의서가 있다면, 그 결의서가 저번 달에 작성되었더라도 강제로 대기로 돌림
             if (data.matchedExpenseId) {
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, data.matchedExpenseId), {
                     matchedTransactionId: null,
@@ -236,7 +244,6 @@ const FinancialDashboard = ({ currentUser }) => {
             }
         });
 
-        // 3. 해당 월 지출결의서 스캔 (SYSTEM 삭제 및 수동 승인건 롤백)
         const expSnap = await getDocs(query(collection(db, `artifacts/${APP_ID}/public/data/expenses`), where('expenseDate', '>=', monthStart), where('expenseDate', '<=', monthEnd)));
         expSnap.forEach(d => {
             const data = d.data();
@@ -245,7 +252,6 @@ const FinancialDashboard = ({ currentUser }) => {
                 opCount++;
             } 
             else if (data.matchedTransactionId || data.status === 'APPROVED') {
-                // 🚀 수동 승인한 것, 카드 엑셀로 매칭된 것 모두 롤백시킴
                 batch.update(d.ref, { matchedTransactionId: null, status: 'PENDING', updatedAt: new Date().toISOString() });
                 opCount++;
             }
@@ -302,6 +308,8 @@ const FinancialDashboard = ({ currentUser }) => {
     const ltv = totalIncome > 0 ? (totalIncome / 150) * (100 / 2) : 0; 
 
     const vatEstimate = totalIncome * 0.1 - (totalExpense * 0.05);
+    
+    // 🚀 [원본 유지] 기존 이상 탐지 로직 (Anomalies) 및 카테고리별 합산
     const anomalies = [];
     const categoryTotals = {};
     expenses.filter(e => e.status === 'APPROVED').forEach(e => { 
@@ -311,12 +319,43 @@ const FinancialDashboard = ({ currentUser }) => {
     
     if (categoryTotals['소모품비'] > 1000000) anomalies.push({ msg: "소모품비 지출 평소 대비 급증 감지 (점검 요망)", type: "warning" });
 
+    // 🚀 [원본 유지] 기존 수익성 ROI 차트 데이터
     const roiData = OFFICIAL_ACCOUNTS.slice(1, 7).map((acc, idx) => ({
       name: acc,
       value: totalIncome > 0 ? totalIncome * (0.2 - idx * 0.02) : 5000000 - idx * 500000,
       cost: categoryTotals[acc] || 500000
     }));
 
+    // 🚀 [신규 기능] 카테고리별 예산 소진 자동 계산 (매출 기반)
+    const budgetTracking = BUDGET_CATEGORIES.map(cat => {
+        const allocated = totalIncome * cat.ratio;
+        const spent = expenses
+            .filter(e => e.status === 'APPROVED' && cat.accounts.includes(e.category))
+            .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        
+        const utilization = allocated > 0 ? (spent / allocated) * 100 : (spent > 0 ? 100 : 0);
+        
+        const topExpenses = expenses
+            .filter(e => e.status === 'APPROVED' && cat.accounts.includes(e.category))
+            .sort((a, b) => Number(b.amount) - Number(a.amount));
+
+        return { ...cat, allocated, spent, utilization, topExpenses };
+    });
+
+    const totalBudgetAllocated = totalIncome * 0.85; 
+    const totalBudgetSpent = budgetTracking.reduce((sum, c) => sum + c.spent, 0);
+    const totalBudgetUtilization = totalBudgetAllocated > 0 ? (totalBudgetSpent / totalBudgetAllocated) * 100 : (totalBudgetSpent > 0 ? 100 : 0);
+
+    let budgetStatus = { color: 'emerald', text: '현재 예산이 건강하게 관리되고 있습니다.', icon: CheckCircle };
+    if (totalBudgetUtilization >= 91) {
+        budgetStatus = { color: 'rose', text: '목표 예산을 초과할 위험이 있습니다!', icon: AlertTriangle };
+    } else if (totalBudgetUtilization >= 71) {
+        budgetStatus = { color: 'amber', text: '예산 소진이 빠릅니다. 추가 지출을 확인하세요.', icon: AlertCircle };
+    }
+
+    const budgetAlerts = budgetTracking.filter(cat => cat.utilization >= 85);
+
+    // 🚀 [원본 유지] 기존 일자별 흐름 데이터
     const dailyFlowData = [];
     let cumulative = -fixedCosts; 
     
@@ -337,7 +376,8 @@ const FinancialDashboard = ({ currentUser }) => {
 
     return { 
       totalIncome, totalExpense, fixedCosts, operatingProfit, bepRate, runway, 
-      cac, churnRate: 2, ltv, vatEstimate, anomalies, roiData, dailyFlowData 
+      cac, churnRate: 2, ltv, vatEstimate, anomalies, roiData, dailyFlowData,
+      budgetTracking, totalBudgetAllocated, totalBudgetSpent, totalBudgetUtilization, budgetStatus, budgetAlerts
     };
   }, [expenses, incomes, finSettings, selectedMonth]);
 
@@ -540,7 +580,6 @@ const FinancialDashboard = ({ currentUser }) => {
       }
 
       for (const item of parsedData) {
-        // 🚀 [해결 1] RegExp 등 DB에 들어갈 수 없는 객체를 분리하여 안전한 순수 데이터만 저장
         const { matchedExpense, matchedRule, isAutoProof, ...safeItem } = item;
 
         if (item.type === 'CARD') {
@@ -644,6 +683,7 @@ const FinancialDashboard = ({ currentUser }) => {
           <p className="text-xs text-gray-400">통장 입출금 기반으로 학원의 진짜 현금 흐름을 분석합니다.</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* 🚀 [원본 복구] 누락건 재매칭 버튼 완벽 복구 */}
           <button onClick={() => handleReverifyMissing(false)} className="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-amber-900/20">
             <RefreshCcw size={18}/> 누락건 재매칭
           </button>
@@ -654,7 +694,7 @@ const FinancialDashboard = ({ currentUser }) => {
             <UploadCloud size={18}/> 장부 동기화 (엑셀)
           </button>
           <button onClick={handleDownloadPerfectLedger} className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-lg shadow-emerald-900/20">
-            <Download size={18}/> 세무 장부 다운 (복식부기)
+            <Download size={18}/> 세무 장부 다운로드
           </button>
           <div className="flex items-center gap-2 bg-white/10 px-4 py-1 rounded-xl ml-2">
             <button onClick={() => handleMonthChange(-1)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><ChevronLeft/></button>
@@ -685,7 +725,7 @@ const FinancialDashboard = ({ currentUser }) => {
             <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-emerald-500 bg-white">
               <div className="flex justify-between items-start mb-2">
                 <p className="text-gray-500 text-xs font-bold uppercase">BEP 달성률 (고정비 {formatCurrency(aiAnalytics.fixedCosts)})</p>
-                <Activity size={16} className="text-emerald-500" />
+                <Target size={16} className="text-emerald-500" />
               </div>
               <h3 className="text-2xl font-black text-gray-900">{typeof aiAnalytics.bepRate === 'number' ? aiAnalytics.bepRate.toFixed(1) : 0}%</h3>
               <div className="w-full bg-gray-100 h-1.5 rounded-full mt-3 overflow-hidden">
@@ -710,8 +750,99 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl">
-            <h2 className="text-sm font-bold text-rose-800 mb-4 flex items-center gap-2"><ShieldAlert size={18}/> AI 리스크 탐지 및 세무 예측</h2>
+          {/* 🚀 [신규 기능] 카테고리별 예산 분배 및 알림 센터 */}
+          <div className="bg-white border border-gray-200 p-6 sm:p-8 rounded-2xl shadow-sm mt-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+                <ShieldAlert className="text-rose-500" size={24}/> AI 예산 통제 및 리스크 관리
+            </h2>
+
+            {/* 상단: 전체 예산 신호등 */}
+            <div className={`p-6 rounded-2xl border mb-8 flex items-center gap-5 sm:gap-6 ${
+                aiAnalytics.budgetStatus.color === 'emerald' ? 'bg-emerald-50 border-emerald-200' : 
+                (aiAnalytics.budgetStatus.color === 'amber' ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200')
+            }`}>
+                <div className={`p-4 rounded-full bg-white text-${aiAnalytics.budgetStatus.color}-500 shadow-sm shrink-0`}>
+                    <aiAnalytics.budgetStatus.icon size={36} />
+                </div>
+                <div className="flex-1 w-full">
+                    <p className={`font-black text-lg md:text-xl text-${aiAnalytics.budgetStatus.color}-700 mb-1`}>{aiAnalytics.budgetStatus.text}</p>
+                    <div className="flex justify-between text-xs sm:text-sm mt-2 font-bold text-gray-600 mb-2">
+                        <span>현재 총 지출: {formatCurrency(aiAnalytics.totalBudgetSpent)}</span>
+                        <span>전체 예산 한도 (매출의 85%): {formatCurrency(aiAnalytics.totalBudgetAllocated)}</span>
+                    </div>
+                    <div className="w-full bg-white/60 h-4 rounded-full overflow-hidden border border-white/50 shadow-inner">
+                        <div className={`h-full bg-${aiAnalytics.budgetStatus.color}-500 transition-all duration-1000 ease-out`} style={{ width: `${Math.min(aiAnalytics.totalBudgetUtilization, 100)}%` }} />
+                    </div>
+                </div>
+                <div className={`hidden sm:block text-4xl font-black shrink-0 text-${aiAnalytics.budgetStatus.color}-600`}>
+                    {aiAnalytics.totalBudgetUtilization.toFixed(1)}%
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
+                {/* 중단: 카테고리별 소진율 프로그레스 바 */}
+                <div className="lg:col-span-2 space-y-6 lg:border-r pr-0 lg:pr-8 border-gray-100">
+                    <h3 className="text-base font-bold text-gray-800 mb-4 flex items-center gap-2"><PieChart size={18}/> 카테고리별 세부 소진 현황</h3>
+                    <div className="space-y-5">
+                        {aiAnalytics.budgetTracking.map(cat => {
+                            let barColor = 'bg-emerald-500';
+                            let textColor = 'text-emerald-700';
+                            if (cat.utilization >= 90) { barColor = 'bg-rose-500'; textColor = 'text-rose-700'; }
+                            else if (cat.utilization >= 75) { barColor = 'bg-amber-500'; textColor = 'text-amber-700'; }
+
+                            return (
+                                <div key={cat.id} className="relative">
+                                    <div className="flex justify-between items-end mb-1.5">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold text-gray-800 text-sm">{cat.name}</span>
+                                            <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">기준 {cat.ratio * 100}%</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-gray-500">{formatCurrency(cat.spent)} / {formatCurrency(cat.allocated)}</span>
+                                            <span className={`text-xs font-black ${textColor} w-12 text-right`}>{cat.utilization.toFixed(0)}%</span>
+                                        </div>
+                                    </div>
+                                    <div className="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
+                                        <div className={`h-full ${barColor} transition-all duration-700`} style={{ width: `${Math.min(cat.utilization, 100)}%` }} />
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* 하단: 실시간 초과 알림 센터 */}
+                <div className="flex flex-col">
+                    <h3 className="text-base font-bold text-gray-800 mb-4 flex items-center gap-2"><BellRing size={18} className="text-rose-500"/> 실시간 초과 알림 센터</h3>
+                    {aiAnalytics.budgetAlerts.length === 0 ? (
+                        <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 rounded-2xl border border-dashed border-gray-200 p-6 text-center">
+                            <CheckCircle size={32} className="text-emerald-400 mb-2"/>
+                            <span className="text-sm font-bold text-gray-500">현재 예산을 85% 이상 초과한<br/>위험 항목이 없습니다.</span>
+                        </div>
+                    ) : (
+                        <div className="space-y-4 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                            {aiAnalytics.budgetAlerts.map(alert => (
+                                <div key={alert.id} className="bg-white border-2 border-rose-100 shadow-sm p-4 rounded-xl relative overflow-hidden animate-in slide-in-from-right-2">
+                                    <div className="absolute top-0 left-0 w-1 h-full bg-rose-500"></div>
+                                    <div className="flex justify-between items-start mb-2">
+                                        <span className="text-sm font-black text-rose-700">{alert.name}</span>
+                                        <span className="text-xs font-black text-white bg-rose-500 px-2 py-0.5 rounded-full animate-pulse">{alert.utilization.toFixed(0)}% 소진</span>
+                                    </div>
+                                    <p className="text-xs text-gray-600 font-semibold mb-3">할당된 예산 {formatCurrency(alert.allocated)} 중<br/><span className="text-rose-600">{formatCurrency(alert.spent)}</span>을 사용했습니다.</p>
+                                    <button onClick={() => setCulpritModalData(alert)} className="w-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 py-2.5 rounded-lg hover:bg-rose-600 hover:text-white transition-colors flex items-center justify-center gap-1">
+                                        <Search size={14}/> 원인 지출 내역 보기
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+          </div>
+
+          {/* 🚀 [원본 복구] 기존의 AI 세무 예측 및 이상 징후 (Anomalies) 블록 */}
+          <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl mt-6">
+            <h2 className="text-sm font-bold text-rose-800 mb-4 flex items-center gap-2"><ShieldAlert size={18}/> 부가세 예측 및 이상 지출 탐지</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-sm flex items-center gap-4">
                 <div className="p-3 bg-rose-100 rounded-full text-rose-600"><AlertCircle/></div>
@@ -736,8 +867,9 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            {/* 🚀 [원본 복구] 기존의 주요 항목별 수익성(ROI) 차트 */}
+            <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl flex flex-col justify-between">
               <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><PieChart size={20} className="text-indigo-600"/> 주요 항목별 수익성(ROI) 분석</h2>
               <div className="h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -850,10 +982,9 @@ const FinancialDashboard = ({ currentUser }) => {
 
       {/* 설정 모달 */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
             <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-4"><Settings className="text-gray-600"/> 재무 환경 설정</h3>
-            
             <div className="overflow-y-auto custom-scrollbar flex-1 pr-2 space-y-4">
                 <div>
                     <label className="block text-sm font-bold text-gray-700 mb-1">월 고정 임대료 (원)</label>
@@ -887,9 +1018,7 @@ const FinancialDashboard = ({ currentUser }) => {
                         ))}
                     </div>
                 </div>
-
                 <hr className="my-2 border-gray-200" />
-                
                 <div className="bg-red-50 border border-red-100 p-4 rounded-xl">
                     <h4 className="text-sm font-bold text-red-800 mb-2 flex items-center gap-1"><AlertCircle size={16}/> 엑셀 데이터 초기화</h4>
                     <p className="text-xs text-gray-600 mb-3 leading-relaxed">
@@ -897,16 +1026,13 @@ const FinancialDashboard = ({ currentUser }) => {
                     </p>
                     <button onClick={handleResetExcelData} disabled={isProcessingCleanup} className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
                         {isProcessingCleanup ? <Loader size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
-                        {isProcessingCleanup ? '초기화 처리 중...' : `[${selectedMonth}월] 엑셀 연동 초기화`}
+                        {isProcessingCleanup ? '처리 중...' : `[${selectedMonth}월] 엑셀 연동 초기화`}
                     </button>
                 </div>
             </div>
-
             <div className="flex gap-2 mt-4 pt-4 border-t">
               <button onClick={() => setIsSettingsOpen(false)} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
-              <button onClick={handleSaveSettings} disabled={isProcessingCleanup} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50">
-                  {isProcessingCleanup ? '처리 중...' : '설정값 저장 및 소급 반영'}
-              </button>
+              <button onClick={handleSaveSettings} disabled={isProcessingCleanup} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50">저장 및 반영</button>
             </div>
           </div>
         </div>
@@ -914,7 +1040,7 @@ const FinancialDashboard = ({ currentUser }) => {
 
       {/* 엑셀 업로드 모달 */}
       {isUploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-6 border-b flex justify-between items-center bg-gray-50">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2"><UploadCloud className="text-blue-600"/> 금융 엑셀 일괄 동기화</h3>
@@ -941,11 +1067,10 @@ const FinancialDashboard = ({ currentUser }) => {
                               <span className="text-gray-800 font-bold flex items-center gap-2">
                                 <span className="truncate max-w-[150px] md:max-w-[200px]">{d.merchantName}</span>
                                 <span className="text-gray-500 font-normal text-xs ml-1">({d.transactionDate})</span>
-                                
                                 {(d.type === 'CARD' || (d.type === 'BANK' && d.amount > 0 && !d.isCardPayment)) && (
                                     d.matchedExpense 
-                                    ? <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">✅ 결의서 병합</span>
-                                    : (d.isAutoProof ? <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200">🤖 자동 증빙 (세금계산서)</span> : <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-rose-200">⚠️ 증빙 누락</span>)
+                                    ? <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-emerald-200">✅ 결의서 병합</span> 
+                                    : (d.isAutoProof ? <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-blue-200">🤖 자동 증빙</span> : <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded text-[10px] font-bold border border-rose-200">⚠️ 증빙 누락</span>)
                                 )}
                               </span>
                           </div>
@@ -956,8 +1081,7 @@ const FinancialDashboard = ({ currentUser }) => {
                       ))}
                     </div>
                     <button onClick={handleMatchAndUpload} disabled={isMatching} className="w-full mt-5 bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:opacity-50 transition-transform active:scale-95">
-                        {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 
-                        장부 자동 동기화 시작
+                        {isMatching ? <Loader className="animate-spin" size={20}/> : <FileSpreadsheet size={20}/>} 장부 자동 동기화 시작
                     </button>
                   </div>
                 )}
@@ -967,47 +1091,89 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 다중 영수증 슬라이더 모달 (Viewer) */}
+      {/* 🚀 [신규 기능] 원인 지출 내역 보기 모달 (범인 색출용) */}
+      {culpritModalData && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setCulpritModalData(null)}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b flex justify-between items-center bg-rose-50">
+              <div>
+                  <h3 className="text-lg font-bold text-rose-900 flex items-center gap-2">
+                    <Search className="text-rose-600" size={20}/> [{culpritModalData.name}] 원인 지출 내역
+                  </h3>
+                  <p className="text-xs text-rose-600 mt-1">해당 카테고리에서 가장 지출이 큰 순서대로 표시됩니다.</p>
+              </div>
+              <button onClick={() => setCulpritModalData(null)} className="p-2 hover:bg-rose-100 rounded-full transition-colors"><XCircle size={24} className="text-rose-400 hover:text-rose-700"/></button>
+            </div>
+            <div className="p-5 overflow-y-auto custom-scrollbar bg-gray-50 flex-1">
+              {culpritModalData.topExpenses.length === 0 ? (
+                  <div className="text-center py-10 text-gray-500 font-bold">승인된 지출 내역이 없습니다.</div>
+              ) : (
+                  <div className="space-y-3">
+                      {culpritModalData.topExpenses.map((exp, idx) => (
+                          <div key={exp.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+                              <div className="flex items-start gap-3">
+                                  <div className="bg-gray-100 text-gray-500 font-black text-sm w-8 h-8 rounded-full flex items-center justify-center shrink-0">{idx + 1}</div>
+                                  <div>
+                                      <p className="font-bold text-gray-900">{exp.purpose}</p>
+                                      <p className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+                                          <span>{exp.expenseDate}</span>
+                                          <span className="bg-gray-100 px-1.5 py-0.5 rounded">{exp.userName || exp.userId}</span>
+                                          <span className="text-indigo-600 font-semibold">{exp.category}</span>
+                                      </p>
+                                  </div>
+                              </div>
+                              <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center w-full sm:w-auto gap-2">
+                                  <span className="text-lg font-black text-rose-600">{formatCurrency(exp.amount)}</span>
+                                  {(exp.receiptUrls?.length > 0 || exp.receiptUrl) && (
+                                      <button onClick={() => { 
+                                          const urls = exp.receiptUrls?.length > 0 ? exp.receiptUrls : (exp.receiptUrl && String(exp.receiptUrl).startsWith('data:') ? [exp.receiptUrl] : []);
+                                          if (urls.length > 0) { setPreviewReceipts(urls); setPreviewIndex(0); }
+                                      }} className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 transition-colors flex items-center gap-1">
+                                          <ImageIcon size={12}/> 영수증 확인
+                                      </button>
+                                  )}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              )}
+            </div>
+            <div className="p-4 border-t bg-white">
+                <button onClick={() => setCulpritModalData(null)} className="w-full py-3 bg-gray-800 text-white font-bold rounded-xl hover:bg-black transition-colors">닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 영수증 뷰어 모달 */}
       {previewReceipts.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewReceipts([])}>
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewReceipts([])}>
           <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4 px-3 border-b pb-3">
               <h3 className="font-bold text-xl text-gray-900 flex items-center gap-2">
-                  <ImageIcon className="text-blue-600" size={24}/> 영수증 상세 확인 
+                  <ImageIcon className="text-blue-600" size={24}/> 영수증 원본 확인 
                   {previewReceipts.length > 1 && <span className="text-sm font-bold text-blue-600 ml-2 bg-blue-100 px-2 py-0.5 rounded-full">({previewIndex + 1} / {previewReceipts.length})</span>}
               </h3>
               <button onClick={() => setPreviewReceipts([])} className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm">닫기 <XCircle size={24}/></button>
             </div>
-            
             <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-between items-center flex-1 w-full h-full relative p-2 border border-gray-200">
-              
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.max(0, prev - 1)); }} disabled={previewIndex === 0} className="absolute left-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronLeft size={32} className="text-gray-800"/>
                   </button>
               )}
-              
               <div className="w-full h-full flex justify-center items-center">
                   {String(previewReceipts[previewIndex]).startsWith('data:application/pdf') || String(previewReceipts[previewIndex]).endsWith('.pdf') ? 
                     <iframe src={previewReceipts[previewIndex]} className="w-full h-full border-0 rounded-xl" title="receipt-preview" /> : 
                     <img src={previewReceipts[previewIndex]} alt="Receipt Preview" className="max-w-full max-h-full object-contain drop-shadow-sm rounded-xl" />
                   }
               </div>
-
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.min(previewReceipts.length - 1, prev + 1)); }} disabled={previewIndex === previewReceipts.length - 1} className="absolute right-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronRight size={32} className="text-gray-800"/>
                   </button>
               )}
             </div>
-
-            {previewReceipts.length > 1 && (
-                <div className="flex justify-center gap-2 mt-4">
-                    {previewReceipts.map((_, idx) => (
-                        <button key={idx} onClick={() => setPreviewIndex(idx)} className={`w-3 h-3 rounded-full transition-all ${previewIndex === idx ? 'bg-blue-600 scale-125' : 'bg-gray-300 hover:bg-gray-400'}`} />
-                    ))}
-                </div>
-            )}
           </div>
         </div>
       )}
