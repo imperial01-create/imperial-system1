@@ -4,7 +4,7 @@ import {
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw 
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
@@ -49,7 +49,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability }) => {
   
   const mySessions = useMemo(() => {
      if (isMyScheduleView) {
@@ -230,7 +230,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         }
                     }
 
-                    // 🚀 [CTO 로직] 행정조교의 박스 배경색을 직관적이고 은은한 'Indigo' 톤으로 구별
                     let cardBgClass = '';
                     if (s.status === 'cancellation_requested') cardBgClass = 'bg-red-50 border-red-200';
                     else if (s.status === 'addition_requested') cardBgClass = 'bg-purple-50 border-purple-200';
@@ -258,7 +257,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 )}
                             </div>
 
-                            {/* 클리닉 전용 학생/범위 정보 박스 */}
                             {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && s.studentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
@@ -270,17 +268,24 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
-                                {/* 교실 배정 (행정조교는 숨김) */}
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
-                                      <option value="">장소 미지정</option>{CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                                      <option value="">장소 미지정</option>
+                                      {/* [CTO 적용] 스케줄 관제탑 정규 수업과 겹치는지 체크하여 비활성화 */}
+                                      {CLASSROOMS.map(r => {
+                                          const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
+                                          return (
+                                              <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
+                                                  {r} {isOccupied ? '(정규수업중)' : ''}
+                                              </option>
+                                          );
+                                      })}
                                     </select>
                                 )}
                                 
                                 <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
                                 <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
                                 
-                                {/* 피드백 (행정조교는 숨김) */}
                                 {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
                                     <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
                                 )}
@@ -336,6 +341,51 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
+
+    // 🚀 [CTO 로직] 스케줄 관제탑 데이터 불러오기 (교실 충돌 방지용)
+    const [baseSchedules, setBaseSchedules] = useState([]);
+    const [scheduleRequests, setScheduleRequests] = useState([]);
+
+    useEffect(() => {
+        if (!isAdminView) return; // 관리자에게만 필요
+        const loadSchedules = async () => {
+            try {
+                const snap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schedule_base'));
+                if (snap.exists()) setBaseSchedules(snap.data().schedules || []);
+            } catch (e) { console.error("뼈대 데이터 로드 실패", e); }
+        };
+        loadSchedules();
+
+        const unsubReq = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`)), (snap) => {
+            setScheduleRequests(snap.docs.map(d => ({id: d.id, ...d.data()})));
+        });
+        return () => unsubReq();
+    }, [isAdminView]);
+
+    const activeSchedules = useMemo(() => {
+        let list = [...baseSchedules];
+        scheduleRequests.filter(r => r.status === 'APPROVED').forEach(req => {
+            if (req.type === 'PERMANENT') {
+                const idx = list.findIndex(s => s.id === req.originalScheduleId);
+                if (idx > -1) list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom };
+            } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
+                list.push({ day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom, targetDate: req.targetDate });
+            }
+        });
+        return list;
+    }, [baseSchedules, scheduleRequests]);
+
+    const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom) => {
+        const dayOfWeek = DAYS[new Date(dateStr).getDay()];
+        const targetRoom = clinicRoom.replace('Class ', 'Classroom '); // Class 1 -> Classroom 1 매핑
+
+        return activeSchedules.some(s => {
+            if (s.room !== targetRoom) return false;
+            if (s.targetDate && s.targetDate !== dateStr) return false;
+            if (!s.targetDate && s.day !== dayOfWeek) return false;
+            return (s.startTime < endTime && s.endTime > startTime); // 겹치는 시간 로직 (문자열 비교)
+        });
+    }, [activeSchedules]);
 
     const taSubjectMap = useMemo(() => {
         const mapById = {};
@@ -684,6 +734,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                   onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
                   onRefresh={() => fetchSessions(true)}
                   isAdminView={true} isMyScheduleView={false} 
+                  checkRoomAvailability={checkRoomAvailability}
               />
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
@@ -706,7 +757,15 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                                             onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
-                                            {CLASSROOMS.map(r => <option key={r} value={r}>{r}</option>)}
+                                            {/* [CTO 적용] 스케줄 관제탑 정규 수업과 겹치는지 체크하여 비활성화 */}
+                                            {CLASSROOMS.map(r => {
+                                                const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
+                                                return (
+                                                    <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
+                                                        {r} {isOccupied ? '(정규수업중)' : ''}
+                                                    </option>
+                                                );
+                                            })}
                                         </select>
                                     </div>
                                 </div>
