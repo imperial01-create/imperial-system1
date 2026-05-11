@@ -16,6 +16,28 @@ const TIME_SLOTS = [
 ];
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
+// [UI/UX 최적화] 수업별 고유 색상 팔레트
+const CLASS_COLORS = [
+  'bg-blue-50 border-blue-200 text-blue-900',
+  'bg-emerald-50 border-emerald-200 text-emerald-900',
+  'bg-purple-50 border-purple-200 text-purple-900',
+  'bg-rose-50 border-rose-200 text-rose-900',
+  'bg-amber-50 border-amber-200 text-amber-900',
+  'bg-cyan-50 border-cyan-200 text-cyan-900',
+  'bg-indigo-50 border-indigo-200 text-indigo-900',
+  'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-900',
+];
+
+// 문자열 해싱을 통해 같은 이름의 수업은 항상 같은 색상을 가지도록 배정합니다.
+const getClassColor = (className) => {
+  if (!className) return CLASS_COLORS[0];
+  let hash = 0;
+  for (let i = 0; i < className.length; i++) {
+    hash = className.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return CLASS_COLORS[Math.abs(hash) % CLASS_COLORS.length];
+};
+
 const ScheduleControlTower = ({ currentUser }) => {
   const isAdmin = currentUser?.role === 'admin';
   const myName = currentUser?.name || '';
@@ -105,13 +127,11 @@ const ScheduleControlTower = ({ currentUser }) => {
     }
   }, [baseSchedules, requests, viewMode, selectedFilter, teacherList]);
 
-  // [수강생 명단 수정] 부분 일치 알고리즘을 도입하여 엑셀 양식이 조금 달라도 지능적으로 매칭합니다.
   const getStudentsForClass = (className, map) => {
     if (!className || !map) return [];
     const cleanTarget = className.replace(/\(.*\)/g, '').trim();
-    if (map[cleanTarget]) return map[cleanTarget]; // 1. 완벽 일치 검사
+    if (map[cleanTarget]) return map[cleanTarget]; 
     
-    // 2. 부분 일치 검사 (예: "고1 심화"가 "고1 심화(10명)"에 포함되는지)
     for (const [key, students] of Object.entries(map)) {
         const cleanKey = key.replace(/\(.*\)/g, '').trim();
         if (cleanKey.includes(cleanTarget) || cleanTarget.includes(cleanKey)) {
@@ -121,7 +141,6 @@ const ScheduleControlTower = ({ currentUser }) => {
     return [];
   };
 
-  // [다이내믹 타일 로직] 시작 분(Minute)과 종료 시간을 이용해 위치와 세로 길이를 계산합니다.
   const getScheduleStyle = (start, end) => {
     try {
         const [sH, sM] = start.split(':').map(s => parseInt(s.trim(), 10) || 0);
@@ -132,10 +151,10 @@ const ScheduleControlTower = ({ currentUser }) => {
         const topPercentage = (sM / 60) * 100;
 
         return {
-            top: `calc(${topPercentage}% + 2px)`, // 위쪽 테두리 여백
-            height: `calc(${heightPercentage}% - 4px)`, // 타일이 겹치지 않도록 높이 조절
+            top: `calc(${topPercentage}% + 2px)`, 
+            height: `calc(${heightPercentage}% - 4px)`, 
             minHeight: '40px',
-            zIndex: 10 // 배경 셀보다 무조건 위에 렌더링
+            zIndex: 10 
         };
     } catch (e) {
         return { top: '0%', height: '100%' };
@@ -143,7 +162,7 @@ const ScheduleControlTower = ({ currentUser }) => {
   };
 
   const [uploadData, setUploadData] = useState({ schedules: [], studentsMap: {} });
-  // (기존 엑셀 핸들러 로직 유지 - 생략 없이 전체 포함)
+  
   const handleTeacherExcel = (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
@@ -195,15 +214,23 @@ const ScheduleControlTower = ({ currentUser }) => {
           if(!h) return;
           const cleanClassName = String(h).replace(/\(\d+\s*명\)/, '').trim();
           sMap[cleanClassName] = [];
+          
           for (let r = 1; r < rows.length; r++) {
             if (rows[r][i]) {
                 let sName = String(rows[r][i]).replace(/\[.*?\]/, '').trim(); 
+                
+                // [데이터 정제] 잘못된 데이터 필터링 (시간, 긴 문자열 등)
+                if (!sName) continue;
+                if (sName.includes(':') || sName.includes('~')) continue;
+                if (sName.length > 8) continue; // 한국어 이름 기준 너무 길면 배제
+                if (/\d{2}/.test(sName)) continue; // 두자리 연속된 숫자 (시간) 포함 배제
+
                 sMap[cleanClassName].push(sName);
             }
           }
         });
         setUploadData(prev => ({ ...prev, studentsMap: sMap }));
-        alert(`총 ${Object.keys(sMap).length}개 반의 원생 목록 해독 완료!`);
+        alert(`총 ${Object.keys(sMap).length}개 반의 원생 목록 정제 및 해독 완료!`);
       } catch (err) { alert("반별원생 엑셀 해독 실패: " + err.message); }
     };
     reader.readAsBinaryString(file);
@@ -280,7 +307,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                     <button onClick={() => setViewMode('TEACHER')} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'TEACHER' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>👨‍🏫 선생님별</button>
                     <button onClick={() => { setViewMode('ROOM'); setSelectedFilter('월'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
                 </div>
-                <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full sm:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold">
+                <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full sm:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
                     {viewMode === 'TEACHER' ? 
                         teacherList.map(t => <option key={t} value={t}>{t} 선생님</option>) :
                         DAYS.map(d => <option key={d} value={d}>{d}요일</option>)
@@ -288,29 +315,29 @@ const ScheduleControlTower = ({ currentUser }) => {
                 </select>
             </div>
 
-            {/* [모바일 최적화] 모바일에서만 보이는 요일 선택 탭 */}
+            {/* [모바일 최적화] lg(1024px) 이하에서만 보이는 직관적인 요일 선택 탭 */}
             {viewMode === 'TEACHER' && (
-                <div className="md:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
+                <div className="lg:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
                     {DAYS.map(d => (
                         <button 
                             key={`mob-${d}`} 
                             onClick={() => setMobileSelectedDay(d)}
-                            className={`px-4 py-1.5 rounded-full text-xs font-black shrink-0 transition-colors ${mobileSelectedDay === d ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}
+                            className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedDay === d ? 'bg-gray-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}
                         >
-                            {d}요일
+                            {d}
                         </button>
                     ))}
                 </div>
             )}
 
             <div className="flex-1 overflow-auto bg-gray-50/30 relative custom-scrollbar">
-                <table className="w-full text-sm border-collapse bg-white min-w-full md:min-w-[800px]">
+                <table className="w-full text-sm border-collapse bg-white min-w-full lg:min-w-[800px]">
                     <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm">
                         <tr>
                             <th className="border p-2 w-16 md:w-20 text-gray-500 font-bold bg-gray-100">시간</th>
                             {viewMode === 'TEACHER' ? 
-                                // 모바일에서는 선택된 요일만 표시 (md:table-cell로 데스크탑은 전체 표시)
-                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d ? 'hidden md:table-cell' : ''}`}>{d}</th>) :
+                                // lg(1024px) 분기점을 사용하여 사이드바가 있어도 테이블이 찌그러지지 않도록 방어
+                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d ? 'hidden lg:table-cell' : ''}`}>{d}</th>) :
                                 roomList.map(r => <th key={r} className="border p-2 font-bold bg-gray-100">{r}</th>)
                             }
                         </tr>
@@ -324,7 +351,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                                     <td className="border p-2 text-center text-xs font-bold text-gray-400 bg-gray-50">{time}</td>
                                     
                                     {viewMode === 'TEACHER' ? DAYS.map(day => {
-                                        // 해당 시간(Hour)에 시작하는 수업만 이 칸에서 렌더링을 시작함 (30분 수업 해결)
                                         const schedulesInCell = activeSchedules.filter(s => {
                                             if (s.day !== day) return false;
                                             const schedHour = parseInt(s.startTime.split(':')[0], 10);
@@ -332,20 +358,26 @@ const ScheduleControlTower = ({ currentUser }) => {
                                         });
 
                                         return (
-                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden md:table-cell' : ''}`}>
-                                                {schedulesInCell.map(schedule => (
-                                                    <div 
-                                                        key={schedule.id}
-                                                        onClick={() => setSelectedBlock(schedule)} 
-                                                        style={getScheduleStyle(schedule.startTime, schedule.endTime)}
-                                                        className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm
-                                                        ${schedule.isModified ? 'bg-amber-100 border-amber-300' : 'bg-blue-50 border-blue-200'}`}
-                                                    >
-                                                        <span className="text-[10px] font-bold text-gray-500 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
-                                                        <span className="text-xs font-black truncate text-blue-900">{schedule.className}</span>
-                                                        <span className="text-[10px] text-gray-600 flex items-center gap-1 mt-auto truncate"><MapPin size={10} className="shrink-0"/>{schedule.room}</span>
-                                                    </div>
-                                                ))}
+                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden lg:table-cell' : ''}`}>
+                                                {schedulesInCell.map(schedule => {
+                                                    // 수업 고유 색상 가져오기
+                                                    const colorTheme = schedule.isModified 
+                                                        ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
+                                                        : getClassColor(schedule.className);
+
+                                                    return (
+                                                        <div 
+                                                            key={schedule.id}
+                                                            onClick={() => setSelectedBlock(schedule)} 
+                                                            style={getScheduleStyle(schedule.startTime, schedule.endTime)}
+                                                            className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
+                                                        >
+                                                            <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
+                                                            <span className="text-xs font-black truncate">{schedule.className}</span>
+                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><MapPin size={10} className="shrink-0"/>{schedule.room}</span>
+                                                        </div>
+                                                    );
+                                                })}
                                             </td>
                                         );
                                     }) : roomList.map(room => {
@@ -357,18 +389,24 @@ const ScheduleControlTower = ({ currentUser }) => {
 
                                         return (
                                             <td key={`${room}-${time}`} className="border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px]">
-                                                {schedulesInCell.map(schedule => (
-                                                    <div 
-                                                        key={schedule.id}
-                                                        onClick={() => setSelectedBlock(schedule)} 
-                                                        style={getScheduleStyle(schedule.startTime, schedule.endTime)}
-                                                        className="absolute left-1 right-1 p-2 rounded-lg border bg-indigo-50 border-indigo-200 cursor-pointer shadow-sm hover:shadow-lg flex flex-col overflow-hidden"
-                                                    >
-                                                        <span className="text-[10px] font-bold text-gray-500 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
-                                                        <span className="text-xs font-black text-indigo-900 truncate">{schedule.className}</span>
-                                                        <span className="text-[10px] text-gray-600 flex items-center gap-1 mt-auto truncate"><User size={10} className="shrink-0"/>{schedule.teacher}T</span>
-                                                    </div>
-                                                ))}
+                                                {schedulesInCell.map(schedule => {
+                                                    const colorTheme = schedule.isModified 
+                                                        ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
+                                                        : getClassColor(schedule.className);
+
+                                                    return (
+                                                        <div 
+                                                            key={schedule.id}
+                                                            onClick={() => setSelectedBlock(schedule)} 
+                                                            style={getScheduleStyle(schedule.startTime, schedule.endTime)}
+                                                            className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
+                                                        >
+                                                            <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
+                                                            <span className="text-xs font-black truncate">{schedule.className}</span>
+                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><User size={10} className="shrink-0"/>{schedule.teacher}T</span>
+                                                        </div>
+                                                    );
+                                                })}
                                             </td>
                                         );
                                     })}
@@ -391,7 +429,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                         ) : requests.filter(r => r.status === 'PENDING').map(req => (
                             <div key={req.id} className="bg-rose-50 border border-rose-100 p-3 rounded-xl">
                                 <div className="flex justify-between mb-2">
-                                    <span className="text-[10px] font-black text-rose-700 bg-white px-2 py-0.5 rounded shadow-sm">{req.type === 'MAKEUP' ? '보강' : '변경'}</span>
+                                    <span className="text-[10px] font-black text-rose-700 bg-white px-2 py-0.5 rounded shadow-sm border border-rose-100">{req.type === 'MAKEUP' ? '보강' : '변경'}</span>
                                     <span className="text-[10px] text-gray-500">{new Date(req.createdAt).toLocaleDateString()}</span>
                                 </div>
                                 <p className="text-sm font-bold text-gray-800">{req.className}</p>
@@ -418,9 +456,8 @@ const ScheduleControlTower = ({ currentUser }) => {
                     </div>
                     
                     <div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl p-3 mb-4 custom-scrollbar">
-                        <h4 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1"><Users size={14}/> 수강생 명단 (자동 매칭)</h4>
+                        <h4 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1"><Users size={14}/> 수강생 명단</h4>
                         <div className="flex flex-wrap gap-1.5">
-                            {/* 고도화된 부분 일치 알고리즘 적용 */}
                             {(() => {
                                 const matchedStudents = getStudentsForClass(selectedBlock.className, studentsMap);
                                 if(matchedStudents.length === 0) return <p className="text-[11px] text-gray-400 py-2">매칭된 명단이 없습니다. (엑셀 확인 필요)</p>;
@@ -452,7 +489,7 @@ const ScheduleControlTower = ({ currentUser }) => {
             <form onSubmit={handleSubmitRequest} className="space-y-4">
                 <div>
                     <label className="block text-xs font-bold text-gray-700 mb-1">신청 유형</label>
-                    <select name="type" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold">
+                    <select name="type" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="TEMPORARY">일시 변경</option>
                         <option value="MAKEUP">추가 보강</option>
                         <option value="PERMANENT">영구 변경</option>
@@ -461,13 +498,13 @@ const ScheduleControlTower = ({ currentUser }) => {
                 <div className="grid grid-cols-2 gap-3">
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">희망 요일</label>
-                        <select name="newDay" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold" defaultValue={changeRequestModal.day}>
+                        <select name="newDay" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.day}>
                             {DAYS.map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                     </div>
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">희망 교실</label>
-                        <select name="newRoom" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold" defaultValue={changeRequestModal.room}>
+                        <select name="newRoom" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.room}>
                             {roomList.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                     </div>
@@ -475,16 +512,16 @@ const ScheduleControlTower = ({ currentUser }) => {
                 <div className="grid grid-cols-2 gap-3 border-t pt-4 mt-4">
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">시작 시간</label>
-                        <input name="newStartTime" type="time" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold" defaultValue={changeRequestModal.startTime} required/>
+                        <input name="newStartTime" type="time" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.startTime} required/>
                     </div>
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">종료 시간</label>
-                        <input name="newEndTime" type="time" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold" defaultValue={changeRequestModal.endTime} required/>
+                        <input name="newEndTime" type="time" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.endTime} required/>
                     </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mt-6 pt-4 border-t">
-                    <button type="button" onClick={() => setChangeRequestModal(null)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl">취소</button>
-                    <button type="submit" className="py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md">결재 올리기</button>
+                    <button type="button" onClick={() => setChangeRequestModal(null)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
+                    <button type="submit" className="py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700">결재 올리기</button>
                 </div>
             </form>
           </div>
@@ -507,8 +544,8 @@ const ScheduleControlTower = ({ currentUser }) => {
                 </div>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-4 border-t">
-                <button onClick={() => setIsUploadModalOpen(false)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl">닫기</button>
-                <button onClick={handleSaveExcelData} className="py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md">저장 및 동기화</button>
+                <button onClick={() => setIsUploadModalOpen(false)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">닫기</button>
+                <button onClick={handleSaveExcelData} className="py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700">저장 및 동기화</button>
             </div>
           </div>
         </div>
