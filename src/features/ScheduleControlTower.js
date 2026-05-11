@@ -5,7 +5,7 @@ import { db } from '../firebase';
 import { 
   Calendar as CalendarIcon, MapPin, UploadCloud, 
   CheckCircle, XCircle, ChevronRight, User, 
-  AlertTriangle, Printer, Bell, Loader, Users
+  AlertTriangle, Printer, Bell, Loader, Users, CalendarDays
 } from 'lucide-react';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -16,7 +16,6 @@ const TIME_SLOTS = [
 ];
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
-// [UI/UX 최적화] 수업별 고유 색상 팔레트
 const CLASS_COLORS = [
   'bg-blue-50 border-blue-200 text-blue-900',
   'bg-emerald-50 border-emerald-200 text-emerald-900',
@@ -28,13 +27,10 @@ const CLASS_COLORS = [
   'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-900',
 ];
 
-// 문자열 해싱을 통해 같은 이름의 수업은 항상 같은 색상을 가지도록 배정합니다.
 const getClassColor = (className) => {
   if (!className) return CLASS_COLORS[0];
   let hash = 0;
-  for (let i = 0; i < className.length; i++) {
-    hash = className.charCodeAt(i) + ((hash << 5) - hash);
-  }
+  for (let i = 0; i < className.length; i++) hash = className.charCodeAt(i) + ((hash << 5) - hash);
   return CLASS_COLORS[Math.abs(hash) % CLASS_COLORS.length];
 };
 
@@ -45,8 +41,8 @@ const ScheduleControlTower = ({ currentUser }) => {
   const [viewMode, setViewMode] = useState('TEACHER');
   const [selectedFilter, setSelectedFilter] = useState(isAdmin ? '' : myName);
   
-  // [모바일 최적화] 모바일 뷰에서 볼 요일을 선택하는 상태
   const [mobileSelectedDay, setMobileSelectedDay] = useState("월");
+  const [mobileSelectedRoom, setMobileSelectedRoom] = useState(""); // [신규] 모바일 교실 탭 상태
   
   const [baseSchedules, setBaseSchedules] = useState([]);
   const [studentsMap, setStudentsMap] = useState({});
@@ -63,7 +59,6 @@ const ScheduleControlTower = ({ currentUser }) => {
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
-
     const loadBaseData = async () => {
       try {
         const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schedule_base');
@@ -75,53 +70,38 @@ const ScheduleControlTower = ({ currentUser }) => {
       } catch (e) { console.error("뼈대 데이터 로드 실패:", e); }
     };
     loadBaseData();
-
     const q = query(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`));
-    const unsub = onSnapshot(q, 
-      (snap) => {
-        if (isMounted) {
-          setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-          setIsLoading(false);
-        }
-      },
-      (error) => {
-        console.error("Firebase Snapshot Error:", error);
-        if (isMounted) setIsLoading(false);
-      }
-    );
-
+    const unsub = onSnapshot(q, (snap) => {
+      if (isMounted) { setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setIsLoading(false); }
+    }, () => { if (isMounted) setIsLoading(false); });
     return () => { isMounted = false; unsub(); };
   }, []);
 
-  const teacherList = useMemo(() => 
-    Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), 
-  [baseSchedules]);
+  const teacherList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), [baseSchedules]);
+  const roomList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.room))).filter(Boolean).sort(), [baseSchedules]);
 
-  const roomList = useMemo(() => 
-    Array.from(new Set(baseSchedules.map(s => s.room))).filter(Boolean).sort(), 
-  [baseSchedules]);
+  useEffect(() => {
+    if (roomList.length > 0 && !mobileSelectedRoom) setMobileSelectedRoom(roomList[0]);
+  }, [roomList, mobileSelectedRoom]);
 
   const activeSchedules = useMemo(() => {
     let list = [...baseSchedules];
     requests.filter(r => r.status === 'APPROVED').forEach(req => {
       if (req.type === 'PERMANENT') {
         const idx = list.findIndex(s => s.id === req.originalScheduleId);
-        if (idx > -1) {
-          list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom };
-        }
+        if (idx > -1) { list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom }; }
       } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
         list.push({
           id: `mod_${req.id}`, teacher: req.requestTeacher, day: req.newDay,
           startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom,
           grade: req.grade, className: req.className + (req.type === 'MAKEUP' ? ' (보강)' : ' (일시변경)'),
-          isModified: true
+          isModified: true, targetDate: req.targetDate // 캘린더 기반 렌더링용 확장
         });
       }
     });
 
     if (viewMode === 'TEACHER') {
-        const defaultTeacher = teacherList.length > 0 ? teacherList[0] : '';
-        return list.filter(s => s.teacher === (selectedFilter || defaultTeacher));
+        return list.filter(s => s.teacher === (selectedFilter || (teacherList[0] || '')));
     } else {
         return list.filter(s => s.day === (selectedFilter || "월"));
     }
@@ -131,12 +111,9 @@ const ScheduleControlTower = ({ currentUser }) => {
     if (!className || !map) return [];
     const cleanTarget = className.replace(/\(.*\)/g, '').trim();
     if (map[cleanTarget]) return map[cleanTarget]; 
-    
     for (const [key, students] of Object.entries(map)) {
         const cleanKey = key.replace(/\(.*\)/g, '').trim();
-        if (cleanKey.includes(cleanTarget) || cleanTarget.includes(cleanKey)) {
-            return students;
-        }
+        if (cleanKey.includes(cleanTarget) || cleanTarget.includes(cleanKey)) return students;
     }
     return [];
   };
@@ -145,20 +122,13 @@ const ScheduleControlTower = ({ currentUser }) => {
     try {
         const [sH, sM] = start.split(':').map(s => parseInt(s.trim(), 10) || 0);
         const [eH, eM] = end.split(':').map(e => parseInt(e.trim(), 10) || 0);
-        
         const durationMins = (eH * 60 + eM) - (sH * 60 + sM);
-        const heightPercentage = (durationMins / 60) * 100;
-        const topPercentage = (sM / 60) * 100;
-
         return {
-            top: `calc(${topPercentage}% + 2px)`, 
-            height: `calc(${heightPercentage}% - 4px)`, 
-            minHeight: '40px',
-            zIndex: 10 
+            top: `calc(${(sM / 60) * 100}% + 2px)`, 
+            height: `calc(${(durationMins / 60) * 100}% - 4px)`, 
+            minHeight: '40px', zIndex: 10 
         };
-    } catch (e) {
-        return { top: '0%', height: '100%' };
-    }
+    } catch (e) { return { top: '0%', height: '100%' }; }
   };
 
   const [uploadData, setUploadData] = useState({ schedules: [], studentsMap: {} });
@@ -170,8 +140,7 @@ const ScheduleControlTower = ({ currentUser }) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: 'binary' });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
-        let currentTeacher = '';
-        const parsedSchedules = [];
+        let currentTeacher = ''; const parsedSchedules = [];
 
         rows.forEach(row => {
           if (row[0] && String(row[0]).includes('* 강사명 :')) {
@@ -182,11 +151,12 @@ const ScheduleControlTower = ({ currentUser }) => {
               if (row[i]) {
                 const parts = String(row[i]).split('\n').map(s => s.trim()).filter(Boolean);
                 if (parts.length >= 3) {
+                  // [서비스 가치]: 엑셀에서 넘어온 반 이름의 괄호를 완벽히 제거하여 데이터 불일치 해결
+                  const cleanClassName = parts[1].replace(/\(.*\)/g, '').trim();
                   parsedSchedules.push({
                     id: `base_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
-                    teacher: currentTeacher, day: DAYS[i - 1],
-                    startTime: start, endTime: end,
-                    grade: parts[0], className: parts[1], room: parts[2],
+                    teacher: currentTeacher, day: DAYS[i - 1], startTime: start, endTime: end,
+                    grade: parts[0], className: cleanClassName, room: parts[2],
                   });
                 }
               }
@@ -207,24 +177,17 @@ const ScheduleControlTower = ({ currentUser }) => {
       try {
         const wb = XLSX.read(evt.target.result, { type: 'binary' });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
-        const headers = rows[0];
-        const sMap = {};
+        const headers = rows[0]; const sMap = {};
         
         headers.forEach((h, i) => {
           if(!h) return;
-          const cleanClassName = String(h).replace(/\(\d+\s*명\)/, '').trim();
+          const cleanClassName = String(h).replace(/\(.*\)/g, '').trim();
           sMap[cleanClassName] = [];
           
           for (let r = 1; r < rows.length; r++) {
             if (rows[r][i]) {
                 let sName = String(rows[r][i]).replace(/\[.*?\]/, '').trim(); 
-                
-                // [데이터 정제] 잘못된 데이터 필터링 (시간, 긴 문자열 등)
-                if (!sName) continue;
-                if (sName.includes(':') || sName.includes('~')) continue;
-                if (sName.length > 8) continue; // 한국어 이름 기준 너무 길면 배제
-                if (/\d{2}/.test(sName)) continue; // 두자리 연속된 숫자 (시간) 포함 배제
-
+                if (!sName || sName.includes(':') || sName.includes('~') || sName.length > 8 || /\d{2}/.test(sName)) continue;
                 sMap[cleanClassName].push(sName);
             }
           }
@@ -242,9 +205,7 @@ const ScheduleControlTower = ({ currentUser }) => {
       await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schedule_base'), {
         schedules: uploadData.schedules, studentsMap: uploadData.studentsMap, updatedAt: new Date().toISOString()
       });
-      setBaseSchedules(uploadData.schedules);
-      setStudentsMap(uploadData.studentsMap);
-      setIsUploadModalOpen(false);
+      setBaseSchedules(uploadData.schedules); setStudentsMap(uploadData.studentsMap); setIsUploadModalOpen(false);
       alert("✅ 학원 전체 뼈대 시간표가 동기화되었습니다.");
     } catch (e) { alert("저장 실패: " + e.message); }
   };
@@ -252,17 +213,31 @@ const ScheduleControlTower = ({ currentUser }) => {
   const handleSubmitRequest = async (e) => {
       e.preventDefault();
       const form = e.target;
+      
+      // [캘린더 기능] 날짜를 기반으로 요일을 자동 계산합니다.
+      const targetDateStr = form.targetDate.value;
+      const dateObj = new Date(targetDateStr);
+      const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
+      const computedDay = dayNames[dateObj.getDay()];
+
       try {
           const reqRef = doc(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`));
           await setDoc(reqRef, {
               originalScheduleId: changeRequestModal.id,
               requestTeacher: myName || changeRequestModal.teacher,
-              type: form.type.value, newDay: form.newDay.value,
-              newStartTime: form.newStartTime.value, newEndTime: form.newEndTime.value,
-              newRoom: form.newRoom.value, grade: changeRequestModal.grade, className: changeRequestModal.className,
-              status: 'PENDING', createdAt: new Date().toISOString()
+              type: form.type.value, 
+              originalDate: form.originalDate.value || null,
+              targetDate: targetDateStr,
+              newDay: computedDay, // 날짜를 기반으로 요일 저장
+              newStartTime: form.newStartTime.value, 
+              newEndTime: form.newEndTime.value,
+              newRoom: form.newRoom.value, 
+              grade: changeRequestModal.grade, 
+              className: changeRequestModal.className,
+              status: 'PENDING', 
+              createdAt: new Date().toISOString()
           });
-          alert("✅ 요청이 전송되었습니다.");
+          alert("✅ 특정 날짜에 대한 스케줄 요청이 전송되었습니다.");
           setChangeRequestModal(null); setSelectedBlock(null);
       } catch (err) { alert("요청 실패: " + err.message); }
   };
@@ -274,15 +249,11 @@ const ScheduleControlTower = ({ currentUser }) => {
       } catch (e) { alert("처리 실패: " + e.message); }
   };
 
-  if (isLoading) return (
-    <div className="p-20 text-center">
-      <Loader className="animate-spin inline-block text-blue-600 mb-4" size={40}/>
-      <p className="font-bold text-gray-600">시간표 데이터 동기화 중...</p>
-    </div>
-  );
+  if (isLoading) return <div className="p-20 text-center"><Loader className="animate-spin inline-block text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-600">데이터 동기화 중...</p></div>;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4 pb-20 animate-in fade-in">
+    <div className="max-w-[1600px] w-full mx-auto space-y-4 pb-20 animate-in fade-in">
+      {/* 헤더 */}
       <div className="bg-gray-900 text-white p-6 rounded-2xl shadow-lg flex flex-col lg:flex-row justify-between lg:items-center gap-4 print:hidden">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><CalendarIcon className="text-yellow-400"/> 인터랙티브 스케줄 관제탑</h1>
@@ -300,7 +271,8 @@ const ScheduleControlTower = ({ currentUser }) => {
         </div>
       </div>
 
-      <div className="flex flex-col xl:flex-row gap-6">
+      <div className="flex flex-col xl:flex-row gap-6 w-full">
+        {/* 메인 캘린더 영역 (모바일/태블릿 대응을 위해 분기점을 xl로 상향 조정) */}
         <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[750px] relative">
             <div className="p-4 border-b bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="flex bg-gray-200 p-1 rounded-xl w-full sm:w-auto justify-center">
@@ -315,65 +287,59 @@ const ScheduleControlTower = ({ currentUser }) => {
                 </select>
             </div>
 
-            {/* [모바일 최적화] lg(1024px) 이하에서만 보이는 직관적인 요일 선택 탭 */}
+            {/* [서비스 가치] 모바일/태블릿(xl 이하)에서 화면이 깨지는 것을 방지하는 스와이프 탭 */}
             {viewMode === 'TEACHER' && (
-                <div className="lg:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
+                <div className="xl:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
                     {DAYS.map(d => (
-                        <button 
-                            key={`mob-${d}`} 
-                            onClick={() => setMobileSelectedDay(d)}
-                            className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedDay === d ? 'bg-gray-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}
-                        >
+                        <button key={`mob-${d}`} onClick={() => setMobileSelectedDay(d)} className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedDay === d ? 'bg-gray-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
                             {d}
+                        </button>
+                    ))}
+                </div>
+            )}
+            
+            {/* 요일/교실 모드 모바일 탭 */}
+            {viewMode === 'ROOM' && (
+                <div className="xl:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
+                    {roomList.map((r, idx) => (
+                        <button key={`mob-room-${r}`} onClick={() => setMobileSelectedRoom(r)} className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedRoom === r ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
+                            {r} {/* 또는 간소화를 위해 `Class ${idx+1}` 형태로도 가능하나, 강사 인지를 위해 원본 이름 유지 */}
                         </button>
                     ))}
                 </div>
             )}
 
             <div className="flex-1 overflow-auto bg-gray-50/30 relative custom-scrollbar">
-                <table className="w-full text-sm border-collapse bg-white min-w-full lg:min-w-[800px]">
+                <table className="w-full text-sm border-collapse bg-white min-w-full xl:min-w-[1000px]">
                     <thead className="bg-gray-100 sticky top-0 z-20 shadow-sm">
                         <tr>
                             <th className="border p-2 w-16 md:w-20 text-gray-500 font-bold bg-gray-100">시간</th>
                             {viewMode === 'TEACHER' ? 
-                                // lg(1024px) 분기점을 사용하여 사이드바가 있어도 테이블이 찌그러지지 않도록 방어
-                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d ? 'hidden lg:table-cell' : ''}`}>{d}</th>) :
-                                roomList.map(r => <th key={r} className="border p-2 font-bold bg-gray-100">{r}</th>)
+                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d ? 'hidden xl:table-cell' : ''}`}>{d}</th>) :
+                                roomList.map(r => <th key={r} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedRoom !== r ? 'hidden xl:table-cell' : ''}`}>{r}</th>)
                             }
                         </tr>
                     </thead>
                     <tbody>
                         {TIME_SLOTS.map((time) => {
                             const currentHour = parseInt(time.split(':')[0], 10);
-                            
                             return (
                                 <tr key={time}>
                                     <td className="border p-2 text-center text-xs font-bold text-gray-400 bg-gray-50">{time}</td>
                                     
                                     {viewMode === 'TEACHER' ? DAYS.map(day => {
-                                        const schedulesInCell = activeSchedules.filter(s => {
-                                            if (s.day !== day) return false;
-                                            const schedHour = parseInt(s.startTime.split(':')[0], 10);
-                                            return schedHour === currentHour;
-                                        });
-
+                                        const schedulesInCell = activeSchedules.filter(s => s.day === day && parseInt(s.startTime.split(':')[0], 10) === currentHour);
                                         return (
-                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden lg:table-cell' : ''}`}>
+                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
-                                                    // 수업 고유 색상 가져오기
-                                                    const colorTheme = schedule.isModified 
-                                                        ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
-                                                        : getClassColor(schedule.className);
-
+                                                    const colorTheme = schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' : getClassColor(schedule.className);
                                                     return (
-                                                        <div 
-                                                            key={schedule.id}
-                                                            onClick={() => setSelectedBlock(schedule)} 
-                                                            style={getScheduleStyle(schedule.startTime, schedule.endTime)}
+                                                        <div key={schedule.id} onClick={() => setSelectedBlock(schedule)} style={getScheduleStyle(schedule.startTime, schedule.endTime)}
                                                             className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
                                                         >
                                                             <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
-                                                            <span className="text-xs font-black truncate">{schedule.className}</span>
+                                                            {/* [요청사항 반영] truncate 제거, whitespace-normal 적용으로 글자 짤림 방지 */}
+                                                            <span className="text-[11px] sm:text-xs font-black break-words whitespace-normal leading-tight">{schedule.className}</span>
                                                             <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><MapPin size={10} className="shrink-0"/>{schedule.room}</span>
                                                         </div>
                                                     );
@@ -381,28 +347,18 @@ const ScheduleControlTower = ({ currentUser }) => {
                                             </td>
                                         );
                                     }) : roomList.map(room => {
-                                        const schedulesInCell = activeSchedules.filter(s => {
-                                            if (s.room !== room) return false;
-                                            const schedHour = parseInt(s.startTime.split(':')[0], 10);
-                                            return schedHour === currentHour;
-                                        });
-
+                                        const schedulesInCell = activeSchedules.filter(s => s.room === room && parseInt(s.startTime.split(':')[0], 10) === currentHour);
                                         return (
-                                            <td key={`${room}-${time}`} className="border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px]">
+                                            <td key={`${room}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px] ${mobileSelectedRoom !== room ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
-                                                    const colorTheme = schedule.isModified 
-                                                        ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
-                                                        : getClassColor(schedule.className);
-
+                                                    const colorTheme = schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' : getClassColor(schedule.className);
                                                     return (
-                                                        <div 
-                                                            key={schedule.id}
-                                                            onClick={() => setSelectedBlock(schedule)} 
-                                                            style={getScheduleStyle(schedule.startTime, schedule.endTime)}
+                                                        <div key={schedule.id} onClick={() => setSelectedBlock(schedule)} style={getScheduleStyle(schedule.startTime, schedule.endTime)}
                                                             className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
                                                         >
                                                             <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
-                                                            <span className="text-xs font-black truncate">{schedule.className}</span>
+                                                            {/* [요청사항 반영] 글씨 전부 보여지도록 처리 */}
+                                                            <span className="text-[11px] sm:text-xs font-black break-words whitespace-normal leading-tight">{schedule.className}</span>
                                                             <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><User size={10} className="shrink-0"/>{schedule.teacher}T</span>
                                                         </div>
                                                     );
@@ -422,7 +378,7 @@ const ScheduleControlTower = ({ currentUser }) => {
         <div className="w-full xl:w-96 flex flex-col gap-6 print:hidden">
             {isAdmin && (
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 flex flex-col max-h-[350px]">
-                    <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2"><Bell className="text-rose-500" size={18}/> 스케줄 결재함</h3>
+                    <h3 className="text-base font-bold text-gray-900 mb-4 flex items-center gap-2"><Bell className="text-rose-500" size={18}/> 날짜별 스케줄 결재함</h3>
                     <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar">
                         {requests.filter(r => r.status === 'PENDING').length === 0 ? (
                             <p className="text-center py-10 text-gray-400 text-sm bg-gray-50 rounded-xl">대기 중인 요청이 없습니다.</p>
@@ -432,8 +388,12 @@ const ScheduleControlTower = ({ currentUser }) => {
                                     <span className="text-[10px] font-black text-rose-700 bg-white px-2 py-0.5 rounded shadow-sm border border-rose-100">{req.type === 'MAKEUP' ? '보강' : '변경'}</span>
                                     <span className="text-[10px] text-gray-500">{new Date(req.createdAt).toLocaleDateString()}</span>
                                 </div>
-                                <p className="text-sm font-bold text-gray-800">{req.className}</p>
+                                <p className="text-sm font-bold text-gray-800 break-words">{req.className}</p>
                                 <p className="text-xs text-gray-500 mb-3">{req.requestTeacher}T</p>
+                                <div className="bg-white rounded border border-rose-100 p-2 mb-3 text-xs">
+                                    {req.originalDate && <p className="text-gray-400 line-through mb-1">기존: {req.originalDate}</p>}
+                                    <p className="font-bold text-rose-600">희망: {req.targetDate} ({req.newDay}) {req.newStartTime} ({req.newRoom})</p>
+                                </div>
                                 <div className="flex gap-2">
                                     <button onClick={() => handleApproveRequest(req.id, 'REJECTED')} className="flex-1 py-1.5 bg-gray-100 text-gray-600 text-xs font-bold rounded">반려</button>
                                     <button onClick={() => handleApproveRequest(req.id, 'APPROVED')} className="flex-1 py-1.5 bg-rose-500 text-white text-xs font-bold rounded shadow-sm">승인</button>
@@ -447,12 +407,12 @@ const ScheduleControlTower = ({ currentUser }) => {
             {selectedBlock ? (
                 <div className="bg-white rounded-2xl shadow-sm border border-indigo-200 p-5 flex flex-col animate-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-start mb-4">
-                        <div>
+                        <div className="w-full pr-4">
                             <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded">{selectedBlock.grade}</span>
-                            <h3 className="text-lg font-black text-gray-900 mt-2">{selectedBlock.className}</h3>
+                            <h3 className="text-lg font-black text-gray-900 mt-2 break-words">{selectedBlock.className}</h3>
                             <p className="text-xs font-semibold text-gray-500 mt-1">{selectedBlock.day}요일 {selectedBlock.startTime} ~ {selectedBlock.endTime} | {selectedBlock.room}</p>
                         </div>
-                        <button onClick={() => setSelectedBlock(null)} className="text-gray-400 hover:text-gray-800"><XCircle size={20}/></button>
+                        <button onClick={() => setSelectedBlock(null)} className="text-gray-400 hover:text-gray-800 shrink-0"><XCircle size={20}/></button>
                     </div>
                     
                     <div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl p-3 mb-4 custom-scrollbar">
@@ -460,7 +420,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                         <div className="flex flex-wrap gap-1.5">
                             {(() => {
                                 const matchedStudents = getStudentsForClass(selectedBlock.className, studentsMap);
-                                if(matchedStudents.length === 0) return <p className="text-[11px] text-gray-400 py-2">매칭된 명단이 없습니다. (엑셀 확인 필요)</p>;
+                                if(matchedStudents.length === 0) return <p className="text-[11px] text-gray-400 py-2">매칭된 명단이 없습니다.</p>;
                                 return matchedStudents.map((s, i) => (
                                     <span key={i} className="text-[11px] font-bold text-gray-700 bg-white border border-gray-200 px-2 py-1 rounded shadow-sm">{s}</span>
                                 ));
@@ -469,7 +429,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                     </div>
 
                     <button onClick={() => setChangeRequestModal(selectedBlock)} className="w-full py-3 bg-gray-900 text-white text-sm font-bold rounded-xl flex justify-center items-center gap-2 shadow-md hover:bg-black transition-transform active:scale-95">
-                        <AlertTriangle size={16}/> 보강 / 일정 변경 신청
+                        <CalendarDays size={16}/> 특정 날짜 일정 변경/보강
                     </button>
                 </div>
             ) : (
@@ -481,35 +441,40 @@ const ScheduleControlTower = ({ currentUser }) => {
         </div>
       </div>
 
-      {/* 모달: 일정 변경 신청 */}
+      {/* 모달: [캘린더 기반] 일정 변경 신청 */}
       {changeRequestModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="text-xl font-black text-gray-900 mb-5">스케줄 변경 / 보강 신청</h3>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 overflow-y-auto max-h-[90vh] custom-scrollbar">
+            <h3 className="text-xl font-black text-gray-900 mb-5 flex items-center gap-2"><CalendarDays className="text-indigo-600"/> 캘린더 기반 스케줄 변경</h3>
             <form onSubmit={handleSubmitRequest} className="space-y-4">
                 <div>
                     <label className="block text-xs font-bold text-gray-700 mb-1">신청 유형</label>
                     <select name="type" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="TEMPORARY">일시 변경</option>
-                        <option value="MAKEUP">추가 보강</option>
-                        <option value="PERMANENT">영구 변경</option>
+                        <option value="TEMPORARY">특정일 휴강 및 이동 (일시 변경)</option>
+                        <option value="MAKEUP">추가 보강 (수업 추가)</option>
+                        <option value="PERMANENT">영구 변경 (해당일 이후 계속)</option>
                     </select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+
+                <div className="grid grid-cols-2 gap-3 border-t pt-4 mt-4 bg-gray-50 p-3 rounded-xl border border-gray-200">
                     <div>
-                        <label className="block text-xs font-bold text-gray-700 mb-1">희망 요일</label>
-                        <select name="newDay" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.day}>
-                            {DAYS.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
+                        <label className="block text-xs font-bold text-gray-500 mb-1">취소/변경될 수업일 (선택)</label>
+                        <input name="originalDate" type="date" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold text-gray-600 outline-none"/>
+                        <p className="text-[9px] text-gray-400 mt-1">보강 추가시 비워두세요.</p>
                     </div>
                     <div>
+                        <label className="block text-xs font-bold text-rose-600 mb-1">새로운 희망 날짜 (필수)</label>
+                        <input name="targetDate" type="date" className="w-full border border-rose-300 p-2 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-rose-500" required/>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
                         <label className="block text-xs font-bold text-gray-700 mb-1">희망 교실</label>
                         <select name="newRoom" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.room}>
                             {roomList.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                     </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3 border-t pt-4 mt-4">
                     <div>
                         <label className="block text-xs font-bold text-gray-700 mb-1">시작 시간</label>
                         <input name="newStartTime" type="time" className="w-full border border-gray-300 p-2 rounded-xl text-sm font-bold outline-none" defaultValue={changeRequestModal.startTime} required/>
@@ -521,7 +486,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                 </div>
                 <div className="grid grid-cols-2 gap-2 mt-6 pt-4 border-t">
                     <button type="button" onClick={() => setChangeRequestModal(null)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">취소</button>
-                    <button type="submit" className="py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700">결재 올리기</button>
+                    <button type="submit" className="py-3 bg-indigo-600 text-white font-bold rounded-xl shadow-md hover:bg-indigo-700">날짜 지정 결재 올리기</button>
                 </div>
             </form>
           </div>
