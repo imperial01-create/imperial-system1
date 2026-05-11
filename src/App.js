@@ -10,6 +10,7 @@ import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serv
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
+// 🚀 기존 Lazy Loading 컴포넌트 유지
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -24,6 +25,9 @@ const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticR
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
+
+// 🚀 신규 기능: 스케줄 관제탑 (초기 로딩 속도 저하를 막기 위해 Lazy Loading 적용)
+const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -90,6 +94,17 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
+                {/* 🚀 Dashboard 카드에 스케줄 관제탑 추가 */}
+                {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">스케줄 관제탑</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">학원의 모든 일정과 인력 동선을 한눈에 파악하고 통합 관리합니다.</p>
+                    </div>
+                )}
+
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -313,9 +328,11 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 메뉴 리스트에 사용자 관리 권한 확장
+  // 🚀 메뉴 리스트에 사용자 관리 권한 확장 및 '스케줄 관제탑' 추가
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    // 🚀 신규 메뉴: 스케줄 관제탑 (관리자, 강사, 행정조교 노출)
+    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
@@ -326,7 +343,7 @@ const AppContent = () => {
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, // 🚀 행정조교 접근 허용 (내부에서 필터링)
+    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
   ];
@@ -380,9 +397,16 @@ const AppContent = () => {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
+                {/* 🚀 React Router DOM 아키텍처 그대로 유지 */}
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        
+                        {/* 🚀 신규 기능: 스케줄 관제탑 Route 추가 */}
+                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
+                            <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
+                        )}
+
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
@@ -399,7 +423,6 @@ const AppContent = () => {
                         
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
                         
-                        {/* 🚀 사용자 관리 권한 확장 (admin_assistant 추가) */}
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
