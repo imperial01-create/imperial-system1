@@ -17,6 +17,7 @@ const TIME_SLOTS = [
 const DAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
 const ScheduleControlTower = ({ currentUser }) => {
+  // [1] 상태 정의
   const isAdmin = currentUser?.role === 'admin';
   const myName = currentUser?.name || '';
   
@@ -35,7 +36,7 @@ const ScheduleControlTower = ({ currentUser }) => {
   const fileInputRef1 = useRef(null);
   const fileInputRef2 = useRef(null);
 
-  // [서비스 가치]: 데이터 로딩 및 예외 처리를 강화하여 관리자의 무한 대기 시간을 제거합니다.
+  // [2] 데이터 구독 (Firebase)
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
@@ -54,7 +55,6 @@ const ScheduleControlTower = ({ currentUser }) => {
     };
     loadBaseData();
 
-    // [중요 수정]: 에러 콜백을 추가하여 보안 규칙 미적용 시에도 로딩 스피너를 해제합니다.
     const q = query(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`));
     const unsub = onSnapshot(q, 
       (snap) => {
@@ -66,8 +66,6 @@ const ScheduleControlTower = ({ currentUser }) => {
       (error) => {
         console.error("Firebase Snapshot Error:", error);
         if (isMounted) {
-          // 관리자에게 직관적인 피드백 제공 (무한 로딩 방지)
-          alert("데이터를 불러올 권한이 없거나 설정 오류가 발생했습니다. 보안 규칙을 확인하세요.");
           setIsLoading(false);
         }
       }
@@ -75,11 +73,52 @@ const ScheduleControlTower = ({ currentUser }) => {
 
     return () => {
       isMounted = false;
-      unsub(); // 리스너 해제 (메모리 누수 방지)
+      unsub();
     };
   }, []);
 
-  // 엑셀 파싱 및 저장 로직 (기존 로직 유지)
+  // [3] 헬퍼 변수 (useMemo 이전에 선언되어야 참조 오류가 발생하지 않습니다)
+  // [서비스 가치]: 데이터 파싱 로직을 최적화하여 원생 수가 늘어나도 화면 버벅임이 없도록 관리합니다.
+  const teacherList = useMemo(() => 
+    Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), 
+  [baseSchedules]);
+
+  const roomList = useMemo(() => 
+    Array.from(new Set(baseSchedules.map(s => s.room))).filter(Boolean).sort(), 
+  [baseSchedules]);
+
+  // [4] 시간표 합성 로직 (ReferenceError 해결됨)
+  const activeSchedules = useMemo(() => {
+    let list = [...baseSchedules];
+    
+    // 승인된 요청 반영
+    requests.filter(r => r.status === 'APPROVED').forEach(req => {
+      if (req.type === 'PERMANENT') {
+        const idx = list.findIndex(s => s.id === req.originalScheduleId);
+        if (idx > -1) {
+          list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom };
+        }
+      } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
+        list.push({
+          id: `mod_${req.id}`, teacher: req.requestTeacher, day: req.newDay,
+          startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom,
+          grade: req.grade, className: req.className + (req.type === 'MAKEUP' ? ' (보강)' : ' (일시변경)'),
+          isModified: true
+        });
+      }
+    });
+
+    // 필터링 로직
+    if (viewMode === 'TEACHER') {
+        const defaultTeacher = teacherList.length > 0 ? teacherList[0] : '';
+        const filterVal = selectedFilter || defaultTeacher;
+        return list.filter(s => s.teacher === filterVal);
+    } else {
+        return list.filter(s => s.day === (selectedFilter || "월"));
+    }
+  }, [baseSchedules, requests, viewMode, selectedFilter, teacherList]);
+
+  // [5] 핸들러 함수들
   const [uploadData, setUploadData] = useState({ schedules: [], studentsMap: {} });
 
   const handleTeacherExcel = (e) => {
@@ -166,52 +205,25 @@ const ScheduleControlTower = ({ currentUser }) => {
     } catch (e) { alert("저장 실패: " + e.message); }
   };
 
-  const activeSchedules = useMemo(() => {
-    let list = [...baseSchedules];
-    requests.filter(r => r.status === 'APPROVED').forEach(req => {
-      if (req.type === 'PERMANENT') {
-        const idx = list.findIndex(s => s.id === req.originalScheduleId);
-        if (idx > -1) {
-          list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom };
-        }
-      } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
-        list.push({
-          id: `mod_${req.id}`, teacher: req.requestTeacher, day: req.newDay,
-          startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom,
-          grade: req.grade, className: req.className + (req.type === 'MAKEUP' ? ' (보강)' : ' (일시변경)'),
-          isModified: true
-        });
-      }
-    });
-
-    if (viewMode === 'TEACHER') {
-        const filterVal = selectedFilter || (teacherList[0] || '');
-        return list.filter(s => s.teacher === filterVal);
-    } else {
-        return list.filter(s => s.day === (selectedFilter || "월"));
-    }
-  }, [baseSchedules, requests, viewMode, selectedFilter]);
-
   const handleSubmitRequest = async (e) => {
       e.preventDefault();
       const form = e.target;
-      const type = form.type.value;
-      const newDay = form.newDay.value;
-      const newStartTime = form.newStartTime.value;
-      const newEndTime = form.newStartTime.value; // 단순화를 위해 시작시간과 동일하게 설정 (수정가능)
-      const newRoom = form.newRoom.value;
-
       try {
           const reqRef = doc(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`));
           await setDoc(reqRef, {
               originalScheduleId: changeRequestModal.id,
               requestTeacher: myName || changeRequestModal.teacher,
-              type, newDay, newStartTime, newEndTime, newRoom,
-              grade: changeRequestModal.grade, className: changeRequestModal.className,
+              type: form.type.value,
+              newDay: form.newDay.value,
+              newStartTime: form.newStartTime.value,
+              newEndTime: form.newStartTime.value,
+              newRoom: form.newRoom.value,
+              grade: changeRequestModal.grade,
+              className: changeRequestModal.className,
               status: 'PENDING',
               createdAt: new Date().toISOString()
           });
-          alert("✅ 요청이 관리자에게 전송되었습니다.");
+          alert("✅ 요청이 전송되었습니다.");
           setChangeRequestModal(null);
           setSelectedBlock(null);
       } catch (err) { alert("요청 실패: " + err.message); }
@@ -226,21 +238,18 @@ const ScheduleControlTower = ({ currentUser }) => {
       } catch (e) { alert("처리 실패: " + e.message); }
   };
 
-  const teacherList = Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean);
-  const roomList = Array.from(new Set(baseSchedules.map(s => s.room))).filter(Boolean).sort();
   const pendingRequests = requests.filter(r => r.status === 'PENDING');
 
+  // [6] 렌더링
   if (isLoading) return (
     <div className="p-20 text-center">
       <Loader className="animate-spin inline-block text-blue-600 mb-4" size={40}/>
       <p className="font-bold text-gray-600">시간표 데이터 동기화 중...</p>
-      <p className="text-xs text-gray-400 mt-2">지속될 경우 관리자에게 보안 규칙 설정을 문의하세요.</p>
     </div>
   );
 
   return (
     <div className="max-w-7xl mx-auto space-y-4 pb-20 animate-in fade-in">
-      {/* 상단 헤더 */}
       <div className="bg-gray-900 text-white p-6 rounded-2xl shadow-lg flex flex-col lg:flex-row justify-between lg:items-center gap-4 print:hidden">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><CalendarIcon className="text-yellow-400"/> 인터랙티브 스케줄 관제탑</h1>
@@ -248,18 +257,17 @@ const ScheduleControlTower = ({ currentUser }) => {
         </div>
         <div className="flex gap-2">
           {isAdmin && (
-              <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 transition-colors">
+              <button onClick={() => setIsUploadModalOpen(true)} className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
                 <UploadCloud size={16}/> 엑셀 뼈대 업로드
               </button>
           )}
-          <button onClick={() => window.print()} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 transition-colors">
+          <button onClick={() => window.print()} className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5">
             <Printer size={16}/> 인쇄 (PDF)
           </button>
         </div>
       </div>
 
       <div className="flex flex-col xl:flex-row gap-6">
-        {/* 메인 캘린더 */}
         <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[750px]">
             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
                 <div className="flex bg-gray-200 p-1 rounded-xl">
@@ -323,7 +331,6 @@ const ScheduleControlTower = ({ currentUser }) => {
             </div>
         </div>
 
-        {/* 우측 패널 */}
         <div className="w-full xl:w-96 flex flex-col gap-6 print:hidden">
             {isAdmin && (
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 flex flex-col max-h-[350px]">
@@ -334,14 +341,11 @@ const ScheduleControlTower = ({ currentUser }) => {
                         ) : pendingRequests.map(req => (
                             <div key={req.id} className="bg-rose-50 border border-rose-100 p-3 rounded-xl">
                                 <div className="flex justify-between mb-2">
-                                    <span className="text-[10px] font-black text-rose-700 bg-white px-2 py-0.5 rounded shadow-sm border border-rose-100">{req.type === 'MAKEUP' ? '보강' : '변경'}</span>
+                                    <span className="text-[10px] font-black text-rose-700 bg-white px-2 py-0.5 rounded shadow-sm">{req.type === 'MAKEUP' ? '보강' : '변경'}</span>
                                     <span className="text-[10px] text-gray-500">{new Date(req.createdAt).toLocaleDateString()}</span>
                                 </div>
                                 <p className="text-sm font-bold text-gray-800">{req.className}</p>
-                                <p className="text-xs text-gray-500 mb-3"><User size={12} className="inline mr-1"/>{req.requestTeacher}T</p>
-                                <div className="bg-white p-2 rounded border border-gray-100 text-xs mb-3 font-bold text-rose-600">
-                                    <ChevronRight size={12} className="inline"/> {req.newDay} {req.newStartTime} ({req.newRoom})
-                                </div>
+                                <p className="text-xs text-gray-500 mb-3">{req.requestTeacher}T</p>
                                 <div className="flex gap-2">
                                     <button onClick={() => handleApproveRequest(req.id, 'REJECTED')} className="flex-1 py-1.5 bg-gray-100 text-gray-600 text-xs font-bold rounded">반려</button>
                                     <button onClick={() => handleApproveRequest(req.id, 'APPROVED')} className="flex-1 py-1.5 bg-rose-500 text-white text-xs font-bold rounded shadow-sm">승인</button>
@@ -370,14 +374,13 @@ const ScheduleControlTower = ({ currentUser }) => {
                             ))}
                         </div>
                     </div>
-                    <button onClick={() => setChangeRequestModal(selectedBlock)} className="w-full py-3 bg-gray-900 text-white text-sm font-bold rounded-xl flex justify-center items-center gap-2 shadow-md hover:bg-black">
+                    <button onClick={() => setChangeRequestModal(selectedBlock)} className="w-full py-3 bg-gray-900 text-white text-sm font-bold rounded-xl flex justify-center items-center gap-2">
                         <AlertTriangle size={16}/> 보강 / 일정 변경 신청
                     </button>
                 </div>
             ) : (
-                <div className="bg-gray-50 rounded-2xl border border-dashed border-gray-300 p-10 flex flex-col items-center text-center">
-                    <MapPin className="text-gray-300 mb-3" size={32}/>
-                    <p className="text-sm font-bold text-gray-500">시간표 블록을 클릭하시면<br/>학생 명단과 변경 옵션이 나타납니다.</p>
+                <div className="bg-gray-50 rounded-2xl border border-dashed border-gray-300 p-10 flex flex-center text-center">
+                    <p className="text-sm font-bold text-gray-500">시간표 블록을 클릭하시면<br/>학생 명단과 옵션이 나타납니다.</p>
                 </div>
             )}
         </div>
@@ -387,15 +390,14 @@ const ScheduleControlTower = ({ currentUser }) => {
       {changeRequestModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 mb-1"><CalendarIcon className="text-indigo-600"/> 스케줄 변경 / 보강 신청</h3>
-            <p className="text-xs font-semibold text-gray-500 mb-5 pb-4 border-b">선택한 수업: [{changeRequestModal.className}]</p>
+            <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 mb-1">스케줄 변경 / 보강 신청</h3>
             <form onSubmit={handleSubmitRequest} className="space-y-4">
                 <div>
                     <label className="block text-xs font-bold text-gray-700 mb-1">신청 유형</label>
                     <select name="type" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold">
-                        <option value="TEMPORARY">일시 변경 (하루만)</option>
-                        <option value="MAKEUP">추가 보강 (1회 추가)</option>
-                        <option value="PERMANENT">영구 변경 (앞으로 계속)</option>
+                        <option value="TEMPORARY">일시 변경</option>
+                        <option value="MAKEUP">추가 보강</option>
+                        <option value="PERMANENT">영구 변경</option>
                     </select>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -412,9 +414,9 @@ const ScheduleControlTower = ({ currentUser }) => {
                         </select>
                     </div>
                 </div>
-                <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-xl">
-                    <label className="block text-xs font-black text-indigo-800 mb-1">희망 교실 선택</label>
-                    <select name="newRoom" className="w-full border border-indigo-200 p-2 rounded-lg text-sm font-bold">
+                <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1">희망 교실</label>
+                    <select name="newRoom" className="w-full border border-gray-300 p-2.5 rounded-xl text-sm font-bold">
                         {roomList.map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                 </div>
@@ -431,8 +433,8 @@ const ScheduleControlTower = ({ currentUser }) => {
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6">
-            <h3 className="text-xl font-black text-gray-900 flex items-center gap-2 mb-1"><UploadCloud className="text-blue-600"/> 학원 뼈대 시간표 동기화</h3>
-            <div className="space-y-4 my-6">
+            <h3 className="text-xl font-black text-gray-900 mb-6">학원 뼈대 시간표 동기화</h3>
+            <div className="space-y-4 mb-6">
                 <div className="border border-dashed border-gray-300 bg-gray-50 p-4 rounded-2xl">
                     <label className="block text-sm font-bold text-gray-800 mb-1">1단계. 강사별 현황.xlsx</label>
                     <input type="file" accept=".xlsx" onChange={handleTeacherExcel} ref={fileInputRef1} className="text-xs"/>
@@ -444,7 +446,7 @@ const ScheduleControlTower = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-2 gap-2 pt-4 border-t">
                 <button onClick={() => setIsUploadModalOpen(false)} className="py-3 bg-gray-100 text-gray-700 font-bold rounded-xl">닫기</button>
-                <button onClick={handleSaveExcelData} className="py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md">동기화 확정 (저장)</button>
+                <button onClick={handleSaveExcelData} className="py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md">저장 및 동기화</button>
             </div>
           </div>
         </div>
