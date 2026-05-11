@@ -5,7 +5,8 @@ import { db } from '../firebase';
 import { 
   Calendar as CalendarIcon, Clock, Users, MapPin, UploadCloud, 
   CheckCircle, XCircle, AlertCircle, ChevronRight, User, Settings,
-  AlertTriangle, PlusCircle, Printer, FileSpreadsheet, Search, Bell
+  AlertTriangle, PlusCircle, Printer, FileSpreadsheet, Search, Bell,
+  Loader
 } from 'lucide-react';
 
 const APP_ID = 'imperial-clinic-v1';

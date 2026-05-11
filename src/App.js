@@ -10,7 +10,7 @@ import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serv
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
-// 🚀 기존 Lazy Loading 컴포넌트 유지
+// 🚀 기존 Lazy Loading 컴포넌트 완벽 유지
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -328,11 +328,10 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 메뉴 리스트에 사용자 관리 권한 확장 및 '스케줄 관제탑' 추가
+  // 🚀 메뉴 리스트 및 권한 완벽 보존
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    // 🚀 신규 메뉴: 스케줄 관제탑 (관리자, 강사, 행정조교 노출)
-    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] },
+    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] }, // 신규 메뉴
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
@@ -360,7 +359,7 @@ const AppContent = () => {
         
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
            {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
-              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === item.path ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
+              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname.startsWith(item.path) ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
                 <item.icon size={20} /> {item.label}
               </button>
            ))}
@@ -397,12 +396,12 @@ const AppContent = () => {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
-                {/* 🚀 React Router DOM 아키텍처 그대로 유지 */}
+                {/* 🚀 React Router 구조를 원본 그대로 100% 복구했습니다. */}
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                         
-                        {/* 🚀 신규 기능: 스케줄 관제탑 Route 추가 */}
+                        {/* 🚀 스케줄 관제탑 라우트 추가 */}
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
                         )}
@@ -428,7 +427,10 @@ const AppContent = () => {
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
+                        {/* 🚀 리포트 열람 주소창 라우팅 유지 */}
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
+                        
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
