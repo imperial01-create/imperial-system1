@@ -49,10 +49,9 @@ const ScheduleControlTower = ({ currentUser }) => {
   const [baseSchedules, setBaseSchedules] = useState([]);
   const [studentsMap, setStudentsMap] = useState({});
   const [requests, setRequests] = useState([]);
-  const [clinics, setClinics] = useState([]); // [CTO] 클리닉 데이터 병합용 상태
+  const [clinics, setClinics] = useState([]); 
   const [isLoading, setIsLoading] = useState(true);
 
-  // 🚀 [CTO 로직] 주간 캘린더 네비게이션 상태 (월요일 기준)
   const [currentWeekStart, setCurrentWeekStart] = useState(() => {
       const d = new Date();
       const day = d.getDay();
@@ -92,7 +91,6 @@ const ScheduleControlTower = ({ currentUser }) => {
       if (isMounted) setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, () => { });
 
-    // [CTO 로직] 클리닉 세션 실시간 구독
     const unsubClinics = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/sessions`)), (snap) => {
       if (isMounted) {
           setClinics(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -104,7 +102,14 @@ const ScheduleControlTower = ({ currentUser }) => {
   }, []);
 
   const teacherList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), [baseSchedules]);
-  const roomList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.room))).filter(Boolean).sort(), [baseSchedules]);
+  
+  // 🚀 [CTO 로직 업데이트]: 강사 엑셀의 방 목록 + 클리닉에서 배정한 방 목록 강제 합집합(Union) 처리
+  const roomList = useMemo(() => {
+    const baseRooms = baseSchedules.map(s => s.room);
+    const clinicRooms = clinics.map(c => c.classroom ? c.classroom.replace('Class ', 'Classroom ') : null);
+    // 중복 제거 및 null 값 필터링 후 정렬
+    return Array.from(new Set([...baseRooms, ...clinicRooms])).filter(Boolean).sort();
+  }, [baseSchedules, clinics]);
 
   useEffect(() => {
     if (roomList.length > 0 && !mobileSelectedRoom) setMobileSelectedRoom(roomList[0]);
@@ -115,13 +120,12 @@ const ScheduleControlTower = ({ currentUser }) => {
     const weekStartStr = formatDate(currentWeekStart);
     const weekEndStr = formatDate(weekEnd);
 
-    // 1. 임시 일정 및 보강 (해당 주차 필터링)
+    // 1. 임시 일정 및 보강
     requests.filter(r => r.status === 'APPROVED').forEach(req => {
       if (req.type === 'PERMANENT') {
         const idx = list.findIndex(s => s.id === req.originalScheduleId);
         if (idx > -1) { list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom }; }
       } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
-        // [CTO] 해당 주간에 포함되는 임시 일정만 표시
         if (req.targetDate >= weekStartStr && req.targetDate <= weekEndStr) {
             list.push({
               id: `mod_${req.id}`, teacher: req.requestTeacher, day: req.newDay,
@@ -133,12 +137,13 @@ const ScheduleControlTower = ({ currentUser }) => {
       }
     });
 
-    // 2. 클리닉 일정 병합 (해당 주차 필터링 & 교실이 배정된 경우만)
+    // 2. 클리닉 일정 병합
     clinics.forEach(c => {
-        if ((c.status === 'confirmed' || c.status === 'completed' || c.status === 'pending') && c.classroom) {
+        // 🚀 [CTO 로직 업데이트]: c.status === 'open' (빈 슬롯 오픈 클리닉) 조건 추가
+        if ((c.status === 'confirmed' || c.status === 'completed' || c.status === 'pending' || c.status === 'open') && c.classroom) {
             if (c.date >= weekStartStr && c.date <= weekEndStr) {
                 const d = new Date(c.date);
-                const dayStr = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]; // 일(0)->6, 월(1)->0 매핑 (SCT는 월요일 시작)
+                const dayStr = DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]; 
                 
                 list.push({
                     id: `clinic_${c.id}`,
@@ -146,11 +151,13 @@ const ScheduleControlTower = ({ currentUser }) => {
                     day: dayStr,
                     startTime: c.startTime,
                     endTime: c.endTime,
-                    room: c.classroom.replace('Class ', 'Classroom '), // Class 1 -> Classroom 1 렌더링
+                    room: c.classroom.replace('Class ', 'Classroom '), 
                     grade: '클리닉 센터',
-                    className: `${c.taName}TA클리닉`, // [요청사항] 조교이름TA클리닉 양식
+                    // 빈 슬롯(open)인 경우 직관적으로 인지할 수 있도록 (오픈) 태그 추가
+                    className: `${c.taName}TA클리닉${c.status === 'open' ? ' (오픈)' : ''}`, 
                     isModified: false,
-                    isClinic: true // 렌더링 스타일 식별자
+                    isClinic: true,
+                    clinicStatus: c.status
                 });
             }
         }
@@ -329,7 +336,6 @@ const ScheduleControlTower = ({ currentUser }) => {
         <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[750px] relative">
             <div className="p-4 border-b bg-gray-50 flex flex-col lg:flex-row justify-between items-center gap-4">
                 
-                {/* [CTO 로직] 주간 캘린더 네비게이션 */}
                 <div className="flex items-center gap-2 bg-white rounded-xl p-1.5 shadow-sm border border-gray-200 order-2 lg:order-1 w-full lg:w-auto justify-center">
                     <button onClick={() => setCurrentWeekStart(new Date(currentWeekStart.setDate(currentWeekStart.getDate() - 7)))} className="p-1 hover:bg-gray-100 rounded-lg transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
                     <span className="text-sm font-black text-gray-800 px-2 flex items-center gap-1">
@@ -395,9 +401,9 @@ const ScheduleControlTower = ({ currentUser }) => {
                                         return (
                                             <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
-                                                    // [CTO] 클리닉 스타일 분기 (점선 옥색 테두리)
+                                                    // 오픈 상태인 클리닉은 투명도를 살짝 주어 직관성을 높입니다.
                                                     const colorTheme = schedule.isClinic 
-                                                        ? 'bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted'
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
                                                         : getClassColor(schedule.className);
                                                     
@@ -419,7 +425,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                                             <td key={`${room}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px] ${mobileSelectedRoom !== room ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
                                                     const colorTheme = schedule.isClinic 
-                                                        ? 'bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted'
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
                                                         : getClassColor(schedule.className);
 
@@ -485,10 +491,13 @@ const ScheduleControlTower = ({ currentUser }) => {
                     </div>
                     
                     <div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl p-3 mb-4 custom-scrollbar border border-gray-100">
-                        <h4 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1"><Users size={14}/> {selectedBlock.isClinic ? '예약 내역' : '수강생 명단'}</h4>
+                        <h4 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1"><Users size={14}/> {selectedBlock.isClinic ? '클리닉 정보' : '수강생 명단'}</h4>
                         <div className="flex flex-wrap gap-1.5">
                             {(() => {
                                 if (selectedBlock.isClinic) {
+                                    if (selectedBlock.clinicStatus === 'open') {
+                                        return <p className="text-[11px] text-gray-500 font-medium py-1">현재 예약된 학생이 없는 대기(오픈) 슬롯입니다.</p>;
+                                    }
                                     return <p className="text-[11px] text-gray-500 font-medium py-1">클리닉 배정 시간입니다. 클리닉 센터에서 상세 명단을 확인하세요.</p>;
                                 }
                                 const matchedStudents = getStudentsForClass(selectedBlock.className, studentsMap);
