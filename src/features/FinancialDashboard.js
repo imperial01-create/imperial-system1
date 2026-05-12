@@ -8,7 +8,7 @@ import {
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
   Activity, LineChart, Settings, RefreshCcw, Trash2,
-  Calendar, Target, AlertTriangle // 🚀 누락되었던 아이콘 및 신규 달력 아이콘 추가
+  Calendar, Target, AlertTriangle
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -23,7 +23,6 @@ const OFFICIAL_ACCOUNTS = [
   '보험료', '차량유지비', '운반비', '도서인쇄비', '소모품비', '지급수수료', '광고선전비', '미지급금'
 ];
 
-// 🚀 [신규 추가] 카테고리별 예산 분배 비율 (매출 100% 기준)
 const BUDGET_CATEGORIES = [
     { id: 'labor', name: '인건비', ratio: 0.50, accounts: ['직원급여', '상여금', '퇴직급여', '보험료', '세금과공과금'] },
     { id: 'facility', name: '시설/공간비', ratio: 0.10, accounts: ['지급임차료', '건물관리비', '수도광열비', '수선비'] },
@@ -88,7 +87,6 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isProcessingCleanup, setIsProcessingCleanup] = useState(false);
   const [newKeyword, setNewKeyword] = useState({ key: '', cat: '지급수수료', note: '전자세금계산서 갈음' });
 
-  // 🚀 [신규 추가] 원인 지출 내역 보기 모달 상태
   const [culpritModalData, setCulpritModalData] = useState(null);
 
   useEffect(() => {
@@ -284,7 +282,6 @@ const FinancialDashboard = ({ currentUser }) => {
 
     const vatEstimate = totalIncome * 0.1 - (totalExpense * 0.05);
 
-    // 🚀 [신규 추가] 카테고리별 예산 소진 자동 계산 (매출 기반)
     const budgetTracking = BUDGET_CATEGORIES.map(cat => {
         const allocated = totalIncome * cat.ratio;
         const spent = expenses
@@ -313,7 +310,6 @@ const FinancialDashboard = ({ currentUser }) => {
 
     const budgetAlerts = budgetTracking.filter(cat => cat.utilization >= 85);
 
-    // 🚀 [원본 유지] 기존 이상 탐지 로직 (Anomalies) 및 카테고리별 합산
     const anomalies = [];
     const categoryTotals = {};
     expenses.filter(e => e.status === 'APPROVED').forEach(e => { 
@@ -322,14 +318,12 @@ const FinancialDashboard = ({ currentUser }) => {
     });
     if (categoryTotals['소모품비'] > 1000000) anomalies.push({ msg: "소모품비 지출 평소 대비 급증 감지 (점검 요망)", type: "warning" });
 
-    // 🚀 [원본 유지] 기존 수익성 ROI 차트 데이터
     const roiData = OFFICIAL_ACCOUNTS.slice(1, 7).map((acc, idx) => ({
       name: acc,
       value: totalIncome > 0 ? totalIncome * (0.2 - idx * 0.02) : 5000000 - idx * 500000,
       cost: categoryTotals[acc] || 500000
     }));
 
-    // 🚀 [원본 유지] 기존 일자별 흐름 데이터
     const dailyFlowData = [];
     let cumulative = -fixedCosts; 
     try {
@@ -401,12 +395,14 @@ const FinancialDashboard = ({ currentUser }) => {
       const unmatchedExps = [...expenses.filter(e => !e.matchedTransactionId || e.matchedTransactionId === 'SYSTEM_CARD_VERIFIED')];
       const dynamicAutoProofKeywords = [...AUTO_PROOF_KEYWORDS, ...(finSettings.customAutoProof || []).map(k => ({ key: new RegExp(k.key), cat: k.cat, note: k.note }))];
       setExtractedInitialBalance(null);
+      
       try {
         if (uploadType === 'BANK') {
           const headerIdx = data.findIndex(row => row && row.includes('거래일시'));
           if (headerIdx === -1) throw new Error("은행 엑셀 형식이 아닙니다.");
           const dateIdx = data[headerIdx].indexOf('거래일시'), nameIdx = data[headerIdx].indexOf('보낸분/받는분'), outIdx = data[headerIdx].indexOf('출금액(원)'), inIdx = data[headerIdx].indexOf('입금액(원)');
           const balIdx = data[headerIdx].findIndex(col => String(col || '').includes('잔액'));
+          
           if (balIdx > -1) {
               for (let i = data.length - 1; i > headerIdx; i--) {
                   if (data[i] && data[i][dateIdx]) {
@@ -421,17 +417,33 @@ const FinancialDashboard = ({ currentUser }) => {
             if (!data[i]) continue;
             const transactionDate = normalizeDateStr(data[i][dateIdx]);
             const outAmount = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
+            
             if (outAmount > 0) {
               const merchantName = data[i][nameIdx] || '알수없음';
-              const isCardPayment = /(카드|결제|삼성|롯데|신한|국민|KB|현대|하나|비씨|BC|NH|농협)/i.test(merchantName);
               let matchedExpense = null, isAutoProof = false, matchedRule = null;
-              if (!isCardPayment) { 
-                  const matchIdx = unmatchedExps.findIndex(e => normalizeDateStr(e.expenseDate) === transactionDate && Number(e.amount) === outAmount);
-                  if (matchIdx > -1) matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
-                  else { for (const rule of dynamicAutoProofKeywords) { if (rule.key.test(merchantName)) { isAutoProof = true; matchedRule = rule; break; } } }
+              
+              // 1단계: 수기 결의서가 있는지 확인
+              const matchIdx = unmatchedExps.findIndex(e => normalizeDateStr(e.expenseDate) === transactionDate && Number(e.amount) === outAmount);
+              if (matchIdx > -1) {
+                  matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
+              } else {
+                  // 2단계: 수기 결의서가 없다면, 자동 증빙 키워드 룰(커스텀+기본)을 최우선으로 검사
+                  for (const rule of dynamicAutoProofKeywords) { 
+                      if (rule.key.test(merchantName)) { 
+                          isAutoProof = true; 
+                          matchedRule = rule; 
+                          break; 
+                      } 
+                  }
               }
+
+              // 3단계: 자동 증빙에도 안 걸렸다면, 최후의 보루인 하드코딩 카드대금 정규식으로 검사
+              // 🚀 '국민'을 '국민카드|KB국민'으로 좁혀서 간섭(Interference) 방지
+              const isCardPayment = !isAutoProof && !matchedExpense && /(카드|결제|대금|삼성|현대|롯데|신한|국민카드|KB국민|하나|비씨|BC|농협)/i.test(merchantName);
+
               extracted.push({ transactionDate, amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment, matchedExpense, isAutoProof, matchedRule });
             }
+            
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) extracted.push({ transactionDate, amount: inAmount, merchantName: data[i][nameIdx] || '알수없음', type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
           }
@@ -466,7 +478,8 @@ const FinancialDashboard = ({ currentUser }) => {
           await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'finance'), newSettings, { merge: true }); setFinSettings(newSettings);
       }
       for (const item of parsedData) {
-        const { matchedExpense, matchedRule, isAutoProof, ...safeItem } = item;
+        const { matchedExpense, matchedRule, isAutoProof, isCardPayment, ...safeItem } = item;
+        
         if (item.type === 'CARD') {
             if (item.matchedExpense) {
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id), { status: 'APPROVED', matchedTransactionId: 'SYSTEM_CARD_VERIFIED', updatedAt: new Date().toISOString() });
@@ -479,22 +492,22 @@ const FinancialDashboard = ({ currentUser }) => {
             addedCount++;
         } else if (item.type === 'BANK') {
             const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
+            
+            // 🚀 매칭 우선순위 로직
             if (item.matchedExpense) {
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id), { status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() });
                 batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: item.matchedExpense.id, createdAt: new Date().toISOString() });
+            } else if (item.isAutoProof && item.matchedRule) {
+                const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                batch.set(expRef, { userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)', expenseDate: safeItem.transactionDate, amount: safeItem.amount, method: '자동이체', purpose: `[${safeItem.merchantName}] 자동 증빙 완료건`, category: item.matchedRule.cat, receiptUrl: item.matchedRule.note, receiptUrls: [], status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
+                batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
+            } else if (item.isCardPayment) {
+                const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
+                batch.set(expRef, { userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', expenseDate: safeItem.transactionDate, amount: safeItem.amount, method: '계좌이체', purpose: `[${safeItem.merchantName}] 신용카드 대금 일괄 납부`, category: '미지급금', receiptUrl: '카드사 청구서 갈음', receiptUrls: [], status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
+                batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
             } else {
-                if (/(카드|결제|대금|삼성|현대|롯데|신한|국민|KB|하나|비씨|BC|농협)/i.test(safeItem.merchantName)) {
-                    const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
-                    batch.set(expRef, { userId: 'SYSTEM_BANK', userName: '시스템(자동 대체)', expenseDate: safeItem.transactionDate, amount: safeItem.amount, method: '계좌이체', purpose: `[${safeItem.merchantName}] 신용카드 대금 일괄 납부`, category: '미지급금', receiptUrl: '카드사 청구서 갈음', receiptUrls: [], status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
-                    batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
-                } else if (item.isAutoProof && item.matchedRule) {
-                    const expRef = doc(collection(db, `artifacts/${APP_ID}/public/data/expenses`));
-                    batch.set(expRef, { userId: 'SYSTEM_AUTO', userName: '시스템(자동증빙)', expenseDate: safeItem.transactionDate, amount: safeItem.amount, method: '자동이체', purpose: `[${safeItem.merchantName}] 자동 증빙 완료건`, category: item.matchedRule.cat, receiptUrl: item.matchedRule.note, receiptUrls: [], status: 'APPROVED', matchedTransactionId: trxDocRef.id, createdAt: new Date().toISOString() });
-                    batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: expRef.id, createdAt: new Date().toISOString() });
-                } else {
-                    batch.set(trxDocRef, { ...safeItem, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
-                    missingProofCount++;
-                }
+                batch.set(trxDocRef, { ...safeItem, isMatched: false, matchedExpenseId: null, createdAt: new Date().toISOString() });
+                missingProofCount++;
             }
             addedCount++;
         }
@@ -517,7 +530,6 @@ const FinancialDashboard = ({ currentUser }) => {
       await writeBatch(db).update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, realId), { status, updatedAt: new Date().toISOString() }).commit(); 
   };
 
-  // 🚀 [신규 기능] 귀속월(예산 차감월) 보정 처리 로직
   const handleChangeExpenseDate = async (item) => {
       if (!item.id.startsWith('exp_') && !item.id.startsWith('pen_')) {
           return alert("지출 결의서가 등록된 내역만 귀속 일자를 변경할 수 있습니다.");
@@ -581,7 +593,6 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       ) : (
         <>
-          {/* 상단: 주요 지표 카드 (원본 복구) */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 rounded-2xl shadow-sm border border-gray-100 border-l-4 border-l-indigo-500 bg-white">
               <div className="flex justify-between items-start mb-2">
@@ -621,13 +632,11 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 🚀 [신규 추가] 카테고리별 예산 분배 및 알림 센터 */}
           <div className="bg-white border border-gray-200 p-6 sm:p-8 rounded-2xl shadow-sm mt-6">
             <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
                 <ShieldAlert className="text-rose-500" size={24}/> AI 예산 통제 및 리스크 관리
             </h2>
 
-            {/* 상단: 전체 예산 신호등 */}
             <div className={`p-6 rounded-2xl border mb-8 flex items-center gap-5 sm:gap-6 ${
                 aiAnalytics.budgetStatus.color === 'emerald' ? 'bg-emerald-50 border-emerald-200' : 
                 (aiAnalytics.budgetStatus.color === 'amber' ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200')
@@ -651,7 +660,6 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-10">
-                {/* 중단: 카테고리별 소진율 프로그레스 바 */}
                 <div className="lg:col-span-2 space-y-6 lg:border-r pr-0 lg:pr-8 border-gray-100">
                     <h3 className="text-base font-bold text-gray-800 mb-4 flex items-center gap-2"><PieChart size={18}/> 카테고리별 세부 소진 현황</h3>
                     <div className="space-y-5">
@@ -682,7 +690,6 @@ const FinancialDashboard = ({ currentUser }) => {
                     </div>
                 </div>
 
-                {/* 하단: 실시간 초과 알림 센터 */}
                 <div className="flex flex-col">
                     <h3 className="text-base font-bold text-gray-800 mb-4 flex items-center gap-2"><BellRing size={18} className="text-rose-500"/> 실시간 초과 알림 센터</h3>
                     {aiAnalytics.budgetAlerts.length === 0 ? (
@@ -711,7 +718,6 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 🚀 [원본 복구] 세무 예측 및 이상 지출 탐지 */}
           <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl mt-6">
             <h2 className="text-sm font-bold text-rose-800 mb-4 flex items-center gap-2"><ShieldAlert size={18}/> AI 세무 예측 및 이상 탐지</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -738,7 +744,6 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 🚀 [원본 복구] 수익성 분석(ROI) 차트 및 BEP 차트 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
             <div className="p-6 bg-white shadow-sm border border-gray-200 rounded-2xl flex flex-col justify-between">
               <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2"><PieChart size={20} className="text-indigo-600"/> 주요 항목별 수익성(ROI) 분석</h2>
@@ -787,7 +792,6 @@ const FinancialDashboard = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 하단: 월별 통합 재무 원장 */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px] mt-6">
             <div className="p-5 border-b bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
               <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Database className="text-indigo-600" size={20} /> 월별 통합 재무 원장</h2>
@@ -814,7 +818,6 @@ const FinancialDashboard = ({ currentUser }) => {
                   {integratedLedger.length === 0 ? <tr><td colSpan="7" className="text-center py-10 text-gray-400 font-bold">내역이 없습니다.</td></tr> : integratedLedger.map((item) => (
                     <tr key={item.id} className={`border-b hover:bg-gray-50 transition-colors ${(item.type || '').includes('수입') ? 'bg-blue-50/30' : (item.status === 'ERROR' ? 'bg-rose-50/50' : '')}`}>
                       
-                      {/* 🚀 [신규 기능 적용] 달력 아이콘을 통해 귀속일자 보정 가능 */}
                       <td className="px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <span>{item.date}</span>
@@ -868,7 +871,6 @@ const FinancialDashboard = ({ currentUser }) => {
         </>
       )}
 
-      {/* 🚀 [신규 추가] 원인 지출 내역 보기 모달 (범인 색출용) */}
       {culpritModalData && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setCulpritModalData(null)}>
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
@@ -922,7 +924,6 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 설정 모달 */}
       {isSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden p-6 relative flex flex-col max-h-[90vh]">
@@ -973,7 +974,6 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 엑셀 업로드 모달 */}
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -1022,7 +1022,6 @@ const FinancialDashboard = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 영수증 뷰어 모달 */}
       {previewReceipts.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setPreviewReceipts([])}>
           <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
