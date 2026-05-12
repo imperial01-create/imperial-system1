@@ -419,15 +419,16 @@ const FinancialDashboard = ({ currentUser }) => {
             const outAmount = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
             
             if (outAmount > 0) {
-              const merchantName = data[i][nameIdx] || '알수없음';
+              // 🚀 [CTO 로직 변경] 보낸분/받는분이 공백일 경우 '월급(미기재)'로 강제 지정하여 자동증빙 태움
+              let rawName = String(data[i][nameIdx] || '').trim();
+              const merchantName = rawName === '' ? '월급' : rawName;
+              
               let matchedExpense = null, isAutoProof = false, matchedRule = null;
               
-              // 1단계: 수기 결의서가 있는지 확인
               const matchIdx = unmatchedExps.findIndex(e => normalizeDateStr(e.expenseDate) === transactionDate && Number(e.amount) === outAmount);
               if (matchIdx > -1) {
                   matchedExpense = unmatchedExps.splice(matchIdx, 1)[0]; 
               } else {
-                  // 2단계: 수기 결의서가 없다면, 자동 증빙 키워드 룰(커스텀+기본)을 최우선으로 검사
                   for (const rule of dynamicAutoProofKeywords) { 
                       if (rule.key.test(merchantName)) { 
                           isAutoProof = true; 
@@ -437,15 +438,17 @@ const FinancialDashboard = ({ currentUser }) => {
                   }
               }
 
-              // 3단계: 자동 증빙에도 안 걸렸다면, 최후의 보루인 하드코딩 카드대금 정규식으로 검사
-              // 🚀 '국민'을 '국민카드|KB국민'으로 좁혀서 간섭(Interference) 방지
               const isCardPayment = !isAutoProof && !matchedExpense && /(카드|결제|대금|삼성|현대|롯데|신한|국민카드|KB국민|하나|비씨|BC|농협)/i.test(merchantName);
 
               extracted.push({ transactionDate, amount: outAmount, merchantName, type: 'BANK', rawId: `OUT_${outAmount}_${i}`, isCardPayment, matchedExpense, isAutoProof, matchedRule });
             }
             
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
-            if (inAmount > 0) extracted.push({ transactionDate, amount: inAmount, merchantName: data[i][nameIdx] || '알수없음', type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
+            if (inAmount > 0) {
+                // 입금의 경우 공백이면 '입금자명 미기재' 처리
+                let rawInName = String(data[i][nameIdx] || '').trim();
+                extracted.push({ transactionDate, amount: inAmount, merchantName: rawInName === '' ? '입금자명 미기재' : rawInName, type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
+            }
           }
         } else if (uploadType === 'CARD') {
           const headerIdx = data.findIndex(row => row && row.includes('승인일'));
@@ -493,7 +496,6 @@ const FinancialDashboard = ({ currentUser }) => {
         } else if (item.type === 'BANK') {
             const trxDocRef = doc(collection(db, `artifacts/${APP_ID}/public/data/transactions`));
             
-            // 🚀 매칭 우선순위 로직
             if (item.matchedExpense) {
                 batch.update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.matchedExpense.id), { status: 'APPROVED', matchedTransactionId: trxDocRef.id, updatedAt: new Date().toISOString() });
                 batch.set(trxDocRef, { ...safeItem, isMatched: true, matchedExpenseId: item.matchedExpense.id, createdAt: new Date().toISOString() });
