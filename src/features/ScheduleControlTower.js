@@ -36,24 +36,17 @@ const getClassColor = (className) => {
 
 const formatDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-// 🚀 [CTO 코어 알고리즘]: 교실명 무결점 정규화기 (Room Name Standardizer)
-// 엑셀 오타, 클리닉 데이터의 형태 차이를 모두 흡수하여 완벽히 똑같은 ID로 통일합니다.
 const normalizeRoomName = (roomStr) => {
   if (!roomStr) return '';
-  // 1. 눈에 보이는/보이지 않는 모든 공백 파괴 및 대문자화 (예: " Class Room 1 " -> "CLASSROOM1")
   const cleaned = String(roomStr).trim().toUpperCase().replace(/\s+/g, '');
-  
-  // 2. CLASSROOM 또는 CLASS로 시작하면 무조건 표준 포맷 "Classroom X" 로 강제 변환
   if (cleaned.startsWith('CLASSROOM')) {
       const num = cleaned.replace('CLASSROOM', '');
       return `Classroom ${num}`;
   }
   if (cleaned.startsWith('CLASS')) {
       const num = cleaned.replace('CLASS', '');
-      return `Classroom ${num}`; // 클리닉의 "Class 1"을 "Classroom 1"로 매핑
+      return `Classroom ${num}`;
   }
-  
-  // 3. 예외적인 방 이름(원장실, 대강의실 등)은 공백만 다듬어서 반환
   return String(roomStr).trim();
 };
 
@@ -124,14 +117,9 @@ const ScheduleControlTower = ({ currentUser }) => {
 
   const teacherList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), [baseSchedules]);
   
-  // 🚀 [CTO 로직 업데이트]: 정규화(Normalization) + 숫자 인식 정렬(Numeric Sort)
   const roomList = useMemo(() => {
-    // 1. 기존 데이터의 오타를 모두 정규화하여 불러옴
     const baseRooms = baseSchedules.map(s => normalizeRoomName(s.room));
-    // 2. 클리닉의 방 이름도 모두 정규화
     const clinicRooms = clinics.map(c => c.classroom ? normalizeRoomName(c.classroom) : null);
-    
-    // 3. 합집합 생성 후, 'Classroom 10'이 'Classroom 2'보다 뒤에 오도록 똑똑하게 정렬
     return Array.from(new Set([...baseRooms, ...clinicRooms]))
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
@@ -142,13 +130,10 @@ const ScheduleControlTower = ({ currentUser }) => {
   }, [roomList, mobileSelectedRoom]);
 
   const activeSchedules = useMemo(() => {
-    // [중요]: 화면에 그리기 전, 과거에 오타로 저장된 엑셀 데이터도 실시간으로 교정(Sanitize)합니다.
     let list = baseSchedules.map(s => ({ ...s, room: normalizeRoomName(s.room) }));
-    
     const weekStartStr = formatDate(currentWeekStart);
     const weekEndStr = formatDate(weekEnd);
 
-    // 1. 임시 일정 및 보강 (방 이름 정규화 적용)
     requests.filter(r => r.status === 'APPROVED').forEach(req => {
       if (req.type === 'PERMANENT') {
         const idx = list.findIndex(s => s.id === req.originalScheduleId);
@@ -167,7 +152,6 @@ const ScheduleControlTower = ({ currentUser }) => {
       }
     });
 
-    // 2. 클리닉 일정 병합 (방 이름 정규화 적용)
     clinics.forEach(c => {
         if ((c.status === 'confirmed' || c.status === 'completed' || c.status === 'pending' || c.status === 'open') && c.classroom) {
             if (c.date >= weekStartStr && c.date <= weekEndStr) {
@@ -180,12 +164,13 @@ const ScheduleControlTower = ({ currentUser }) => {
                     day: dayStr,
                     startTime: c.startTime,
                     endTime: c.endTime,
-                    room: normalizeRoomName(c.classroom), // 정규화기 통과
+                    room: normalizeRoomName(c.classroom), 
                     grade: '클리닉 센터',
-                    className: `${c.taName}TA클리닉${c.status === 'open' ? ' (오픈)' : ''}`, 
+                    className: `${c.taName}TA클리닉`, 
                     isModified: false,
                     isClinic: true,
-                    clinicStatus: c.status
+                    clinicStatus: c.status,
+                    taName: c.taName
                 });
             }
         }
@@ -244,7 +229,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                 const parts = String(row[i]).split('\n').map(s => s.trim()).filter(Boolean);
                 if (parts.length >= 3) {
                   const cleanClassName = parts[1].replace(/\(.*\)/g, '').trim();
-                  // 🚀 업로드 시점에 방 이름을 원천적으로 정규화하여 DB에 깨끗한 데이터만 저장합니다.
                   const standardizedRoom = normalizeRoomName(parts[2]);
                   parsedSchedules.push({
                     id: `base_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
@@ -274,7 +258,7 @@ const ScheduleControlTower = ({ currentUser }) => {
         
         headers.forEach((h, i) => {
           if(!h) return;
-          const cleanClassName = String(h).replace(/\(.*\)/g, '').trim();
+          const cleanClassName = String(h).replace(/\(\d+\s*명\)/, '').trim();
           sMap[cleanClassName] = [];
           
           for (let r = 1; r < rows.length; r++) {
@@ -306,7 +290,6 @@ const ScheduleControlTower = ({ currentUser }) => {
   const handleSubmitRequest = async (e) => {
       e.preventDefault();
       const form = e.target;
-      
       const targetDateStr = form.targetDate.value;
       const dateObj = new Date(targetDateStr);
       const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
@@ -323,7 +306,7 @@ const ScheduleControlTower = ({ currentUser }) => {
               newDay: computedDay,
               newStartTime: form.newStartTime.value, 
               newEndTime: form.newEndTime.value,
-              newRoom: normalizeRoomName(form.newRoom.value), // 신청 시에도 정규화
+              newRoom: normalizeRoomName(form.newRoom.value),
               grade: changeRequestModal.grade, 
               className: changeRequestModal.className,
               status: 'PENDING', 
@@ -365,7 +348,6 @@ const ScheduleControlTower = ({ currentUser }) => {
       <div className="flex flex-col xl:flex-row gap-6 w-full">
         <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[750px] relative">
             <div className="p-4 border-b bg-gray-50 flex flex-col lg:flex-row justify-between items-center gap-4">
-                
                 <div className="flex items-center gap-2 bg-white rounded-xl p-1.5 shadow-sm border border-gray-200 order-2 lg:order-1 w-full lg:w-auto justify-center">
                     <button onClick={() => setCurrentWeekStart(new Date(currentWeekStart.setDate(currentWeekStart.getDate() - 7)))} className="p-1 hover:bg-gray-100 rounded-lg transition-colors"><ChevronLeft size={20} className="text-gray-600"/></button>
                     <span className="text-sm font-black text-gray-800 px-2 flex items-center gap-1">
@@ -380,7 +362,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                     <button onClick={() => { setViewMode('ROOM'); setSelectedFilter(roomList[0] || 'Classroom 1'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
                 </div>
                 
-                {/* 데스크탑에서 필터 드롭다운 옵션 수정 */}
                 <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full lg:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 order-3">
                     {viewMode === 'TEACHER' ? 
                         teacherList.map(t => <option key={t} value={t}>{t} 선생님</option>) :
@@ -401,7 +382,7 @@ const ScheduleControlTower = ({ currentUser }) => {
             
             {viewMode === 'ROOM' && (
                 <div className="xl:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
-                    {roomList.map((r, idx) => (
+                    {roomList.map((r) => (
                         <button key={`mob-room-${r}`} onClick={() => setMobileSelectedRoom(r)} className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedRoom === r ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
                             {r}
                         </button>
@@ -433,7 +414,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                                             <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
                                                     const colorTheme = schedule.isClinic 
-                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
                                                         : getClassColor(schedule.className);
                                                     
@@ -451,11 +432,21 @@ const ScheduleControlTower = ({ currentUser }) => {
                                         );
                                     }) : roomList.map(room => {
                                         const schedulesInCell = activeSchedules.filter(s => s.room === room && parseInt(s.startTime.split(':')[0], 10) === currentHour);
+                                        
                                         return (
                                             <td key={`${room}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px] ${mobileSelectedRoom !== room ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
+                                                    if (schedule.isClinic) {
+                                                        const isCoveredByClass = schedulesInCell.some(s => !s.isClinic);
+                                                        if (isCoveredByClass) return null;
+                                                    }
+
+                                                    const matchedClinics = !schedule.isClinic 
+                                                        ? schedulesInCell.filter(s => s.isClinic)
+                                                        : [];
+
                                                     const colorTheme = schedule.isClinic 
-                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
                                                         : getClassColor(schedule.className);
 
@@ -465,7 +456,20 @@ const ScheduleControlTower = ({ currentUser }) => {
                                                         >
                                                             <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
                                                             <span className="text-[11px] sm:text-xs font-black break-words whitespace-normal leading-tight">{schedule.className}</span>
-                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><User size={10} className="shrink-0"/>{schedule.teacher}</span>
+                                                            
+                                                            {matchedClinics.length > 0 && (
+                                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                                    {matchedClinics.map(c => (
+                                                                        <span key={c.id} className="bg-white/60 text-[9px] px-1 rounded border border-cyan-300 font-bold text-cyan-800">
+                                                                            + {c.taName}TA 투입
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            
+                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold">
+                                                                <User size={10} className="shrink-0"/>{schedule.teacher}
+                                                            </span>
                                                         </div>
                                                     );
                                                 })}

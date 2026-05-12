@@ -271,12 +271,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>
-                                      {/* [CTO 적용] 스케줄 관제탑 정규 수업과 겹치는지 체크하여 비활성화 */}
+                                      {/* [CTO] 의도적 중복 허용: disabled 속성 제거, 스타일로 경고만 표시 */}
                                       {CLASSROOMS.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
-                                              <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
-                                                  {r} {isOccupied ? '(정규수업중)' : ''}
+                                              <option key={r} value={r} className={isOccupied ? 'text-amber-600 bg-amber-50' : ''}>
+                                                  {r} {isOccupied ? '(정규수업중 - 보조투입시 선택)' : ''}
                                               </option>
                                           );
                                       })}
@@ -342,12 +342,12 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // 🚀 [CTO 로직 변수명 수정됨] 스케줄 관제탑 데이터 불러오기 (교실 충돌 방지용)
+    // 🚀 [CTO 로직: 빌드 충돌 해결] masterScheduleRequests 사용
     const [baseSchedules, setBaseSchedules] = useState([]);
     const [masterScheduleRequests, setMasterScheduleRequests] = useState([]);
 
     useEffect(() => {
-        if (!isAdminView) return; // 관리자에게만 필요
+        if (!isAdminView) return; 
         const loadSchedules = async () => {
             try {
                 const snap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schedule_base'));
@@ -377,13 +377,13 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
 
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom) => {
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
-        const targetRoom = clinicRoom.replace('Class ', 'Classroom '); // Class 1 -> Classroom 1 매핑
+        const targetRoom = clinicRoom.replace('Class ', 'Classroom '); 
 
         return activeSchedules.some(s => {
             if (s.room !== targetRoom) return false;
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
-            return (s.startTime < endTime && s.endTime > startTime); // 겹치는 시간 로직 (문자열 비교)
+            return (s.startTime < endTime && s.endTime > startTime); 
         });
     }, [activeSchedules]);
 
@@ -760,8 +760,8 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                                             {CLASSROOMS.map(r => {
                                                 const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                                 return (
-                                                    <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
-                                                        {r} {isOccupied ? '(정규수업중)' : ''}
+                                                    <option key={r} value={r} className={isOccupied ? 'text-amber-600 bg-amber-50' : ''}>
+                                                        {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                                     </option>
                                                 );
                                             })}
