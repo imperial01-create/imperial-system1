@@ -36,6 +36,27 @@ const getClassColor = (className) => {
 
 const formatDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+// 🚀 [CTO 코어 알고리즘]: 교실명 무결점 정규화기 (Room Name Standardizer)
+// 엑셀 오타, 클리닉 데이터의 형태 차이를 모두 흡수하여 완벽히 똑같은 ID로 통일합니다.
+const normalizeRoomName = (roomStr) => {
+  if (!roomStr) return '';
+  // 1. 눈에 보이는/보이지 않는 모든 공백 파괴 및 대문자화 (예: " Class Room 1 " -> "CLASSROOM1")
+  const cleaned = String(roomStr).trim().toUpperCase().replace(/\s+/g, '');
+  
+  // 2. CLASSROOM 또는 CLASS로 시작하면 무조건 표준 포맷 "Classroom X" 로 강제 변환
+  if (cleaned.startsWith('CLASSROOM')) {
+      const num = cleaned.replace('CLASSROOM', '');
+      return `Classroom ${num}`;
+  }
+  if (cleaned.startsWith('CLASS')) {
+      const num = cleaned.replace('CLASS', '');
+      return `Classroom ${num}`; // 클리닉의 "Class 1"을 "Classroom 1"로 매핑
+  }
+  
+  // 3. 예외적인 방 이름(원장실, 대강의실 등)은 공백만 다듬어서 반환
+  return String(roomStr).trim();
+};
+
 const ScheduleControlTower = ({ currentUser }) => {
   const isAdmin = currentUser?.role === 'admin';
   const myName = currentUser?.name || '';
@@ -103,12 +124,17 @@ const ScheduleControlTower = ({ currentUser }) => {
 
   const teacherList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), [baseSchedules]);
   
-  // 🚀 [CTO 로직 업데이트]: 강사 엑셀의 방 목록 + 클리닉에서 배정한 방 목록 강제 합집합(Union) 처리
+  // 🚀 [CTO 로직 업데이트]: 정규화(Normalization) + 숫자 인식 정렬(Numeric Sort)
   const roomList = useMemo(() => {
-    const baseRooms = baseSchedules.map(s => s.room);
-    const clinicRooms = clinics.map(c => c.classroom ? c.classroom.replace('Class ', 'Classroom ') : null);
-    // 중복 제거 및 null 값 필터링 후 정렬
-    return Array.from(new Set([...baseRooms, ...clinicRooms])).filter(Boolean).sort();
+    // 1. 기존 데이터의 오타를 모두 정규화하여 불러옴
+    const baseRooms = baseSchedules.map(s => normalizeRoomName(s.room));
+    // 2. 클리닉의 방 이름도 모두 정규화
+    const clinicRooms = clinics.map(c => c.classroom ? normalizeRoomName(c.classroom) : null);
+    
+    // 3. 합집합 생성 후, 'Classroom 10'이 'Classroom 2'보다 뒤에 오도록 똑똑하게 정렬
+    return Array.from(new Set([...baseRooms, ...clinicRooms]))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
   }, [baseSchedules, clinics]);
 
   useEffect(() => {
@@ -116,20 +142,24 @@ const ScheduleControlTower = ({ currentUser }) => {
   }, [roomList, mobileSelectedRoom]);
 
   const activeSchedules = useMemo(() => {
-    let list = [...baseSchedules];
+    // [중요]: 화면에 그리기 전, 과거에 오타로 저장된 엑셀 데이터도 실시간으로 교정(Sanitize)합니다.
+    let list = baseSchedules.map(s => ({ ...s, room: normalizeRoomName(s.room) }));
+    
     const weekStartStr = formatDate(currentWeekStart);
     const weekEndStr = formatDate(weekEnd);
 
-    // 1. 임시 일정 및 보강
+    // 1. 임시 일정 및 보강 (방 이름 정규화 적용)
     requests.filter(r => r.status === 'APPROVED').forEach(req => {
       if (req.type === 'PERMANENT') {
         const idx = list.findIndex(s => s.id === req.originalScheduleId);
-        if (idx > -1) { list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom }; }
+        if (idx > -1) { 
+            list[idx] = { ...list[idx], day: req.newDay, startTime: req.newStartTime, endTime: req.newEndTime, room: normalizeRoomName(req.newRoom) }; 
+        }
       } else if (req.type === 'MAKEUP' || req.type === 'TEMPORARY') {
         if (req.targetDate >= weekStartStr && req.targetDate <= weekEndStr) {
             list.push({
               id: `mod_${req.id}`, teacher: req.requestTeacher, day: req.newDay,
-              startTime: req.newStartTime, endTime: req.newEndTime, room: req.newRoom,
+              startTime: req.newStartTime, endTime: req.newEndTime, room: normalizeRoomName(req.newRoom),
               grade: req.grade, className: req.className + (req.type === 'MAKEUP' ? ' (보강)' : ' (일시변경)'),
               isModified: true, targetDate: req.targetDate
             });
@@ -137,9 +167,8 @@ const ScheduleControlTower = ({ currentUser }) => {
       }
     });
 
-    // 2. 클리닉 일정 병합
+    // 2. 클리닉 일정 병합 (방 이름 정규화 적용)
     clinics.forEach(c => {
-        // 🚀 [CTO 로직 업데이트]: c.status === 'open' (빈 슬롯 오픈 클리닉) 조건 추가
         if ((c.status === 'confirmed' || c.status === 'completed' || c.status === 'pending' || c.status === 'open') && c.classroom) {
             if (c.date >= weekStartStr && c.date <= weekEndStr) {
                 const d = new Date(c.date);
@@ -151,9 +180,8 @@ const ScheduleControlTower = ({ currentUser }) => {
                     day: dayStr,
                     startTime: c.startTime,
                     endTime: c.endTime,
-                    room: c.classroom.replace('Class ', 'Classroom '), 
+                    room: normalizeRoomName(c.classroom), // 정규화기 통과
                     grade: '클리닉 센터',
-                    // 빈 슬롯(open)인 경우 직관적으로 인지할 수 있도록 (오픈) 태그 추가
                     className: `${c.taName}TA클리닉${c.status === 'open' ? ' (오픈)' : ''}`, 
                     isModified: false,
                     isClinic: true,
@@ -172,7 +200,7 @@ const ScheduleControlTower = ({ currentUser }) => {
 
   const getStudentsForClass = (className, map) => {
     if (!className || !map) return [];
-    if (className.includes('TA클리닉')) return []; // 클리닉은 정규 명단에서 매칭 안함
+    if (className.includes('TA클리닉')) return []; 
     const cleanTarget = className.replace(/\(.*\)/g, '').trim();
     if (map[cleanTarget]) return map[cleanTarget]; 
     for (const [key, students] of Object.entries(map)) {
@@ -216,10 +244,12 @@ const ScheduleControlTower = ({ currentUser }) => {
                 const parts = String(row[i]).split('\n').map(s => s.trim()).filter(Boolean);
                 if (parts.length >= 3) {
                   const cleanClassName = parts[1].replace(/\(.*\)/g, '').trim();
+                  // 🚀 업로드 시점에 방 이름을 원천적으로 정규화하여 DB에 깨끗한 데이터만 저장합니다.
+                  const standardizedRoom = normalizeRoomName(parts[2]);
                   parsedSchedules.push({
                     id: `base_${Date.now()}_${Math.random().toString(36).substr(2,9)}`,
                     teacher: currentTeacher, day: DAYS[i - 1], startTime: start, endTime: end,
-                    grade: parts[0], className: cleanClassName, room: parts[2],
+                    grade: parts[0], className: cleanClassName, room: standardizedRoom,
                   });
                 }
               }
@@ -293,7 +323,7 @@ const ScheduleControlTower = ({ currentUser }) => {
               newDay: computedDay,
               newStartTime: form.newStartTime.value, 
               newEndTime: form.newEndTime.value,
-              newRoom: form.newRoom.value, 
+              newRoom: normalizeRoomName(form.newRoom.value), // 신청 시에도 정규화
               grade: changeRequestModal.grade, 
               className: changeRequestModal.className,
               status: 'PENDING', 
@@ -347,9 +377,10 @@ const ScheduleControlTower = ({ currentUser }) => {
 
                 <div className="flex bg-gray-200 p-1 rounded-xl w-full lg:w-auto justify-center order-1 lg:order-2">
                     <button onClick={() => setViewMode('TEACHER')} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'TEACHER' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>👨‍🏫 선생님별</button>
-                    <button onClick={() => { setViewMode('ROOM'); setSelectedFilter('월'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
+                    <button onClick={() => { setViewMode('ROOM'); setSelectedFilter(roomList[0] || 'Classroom 1'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
                 </div>
                 
+                {/* 데스크탑에서 필터 드롭다운 옵션 수정 */}
                 <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full lg:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 order-3">
                     {viewMode === 'TEACHER' ? 
                         teacherList.map(t => <option key={t} value={t}>{t} 선생님</option>) :
@@ -401,7 +432,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                                         return (
                                             <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
-                                                    // 오픈 상태인 클리닉은 투명도를 살짝 주어 직관성을 높입니다.
                                                     const colorTheme = schedule.isClinic 
                                                         ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
