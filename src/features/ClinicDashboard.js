@@ -271,12 +271,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>
-                                      {/* [CTO] 의도적 중복 허용: disabled 속성 제거, 스타일로 경고만 표시 */}
                                       {CLASSROOMS.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
                                               <option key={r} value={r} className={isOccupied ? 'text-amber-600 bg-amber-50' : ''}>
-                                                  {r} {isOccupied ? '(정규수업중 - 보조투입시 선택)' : ''}
+                                                  {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                               </option>
                                           );
                                       })}
@@ -342,7 +341,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
 
-    // 🚀 [CTO 로직: 빌드 충돌 해결] masterScheduleRequests 사용
+    // 🚀 [CTO 로직: 빌드 충돌 방지] 변수명 masterScheduleRequests 적용 유지
     const [baseSchedules, setBaseSchedules] = useState([]);
     const [masterScheduleRequests, setMasterScheduleRequests] = useState([]);
 

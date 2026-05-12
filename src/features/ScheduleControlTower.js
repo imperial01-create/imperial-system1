@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { collection, query, onSnapshot, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, getDoc, setDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   Calendar as CalendarIcon, MapPin, UploadCloud, 
@@ -54,7 +54,7 @@ const ScheduleControlTower = ({ currentUser }) => {
   const isAdmin = currentUser?.role === 'admin';
   const myName = currentUser?.name || '';
   
-  const [viewMode, setViewMode] = useState('TEACHER');
+  const [viewMode, setViewMode] = useState(isAdmin ? 'TEACHER' : 'TEACHER');
   const [selectedFilter, setSelectedFilter] = useState(isAdmin ? '' : myName);
   
   const [mobileSelectedDay, setMobileSelectedDay] = useState("월");
@@ -86,6 +86,15 @@ const ScheduleControlTower = ({ currentUser }) => {
   const fileInputRef1 = useRef(null);
   const fileInputRef2 = useRef(null);
 
+  // 🚀 [보안/UX 고도화]: 강사 접속 시 다른 선생님 데이터 열람 원천 차단
+  useEffect(() => {
+    if (!isAdmin) {
+        setViewMode('TEACHER');
+        setSelectedFilter(myName);
+    }
+  }, [isAdmin, myName]);
+
+  // 🚀 [성능 최적화 1]: 뼈대 데이터 및 변경 요청 데이터 로드 (최초 1회 마운트 시에만)
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
@@ -101,19 +110,37 @@ const ScheduleControlTower = ({ currentUser }) => {
     };
     loadBaseData();
 
+    // 관리자 결재함을 위해 PENDING 처리가 필요하므로 전체 요청을 구독 (데이터량이 적어 문제없음)
     const unsubReq = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/schedule_requests`)), (snap) => {
       if (isMounted) setRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, () => { });
 
-    const unsubClinics = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/sessions`)), (snap) => {
+    return () => { isMounted = false; unsubReq(); };
+  }, []);
+
+  // 🚀 [성능 최적화 2]: 클리닉(Sessions) 데이터는 주간 캘린더 날짜에 맞춰 필터링하여 최소한의 읽기(Read)만 수행
+  useEffect(() => {
+    let isMounted = true;
+    setIsLoading(true);
+    
+    const weekStartStr = formatDate(currentWeekStart);
+    const weekEndStr = formatDate(weekEnd);
+
+    const qClinics = query(
+        collection(db, `artifacts/${APP_ID}/public/data/sessions`),
+        where('date', '>=', weekStartStr),
+        where('date', '<=', weekEndStr)
+    );
+
+    const unsubClinics = onSnapshot(qClinics, (snap) => {
       if (isMounted) {
           setClinics(snap.docs.map(d => ({ id: d.id, ...d.data() })));
           setIsLoading(false);
       }
     }, () => { if (isMounted) setIsLoading(false); });
 
-    return () => { isMounted = false; unsubReq(); unsubClinics(); };
-  }, []);
+    return () => { isMounted = false; unsubClinics(); };
+  }, [currentWeekStart, weekEnd]);
 
   const teacherList = useMemo(() => Array.from(new Set(baseSchedules.map(s => s.teacher))).filter(Boolean), [baseSchedules]);
   
@@ -330,7 +357,8 @@ const ScheduleControlTower = ({ currentUser }) => {
     <div className="max-w-[1600px] w-full mx-auto space-y-4 pb-20 animate-in fade-in">
       <div className="bg-gray-900 text-white p-6 rounded-2xl shadow-lg flex flex-col lg:flex-row justify-between lg:items-center gap-4 print:hidden">
         <div>
-          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><CalendarIcon className="text-yellow-400"/> 인터랙티브 스케줄 관제탑</h1>
+          {/* 🚀 메뉴명 수정 완료 */}
+          <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><CalendarIcon className="text-yellow-400"/> 인터랙티브 스케줄 관리</h1>
           <p className="text-sm text-gray-400">정규수업 및 클리닉 일정 캘린더 연동 시스템</p>
         </div>
         <div className="flex gap-2">
@@ -357,20 +385,29 @@ const ScheduleControlTower = ({ currentUser }) => {
                     <button onClick={() => setCurrentWeekStart(new Date(currentWeekStart.setDate(currentWeekStart.getDate() + 7)))} className="p-1 hover:bg-gray-100 rounded-lg transition-colors"><ChevronRight size={20} className="text-gray-600"/></button>
                 </div>
 
-                <div className="flex bg-gray-200 p-1 rounded-xl w-full lg:w-auto justify-center order-1 lg:order-2">
-                    <button onClick={() => setViewMode('TEACHER')} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'TEACHER' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>👨‍🏫 선생님별</button>
-                    <button onClick={() => { setViewMode('ROOM'); setSelectedFilter(roomList[0] || 'Classroom 1'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
-                </div>
+                {/* 🚀 강사 계정 시 불필요한 컨트롤 숨김 처리 (권한 통제) */}
+                {isAdmin && (
+                    <div className="flex bg-gray-200 p-1 rounded-xl w-full lg:w-auto justify-center order-1 lg:order-2">
+                        <button onClick={() => setViewMode('TEACHER')} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'TEACHER' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>👨‍🏫 선생님별</button>
+                        <button onClick={() => { setViewMode('ROOM'); setSelectedFilter(roomList[0] || 'Classroom 1'); }} className={`px-4 py-1.5 text-sm font-bold rounded-lg ${viewMode === 'ROOM' ? 'bg-white shadow text-blue-700' : 'text-gray-500'}`}>🏫 요일/교실</button>
+                    </div>
+                )}
                 
-                <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full lg:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 order-3">
-                    {viewMode === 'TEACHER' ? 
-                        teacherList.map(t => <option key={t} value={t}>{t} 선생님</option>) :
-                        DAYS.map(d => <option key={d} value={d}>{d}요일</option>)
-                    }
-                </select>
+                {isAdmin ? (
+                    <select value={selectedFilter} onChange={e => setSelectedFilter(e.target.value)} className="w-full lg:w-auto border border-gray-300 rounded-xl px-3 py-1.5 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 order-3">
+                        {viewMode === 'TEACHER' ? 
+                            teacherList.map(t => <option key={t} value={t}>{t} 선생님</option>) :
+                            DAYS.map(d => <option key={d} value={d}>{d}요일</option>)
+                        }
+                    </select>
+                ) : (
+                    <div className="w-full lg:w-auto bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-sm font-bold text-blue-800 order-3 text-center shadow-sm">
+                        {myName} 선생님 전용 스케줄
+                    </div>
+                )}
             </div>
 
-            {viewMode === 'TEACHER' && (
+            {viewMode === 'TEACHER' && isAdmin && (
                 <div className="xl:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
                     {DAYS.map(d => (
                         <button key={`mob-${d}`} onClick={() => setMobileSelectedDay(d)} className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedDay === d ? 'bg-gray-900 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
@@ -380,7 +417,7 @@ const ScheduleControlTower = ({ currentUser }) => {
                 </div>
             )}
             
-            {viewMode === 'ROOM' && (
+            {viewMode === 'ROOM' && isAdmin && (
                 <div className="xl:hidden flex overflow-x-auto gap-2 p-3 bg-white border-b custom-scrollbar">
                     {roomList.map((r) => (
                         <button key={`mob-room-${r}`} onClick={() => setMobileSelectedRoom(r)} className={`px-4 py-1.5 rounded-full text-sm font-black shrink-0 transition-colors ${mobileSelectedRoom === r ? 'bg-indigo-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 border border-gray-200'}`}>
@@ -396,8 +433,8 @@ const ScheduleControlTower = ({ currentUser }) => {
                         <tr>
                             <th className="border p-2 w-16 md:w-20 text-gray-500 font-bold bg-gray-100">시간</th>
                             {viewMode === 'TEACHER' ? 
-                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d ? 'hidden xl:table-cell' : ''}`}>{d}</th>) :
-                                roomList.map(r => <th key={r} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedRoom !== r ? 'hidden xl:table-cell' : ''}`}>{r}</th>)
+                                DAYS.map(d => <th key={d} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedDay !== d && isAdmin ? 'hidden xl:table-cell' : ''}`}>{d}</th>) :
+                                roomList.map(r => <th key={r} className={`border p-2 font-bold bg-gray-100 ${mobileSelectedRoom !== r && isAdmin ? 'hidden xl:table-cell' : ''}`}>{r}</th>)
                             }
                         </tr>
                     </thead>
@@ -411,45 +448,35 @@ const ScheduleControlTower = ({ currentUser }) => {
                                     {viewMode === 'TEACHER' ? DAYS.map(day => {
                                         const schedulesInCell = activeSchedules.filter(s => s.day === day && parseInt(s.startTime.split(':')[0], 10) === currentHour);
                                         return (
-                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day ? 'hidden xl:table-cell' : ''}`}>
+                                            <td key={`${day}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top ${mobileSelectedDay !== day && isAdmin ? 'hidden xl:table-cell' : ''}`}>
                                                 {schedulesInCell.map(schedule => {
-                                                    const colorTheme = schedule.isClinic 
-                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted`
-                                                        : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
-                                                        : getClassColor(schedule.className);
-                                                    
-                                                    return (
-                                                        <div key={schedule.id} onClick={() => setSelectedBlock(schedule)} style={getScheduleStyle(schedule.startTime, schedule.endTime)}
-                                                            className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
-                                                        >
-                                                            <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
-                                                            <span className="text-[11px] sm:text-xs font-black break-words whitespace-normal leading-tight">{schedule.className}</span>
-                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><MapPin size={10} className="shrink-0"/>{schedule.room}</span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </td>
-                                        );
-                                    }) : roomList.map(room => {
-                                        const schedulesInCell = activeSchedules.filter(s => s.room === room && parseInt(s.startTime.split(':')[0], 10) === currentHour);
-                                        
-                                        return (
-                                            <td key={`${room}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px] ${mobileSelectedRoom !== room ? 'hidden xl:table-cell' : ''}`}>
-                                                {schedulesInCell.map(schedule => {
+                                                    // 🚀 [알고리즘 진화]: 선생님별 뷰에서도 완벽하게 교차 병합을 지원
                                                     if (schedule.isClinic) {
-                                                        const isCoveredByClass = schedulesInCell.some(s => !s.isClinic);
-                                                        if (isCoveredByClass) return null;
+                                                        const isCovered = activeSchedules.some(c => 
+                                                            !c.isClinic && 
+                                                            c.day === schedule.day &&
+                                                            c.teacher === schedule.teacher && // 선생님 본인의 클리닉인 경우 겹침 판정
+                                                            c.startTime <= schedule.startTime && 
+                                                            c.endTime > schedule.startTime
+                                                        );
+                                                        if (isCovered) return null;
                                                     }
 
                                                     const matchedClinics = !schedule.isClinic 
-                                                        ? schedulesInCell.filter(s => s.isClinic)
+                                                        ? activeSchedules.filter(c => 
+                                                            c.isClinic && 
+                                                            c.day === schedule.day &&
+                                                            c.teacher === schedule.teacher &&
+                                                            c.startTime >= schedule.startTime && 
+                                                            c.startTime < schedule.endTime
+                                                          )
                                                         : [];
 
                                                     const colorTheme = schedule.isClinic 
-                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted`
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
                                                         : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
                                                         : getClassColor(schedule.className);
-
+                                                    
                                                     return (
                                                         <div key={schedule.id} onClick={() => setSelectedBlock(schedule)} style={getScheduleStyle(schedule.startTime, schedule.endTime)}
                                                             className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
@@ -461,7 +488,65 @@ const ScheduleControlTower = ({ currentUser }) => {
                                                                 <div className="mt-1 flex flex-wrap gap-1">
                                                                     {matchedClinics.map(c => (
                                                                         <span key={c.id} className="bg-white/60 text-[9px] px-1 rounded border border-cyan-300 font-bold text-cyan-800">
-                                                                            + {c.taName}TA 투입
+                                                                            + {c.taName}TA 투입 ({c.startTime}~{c.endTime})
+                                                                        </span>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+
+                                                            <span className="text-[10px] opacity-80 flex items-center gap-1 mt-auto truncate font-semibold"><MapPin size={10} className="shrink-0"/>{schedule.room}</span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </td>
+                                        );
+                                    }) : roomList.map(room => {
+                                        const schedulesInCell = activeSchedules.filter(s => s.room === room && parseInt(s.startTime.split(':')[0], 10) === currentHour);
+                                        
+                                        return (
+                                            <td key={`${room}-${time}`} className={`border relative h-24 hover:bg-gray-50/50 align-top min-w-[120px] ${mobileSelectedRoom !== room && isAdmin ? 'hidden xl:table-cell' : ''}`}>
+                                                {schedulesInCell.map(schedule => {
+                                                    // 🚀 [알고리즘 진화]: Span(시간 범위)을 완벽하게 계산하여 다중 클리닉 중복 렌더링 방지
+                                                    if (schedule.isClinic) {
+                                                        const isCovered = activeSchedules.some(c => 
+                                                            !c.isClinic && 
+                                                            c.room === schedule.room && 
+                                                            c.day === schedule.day &&
+                                                            c.startTime <= schedule.startTime && 
+                                                            c.endTime > schedule.startTime // 클리닉이 포함되는지 완벽 판별
+                                                        );
+                                                        if (isCovered) return null; // 정규 수업 뒤로 완벽하게 숨김
+                                                    }
+
+                                                    // 해당 정규 수업의 전체 시간(예: 16~18시) 내에 속한 모든 클리닉 탐색
+                                                    const matchedClinics = !schedule.isClinic 
+                                                        ? activeSchedules.filter(c => 
+                                                            c.isClinic && 
+                                                            c.room === schedule.room && 
+                                                            c.day === schedule.day &&
+                                                            c.startTime >= schedule.startTime && 
+                                                            c.startTime < schedule.endTime
+                                                          )
+                                                        : [];
+
+                                                    const colorTheme = schedule.isClinic 
+                                                        ? `bg-cyan-50/80 border-cyan-400 text-cyan-900 border-[2px] border-dotted ${schedule.clinicStatus === 'open' ? 'opacity-80' : ''}`
+                                                        : schedule.isModified ? 'bg-amber-50 border-amber-400 text-amber-900 border-[2px] border-dashed' 
+                                                        : getClassColor(schedule.className);
+
+                                                    return (
+                                                        <div key={schedule.id} onClick={() => setSelectedBlock(schedule)} style={getScheduleStyle(schedule.startTime, schedule.endTime)}
+                                                            className={`absolute left-1 right-1 p-2 rounded-lg border cursor-pointer hover:shadow-lg transition-all flex flex-col overflow-hidden shadow-sm ${colorTheme}`}
+                                                        >
+                                                            <span className="text-[10px] font-bold opacity-70 mb-0.5">{schedule.startTime} - {schedule.endTime}</span>
+                                                            <span className="text-[11px] sm:text-xs font-black break-words whitespace-normal leading-tight">{schedule.className}</span>
+                                                            
+                                                            {/* 🚀 분할된 1시간 클리닉들이 모두 수업 안으로 병합되어 뱃지로 예쁘게 출력됨 */}
+                                                            {matchedClinics.length > 0 && (
+                                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                                    {matchedClinics.map(c => (
+                                                                        <span key={c.id} className="bg-white/60 text-[9px] px-1 rounded border border-cyan-300 font-bold text-cyan-800">
+                                                                            + {c.taName}TA 투입 ({c.startTime}~{c.endTime})
                                                                         </span>
                                                                     ))}
                                                                 </div>
