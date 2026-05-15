@@ -340,8 +340,10 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
+    
+    // 🚀 학생 예약 따닥 방지 상태
+    const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
-    // 🚀 [CTO 로직: 빌드 충돌 방지] 변수명 masterScheduleRequests 적용 유지
     const [baseSchedules, setBaseSchedules] = useState([]);
     const [masterScheduleRequests, setMasterScheduleRequests] = useState([]);
 
@@ -606,29 +608,53 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
       fetchSessions(true); 
   };
 
+  // 🚀 [CTO 로직 업데이트]: 학생 예약 레이스 컨디션 및 Undefined 크래시 완벽 차단
   const submitStudentApplication = async () => {
-      const formattedTopic = applicationItems.map(i => i.subject).join(', ');
-      const formattedRange = applicationItems.map(i => `${i.workbook} (${i.range})`).join('\n');
-      const batch = writeBatch(db);
-      const updates = {};
+      if (isSubmittingBooking) return; // 따닥 방지
+      setIsSubmittingBooking(true);
       
-      studentSelectedSlots.forEach(id => {
-        const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
-        const updateData = { status: 'pending', studentId: currentUser.id, studentName: currentUser.name, studentPhone: currentUser.phone || '', topic: formattedTopic, questionRange: formattedRange, source: 'app' };
-        batch.update(ref, updateData);
-        updates[id] = { id, ...updateData }; 
-      });
-
       try {
+          // 방어 로직: 빈 값 필터링
+          const validItems = applicationItems.filter(i => i.subject || i.workbook || i.range);
+          const formattedTopic = validItems.length > 0 ? validItems.map(i => i.subject).join(', ') : '개별 Q&A';
+          const formattedRange = validItems.length > 0 ? validItems.map(i => `${i.workbook} (${i.range})`).join('\n') : '현장 지참';
+          
+          const batch = writeBatch(db);
+          const updates = {};
+          
+          studentSelectedSlots.forEach(id => {
+              const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
+              const updateData = { 
+                  status: 'pending', 
+                  studentId: currentUser?.id || 'unknown_student', // Undefined 방어
+                  studentName: currentUser?.name || '알수없음', 
+                  studentPhone: currentUser?.phone || '', 
+                  topic: formattedTopic, 
+                  questionRange: formattedRange, 
+                  source: 'app' 
+              };
+              batch.update(ref, updateData);
+              updates[id] = { id, ...updateData }; 
+          });
+
           await batch.commit(); 
+          
           updateLocalAndCacheState(prev => {
               const next = { ...prev };
               Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; });
               return next;
           });
+          
           sendClinicNotificationToTelegram(updates);
-          setModalState({type:null}); setStudentSelectedSlots([]); notify('신청 완료!');
-      } catch(e) { notify('예약 처리 중 오류가 발생했습니다.', 'error'); }
+          setModalState({type:null}); 
+          setStudentSelectedSlots([]); 
+          notify('신청이 성공적으로 완료되었습니다!', 'success');
+      } catch(e) { 
+          console.error("학생 예약 처리 에러 상세내역:", e);
+          notify(`예약 실패: ${e.message || '네트워크 오류가 발생했습니다.'}`, 'error'); 
+      } finally {
+          setIsSubmittingBooking(false); // 로딩 스피너 해제
+      }
   };
 
   const handleAdminEditSubmit = async () => {
@@ -759,7 +785,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                                             {CLASSROOMS.map(r => {
                                                 const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                                 return (
-                                                    <option key={r} value={r} className={isOccupied ? 'text-amber-600 bg-amber-50' : ''}>
+                                                    <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
                                                         {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                                     </option>
                                                 );
@@ -926,7 +952,9 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
             </div>
         ))}
         <Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button>
-        <Button className="w-full py-4 text-xl font-bold" onClick={submitStudentApplication}>신청 완료</Button>
+        <Button className="w-full py-4 text-xl font-bold" onClick={submitStudentApplication} disabled={isSubmittingBooking}>
+            {isSubmittingBooking ? <Loader className="animate-spin inline-block text-white" size={24}/> : '신청 완료'}
+        </Button>
       </Modal>
       
       <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백">
