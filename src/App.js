@@ -6,11 +6,11 @@ import {
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
   Clock, Trash2 
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot } from 'firebase/firestore'; 
+// 🚀 [CTO 패치] setDoc 함수 추가
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
-// 🚀 기존 Lazy Loading 컴포넌트 완벽 유지
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -25,8 +25,6 @@ const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticR
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
-
-// 🚀 신규 기능: 스케줄 관제탑 (초기 로딩 속도 저하를 막기 위해 Lazy Loading 적용)
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
 
 const APP_ID = 'imperial-clinic-v1';
@@ -94,7 +92,6 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
-                {/* 🚀 Dashboard 카드에 스케줄 관제탑 추가 */}
                 {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -272,7 +269,8 @@ const AppContent = () => {
          let finalSafeId = null;
 
          for (const idVariant of idVariants) {
-             const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x');
+             // 🚀 [CTO 패치 1] 로그인 시 무조건 소문자로 변환하여 Firebase Auth와 Firestore 규격 통일
+             const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
              const email = `${safeId}@imperial.com`;
              try {
                  const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
@@ -282,24 +280,43 @@ const AppContent = () => {
              } catch (authErr) {}
          }
 
-         if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x'); }
+         if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase(); }
          
          try {
              let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
              let userDoc = await getDoc(userDocRef);
+             let docData = null;
+             let originalDocId = null; // 과거 대문자 문서인지 확인하기 위한 변수
              
              if (!userDoc.exists()) {
+                 // 🚀 [CTO 패치 2] 소문자 문서가 없으면, 과거에 생성된 대문자 문서가 있는지 찾기
                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                  const s = await getDocs(q);
-                 if (!s.empty) userDoc = s.docs[0];
+                 if (!s.empty) {
+                     userDoc = s.docs[0];
+                     docData = userDoc.data();
+                     originalDocId = userDoc.id; // 예: xEDx95... (대문자)
+                 }
+             } else {
+                 docData = userDoc.data();
+                 originalDocId = userDoc.id;
              }
              
-             if(userDoc && userDoc.exists()) {
-                 const docData = userDoc.data();
+             if(docData) {
                  if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
 
-                 const userData = { id: userDoc.id, ...docData, authUid: authUid || docData.authUid };
-                 updateDoc(userDocRef, { lastLogin: new Date().toISOString() }).catch(e => console.error(e));
+                 // 🚀 [CTO 패치 3] currentUser.id는 반드시 소문자(finalSafeId)로 세팅
+                 const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
+
+                 // 🚀 [CTO 패치 4 - 자가 치유 로직] 과거 대문자 문서가 발견되었다면?
+                 // 즉시 소문자(finalSafeId) 문서 경로로 데이터를 복제 생성(Self-Healing)하여 권한 크래시 해결
+                 if (originalDocId && originalDocId !== finalSafeId) {
+                     setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
+                        .catch(e => console.error("Self-healing failed:", e));
+                 } else {
+                     updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
+                        .catch(e => console.error("Last login update failed:", e));
+                 }
 
                  setCurrentUser(userData);
                  sessionStorage.setItem('imperial_user', JSON.stringify(userData));
@@ -328,10 +345,9 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 메뉴 리스트 및 권한 완벽 보존
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] }, // 신규 메뉴
+    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
@@ -396,41 +412,29 @@ const AppContent = () => {
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
-                {/* 🚀 React Router 구조를 원본 그대로 100% 복구했습니다. */}
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        
-                        {/* 🚀 스케줄 관제탑 라우트 추가 */}
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
                         )}
-
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
                         )}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
-                        
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
                         {currentUser.role === 'admin_assistant' && (
                             <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
                         )}
-
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                        
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
-                        
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
-                        {/* 🚀 리포트 열람 주소창 라우팅 유지 */}
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
-                        
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
