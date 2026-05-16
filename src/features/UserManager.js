@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 다중 자녀 배열 지원 및 출결 PIN 번호 뼈대 통합 완료) */
+   (Updated: 대소문자 불일치 권한 크래시 해결 및 자가 치유 로직 적용) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon
@@ -34,7 +34,6 @@ const UserManager = ({ currentUser }) => {
     
     const [toast, setToast] = useState({ message: '', type: 'info' });
 
-    // 🚀 [CTO 패치] 신규 DB 뼈대(PIN, status, linkedChildrenIds) 추가
     const [formData, setFormData] = useState({ 
         id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
         schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '',
@@ -126,7 +125,6 @@ const UserManager = ({ currentUser }) => {
         setIsModalOpen(true);
     };
 
-    // 🚀 [CTO 패치] 출결 PIN 자동 생성 방어 로직
     const handleAutoPin = (phoneVal) => {
         if (!phoneVal || phoneVal.length < 4) return;
         const basePin = phoneVal.replace(/[^0-9]/g, '').slice(-4);
@@ -155,7 +153,6 @@ const UserManager = ({ currentUser }) => {
         if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
         if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
         
-        // 🚀 신규 스키마 검증
         if (activeTab === 'parent' && (!formData.linkedChildrenIds || formData.linkedChildrenIds.length === 0) && !formData.childName) {
             return showToast('학부모 계정은 최소 1명 이상의 자녀를 연결해야 합니다.', 'error');
         }
@@ -168,7 +165,6 @@ const UserManager = ({ currentUser }) => {
                 phone: formData.phone || '', updatedAt: serverTimestamp()
             };
             
-            // 학생 전용 데이터
             if (activeTab === 'student') { 
                 payload.schoolName = formData.schoolName; 
                 payload.grade = formData.grade; 
@@ -176,7 +172,6 @@ const UserManager = ({ currentUser }) => {
                 payload.status = formData.status;
             }
             
-            // 교직원 전용 데이터
             if (['ta', 'lecturer', 'admin', 'admin_assistant'].includes(activeTab)) { 
                 if (activeTab !== 'admin' && activeTab !== 'admin_assistant') payload.subject = formData.subject || '';
                 if (activeTab === 'ta' || activeTab === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
@@ -184,30 +179,32 @@ const UserManager = ({ currentUser }) => {
                 payload.accountNumber = formData.accountNumber || '';
             }
             
-            // 학부모 전용 데이터
             if (activeTab === 'parent') { 
                 payload.linkedChildrenIds = formData.linkedChildrenIds || [];
-                // 기존 호환성용 유지
                 payload.childId = formData.childId; 
                 payload.childName = formData.childName; 
                 payload.childSnapshot = formData.childSnapshot; 
             }
 
-            const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x');
+            // 🚀 [CTO 핵심 패치]: 아이디를 무조건 소문자로 강제 변환하여 권한 크래시 원천 차단
+            const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
                 if (formData.password && !formData.authUid) {
                     payload.password = formData.password;
                 }
+                
+                // 1. 소문자로 변환된 올바른 ID로 데이터 덮어쓰기 (또는 신규 생성)
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload, { merge: true });
                 
+                // 2. 🚀 자가 치유(Self-Healing) 로직: 기존의 대문자 찌꺼기 아이디가 있다면 자동으로 삭제
                 if (formData.id && formData.id !== safeId) {
                     try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id)); } 
                     catch (e) { console.log("찌꺼기 문서 삭제 스킵:", e); }
                 }
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
             } else {
-                if (users.some(u => u.userId === formData.userId)) throw new Error("이미 존재하는 아이디입니다.");
+                if (users.some(u => u.id === safeId)) throw new Error("이미 존재하는 아이디입니다.");
                 
                 const email = `${safeId}@imperial.com`;
                 let authUid = '';
@@ -254,7 +251,7 @@ const UserManager = ({ currentUser }) => {
 
     const duplicateCounts = useMemo(() => {
         const counts = {};
-        users.forEach(u => { counts[u.userId] = (counts[u.userId] || 0) + 1; });
+        users.forEach(u => { counts[u.userId.toLowerCase()] = (counts[u.userId.toLowerCase()] || 0) + 1; });
         return counts;
     }, [users]);
 
@@ -297,7 +294,7 @@ const UserManager = ({ currentUser }) => {
                                     <div className="font-bold text-lg">{u.name}</div>
                                     <div className="text-xs text-gray-400 flex items-center gap-1">
                                         {u.userId}
-                                        {duplicateCounts[u.userId] > 1 && <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[8px] font-bold rounded-full animate-pulse">중복!</span>}
+                                        {duplicateCounts[u.userId.toLowerCase()] > 1 && <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[8px] font-bold rounded-full animate-pulse">중복!</span>}
                                     </div>
                                 </div>
                             </div>
@@ -367,7 +364,7 @@ const UserManager = ({ currentUser }) => {
                                         <div className="flex flex-col gap-1">
                                             <div className="flex items-center gap-2 font-bold text-gray-800">
                                                 {u.userId}
-                                                {duplicateCounts[u.userId] > 1 && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] rounded-full border border-red-200 animate-pulse">중복</span>}
+                                                {duplicateCounts[u.userId.toLowerCase()] > 1 && <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[10px] rounded-full border border-red-200 animate-pulse">중복</span>}
                                             </div>
                                             <span className="text-xs text-gray-500">{u.phone || '-'}</span>
                                         </div>
@@ -420,7 +417,6 @@ const UserManager = ({ currentUser }) => {
                 </Card>
             </div>
 
-            {/* 신규 등록/수정 모달 */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 관리`}>
                 <div className="space-y-4 p-2 max-h-[80vh] overflow-y-auto custom-scrollbar">
                     <div className="grid grid-cols-2 gap-4">
