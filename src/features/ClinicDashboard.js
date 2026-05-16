@@ -80,7 +80,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
     const alreadyBooked = sessions.some(s => 
-        s.studentName === currentUser.name && 
+        s.studentId === currentUser.id && 
         s.date === selectedDateStr && 
         s.startTime === time && 
         (s.status === 'confirmed' || s.status === 'pending')
@@ -215,8 +215,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         );
                     }
 
+                    // 🚀 [CTO 패치] 학부모 뷰잉 로직 고도화 (구버전 호환성 fallback 포함)
                     if (isParent) {
-                        const isMyChild = s.studentName === currentUser.childName;
+                        const isMyChild = (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || (s.studentName === currentUser.childName);
                         const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
                         if (isBooked && !isMyChild) {
                             return (
@@ -274,7 +275,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                       {CLASSROOMS.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
-                                              <option key={r} value={r} className={isOccupied ? 'text-amber-600 bg-amber-50' : ''}>
+                                              <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
                                                   {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                               </option>
                                           );
@@ -341,7 +342,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     const [feedbackData, setFeedbackData] = useState({});
     const [requestData, setRequestData] = useState({});
     
-    // 🚀 학생 예약 따닥 방지 상태
     const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
     const [baseSchedules, setBaseSchedules] = useState([]);
@@ -608,13 +608,11 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
       fetchSessions(true); 
   };
 
-  // 🚀 [CTO 로직 업데이트]: 학생 예약 레이스 컨디션 및 Undefined 크래시 완벽 차단
   const submitStudentApplication = async () => {
-      if (isSubmittingBooking) return; // 따닥 방지
+      if (isSubmittingBooking) return; 
       setIsSubmittingBooking(true);
       
       try {
-          // 방어 로직: 빈 값 필터링
           const validItems = applicationItems.filter(i => i.subject || i.workbook || i.range);
           const formattedTopic = validItems.length > 0 ? validItems.map(i => i.subject).join(', ') : '개별 Q&A';
           const formattedRange = validItems.length > 0 ? validItems.map(i => `${i.workbook} (${i.range})`).join('\n') : '현장 지참';
@@ -626,7 +624,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
               const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
               const updateData = { 
                   status: 'pending', 
-                  studentId: currentUser?.id || 'unknown_student', // Undefined 방어
+                  studentId: currentUser?.id || 'unknown_student',
                   studentName: currentUser?.name || '알수없음', 
                   studentPhone: currentUser?.phone || '', 
                   topic: formattedTopic, 
@@ -650,10 +648,9 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
           setStudentSelectedSlots([]); 
           notify('신청이 성공적으로 완료되었습니다!', 'success');
       } catch(e) { 
-          console.error("학생 예약 처리 에러 상세내역:", e);
           notify(`예약 실패: ${e.message || '네트워크 오류가 발생했습니다.'}`, 'error'); 
       } finally {
-          setIsSubmittingBooking(false); // 로딩 스피너 해제
+          setIsSubmittingBooking(false); 
       }
   };
 
@@ -681,9 +678,18 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
   const pendingBookings = sessions.filter(s => s.status === 'pending');
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
-  const targetStudentName = currentUser.role === 'parent' ? currentUser.childName : currentUser.name;
   
-  const studentMyClinics = sessions.filter(s => s.studentName === targetStudentName && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed')).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+  // 🚀 [CTO 패치] 하이브리드 필터링 적용 (다중 자녀 검사 + 구버전 이름 검사 동시 지원)
+  const studentMyClinics = useMemo(() => {
+    return sessions.filter(s => {
+        if (currentUser.role === 'parent') {
+            const isMatchedByArray = currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId);
+            const isMatchedByName = s.studentName === currentUser.childName; // 구버전 호환용
+            return (isMatchedByArray || isMatchedByName) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
+        }
+        return (s.studentId === currentUser.id || s.studentName === currentUser.name) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
+    }).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+  }, [sessions, currentUser]);
 
   if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
@@ -861,12 +867,17 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full">
-                    <h2 className="text-lg font-bold mb-4 text-blue-800 flex items-center gap-2"><CheckCircle size={20}/> {currentUser.role === 'parent' ? `${currentUser.childName} 학생의` : '나의'} 예약 현황</h2>
+                    {/* 🚀 뷰잉 분리 */}
+                    <h2 className="text-lg font-bold mb-4 text-blue-800 flex items-center gap-2">
+                        <CheckCircle size={20}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 예약 현황'}
+                    </h2>
+                    
                     {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400">예약 내역이 없습니다.</div> : (
                         <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
                             {studentMyClinics.map(s => (
-                                <div key={s.id} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-                                    <div className="flex justify-between mb-2">
+                                <div key={s.id} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm relative overflow-hidden">
+                                    {currentUser.role === 'parent' && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{s.studentName}</div>}
+                                    <div className="flex justify-between mb-2 pr-12">
                                         <span className="font-bold text-gray-800 text-lg">{s.date}</span>
                                         <Badge status={s.status}/>
                                     </div>
