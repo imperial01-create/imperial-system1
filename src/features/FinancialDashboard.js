@@ -8,7 +8,7 @@ import {
   Wallet, Download, BellRing, UploadCloud, FileSpreadsheet, 
   ShieldAlert, Image as ImageIcon, Search, Database,
   Activity, LineChart, Settings, RefreshCcw, Trash2,
-  Calendar, Target, AlertTriangle
+  Calendar, Target, AlertTriangle, Edit // 🚀 [CTO 패치] Edit 아이콘 Import 추가됨
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -75,7 +75,6 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isMatching, setIsMatching] = useState(false);
   const [extractedInitialBalance, setExtractedInitialBalance] = useState(null);
 
-  // 🚀 [CTO 패치] 계정과목 인라인 편집을 위한 상태
   const [editingCategoryItemId, setEditingCategoryItemId] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -560,7 +559,6 @@ const FinancialDashboard = ({ currentUser }) => {
       }
   };
 
-  // 🚀 [CTO 패치] 계정과목 인라인 편집 로직
   const handleCategoryChange = async (item, newCategory) => {
       if (item.category === newCategory) {
           setEditingCategoryItemId(null);
@@ -860,7 +858,6 @@ const FinancialDashboard = ({ currentUser }) => {
                         </span>
                       </td>
 
-                      {/* 🚀 [CTO 패치] 계정과목 인라인 편집 UI 적용 */}
                       <td className="px-4 py-3 font-bold text-indigo-700 whitespace-nowrap">
                           {(item.id.startsWith('exp_') || item.id.startsWith('pen_')) ? (
                               editingCategoryItemId === item.id ? (
