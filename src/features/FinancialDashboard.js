@@ -75,6 +75,9 @@ const FinancialDashboard = ({ currentUser }) => {
   const [isMatching, setIsMatching] = useState(false);
   const [extractedInitialBalance, setExtractedInitialBalance] = useState(null);
 
+  // 🚀 [CTO 패치] 계정과목 인라인 편집을 위한 상태
+  const [editingCategoryItemId, setEditingCategoryItemId] = useState(null);
+
   const fileInputRef = useRef(null);
   
   const [previewReceipts, setPreviewReceipts] = useState([]);
@@ -419,7 +422,6 @@ const FinancialDashboard = ({ currentUser }) => {
             const outAmount = Number(String(data[i][outIdx] || 0).replace(/,/g, ''));
             
             if (outAmount > 0) {
-              // 🚀 [CTO 로직 변경] 보낸분/받는분이 공백일 경우 '월급(미기재)'로 강제 지정하여 자동증빙 태움
               let rawName = String(data[i][nameIdx] || '').trim();
               const merchantName = rawName === '' ? '월급' : rawName;
               
@@ -445,7 +447,6 @@ const FinancialDashboard = ({ currentUser }) => {
             
             const inAmount = Number(String(data[i][inIdx] || 0).replace(/,/g, ''));
             if (inAmount > 0) {
-                // 입금의 경우 공백이면 '입금자명 미기재' 처리
                 let rawInName = String(data[i][nameIdx] || '').trim();
                 extracted.push({ transactionDate, amount: inAmount, merchantName: rawInName === '' ? '입금자명 미기재' : rawInName, type: 'BANK_INCOME', rawId: `IN_${inAmount}_${i}` });
             }
@@ -556,6 +557,24 @@ const FinancialDashboard = ({ currentUser }) => {
           alert("귀속 일자가 성공적으로 변경되어 예산이 이동되었습니다.");
       } catch(e) {
           alert("변경 실패: " + e.message);
+      }
+  };
+
+  // 🚀 [CTO 패치] 계정과목 인라인 편집 로직
+  const handleCategoryChange = async (item, newCategory) => {
+      if (item.category === newCategory) {
+          setEditingCategoryItemId(null);
+          return;
+      }
+      try {
+          await writeBatch(db).update(doc(db, `artifacts/${APP_ID}/public/data/expenses`, item.realId), {
+              category: newCategory,
+              updatedAt: new Date().toISOString()
+          }).commit();
+          setEditingCategoryItemId(null);
+      } catch(e) {
+          alert("계정과목 수정에 실패했습니다: " + e.message);
+          setEditingCategoryItemId(null);
       }
   };
 
@@ -840,7 +859,36 @@ const FinancialDashboard = ({ currentUser }) => {
                           {item.type}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-bold text-indigo-700 whitespace-nowrap">{item.category}</td>
+
+                      {/* 🚀 [CTO 패치] 계정과목 인라인 편집 UI 적용 */}
+                      <td className="px-4 py-3 font-bold text-indigo-700 whitespace-nowrap">
+                          {(item.id.startsWith('exp_') || item.id.startsWith('pen_')) ? (
+                              editingCategoryItemId === item.id ? (
+                                  <select
+                                      className="border border-indigo-300 rounded px-1 py-0.5 text-xs font-bold outline-none bg-indigo-50 focus:ring-2 focus:ring-indigo-500"
+                                      autoFocus
+                                      value={item.category}
+                                      onBlur={() => setEditingCategoryItemId(null)}
+                                      onChange={(e) => handleCategoryChange(item, e.target.value)}
+                                  >
+                                      {OFFICIAL_ACCOUNTS.map(acc => (
+                                          <option key={acc} value={acc}>{acc}</option>
+                                      ))}
+                                  </select>
+                              ) : (
+                                  <span 
+                                      onClick={() => setEditingCategoryItemId(item.id)}
+                                      className="cursor-pointer hover:bg-indigo-50 hover:underline px-1 py-0.5 rounded transition-colors block w-fit"
+                                      title="클릭하여 계정과목 수정"
+                                  >
+                                      {item.category} <Edit size={10} className="inline opacity-50 ml-1 mb-0.5"/>
+                                  </span>
+                              )
+                          ) : (
+                              item.category
+                          )}
+                      </td>
+
                       <td className="px-4 py-3 font-semibold text-gray-900 truncate max-w-xs">{item.purpose}</td>
                       <td className={`px-4 py-3 font-black text-right whitespace-nowrap ${(item.type || '').includes('수입') ? 'text-blue-600' : 'text-gray-900'}`}>{(item.type || '').includes('수입') ? '+' : ''}{item.amount.toLocaleString()}원</td>
                       <td className="px-4 py-3 text-center">{item.status === 'PENDING' ? <div className="flex justify-center gap-1"><button onClick={() => handleApproval(item.id, 'APPROVED')} className="text-[10px] bg-emerald-500 text-white px-2 py-1 rounded shadow-sm hover:bg-emerald-600">승인</button><button onClick={() => handleApproval(item.id, 'REJECTED')} className="text-[10px] bg-rose-500 text-white px-2 py-1 rounded shadow-sm hover:bg-rose-600">반려</button></div> : <span className="text-gray-500 font-semibold">{item.method}</span>}</td>
@@ -1029,29 +1077,43 @@ const FinancialDashboard = ({ currentUser }) => {
           <div className="bg-white p-5 rounded-3xl shadow-2xl max-w-5xl w-full flex flex-col h-[90vh]" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4 px-3 border-b pb-3">
               <h3 className="font-bold text-xl text-gray-900 flex items-center gap-2">
-                  <ImageIcon className="text-blue-600" size={24}/> 영수증 원본 확인 
-                  {previewReceipts.length > 1 && <span className="text-sm font-bold text-blue-600 ml-2 bg-blue-100 px-2 py-0.5 rounded-full">({previewIndex + 1} / {previewReceipts.length})</span>}
+                <ImageIcon className="text-blue-600" size={24}/> 영수증 상세 확인
+                {previewReceipts.length > 1 && <span className="text-sm font-bold text-blue-600 ml-2 bg-blue-100 px-2 py-0.5 rounded-full">({previewIndex + 1} / {previewReceipts.length})</span>}
               </h3>
-              <button onClick={() => setPreviewReceipts([])} className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm">닫기 <XCircle size={24}/></button>
+              <button onClick={() => setPreviewReceipts([])} className="text-gray-500 hover:text-rose-600 hover:bg-rose-50 p-2 rounded-full transition-colors flex items-center gap-1 font-bold text-sm">
+                닫기 <XCircle size={24}/>
+              </button>
             </div>
-            <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-between items-center flex-1 w-full h-full relative p-2 border border-gray-200">
+            <div className="bg-gray-100/50 rounded-2xl overflow-hidden flex justify-between items-center flex-1 w-full h-full relative p-2 border border-gray-100">
+              
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.max(0, prev - 1)); }} disabled={previewIndex === 0} className="absolute left-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronLeft size={32} className="text-gray-800"/>
                   </button>
               )}
+
               <div className="w-full h-full flex justify-center items-center">
-                  {String(previewReceipts[previewIndex]).startsWith('data:application/pdf') || String(previewReceipts[previewIndex]).endsWith('.pdf') ? 
-                    <iframe src={previewReceipts[previewIndex]} className="w-full h-full border-0 rounded-xl" title="receipt-preview" /> : 
+                  {String(previewReceipts[previewIndex]).startsWith('data:application/pdf') || String(previewReceipts[previewIndex]).endsWith('.pdf') ? (
+                    <iframe src={previewReceipts[previewIndex]} className="w-full h-full border-0 rounded-xl" title="receipt-preview" />
+                  ) : (
                     <img src={previewReceipts[previewIndex]} alt="Receipt Preview" className="max-w-full max-h-full object-contain drop-shadow-sm rounded-xl" />
-                  }
+                  )}
               </div>
+
               {previewReceipts.length > 1 && (
                   <button onClick={(e) => { e.stopPropagation(); setPreviewIndex(prev => Math.min(previewReceipts.length - 1, prev + 1)); }} disabled={previewIndex === previewReceipts.length - 1} className="absolute right-2 z-10 p-2 bg-white/90 rounded-full shadow-md hover:bg-white hover:scale-110 disabled:opacity-30 transition-all">
                       <ChevronRight size={32} className="text-gray-800"/>
                   </button>
               )}
             </div>
+
+            {previewReceipts.length > 1 && (
+                <div className="flex justify-center gap-2 mt-4">
+                    {previewReceipts.map((_, idx) => (
+                        <button key={idx} onClick={() => setPreviewIndex(idx)} className={`w-3 h-3 rounded-full transition-all ${previewIndex === idx ? 'bg-blue-600 scale-125' : 'bg-gray-300 hover:bg-gray-400'}`} />
+                    ))}
+                </div>
+            )}
           </div>
         </div>
       )}
