@@ -56,7 +56,6 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  // 🚀 [수정점] 행정조교도 관리자처럼 내신연구소를 통제할 수 있도록 배열에 추가
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
   const isAdmin = ['admin', 'admin_assistant'].includes(user.role);
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
@@ -338,6 +337,19 @@ export default function SchoolStrategy({ currentUser }) {
     return { totalIdi, level, percent };
   };
 
+  // 🚀 [CTO 패치] 객체 내부에 숨어있는 undefined 값을 찾아내어 안전하게 삭제하는 클리너 함수
+  const removeUndefined = (obj) => {
+      if (obj === undefined) return null;
+      if (obj === null || typeof obj !== 'object') return obj;
+      if (obj.constructor && obj.constructor.name === 'FieldValue') return obj;
+      if (Array.isArray(obj)) return obj.map(removeUndefined);
+      const res = {};
+      Object.keys(obj).forEach(key => {
+          if (obj[key] !== undefined) res[key] = removeUndefined(obj[key]);
+      });
+      return res;
+  };
+
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
     if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
@@ -389,7 +401,13 @@ export default function SchoolStrategy({ currentUser }) {
           
           if (oldDocSnap.exists()) {
               const oldData = oldDocSnap.data();
-              const mergedPayload = { ...oldData, ...baseData, ...strategyPayload, updatedAt: serverTimestamp() };
+              // 🚀 찌꺼기 undefined 데이터 제거하여 안전하게 병합
+              const mergedPayload = { 
+                  ...removeUndefined(oldData), 
+                  ...removeUndefined(baseData), 
+                  ...removeUndefined(strategyPayload), 
+                  updatedAt: serverTimestamp() 
+              };
               await setDoc(doc(db, INTEGRATED_COLLECTION, newId), mergedPayload);
               await deleteDoc(oldDocRef);
           } else {
@@ -547,7 +565,6 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
         )}
 
-        {/* ...이하 동일 (생략 없이 원본 유지) ... */}
         {isStudentOrParent && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
              <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>

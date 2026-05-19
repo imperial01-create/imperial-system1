@@ -5,16 +5,33 @@ const APP_ID = 'imperial-clinic-v1';
 export const INTEGRATED_COLLECTION = `artifacts/${APP_ID}/public/data/integrated_exams`;
 
 /**
- * [CTO 최적화] 결정적 문서 ID 생성기 (Time Complexity: O(1))
- * 공백을 완벽히 제거하고 모든 데이터를 강제 문자열로 변환하여 중복 생성을 원천 차단합니다.
+ * 🚀 [CTO 패치] 찌꺼기 데이터 딥 클렌징 (Undefined 크래시 원천 차단)
+ */
+const removeUndefined = (obj) => {
+    if (obj === undefined) return null;
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (obj.constructor && obj.constructor.name === 'FieldValue') return obj;
+    if (Array.isArray(obj)) return obj.map(removeUndefined);
+    const res = {};
+    Object.keys(obj).forEach(key => {
+        if (obj[key] !== undefined) res[key] = removeUndefined(obj[key]);
+    });
+    return res;
+};
+
+/**
+ * 🚀 [CTO 패치] 결정적 문서 ID 생성기 (특수기호 '/' 크래시 완벽 방어)
  */
 export const generateExamDocId = (examData) => {
-    const year = String(examData.year || '0000').trim();
-    const schoolName = String(examData.schoolName || examData.school || '').replace(/\s+/g, '');
-    const grade = String(examData.grade || '1학년').replace(/\s+/g, '');
-    const semester = String(examData.semester || '1학기').replace(/\s+/g, '');
-    const term = String(examData.termType || examData.term || '중간고사').replace(/\s+/g, '');
-    const subject = String(examData.subject || '미정').replace(/\s+/g, '');
+    // 슬래시(/), 백슬래시(\), 마침표(.), 공백을 모두 언더바(_)로 강제 치환
+    const safe = (str) => String(str || '').replace(/[\/\\.\s]+/g, '_');
+    
+    const year = safe(examData.year || '0000');
+    const schoolName = safe(examData.schoolName || examData.school || '');
+    const grade = safe(examData.grade || '1학년');
+    const semester = safe(examData.semester || '1학기');
+    const term = safe(examData.termType || examData.term || '중간고사');
+    const subject = safe(examData.subject || '미정');
     
     return `${year}_${schoolName}_${grade}_${semester}_${term}_${subject}`;
 };
@@ -28,8 +45,8 @@ export const upsertExamData = async (baseData, updatePayload) => {
         const docRef = doc(db, INTEGRATED_COLLECTION, docId);
 
         const finalPayload = {
-            ...baseData, 
-            ...updatePayload, 
+            ...removeUndefined(baseData), 
+            ...removeUndefined(updatePayload), 
             updatedAt: serverTimestamp()
         };
 
