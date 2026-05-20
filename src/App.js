@@ -4,12 +4,13 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
-  Clock, Trash2 
+  Clock, Trash2, UserPlus // 🚀 [CTO 패치] UserPlus 아이콘 추가
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
+// --- [컴포넌트 Lazy Loading] ---
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
@@ -25,6 +26,7 @@ const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
+const EnrollmentManager = React.lazy(() => import('./features/EnrollmentManager')); // 🚀 신규 메뉴 연결
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -91,6 +93,17 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
+                {/* 🚀 신규 메뉴 배너 추가 */}
+                {['admin', 'admin_assistant'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/enrollments')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><UserPlus size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">수강 및 등원 배정</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">학생별 수강 과목과 개인화된 '등원 요구 시간(Call-Time)'을 설정합니다.</p>
+                    </div>
+                )}
+
                 {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -310,7 +323,6 @@ const AppContent = () => {
                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
                  if (originalDocId && originalDocId !== finalSafeId) {
-                     // 🚀 [CTO 완벽 패치] 소문자 계정 생성 후, 중복의 원흉이었던 기존 대문자 문서를 즉시 자동 삭제
                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                         .then(() => {
                             const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
@@ -349,8 +361,10 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
+  // 🚀 [CTO 패치] 좌측 네비게이션 메뉴에 신규 기능 연결
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/enrollments', label: '수강 및 등원 배정', icon: UserPlus, roles: ['admin', 'admin_assistant'] }, 
     { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
@@ -419,6 +433,8 @@ const AppContent = () => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        {/* 🚀 신규 라우트 연결 */}
+                        <Route path="/enrollments" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <EnrollmentManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
                         )}
