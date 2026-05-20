@@ -310,7 +310,7 @@ const AppContent = () => {
                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
                  if (originalDocId && originalDocId !== finalSafeId) {
-                     // 🚀 [CTO 궁극 패치] 소문자 계정 생성 후, 중복 원인이 되는 기존 옛날 문서를 즉시 삭제
+                     // 🚀 [CTO 완벽 패치] 소문자 계정 생성 후, 중복의 원흉이었던 기존 대문자 문서를 즉시 자동 삭제
                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                         .then(() => {
                             const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);

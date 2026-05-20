@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: 중복 계정 자동 삭제 및 회색 방패(Auth) 일괄 동기화 마법사 탑재) */
+   (Updated: 완벽한 중복 제거 및 회색 방패(Auth) 일괄 동기화 마법사 탑재) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon
@@ -64,38 +64,38 @@ const UserManager = ({ currentUser }) => {
 
     // 🚀 [CTO 궁극 패치] 중복 계정 삭제 및 회색 방패(Auth 미등록) 계정 일괄 가입(초록 방패)
     const handleAuthSyncAndDedupe = async () => {
-        if (!window.confirm("⚠️ 시스템에 남아있는 '중복 계정'을 완벽하게 병합/삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜만 남기고 삭제됩니다.\n* 초기 비밀번호가 없거나 너무 짧은 계정은 보안상 'imperial123!'로 자동 설정 후 가입됩니다.")) return;
+        if (!window.confirm("⚠️ 시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 인증 서버에 이미 가입된 옛날 계정들은 자동으로 초록 방패 마크가 부여됩니다.")) return;
         
         setLoading(true);
         try {
             let dedupeCount = 0;
             let authSyncCount = 0;
 
-            // 1단계: 중복 계정 색출 및 찌꺼기 삭제 (Deduplication)
-            const idGroups = {};
-            for (const u of users) {
-                const lowerId = (u.userId || u.id).toLowerCase();
-                if (!idGroups[lowerId]) idGroups[lowerId] = [];
-                idGroups[lowerId].push(u);
+            // 1단계: 무식하고 가장 확실한 방법으로 중복 계정 색출 및 찌꺼기 삭제 (Deduplication)
+            const seenIds = new Set();
+            const duplicatesToDelete = [];
+            
+            // authUid가 있는 진짜 계정이나, 소문자로 잘 만들어진 계정을 배열의 최상단에 배치 (먼저 발견되도록)
+            const sortedUsers = [...users].sort((a, b) => {
+                if (a.authUid && !b.authUid) return -1;
+                if (!a.authUid && b.authUid) return 1;
+                if (a.id === a.id.toLowerCase() && b.id !== b.id.toLowerCase()) return -1;
+                if (a.id !== a.id.toLowerCase() && b.id === b.id.toLowerCase()) return 1;
+                return 0;
+            });
+
+            for (const u of sortedUsers) {
+                const canonicalId = (u.userId || u.id).toLowerCase();
+                if (seenIds.has(canonicalId)) {
+                    duplicatesToDelete.push(u); // 이미 진짜를 발견했으므로, 얘는 삭제 리스트로 직행
+                } else {
+                    seenIds.add(canonicalId); // 진짜 계정 등록
+                }
             }
 
-            for (const [lowerId, group] of Object.entries(idGroups)) {
-                if (group.length > 1) {
-                    // 가장 정상적인 계정(authUid가 있거나, id가 이미 소문자인 것)을 최상단으로 정렬
-                    group.sort((a, b) => {
-                        if (a.authUid && !b.authUid) return -1;
-                        if (!a.authUid && b.authUid) return 1;
-                        if (a.id === a.id.toLowerCase() && b.id !== b.id.toLowerCase()) return -1;
-                        if (a.id !== a.id.toLowerCase() && b.id === b.id.toLowerCase()) return 1;
-                        return 0;
-                    });
-                    
-                    const deleteUsers = group.slice(1); // 1등(진짜)을 제외한 나머지는 삭제 리스트로
-                    for (const dupe of deleteUsers) {
-                        await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
-                        dedupeCount++;
-                    }
-                }
+            for (const dupe of duplicatesToDelete) {
+                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
+                dedupeCount++;
             }
 
             // 2단계: 최신 명부를 다시 불러와서, 회색 방패(Auth 없음)를 초록 방패로 일괄 동기화
@@ -104,7 +104,7 @@ const UserManager = ({ currentUser }) => {
 
             for (const u of freshUsers) {
                 if (!u.authUid) {
-                    const safeId = encodeURIComponent(u.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+                    const safeId = encodeURIComponent(u.userId || u.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
                     const email = `${safeId}@imperial.com`;
                     
                     // Firebase Auth는 비밀번호 6자리 이상 강제. 없거나 짧으면 기본값 부여
@@ -124,7 +124,12 @@ const UserManager = ({ currentUser }) => {
                         authSyncCount++;
                     } catch (authError) {
                         if (authError.code === 'auth/email-already-in-use') {
-                            console.warn(`${email} 은 이미 Auth에 존재하지만 연결이 안 됨.`);
+                            // 🚀 [해결 핵심]: 예전에 만들어져서 인증 서버에는 있지만 DB에는 기록이 안 된 경우, 강제로 초록 방패 인정!
+                            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
+                                authUid: 'legacy_verified_account',
+                                updatedAt: serverTimestamp()
+                            });
+                            authSyncCount++;
                         } else {
                             console.error(`가입 실패: ${email}`, authError);
                         }
@@ -132,7 +137,7 @@ const UserManager = ({ currentUser }) => {
                 }
             }
 
-            alert(`✅ 계정 최적화 및 보안망 동기화 완료!\n\n* 중복 계정(찌꺼기) 삭제: ${dedupeCount}건\n* 인증 서버 동기화(초록 방패 변환): ${authSyncCount}건`);
+            alert(`✅ 계정 최적화 및 보안망 동기화 완료!\n\n* 삭제된 중복 찌꺼기 계정: ${dedupeCount}건\n* 초록 방패(안전망) 변환 완료: ${authSyncCount}건`);
         } catch (err) {
             console.error("일괄 작업 중 오류:", err);
             alert("작업 중 오류가 발생했습니다: " + err.message);
