@@ -237,7 +237,6 @@ const AppContent = () => {
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
-      // 🚀 [CTO 궁극 패치] 자동 로그인된 학생의 세션에서 대문자가 발견되면 즉시 소문자로 무결성 교정 (백그라운드 자가치유)
       if (parsedUser.id && parsedUser.id !== parsedUser.id.toLowerCase()) {
           parsedUser.id = parsedUser.id.toLowerCase();
           sessionStorage.setItem('imperial_user', JSON.stringify(parsedUser));
@@ -311,7 +310,12 @@ const AppContent = () => {
                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
                  if (originalDocId && originalDocId !== finalSafeId) {
+                     // 🚀 [CTO 궁극 패치] 소문자 계정 생성 후, 중복 원인이 되는 기존 옛날 문서를 즉시 삭제
                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
+                        .then(() => {
+                            const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
+                            deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
+                        })
                         .catch(e => console.error("Self-healing failed:", e));
                  } else {
                      updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
