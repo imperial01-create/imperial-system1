@@ -6,7 +6,6 @@ import {
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
   Clock, Trash2 
 } from 'lucide-react';
-// 🚀 [CTO 패치] setDoc 함수 추가
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
@@ -237,7 +236,13 @@ const AppContent = () => {
 
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
+      const parsedUser = JSON.parse(savedUser);
+      // 🚀 [CTO 궁극 패치] 자동 로그인된 학생의 세션에서 대문자가 발견되면 즉시 소문자로 무결성 교정 (백그라운드 자가치유)
+      if (parsedUser.id && parsedUser.id !== parsedUser.id.toLowerCase()) {
+          parsedUser.id = parsedUser.id.toLowerCase();
+          sessionStorage.setItem('imperial_user', JSON.stringify(parsedUser));
+      }
+      setCurrentUser(parsedUser);
     }
     setLoading(false);
   }, []);
@@ -269,7 +274,6 @@ const AppContent = () => {
          let finalSafeId = null;
 
          for (const idVariant of idVariants) {
-             // 🚀 [CTO 패치 1] 로그인 시 무조건 소문자로 변환하여 Firebase Auth와 Firestore 규격 통일
              const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
              const email = `${safeId}@imperial.com`;
              try {
@@ -286,16 +290,15 @@ const AppContent = () => {
              let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
              let userDoc = await getDoc(userDocRef);
              let docData = null;
-             let originalDocId = null; // 과거 대문자 문서인지 확인하기 위한 변수
+             let originalDocId = null; 
              
              if (!userDoc.exists()) {
-                 // 🚀 [CTO 패치 2] 소문자 문서가 없으면, 과거에 생성된 대문자 문서가 있는지 찾기
                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                  const s = await getDocs(q);
                  if (!s.empty) {
                      userDoc = s.docs[0];
                      docData = userDoc.data();
-                     originalDocId = userDoc.id; // 예: xEDx95... (대문자)
+                     originalDocId = userDoc.id; 
                  }
              } else {
                  docData = userDoc.data();
@@ -305,11 +308,8 @@ const AppContent = () => {
              if(docData) {
                  if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
 
-                 // 🚀 [CTO 패치 3] currentUser.id는 반드시 소문자(finalSafeId)로 세팅
                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
-                 // 🚀 [CTO 패치 4 - 자가 치유 로직] 과거 대문자 문서가 발견되었다면?
-                 // 즉시 소문자(finalSafeId) 문서 경로로 데이터를 복제 생성(Self-Healing)하여 권한 크래시 해결
                  if (originalDocId && originalDocId !== finalSafeId) {
                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                         .catch(e => console.error("Self-healing failed:", e));
