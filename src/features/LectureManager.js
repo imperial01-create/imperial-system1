@@ -1,3 +1,5 @@
+/* [서비스 가치] 강사와 관리자가 직관적으로 반을 관리할 수 있는 2-Depth UI와
+   안전한 CSV 덮어쓰기(동기화) 및 수강 현황 체크 기능을 제공합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
@@ -42,11 +44,11 @@ const parseCSV = (str) => {
     return result;
 };
 
-// 🚀 [CTO 패치] 학년 절삭 오류 수정: 괄호와 그 안의 내용만 제거하고 원본 이름은 보존
+// 🚀 [CTO 패치] 원장님 지시 반영: 학년은 놔두고 괄호(...)와 그 안의 내용만 완벽하게 제거
 const cleanClassName = (rawName) => {
     if (!rawName) return '';
     return rawName
-        .replace(/\(.*?\)/g, '') // 모든 괄호 및 그 안의 텍스트 제거
+        .replace(/\(.*?\)/g, '') // 모든 괄호 및 그 안의 텍스트만 제거
         .trim();
 };
 
@@ -58,12 +60,10 @@ const cleanStudentName = (rawName) => {
         .trim();
 };
 
-// 문자열 비교를 위한 정규화 (띄어쓰기, 대소문자 무시)
 const normalizeString = (str) => {
     return (str || '').replace(/\s+/g, '').toLowerCase();
 };
 
-// 환경설정(마스터)의 강의실 목록에서 일치하는 것을 찾아 반환 (없으면 원본 반환)
 const getMatchedMasterRoom = (rawRoom, masterRooms) => {
     if (!rawRoom) return '';
     const normRaw = normalizeString(rawRoom);
@@ -162,6 +162,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
             setLectures(lectureList);
         });
         
+        // 🚀 [CTO 복구] 학생 연동 데이터 (수강 현황용) 100% 복구 완료
         if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
             setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
         } else {
@@ -288,6 +289,21 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                         <div className="w-6 shrink-0 text-gray-400"><CheckCircle size={16}/></div>
                                         <div className="text-gray-700 break-all"><span className="font-bold text-gray-500 text-xs block">숙제</span>{lecture.homework}</div>
                                     </div>
+                                    {lecture.proofImageUrl && (
+                                        <div className="flex gap-2 items-center text-blue-600 bg-blue-50 p-2 rounded-lg mt-1">
+                                            <LinkIcon size={16}/> <span className="font-bold text-xs truncate max-w-[200px]">인증 사진 링크 등록됨</span>
+                                        </div>
+                                    )}
+                                </div>
+                                {/* 🚀 [CTO 복구] 모바일 화면의 수강 현황 리스트 완벽 복구 */}
+                                <div className="bg-gray-50 p-2 rounded-lg mt-1">
+                                    <h5 className="text-xs font-bold text-gray-500 mb-1 flex items-center gap-1"><Users size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lecture.id).length}/{studentsInClass.length})</h5>
+                                    <div className="flex flex-wrap gap-1">
+                                        {studentsInClass.map(std => {
+                                            const isDone = completions.some(c => c.lectureId === lecture.id && c.studentId === std.id);
+                                            return <span key={std.id} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDone ? 'bg-green-100 border-green-200 text-green-700' : 'bg-white border-gray-200 text-gray-400'}`}>{std.name}</span>
+                                        })}
+                                    </div>
                                 </div>
                             </div>
                         ))
@@ -298,10 +314,12 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50 border-b text-gray-500">
                             <tr>
-                                <th className="p-3 w-20">회차</th>
+                                <th className="p-3 w-16">회차</th>
                                 <th className="p-3">진도 내용</th>
                                 <th className="p-3">숙제</th>
-                                <th className="p-3 w-20 text-center">인증</th>
+                                <th className="p-3 text-center w-20">인증</th>
+                                {/* 🚀 [CTO 복구] 데스크톱 화면의 수강 현황 컬럼 완벽 복구 */}
+                                <th className="p-3 w-48">수강 현황</th>
                                 <th className="p-3 w-24 text-right">관리</th>
                             </tr>
                         </thead>
@@ -314,6 +332,14 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                     <td className="p-3 text-center">
                                         {lecture.proofImageUrl ? <CheckCircle size={18} className="mx-auto text-green-500"/> : <span className="text-gray-300">-</span>}
                                     </td>
+                                    <td className="p-3">
+                                        <div className="flex flex-wrap gap-1">
+                                            {studentsInClass.map(std => {
+                                                const isDone = completions.some(c => c.lectureId === lecture.id && c.studentId === std.id);
+                                                return <span key={std.id} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDone ? 'bg-green-100 border-green-200 text-green-700' : 'bg-white border-gray-200 text-gray-400'}`}>{std.name}</span>
+                                            })}
+                                        </div>
+                                    </td>
                                     <td className="p-3 text-right">
                                         <div className="flex justify-end gap-2">
                                             <button onClick={() => handleOpenModal(lecture)} className="text-gray-400 hover:text-blue-600"><Edit2 size={16}/></button>
@@ -323,7 +349,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 </tr>
                             ))}
                             {currentLectures.length === 0 && (
-                                <tr><td colSpan="5" className="p-8 text-center text-gray-400">해당 날짜에 일지가 없습니다.</td></tr>
+                                <tr><td colSpan="6" className="p-8 text-center text-gray-400">해당 날짜에 일지가 없습니다.</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -523,6 +549,8 @@ export const AdminLectureManager = ({ users }) => {
                 }
             } else {
                 payload.createdAt = serverTimestamp();
+                // 🚀 [CTO 복구] 반 신규 개설 시 학생 연동을 위한 studentIds 껍데기 보존
+                payload.studentIds = []; 
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -586,6 +614,7 @@ export const AdminLectureManager = ({ users }) => {
                                 const rawClassName = lines[1];
                                 const rawClassroom = lines[2] || '';
                                 
+                                // 🚀 원장님 지시 반영: 학년 텍스트는 그대로 두고 괄호만 삭제
                                 const className = cleanClassName(rawClassName);
                                 const classroom = getMatchedMasterRoom(rawClassroom, masterData.classrooms);
                                 const day = DAYS_OF_WEEK[col - 1];
@@ -646,6 +675,7 @@ export const AdminLectureManager = ({ users }) => {
                         name: newClsData.name,
                         lecturerId: safeLecturerId,
                         schedules: newClsData.schedules,
+                        studentIds: [], // 🚀 [CTO 복구] 학생 연동 데이터 보존
                         createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
                     });
@@ -896,7 +926,7 @@ export const AdminLectureManager = ({ users }) => {
                         <div className="opacity-90 leading-relaxed space-y-1">
                             <p>• <b>통통통 &gt; 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 엑셀(CSV) 파일을 올려주세요.</p>
                             <p>• 기존 반의 <span className="font-bold text-red-500">시간표만 완벽하게 덮어쓰기</span> 됩니다. (과거 일지 보존)</p>
-                            <p>• 학년(고1, 중2 등) 및 괄호 속 내용은 자동으로 정제됩니다.</p>
+                            <p>• 학년 및 괄호 속 내용은 자동으로 정제됩니다.</p>
                         </div>
                     </div>
 

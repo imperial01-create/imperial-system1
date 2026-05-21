@@ -1,8 +1,11 @@
+/* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
+   PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다. */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
-  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus
+  FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus,
+  AlertTriangle // 🚀 [CTO 패치] 경고등 아이콘 추가
 } from 'lucide-react';
 import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -131,7 +134,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    // 🚀 [CTO 로직] 스케줄(sessions) 단일 파이프라인에서 데이터 확보 (work_logs는 이제 사용하지 않음)
     const fetchMonthlyData = useCallback(async () => {
         if (!isManagementMode) { setMonthlySessions([]); return; }
         setIsSessionsLoading(true);
@@ -145,6 +147,53 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     }, [selectedMonth, isManagementMode]);
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
+
+    // 🚀 [CTO 패치] 실시간 스케줄 변동 대조를 위한 분리된 계산 엔진 (Dynamic Sync Engine)
+    const getRealtimeCalculation = useCallback((targetUser) => {
+        const uid = targetUser.id || targetUser.userId;
+        const wage = targetUser.hourlyRate || targetUser.hourlyWage;
+        let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
+        let completedHours = 0, expectedHours = 0;
+
+        if (targetUser.role === 'ta' || targetUser.role === 'admin_assistant') {
+            hourlyRate = parseInt(wage || 10030, 10);
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            const userSessions = monthlySessions.filter(s =>
+                (s.taId === uid || s.taName === targetUser.name) &&
+                ['open', 'confirmed', 'completed', 'pending'].includes(s.status)
+            );
+
+            const validLogs = userSessions.map(s => {
+                const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
+                const endH = parseInt((s.endTime||'00:00').split(':')[0], 10);
+                return { date: s.date, hours: endH - startH };
+            });
+
+            completedHours = validLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
+            expectedHours = validLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
+            totalHours = completedHours + expectedHours;
+
+            const weekGroups = {};
+            validLogs.forEach(log => {
+                const d = new Date(log.date);
+                const day = d.getDay();
+                const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+                const weekKey = new Date(d.setDate(diff)).toISOString().split('T')[0];
+                weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
+            });
+
+            Object.values(weekGroups).forEach(hours => {
+                if (hours >= 15) {
+                    weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate;
+                }
+            });
+
+            weeklyHolidayPay = Math.round(weeklyHolidayPay);
+            baseSalary = Math.floor(totalHours * hourlyRate);
+        }
+        return { baseSalary, weeklyHolidayPay, totalHours, completedHours, expectedHours, totalGross: baseSalary + weeklyHolidayPay, hourlyRate };
+    }, [monthlySessions]);
 
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
@@ -197,7 +246,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         } catch (e) { alert("공제 내역 오류: " + e.message); } finally { setCalcProcessing(false); }
     };
 
-    // 🚀 [CTO 로직 통합] TA(수업조교)와 Admin Assistant(행정조교)의 계산 로직을 하나로 일원화
     const handleCalculate = async (targetUser) => {
         if (!isManagementMode) return;
         const uid = targetUser.id || targetUser.userId;
@@ -210,58 +258,33 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         
         setCalcProcessing(true);
         try {
-            let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
-            let completedHours = 0, expectedHours = 0;
-            const todayStr = new Date().toISOString().split('T')[0];
+            // 🚀 [CTO 패치] 실시간 계산 엔진을 호출하여 데이터 가져오기
+            const rt = getRealtimeCalculation(targetUser);
             
-            // 두 조교 직군 모두 동일한 로직(sessions 기반)을 적용
-            if (targetUser.role === 'ta' || targetUser.role === 'admin_assistant') {
-                hourlyRate = parseInt(wage || 10030, 10);
+            // 🚀 [CTO 추가 수정] 재정산 시 기존의 세무 공제 내역 및 보너스 초기화 방지 로직
+            const existingPayroll = payrolls[uid];
+            const initialDeductions = existingPayroll?.deductions || Object.fromEntries(DEDUCTION_KEYS.map(k => [k, 0]));
+            const savedBonus = existingPayroll?.bonus || 0;
+            const savedMeal = existingPayroll?.mealAllowance || 0;
 
-                // 정상적으로 확정된(예정 포함) 스케줄만 필터링
-                const userSessions = monthlySessions.filter(s => 
-                    (s.taId === uid || s.taName === targetUser.name) && 
-                    ['open', 'confirmed', 'completed', 'pending'].includes(s.status)
-                );
-
-                const validLogs = userSessions.map(s => {
-                    const startH = parseInt(s.startTime.split(':')[0], 10);
-                    const endH = parseInt(s.endTime.split(':')[0], 10);
-                    return { date: s.date, hours: endH - startH };
-                });
-
-                completedHours = validLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
-                expectedHours = validLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
-                totalHours = completedHours + expectedHours;
-
-                const weekGroups = {}; 
-                validLogs.forEach(log => {
-                    const d = new Date(log.date);
-                    const day = d.getDay(); 
-                    const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
-                    const weekKey = new Date(d.setDate(diff)).toISOString().split('T')[0];
-                    weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
-                });
-
-                Object.values(weekGroups).forEach(hours => {
-                    if (hours >= 15) { 
-                        weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate; 
-                    }
-                });
-
-                weeklyHolidayPay = Math.round(weeklyHolidayPay);
-                baseSalary = Math.floor(totalHours * hourlyRate);
-            }
-            
-            const initialDeductions = {}; 
-            DEDUCTION_KEYS.forEach(key => initialDeductions[key] = 0);
+            const newTotalGross = rt.baseSalary + rt.weeklyHolidayPay + savedBonus + savedMeal;
+            const totalDeductionsAmount = Object.values(initialDeductions).reduce((a,b) => a + (Number(b)||0), 0);
             
             const dbPayload = { 
                 userId: uid, userName: targetUser.name, userRole: targetUser.role, yearMonth: selectedMonth, 
-                hourlyRate: hourlyRate, baseSalary, totalHours, completedHours, expectedHours, 
-                weeklyHolidayPay, mealAllowance: 0, bonus: 0, 
-                totalGross: baseSalary + weeklyHolidayPay, deductions: initialDeductions, netSalary: baseSalary + weeklyHolidayPay, 
-                status: 'calculated', updatedAt: serverTimestamp() 
+                hourlyRate: rt.hourlyRate, 
+                baseSalary: rt.baseSalary, 
+                totalHours: rt.totalHours, 
+                completedHours: rt.completedHours, 
+                expectedHours: rt.expectedHours, 
+                weeklyHolidayPay: rt.weeklyHolidayPay, 
+                mealAllowance: savedMeal, 
+                bonus: savedBonus, 
+                totalGross: newTotalGross, 
+                deductions: initialDeductions, 
+                netSalary: newTotalGross - totalDeductionsAmount, 
+                status: existingPayroll?.status || 'calculated', 
+                updatedAt: serverTimestamp() 
             };
             
             const docId = `${uid}_${selectedMonth}`;
@@ -354,8 +377,18 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             const payroll = payrolls[uid];
                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                             const wage = user.hourlyRate || user.hourlyWage;
+
+                            // 🚀 [CTO 패치] 실시간 변동 대조 검사
+                            let needsSync = false;
+                            if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
+                                const rt = getRealtimeCalculation(user);
+                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== rt.totalGross) {
+                                    needsSync = true;
+                                }
+                            }
+
                             return (
-                                <Card key={uid} className="p-5 flex flex-col gap-3">
+                                <Card key={uid} className={`p-5 flex flex-col gap-3 transition-all ${needsSync ? 'border-orange-300 shadow-md ring-2 ring-orange-50' : ''}`}>
                                     <div className="flex justify-between items-center border-b pb-2">
                                         <div>
                                             <span className="font-bold text-lg">{user.name}</span>
@@ -378,11 +411,26 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         <div className="flex justify-between"><span>주휴수당</span><span className="text-blue-500">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</span></div>
                                         <div className="flex justify-between font-bold text-gray-800 border-t pt-1 mt-1"><span>지급총액(세전)</span><span>{payroll ? formatCurrency(payroll.totalGross) : '-'}</span></div>
                                     </div>
-                                    <div className="flex justify-end gap-2 mt-2">
+                                    
+                                    <div className="flex flex-col gap-2 mt-2">
                                         {payroll ? (
-                                            <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }}>상세/공제 수정</Button>
+                                            <>
+                                                {needsSync && (
+                                                    <div className="flex flex-col gap-2 items-end w-full">
+                                                        <span className="text-[11px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded text-center animate-pulse flex items-center justify-center gap-1 w-full border border-orange-200">
+                                                            <AlertTriangle size={12}/> 스케줄 변동 감지됨
+                                                        </span>
+                                                        <Button size="sm" onClick={() => handleCalculate(user)} disabled={calcProcessing} className="bg-orange-500 hover:bg-orange-600 border-0 text-white w-full shadow-md">
+                                                            {calcProcessing ? <Loader className="animate-spin" size={14}/> : <RefreshCcw size={14}/>} 변동 갱신 (재정산)
+                                                        </Button>
+                                                    </div>
+                                                )}
+                                                <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }} className="w-full">
+                                                    상세/공제 수정
+                                                </Button>
+                                            </>
                                         ) : (
-                                            <Button size="sm" icon={calcProcessing ? Loader : Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing}>
+                                            <Button size="sm" icon={calcProcessing ? Loader : Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing} className="w-full">
                                                 {calcProcessing ? '처리 중...' : '정산 하기'}
                                             </Button>
                                         )}
@@ -405,7 +453,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             <th className="p-4 whitespace-nowrap">주휴수당</th>
                                             <th className="p-4 whitespace-nowrap">지급총액(세전)</th>
                                             <th className="p-4 whitespace-nowrap">실수령액(세후)</th>
-                                            <th className="p-4 text-right whitespace-nowrap">관리</th>
+                                            <th className="p-4 text-right whitespace-nowrap w-48">관리</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y">
@@ -414,8 +462,18 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             const payroll = payrolls[uid];
                                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                                             const wage = user.hourlyRate || user.hourlyWage;
+
+                                            // 🚀 [CTO 패치] 실시간 변동 대조 검사
+                                            let needsSync = false;
+                                            if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
+                                                const rt = getRealtimeCalculation(user);
+                                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== rt.totalGross) {
+                                                    needsSync = true;
+                                                }
+                                            }
+
                                             return (
-                                                <tr key={uid} className="hover:bg-gray-50">
+                                                <tr key={uid} className={`hover:bg-gray-50 ${needsSync ? 'bg-orange-50/30' : ''}`}>
                                                     <td className="p-4 font-bold">{user.name}</td>
                                                     <td className="p-4 text-xs font-bold"><span className={`px-2 py-1 rounded-md ${user.role==='admin_assistant' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{roleLabel}</span></td>
                                                     <td className="p-4">{['ta', 'admin_assistant'].includes(user.role) ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</td>
@@ -426,11 +484,25 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                     <td className="p-4 text-blue-600 font-bold">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
                                                     <td className="p-4 font-bold">{payroll ? formatCurrency(payroll.totalGross) : '-'}</td>
                                                     <td className="p-4 font-bold text-green-600">{payroll ? formatCurrency(payroll.netSalary) : '-'}</td>
-                                                    <td className="p-4 flex justify-end gap-2">
+                                                    <td className="p-4 flex flex-col items-end gap-2">
                                                         {payroll ? (
-                                                            <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }}>상세/공제 수정</Button>
+                                                            <>
+                                                                {needsSync && (
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-[11px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded flex items-center gap-1 animate-pulse border border-orange-200 whitespace-nowrap">
+                                                                            <AlertTriangle size={12}/> 스케줄 변동
+                                                                        </span>
+                                                                        <Button size="sm" icon={calcProcessing ? Loader : RefreshCcw} onClick={() => handleCalculate(user)} disabled={calcProcessing} className="bg-orange-500 hover:bg-orange-600 border-0 text-white shadow-sm whitespace-nowrap">
+                                                                            재정산
+                                                                        </Button>
+                                                                    </div>
+                                                                )}
+                                                                <Button size="sm" variant="secondary" icon={FileText} onClick={() => { setEditingPayroll(payroll); setIsEditModalOpen(true); }} className={needsSync ? "w-full" : "whitespace-nowrap"}>
+                                                                    상세/공제 수정
+                                                                </Button>
+                                                            </>
                                                         ) : (
-                                                            <Button size="sm" icon={calcProcessing ? Loader : Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing}>
+                                                            <Button size="sm" icon={calcProcessing ? Loader : Calculator} onClick={() => handleCalculate(user)} disabled={calcProcessing} className="whitespace-nowrap">
                                                                 {calcProcessing ? '처리 중...' : '정산 하기'}
                                                             </Button>
                                                         )}

@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Phase 2 - 학생 모달창 내 '수강 관리(Enrollment)' 탭 완벽 이식) */
+   (Updated: Phase 2 - 학생 모달창 내 '수강 관리' 탭 ➔ 검색형 반 배정 UI 적용) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
@@ -24,8 +24,8 @@ const UserManager = ({ currentUser }) => {
 
     // --- 글로벌 상태 관리 ---
     const [users, setUsers] = useState([]);
-    const [classes, setClasses] = useState([]);           // 🚀 [CTO] 전체 반 마스터 데이터
-    const [enrollments, setEnrollments] = useState([]);   // 🚀 [CTO] 수강 이력 브릿지 데이터
+    const [classes, setClasses] = useState([]);           
+    const [enrollments, setEnrollments] = useState([]);   
     
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('student'); 
@@ -36,7 +36,7 @@ const UserManager = ({ currentUser }) => {
     const [toast, setToast] = useState({ message: '', type: 'info' });
 
     // --- 폼 상태 관리 ---
-    const [modalTab, setModalTab] = useState('basic'); // 'basic' | 'enroll'
+    const [modalTab, setModalTab] = useState('basic'); 
     const [isEditMode, setIsEditMode] = useState(false);
     
     const [formData, setFormData] = useState({ 
@@ -47,6 +47,10 @@ const UserManager = ({ currentUser }) => {
 
     const initEnrollForm = { classId: '', className: '', lecturerId: '', status: 'active', schedules: [] };
     const [enrollForm, setEnrollForm] = useState(initEnrollForm);
+
+    // 🚀 [CTO 패치] 반 검색용 상태 추가
+    const [classSearchInput, setClassSearchInput] = useState('');
+    const [classSearchQuery, setClassSearchQuery] = useState('');
 
     const [studentList, setStudentList] = useState([]);
 
@@ -75,7 +79,6 @@ const UserManager = ({ currentUser }) => {
         return () => { unsubUsers(); unsubClasses(); unsubEnrollments(); };
     }, []);
 
-    // --- [CTO 기능] 중복 계정 찌꺼기 삭제 & Auth 동기화 ---
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ 시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 인증 서버에 이미 가입된 옛날 계정들은 자동으로 초록 방패 마크가 부여됩니다.")) return;
         
@@ -180,6 +183,8 @@ const UserManager = ({ currentUser }) => {
         setIsEditMode(false);
         setModalTab('basic');
         setEnrollForm(initEnrollForm);
+        setClassSearchInput('');
+        setClassSearchQuery('');
         setIsModalOpen(true);
     };
 
@@ -204,6 +209,8 @@ const UserManager = ({ currentUser }) => {
         setIsEditMode(true);
         setModalTab('basic');
         setEnrollForm(initEnrollForm);
+        setClassSearchInput('');
+        setClassSearchQuery('');
         setIsModalOpen(true);
     };
 
@@ -280,12 +287,11 @@ const UserManager = ({ currentUser }) => {
                 payload.authUid = authUid; payload.password = formData.password; payload.createdAt = serverTimestamp();
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
                 
-                // 신규 생성 후 모달을 닫지 않고 바로 '수강 관리' 탭을 쓸 수 있도록 isEditMode 전환
                 setIsEditMode(true);
                 setFormData(prev => ({ ...prev, id: safeId, authUid }));
                 showToast('사용자가 성공적으로 생성되었습니다. 이제 상단 탭에서 수강을 배정할 수 있습니다.', 'success');
                 setLoading(false);
-                return; // 모달 닫지 않음
+                return; 
             }
             setIsModalOpen(false);
         } catch (e) { 
@@ -304,7 +310,7 @@ const UserManager = ({ currentUser }) => {
         finally { setLoading(false); setTargetUserId(null); }
     };
 
-    // --- 🚀 [CTO 패치] 수강 이력 관리 (Enrollment Logic) ---
+    // --- 수강 이력 관리 (Enrollment Logic) ---
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
 
     const handleClassSelect = (classId) => {
@@ -315,7 +321,6 @@ const UserManager = ({ currentUser }) => {
         const cls = classes.find(c => c.id === classId);
         if (!cls) return;
 
-        // 마스터 데이터(클래스)의 스케줄을 가져와서 callTime(등원요구시간)을 startTime과 동일하게 기본 세팅
         const mappedSchedules = (cls.schedules || []).map(s => ({
             dayOfWeek: s.dayOfWeek,
             startTime: s.startTime,
@@ -363,6 +368,8 @@ const UserManager = ({ currentUser }) => {
 
             await setDoc(eRef, payload, { merge: true });
             setEnrollForm(initEnrollForm);
+            setClassSearchInput('');
+            setClassSearchQuery('');
             showToast('수강 배정이 성공적으로 저장되었습니다.', 'success');
         } catch (e) {
             showToast('수강 배정 실패: ' + e.message, 'error');
@@ -500,7 +507,6 @@ const UserManager = ({ currentUser }) => {
                 </Card>
             </div>
 
-            {/* 🚀 [CTO 패치] 대규모 개편된 모달창 (2-Depth Tabs) */}
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-3xl w-full">
                 
                 {/* 탭 네비게이션 (학생인 경우에만 렌더링) */}
@@ -578,7 +584,7 @@ const UserManager = ({ currentUser }) => {
                             <div>
                                 <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5"><BookMarked size={16} className="text-blue-600"/> 현재 수강중인 반</h3>
                                 {currentStudentEnrollments.length === 0 ? (
-                                    <div className="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-sm font-bold text-gray-400">배정된 강의가 없습니다. 아래에서 반을 선택해 배정해주세요.</div>
+                                    <div className="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-sm font-bold text-gray-400">배정된 강의가 없습니다. 아래에서 반을 검색 후 배정해주세요.</div>
                                 ) : (
                                     <div className="space-y-3">
                                         {currentStudentEnrollments.map(e => (
@@ -593,7 +599,12 @@ const UserManager = ({ currentUser }) => {
                                                         <h4 className="font-black text-gray-900">{e.className}</h4>
                                                     </div>
                                                     <div className="flex gap-1">
-                                                        <button onClick={() => {setEnrollForm(e); window.scrollTo(0, document.body.scrollHeight);}} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={14}/></button>
+                                                        <button onClick={() => {
+                                                            setEnrollForm(e); 
+                                                            setClassSearchInput('');
+                                                            setClassSearchQuery('');
+                                                            window.scrollTo(0, document.body.scrollHeight);
+                                                        }} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={14}/></button>
                                                         <button onClick={() => handleDeleteEnrollment(e.id)} className="p-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={14}/></button>
                                                     </div>
                                                 </div>
@@ -611,21 +622,73 @@ const UserManager = ({ currentUser }) => {
                                 )}
                             </div>
 
-                            {/* 신규 배정 및 수정 폼 */}
+                            {/* 🚀 [CTO 패치] 쾌적한 검색형 수강 배정 폼 */}
                             <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100 mt-6 shadow-inner">
                                 <h3 className="text-sm font-black text-blue-900 mb-4 flex items-center gap-1.5"><Plus size={16}/> {enrollForm.id ? '수강 이력 수정' : '새로운 수강 배정'}</h3>
                                 
                                 <div className="space-y-4">
                                     <div>
-                                        <label className="block text-xs font-bold text-blue-800 mb-1.5">배정할 반(Class) 선택</label>
-                                        <select className="w-full border-2 border-white bg-white p-3 rounded-xl focus:border-blue-500 outline-none font-bold text-gray-800 shadow-sm" value={enrollForm.classId} onChange={e => handleClassSelect(e.target.value)} disabled={!!enrollForm.id}>
-                                            <option value="">반을 선택해주세요</option>
-                                            {classes.map(c => <option key={c.id} value={c.id}>[{users.find(u=>u.id===c.lecturerId)?.name || '미지정'}] {c.name}</option>)}
-                                        </select>
+                                        <label className="block text-xs font-bold text-blue-800 mb-1.5">배정할 반(Class) 검색 및 선택</label>
+                                        {!enrollForm.id ? (
+                                            <div className="border-2 border-blue-100 rounded-xl bg-white p-2 shadow-sm">
+                                                <div className="flex gap-2 mb-2">
+                                                    <div className="relative flex-1">
+                                                        <input 
+                                                            type="text" 
+                                                            className="w-full border p-2 pl-8 rounded-lg bg-gray-50 text-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold" 
+                                                            placeholder="반 이름 또는 강사명 검색 후 엔터" 
+                                                            value={classSearchInput} 
+                                                            onChange={e => setClassSearchInput(e.target.value)} 
+                                                            onKeyDown={e => {
+                                                                if (e.key === 'Enter') {
+                                                                    e.preventDefault();
+                                                                    setClassSearchQuery(classSearchInput);
+                                                                }
+                                                            }}
+                                                        />
+                                                        <Search className="absolute left-2.5 top-2.5 text-gray-400" size={16}/>
+                                                    </div>
+                                                    <Button type="button" size="sm" onClick={() => setClassSearchQuery(classSearchInput)} className="shrink-0 bg-blue-600 hover:bg-blue-700">검색</Button>
+                                                </div>
+                                                
+                                                <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                                                    {classes
+                                                        .filter(c => c.name.includes(classSearchQuery) || (users.find(u=>u.id===c.lecturerId)?.name || '').includes(classSearchQuery))
+                                                        .map(c => (
+                                                            <button
+                                                                key={c.id}
+                                                                type="button"
+                                                                onClick={() => handleClassSelect(c.id)}
+                                                                className={`w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between border ${enrollForm.classId === c.id ? 'bg-blue-50 border-blue-300 font-bold text-blue-900 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50 text-gray-700'}`}
+                                                            >
+                                                                <div>
+                                                                    <span className="text-xs text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mr-2 font-bold inline-block w-14 text-center">
+                                                                        {users.find(u=>u.id===c.lecturerId)?.name || '미지정'}
+                                                                    </span>
+                                                                    {c.name}
+                                                                </div>
+                                                                {enrollForm.classId === c.id && <CheckCircle size={16} className="text-blue-600"/>}
+                                                            </button>
+                                                        ))
+                                                    }
+                                                    {classes.filter(c => c.name.includes(classSearchQuery) || (users.find(u=>u.id===c.lecturerId)?.name || '').includes(classSearchQuery)).length === 0 && (
+                                                        <div className="text-center py-6 text-sm text-gray-400 font-bold">검색 결과가 없습니다.</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="w-full border-2 border-gray-200 bg-gray-100 p-3.5 rounded-xl font-bold text-gray-500 shadow-sm flex items-center gap-2">
+                                                <span className="text-xs text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded font-bold">
+                                                    {users.find(u=>u.id===enrollForm.lecturerId)?.name || '미지정'}
+                                                </span>
+                                                {enrollForm.className}
+                                                <span className="ml-auto text-xs font-normal text-rose-500 hidden md:inline">* 배정된 반은 변경불가 (필요시 삭제 후 재배정)</span>
+                                            </div>
+                                        )}
                                     </div>
 
                                     {enrollForm.classId && (
-                                        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3">
+                                        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3 animate-in fade-in zoom-in-95 duration-200">
                                             <div className="flex justify-between items-center border-b pb-2">
                                                 <label className="text-xs font-bold text-gray-800 flex items-center gap-1"><Calendar size={14} className="text-blue-600"/> 스케줄 및 등원시간(Call-Time) 세팅</label>
                                                 <select className="border border-gray-200 p-1 px-2 rounded-lg text-xs font-bold outline-none" value={enrollForm.status} onChange={e => setEnrollForm({...enrollForm, status: e.target.value})}>
