@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText, Upload, Clock, Calendar
+    FileText, Upload, Clock, Calendar, ChevronDown
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
-    query, where, onSnapshot, serverTimestamp, getDocs,
+    query, where, onSnapshot, serverTimestamp, getDocs, getDoc,
     writeBatch 
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -247,13 +247,12 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                         <PenTool size={18} className="text-blue-600"/> 
                         {selectedDate.split('-')[2]}일 강의 목록
                     </h3>
-                    <Button size="sm" onClick={() => handleOpenModal()} icon={Plus}>강의 추가</Button>
+                    <Button size="sm" onClick={() => handleOpenModal()} icon={Plus}>강의 일지 작성</Button>
                 </div>
 
-                {/* Mobile Card List */}
                 <div className="block md:hidden space-y-3">
                     {currentLectures.length === 0 ? (
-                        <div className="text-center py-8 text-gray-400 border-2 border-dashed rounded-xl">해당 날짜에 강의가 없습니다.</div>
+                        <div className="text-center py-8 text-gray-400 border-2 border-dashed rounded-xl">해당 날짜에 일지가 없습니다.</div>
                     ) : (
                         currentLectures.map(lecture => (
                             <div key={lecture.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3">
@@ -276,27 +275,12 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                         <div className="w-6 shrink-0 text-gray-400"><CheckCircle size={16}/></div>
                                         <div className="text-gray-700 break-all"><span className="font-bold text-gray-500 text-xs block">숙제</span>{lecture.homework}</div>
                                     </div>
-                                    {lecture.proofImageUrl && (
-                                        <div className="flex gap-2 items-center text-blue-600 bg-blue-50 p-2 rounded-lg mt-1">
-                                            <LinkIcon size={16}/> <span className="font-bold text-xs truncate max-w-[200px]">인증 사진 링크 등록됨</span>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="bg-gray-50 p-2 rounded-lg mt-1">
-                                    <h5 className="text-xs font-bold text-gray-500 mb-1 flex items-center gap-1"><Users size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lecture.id).length}/{studentsInClass.length})</h5>
-                                    <div className="flex flex-wrap gap-1">
-                                        {studentsInClass.map(std => {
-                                            const isDone = completions.some(c => c.lectureId === lecture.id && c.studentId === std.id);
-                                            return <span key={std.id} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDone ? 'bg-green-100 border-green-200 text-green-700' : 'bg-white border-gray-200 text-gray-400'}`}>{std.name}</span>
-                                        })}
-                                    </div>
                                 </div>
                             </div>
                         ))
                     )}
                 </div>
 
-                {/* PC Table View */}
                 <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-hidden">
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50 border-b text-gray-500">
@@ -326,15 +310,14 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 </tr>
                             ))}
                             {currentLectures.length === 0 && (
-                                <tr><td colSpan="5" className="p-8 text-center text-gray-400">해당 날짜에 강의가 없습니다.</td></tr>
+                                <tr><td colSpan="5" className="p-8 text-center text-gray-400">해당 날짜에 일지가 없습니다.</td></tr>
                             )}
                         </tbody>
                     </table>
                 </div>
             </div>
 
-            {/* Modal */}
-            <Modal isOpen={isLectureModalOpen} onClose={() => setIsLectureModalOpen(false)} title={editingLecture ? "강의 수정" : "새 강의 등록"}>
+            <Modal isOpen={isLectureModalOpen} onClose={() => setIsLectureModalOpen(false)} title={editingLecture ? "강의 일지 수정" : "새 강의 일지 등록"}>
                 <div className="space-y-4">
                     <div className="flex gap-4">
                         <div className="flex-1">
@@ -355,12 +338,11 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                         <textarea className="w-full border p-3 rounded-xl h-24 resize-none outline-none focus:ring-2 focus:ring-blue-500" value={formData.homework} onChange={e => setFormData({...formData, homework: e.target.value})} placeholder="내주신 숙제를 입력하세요" />
                     </div>
                     <div>
-                        <label className="text-sm font-bold text-gray-600 mb-1 flex items-center gap-1"><LinkIcon size={14} className="text-green-600"/> 인증 사진 링크 (선택)</label>
+                        <label className="text-sm font-bold text-gray-600 mb-1 flex items-center gap-1"><LinkIcon size={14} className="text-green-600"/> 판서/현장 인증 사진 링크 (선택)</label>
                         <input type="text" className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-green-500 transition-colors" value={formData.proofImageUrl} onChange={e => setFormData({...formData, proofImageUrl: e.target.value})} placeholder="Google Drive 공유 링크 또는 이미지 URL" />
-                        <p className="text-xs text-gray-400 mt-1 ml-1">* 서버 용량 절약을 위해 사진을 직접 업로드하지 않고, 링크를 붙여넣어 주세요.</p>
                     </div>
                     <div>
-                        <label className="text-sm font-bold text-gray-600 mb-1 flex justify-between">영상 링크 <button onClick={handleAddLink} className="text-blue-600">+추가</button></label>
+                        <label className="text-sm font-bold text-gray-600 mb-1 flex justify-between">복습용 영상 링크 <button onClick={handleAddLink} className="text-blue-600">+추가</button></label>
                         {formData.youtubeLinks.map((link, idx) => (
                             <div key={idx} className="flex gap-2 mb-2">
                                 <input type="text" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={link} onChange={e => handleLinkChange(idx, e.target.value)} placeholder="https://youtu.be/..." />
@@ -372,7 +354,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                             </div>
                         ))}
                     </div>
-                    <Button className="w-full py-4 text-lg mt-4 font-bold" onClick={handleSaveLecture}>저장하기</Button>
+                    <Button className="w-full py-4 text-lg mt-4 font-bold" onClick={handleSaveLecture}>일지 저장하기</Button>
                 </div>
             </Modal>
         </div>
@@ -382,11 +364,18 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
 // --- Admin & Lecturer Unified Component ---
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
+    
+    // 🚀 [CTO 패치] 2-Depth UI를 위한 상태 관리
+    const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
+    
     const [isClassModalOpen, setIsClassModalOpen] = useState(false);
     const [editingClassId, setEditingClassId] = useState(null);
     const [newClass, setNewClass] = useState({ name: '', lecturerId: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
+
+    // 환경설정 마스터 데이터 불러오기
+    const [masterData, setMasterData] = useState({ classrooms: [], subjects: [] });
 
     // CSV 동기화 관리용 상태
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
@@ -394,20 +383,57 @@ export const AdminLectureManager = ({ users }) => {
     const [csvStudentFile, setCsvStudentFile] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
 
+    const lecturers = useMemo(() => {
+        return users.filter(u => u.role === 'lecturer' || u.role === 'admin' || u.role === 'ta').sort((a,b) => a.name.localeCompare(b.name));
+    }, [users]);
+
+    // 전체 반 목록 가져오기
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
         return onSnapshot(q, (s) => {
             const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
-            // 가나다 순 정렬
             list.sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
             setClasses(list);
         });
     }, []);
 
+    // 환경설정 마스터 데이터 가져오기
+    useEffect(() => {
+        const fetchSettings = async () => {
+            try {
+                const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data');
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    setMasterData({
+                        classrooms: data.classrooms || [],
+                        subjects: data.subjects || []
+                    });
+                }
+            } catch (err) {
+                console.error("Master data load error:", err);
+            }
+        };
+        fetchSettings();
+    }, []);
+
+    // 선택된 강사의 반만 필터링
+    const displayedClasses = useMemo(() => {
+        if (!selectedLecturerId) return [];
+        return classes.filter(c => c.lecturerId === selectedLecturerId);
+    }, [classes, selectedLecturerId]);
+
+    // 강사 선택 시, 활성화된 반 초기화
+    const handleSelectLecturer = (lecturerId) => {
+        setSelectedLecturerId(lecturerId);
+        setSelectedClass(null); // 반 초기화
+    };
+
     const handleOpenCreateClass = () => {
+        if (!selectedLecturerId) return alert('좌측에서 반을 개설할 담당 강사를 먼저 선택해주세요.');
         setNewClass({ 
             name: '', 
-            lecturerId: '', 
+            lecturerId: selectedLecturerId, 
             schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }] 
         });
         setEditingClassId(null);
@@ -417,7 +443,6 @@ export const AdminLectureManager = ({ users }) => {
     const handleOpenEditClass = (e, cls) => {
         e.stopPropagation();
         
-        // 🚀 [CTO 패치] 과거 데이터 마이그레이션 (days/time -> schedules)
         let initialSchedules = cls.schedules || [];
         if (initialSchedules.length === 0 && cls.days && cls.days.length > 0) {
             let sTime = "18:00", eTime = "20:00";
@@ -435,7 +460,7 @@ export const AdminLectureManager = ({ users }) => {
 
         setNewClass({
             name: cls.name,
-            lecturerId: cls.lecturerId || '',
+            lecturerId: cls.lecturerId || selectedLecturerId,
             schedules: initialSchedules
         });
         setEditingClassId(cls.id);
@@ -472,8 +497,6 @@ export const AdminLectureManager = ({ users }) => {
 
         setIsSaving(true);
         try {
-            // 학생 연동 기능(studentIds)은 Phase 2(사용자 관리)에서 처리하므로 삭제하되,
-            // 하위 호환성을 위해 DB 업데이트 시 studentIds를 건드리지 않도록 payload 구성
             const payload = { 
                 name: newClass.name.trim(),
                 lecturerId: newClass.lecturerId,
@@ -485,7 +508,6 @@ export const AdminLectureManager = ({ users }) => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), payload);
             } else {
                 payload.createdAt = serverTimestamp();
-                payload.studentIds = []; // 새 반을 만들 때는 빈 배열 세팅
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -509,7 +531,6 @@ export const AdminLectureManager = ({ users }) => {
         });
     };
 
-    // 🚀 [CTO 패치] CSV 동기화 엔진 업그레이드 (schedules 배열 변환)
     const handleSyncCsv = async () => {
         if (!csvLecturerFile || !csvStudentFile) {
             return alert("두 개의 CSV 파일을 모두 업로드해주세요.");
@@ -527,7 +548,6 @@ export const AdminLectureManager = ({ users }) => {
             let currentTeacherName = '';
             const DAYS_OF_WEEK = ['월', '화', '수', '목', '금', '토', '일'];
 
-            // 1. 강사별 현황 파싱 (시간, 교실, 강사 매핑)
             lecturerData.forEach((row) => {
                 if (row.length === 0) return;
                 
@@ -562,7 +582,6 @@ export const AdminLectureManager = ({ users }) => {
                                         };
                                     }
                                     
-                                    // 요일 중복 방지 (같은 반이 같은 요일에 2번 들어가지 않도록)
                                     if (!parsedClasses[className].schedules.some(s => s.dayOfWeek === day)) {
                                         parsedClasses[className].schedules.push({
                                             dayOfWeek: day,
@@ -578,29 +597,8 @@ export const AdminLectureManager = ({ users }) => {
                 }
             });
 
-            // 2. 반별 원생 목록 파싱 (학생 연동 - 기존 코드 호환성 유지)
-            if (studentData.length > 0) {
-                const headers = studentData[0];
-                for (let col = 1; col < headers.length; col++) {
-                    const rawClassName = headers[col];
-                    if (!rawClassName) continue;
-                    
-                    const className = cleanClassName(rawClassName);
-                    if (parsedClasses[className]) {
-                        for (let r = 2; r < studentData.length; r++) {
-                            if (studentData[r] && studentData[r][col]) {
-                                const rawStudent = studentData[r][col];
-                                const studentName = cleanStudentName(rawStudent);
-                                if (studentName && !parsedClasses[className].studentNames.includes(studentName)) {
-                                    parsedClasses[className].studentNames.push(studentName);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // 학생 연동 코드는 삭제 (Phase 2로 이관됨)
 
-            // 3. Firebase 최적화 Batch 쓰기
             const batch = writeBatch(db);
             let writeCount = 0;
 
@@ -609,30 +607,22 @@ export const AdminLectureManager = ({ users }) => {
 
             Object.values(parsedClasses).forEach(newClsData => {
                 const lecturerId = users.find(u => u.role === 'lecturer' && u.name === newClsData.lecturerName)?.id || '';
-                const studentIds = newClsData.studentNames
-                    .map(name => users.find(u => u.role === 'student' && u.name === name)?.id)
-                    .filter(Boolean);
 
                 const existing = existingClassesMap[newClsData.name];
                 
                 if (existing) {
-                    // Deep Compare를 위한 JSON 변환 비교
                     const existingSchedules = JSON.stringify(existing.schedules || []);
                     const newSchedules = JSON.stringify(newClsData.schedules);
-                    const existingStudentIdsSorted = [...(existing.studentIds || [])].sort().join(',');
-                    const newStudentIdsSorted = [...studentIds].sort().join(',');
                     
                     const hasChanged = 
                         existing.lecturerId !== lecturerId ||
-                        existingSchedules !== newSchedules ||
-                        existingStudentIdsSorted !== newStudentIdsSorted;
+                        existingSchedules !== newSchedules;
 
                     if (hasChanged) {
                         const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
                         batch.update(classRef, {
                             lecturerId,
                             schedules: newClsData.schedules,
-                            studentIds,
                             updatedAt: serverTimestamp()
                         });
                         writeCount++;
@@ -643,7 +633,6 @@ export const AdminLectureManager = ({ users }) => {
                         name: newClsData.name,
                         lecturerId,
                         schedules: newClsData.schedules,
-                        studentIds,
                         createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
                     });
@@ -671,100 +660,148 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     return (
-        <div className="space-y-8 w-full animate-in fade-in">
-            {/* 1. Class Management Section */}
-            <div className="w-full">
-                <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                    <div>
-                        <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 클래스 마스터 관리</h2>
-                        <p className="text-gray-500 text-sm mt-1">학원의 모든 정규반 뼈대(스케줄, 강사, 강의실)를 설계합니다.</p>
-                    </div>
-                    
-                    <div className="flex gap-2 w-full md:w-auto">
-                        <Button 
-                            variant="outline" 
-                            onClick={() => setIsCsvModalOpen(true)} 
-                            icon={Upload} 
-                            className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold"
-                        >
-                            통통통 CSV 동기화
-                        </Button>
-                        <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto font-bold shadow-md">새로운 반 개설하기</Button>
-                    </div>
+        <div className="space-y-6 w-full animate-in fade-in h-[85vh] flex flex-col">
+            <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-2xl border border-gray-200 shadow-sm shrink-0 gap-4">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 클래스 마스터 관리</h2>
+                    <p className="text-gray-500 text-sm mt-1">학원의 모든 반과 스케줄을 강사별로 직관적으로 관리합니다.</p>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 w-full">
-                    {classes.map(cls => {
-                        // 🚀 하위 호환성을 위해 기존 days 배열도 처리
-                        const displaySchedules = cls.schedules || (cls.days ? cls.days.map(d => ({dayOfWeek: d, startTime: cls.time?.split('~')[0]?.trim() || '', endTime: cls.time?.split('~')[1]?.trim() || '', room: cls.classroom || ''})) : []);
-
-                        return (
-                        <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-6 rounded-2xl border-2 cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50/50 border-blue-500 shadow-md' : 'bg-white border-gray-100 hover:border-blue-300 hover:shadow-sm'}`}>
-                            <div className="flex justify-between items-start mb-4">
-                                <h3 className="font-black text-xl text-gray-800 break-keep leading-tight">{cls.name}</h3>
-                                <div className="flex gap-1 shrink-0">
-                                    <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={18}/></button>
-                                    <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2 mb-4">
-                                {displaySchedules.length === 0 ? (
-                                    <div className="text-xs text-gray-400 font-bold bg-gray-50 p-2 rounded-lg text-center">등록된 스케줄이 없습니다.</div>
-                                ) : (
-                                    displaySchedules.map((s, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 bg-gray-50 border border-gray-100 p-2.5 rounded-xl text-sm">
-                                            <span className="w-6 h-6 flex items-center justify-center bg-blue-100 text-blue-700 font-black rounded-md shrink-0">{s.dayOfWeek}</span>
-                                            <span className="font-bold text-gray-700 flex items-center gap-1"><Clock size={14} className="text-gray-400"/> {s.startTime}~{s.endTime}</span>
-                                            <span className="text-gray-500 text-xs font-semibold ml-auto border border-gray-200 bg-white px-2 py-0.5 rounded-full truncate max-w-[80px]" title={s.room}>{s.room || '미정'}</span>
-                                        </div>
-                                    ))
-                                )}
-                            </div>
-
-                            <div className="flex justify-between items-center pt-4 border-t border-gray-100">
-                                <div className="flex items-center gap-1.5">
-                                    <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black uppercase">
-                                        {(users.find(u => u.id === cls.lecturerId)?.name || '?')[0]}
-                                    </div>
-                                    <span className="text-sm font-bold text-gray-700">{users.find(u => u.id === cls.lecturerId)?.name || '강사 미지정'}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">
-                                    <Users size={14}/> {(cls.studentIds || []).length}명
-                                </div>
-                            </div>
-                        </div>
-                    )})}
+                
+                <div className="flex gap-2 w-full md:w-auto">
+                    <Button variant="outline" onClick={() => setIsCsvModalOpen(true)} icon={Upload} className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold">
+                        통통통 CSV 동기화
+                    </Button>
                 </div>
             </div>
 
-            {/* 2. Lecture Management Section */}
-            {selectedClass ? (
-                <div className="border-t border-gray-200 pt-8 animate-in slide-in-from-bottom-4 w-full">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-xl">{selectedClass.name}</span> 강의 일지 관리</h2>
-                    <LectureManagementPanel selectedClass={selectedClass} users={users} />
+            <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
+                {/* 🚀 2-Depth UI: 좌측 패널 (강사 리스트) */}
+                <div className="w-full lg:w-1/4 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col shrink-0 min-h-[300px]">
+                    <div className="p-4 border-b border-gray-100 bg-gray-50 rounded-t-2xl">
+                        <h3 className="font-bold text-gray-800">강사 목록</h3>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                        {lecturers.map(lecturer => {
+                            const myClassesCount = classes.filter(c => c.lecturerId === lecturer.id).length;
+                            return (
+                                <button 
+                                    key={lecturer.id} 
+                                    onClick={() => handleSelectLecturer(lecturer.id)} 
+                                    className={`w-full text-left p-3 rounded-xl transition-all flex items-center justify-between mb-1 ${selectedLecturerId === lecturer.id ? 'bg-blue-50 border border-blue-200 shadow-sm' : 'hover:bg-gray-50 border border-transparent'}`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black uppercase shrink-0">
+                                            {lecturer.name[0]}
+                                        </div>
+                                        <span className={`font-bold ${selectedLecturerId === lecturer.id ? 'text-blue-900' : 'text-gray-800'}`}>{lecturer.name}</span>
+                                    </div>
+                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${myClassesCount > 0 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
+                                        {myClassesCount}개
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
-            ) : (
-                <div className="text-center py-16 mt-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 w-full flex flex-col items-center justify-center gap-4">
-                    <BookOpen size={48} className="text-gray-300"/>
-                    <p className="font-bold text-lg text-gray-500">위에서 관리할 반을 클릭해주세요.</p>
-                </div>
-            )}
 
-            {/* Create/Edit Class Modal (Phase 1 뼈대 공사) */}
+                {/* 🚀 2-Depth UI: 우측 패널 (선택된 강사의 반 목록 및 상세) */}
+                <div className="flex-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col min-h-0 overflow-hidden relative">
+                    {!selectedLecturerId ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4">
+                            <Users size={48} className="opacity-20" />
+                            <p className="font-bold text-lg">좌측에서 강사를 선택해주세요.</p>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col h-full absolute inset-0">
+                            {/* 상단 반 리스트 헤더 */}
+                            <div className="p-4 border-b border-gray-100 bg-blue-50/30 flex justify-between items-center shrink-0">
+                                <h3 className="font-black text-lg text-gray-900 flex items-center gap-2">
+                                    <span className="text-blue-600">{lecturers.find(l => l.id === selectedLecturerId)?.name}</span> 강사님의 배정 클래스
+                                </h3>
+                                <Button size="sm" onClick={handleOpenCreateClass} icon={Plus} className="font-bold shadow-md">새 반 개설</Button>
+                            </div>
+                            
+                            {/* 반 카드 그리드 (스크롤 가능) */}
+                            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-gray-50/50">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {displayedClasses.length === 0 ? (
+                                        <div className="col-span-full text-center py-12 text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-2xl bg-white">
+                                            개설된 반이 없습니다. 우측 상단 버튼을 눌러 개설해주세요.
+                                        </div>
+                                    ) : (
+                                        displayedClasses.map(cls => {
+                                            const displaySchedules = cls.schedules || [];
+                                            return (
+                                                <div key={cls.id} className={`bg-white rounded-2xl border-2 transition-all overflow-hidden flex flex-col h-full ${selectedClass?.id === cls.id ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-gray-100 hover:border-blue-300'}`}>
+                                                    <div className="p-4 cursor-pointer" onClick={() => setSelectedClass(cls)}>
+                                                        <div className="flex justify-between items-start mb-3">
+                                                            <h3 className="font-black text-lg text-gray-800 break-keep leading-tight">{cls.name}</h3>
+                                                            <div className="flex gap-1 shrink-0">
+                                                                <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={16}/></button>
+                                                                <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        <div className="space-y-1.5 min-h-[60px]">
+                                                            {displaySchedules.length === 0 ? (
+                                                                <div className="text-xs text-gray-400 font-bold bg-gray-50 p-2 rounded-lg text-center">등록된 스케줄이 없습니다.</div>
+                                                            ) : (
+                                                                displaySchedules.map((s, idx) => (
+                                                                    <div key={idx} className="flex items-center gap-2 bg-gray-50 border border-gray-100 p-2 rounded-xl text-xs">
+                                                                        <span className="w-5 h-5 flex items-center justify-center bg-blue-100 text-blue-700 font-black rounded-md shrink-0">{s.dayOfWeek}</span>
+                                                                        <span className="font-bold text-gray-700 flex items-center gap-1"><Clock size={12} className="text-gray-400"/> {s.startTime}~{s.endTime}</span>
+                                                                        <span className="text-gray-500 font-semibold ml-auto border border-gray-200 bg-white px-2 py-0.5 rounded-full truncate max-w-[80px]" title={s.room}>{s.room || '미정'}</span>
+                                                                    </div>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )
+                                        })
+                                    )}
+                                </div>
+
+                                {/* 하단: 선택된 반의 일지 기록 화면 (Slide up) */}
+                                {selectedClass && (
+                                    <div className="mt-6 border-t border-gray-200 pt-6 animate-in slide-in-from-bottom-4">
+                                        <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg">{selectedClass.name}</span> 일지 및 숙제 기록</h2>
+                                        <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Create/Edit Class Modal (마스터 데이터 연동) */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "클래스 정보 수정" : "새로운 클래스 마스터 개설"}>
                 <div className="space-y-5 w-full bg-gray-50 p-2 md:p-4 rounded-xl">
                     
                     <div className="bg-white p-4 md:p-5 rounded-xl border border-gray-200 shadow-sm space-y-4">
                         <div>
                             <label className="text-xs font-bold text-blue-600 mb-1.5 block">강의명 (반 이름)</label>
-                            <input className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-900 focus:border-blue-500 focus:ring-0 outline-none transition-colors" placeholder="예: 고1 수학(상) 정규반" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
+                            {/* [CTO 패치] 텍스트 입력창 대신 환경설정에 저장해둔 과목을 가져와 자동완성 지원 */}
+                            <div className="relative">
+                                <input 
+                                    list="subject-options"
+                                    className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-900 focus:border-blue-500 focus:ring-0 outline-none transition-colors" 
+                                    placeholder="예: 고1 수학(상) 정규반" 
+                                    value={newClass.name} 
+                                    onChange={e => setNewClass({...newClass, name: e.target.value})} 
+                                />
+                                <datalist id="subject-options">
+                                    {masterData.subjects.map((sub, idx) => <option key={idx} value={sub} />)}
+                                </datalist>
+                                <p className="text-[10px] text-gray-400 mt-1">* 환경설정의 과목명과 조합하여 직접 입력하실 수 있습니다.</p>
+                            </div>
                         </div>
                         <div>
                             <label className="text-xs font-bold text-blue-600 mb-1.5 block">담당 강사</label>
                             <select className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-700 bg-white focus:border-blue-500 outline-none transition-colors" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
                                 <option value="">강사를 선택해주세요</option>
-                                {users.filter(u => u.role === 'lecturer').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                                {lecturers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                             </select>
                         </div>
                     </div>
@@ -775,7 +812,7 @@ export const AdminLectureManager = ({ users }) => {
                             <button onClick={handleAddScheduleRow} className="text-xs font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"><Plus size={14}/> 스케줄 추가</button>
                         </div>
                         
-                        <div className="space-y-3">
+                        <div className="space-y-3 max-h-[30vh] overflow-y-auto custom-scrollbar pr-2">
                             {newClass.schedules.map((sch, idx) => (
                                 <div key={idx} className="flex flex-col md:flex-row gap-2 md:gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200 relative group">
                                     <button onClick={() => handleRemoveScheduleRow(idx)} className="absolute -top-2 -right-2 bg-white border border-red-200 text-red-500 hover:bg-red-500 hover:text-white rounded-full p-1 shadow-sm transition-all opacity-100 md:opacity-0 group-hover:opacity-100"><X size={14}/></button>
@@ -796,9 +833,14 @@ export const AdminLectureManager = ({ users }) => {
                                             <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.endTime} onChange={e => handleScheduleChange(idx, 'endTime', e.target.value)} />
                                         </div>
                                     </div>
-                                    <div className="w-full md:w-28 shrink-0">
+                                    <div className="w-full md:w-32 shrink-0">
                                         <label className="text-[10px] font-bold text-gray-500 mb-1 block">강의실</label>
-                                        <input type="text" placeholder="예: 301호" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)} />
+                                        {/* 🚀 [CTO 패치] 수기 입력 방지, 환경설정 마스터 데이터 드롭다운 연동 */}
+                                        <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)}>
+                                            <option value="">미정/선택</option>
+                                            {masterData.classrooms.map((room, rIdx) => <option key={rIdx} value={room}>{room}</option>)}
+                                            {sch.room && !masterData.classrooms.includes(sch.room) && <option value={sch.room}>{sch.room} (이전 데이터)</option>}
+                                        </select>
                                     </div>
                                 </div>
                             ))}
