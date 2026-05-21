@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText, Upload 
+    FileText, Upload, Clock, Calendar
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
@@ -16,8 +16,6 @@ const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 // --- Helper: CSV Data Cleaners & Parsers ---
-
-// 1. 따옴표 내부의 줄바꿈까지 완벽하게 처리하는 커스텀 CSV 파서 [보안/안정성]
 const parseCSV = (str) => {
     const result = [];
     let row = [];
@@ -44,21 +42,19 @@ const parseCSV = (str) => {
     return result;
 };
 
-// 2. 반 이름 정제: 앞의 학년(고1 등) 제거, 뒤의 괄호 제거 [데이터 최적화]
 const cleanClassName = (rawName) => {
     if (!rawName) return '';
     return rawName
-        .replace(/^(초|중|고)\d\s*/, '') // 시작 부분의 '고1 ', '중2' 등 제거
-        .replace(/\s*\(.*$/, '')         // 끝 부분의 괄호 전체 제거
+        .replace(/^(초|중|고)\d\s*/, '')
+        .replace(/\s*\(.*$/, '')         
         .trim();
 };
 
-// 3. 학생 이름 정제: 앞의 날짜 [03/01] 무시, 뒤의 괄호 (중1) 무시
 const cleanStudentName = (rawName) => {
     if (!rawName) return '';
     return rawName
-        .replace(/^\[.*?\]\s*/, '')  // 시작 부분의 '[03/14] ' 등 제거
-        .replace(/\s*\(.*?\)$/, '')  // 끝 부분의 '(고1)' 등 제거
+        .replace(/^\[.*?\]\s*/, '')  
+        .replace(/\s*\(.*?\)$/, '')  
         .trim();
 };
 
@@ -190,7 +186,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         } else {
             setEditingLecture(null);
             setFormData({
-                date: new Date().toISOString().split('T')[0],
+                date: selectedDate,
                 round: (lectures.length + 1) + '회차',
                 progress: '',
                 homework: '',
@@ -343,40 +339,40 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                     <div className="flex gap-4">
                         <div className="flex-1">
                             <label className="text-sm font-bold text-gray-600 mb-1 block">수업 날짜</label>
-                            <input type="date" className="w-full border p-3 rounded-xl" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
+                            <input type="date" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} />
                         </div>
                         <div className="flex-1">
                             <label className="text-sm font-bold text-gray-600 mb-1 block">회차</label>
-                            <input type="text" className="w-full border p-3 rounded-xl" value={formData.round} onChange={e => setFormData({...formData, round: e.target.value})} placeholder="예: 1회차" />
+                            <input type="text" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" value={formData.round} onChange={e => setFormData({...formData, round: e.target.value})} placeholder="예: 1회차" />
                         </div>
                     </div>
                     <div>
                         <label className="text-sm font-bold text-gray-600 mb-1 block">진도 내용</label>
-                        <textarea className="w-full border p-3 rounded-xl h-24 resize-none" value={formData.progress} onChange={e => setFormData({...formData, progress: e.target.value})} placeholder="수업한 내용을 입력하세요" />
+                        <textarea className="w-full border p-3 rounded-xl h-24 resize-none outline-none focus:ring-2 focus:ring-blue-500" value={formData.progress} onChange={e => setFormData({...formData, progress: e.target.value})} placeholder="수업한 내용을 입력하세요" />
                     </div>
                     <div>
                         <label className="text-sm font-bold text-gray-600 mb-1 block">숙제</label>
-                        <textarea className="w-full border p-3 rounded-xl h-24 resize-none" value={formData.homework} onChange={e => setFormData({...formData, homework: e.target.value})} placeholder="내주신 숙제를 입력하세요" />
+                        <textarea className="w-full border p-3 rounded-xl h-24 resize-none outline-none focus:ring-2 focus:ring-blue-500" value={formData.homework} onChange={e => setFormData({...formData, homework: e.target.value})} placeholder="내주신 숙제를 입력하세요" />
                     </div>
                     <div>
-                        <label className="text-sm font-bold text-gray-600 mb-1 block flex items-center gap-1"><LinkIcon size={14} className="text-green-600"/> 인증 사진 링크 (선택)</label>
-                        <input type="text" className="w-full border p-3 rounded-xl bg-gray-50 focus:bg-white transition-colors" value={formData.proofImageUrl} onChange={e => setFormData({...formData, proofImageUrl: e.target.value})} placeholder="Google Drive 공유 링크 또는 이미지 URL" />
+                        <label className="text-sm font-bold text-gray-600 mb-1 flex items-center gap-1"><LinkIcon size={14} className="text-green-600"/> 인증 사진 링크 (선택)</label>
+                        <input type="text" className="w-full border p-3 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-green-500 transition-colors" value={formData.proofImageUrl} onChange={e => setFormData({...formData, proofImageUrl: e.target.value})} placeholder="Google Drive 공유 링크 또는 이미지 URL" />
                         <p className="text-xs text-gray-400 mt-1 ml-1">* 서버 용량 절약을 위해 사진을 직접 업로드하지 않고, 링크를 붙여넣어 주세요.</p>
                     </div>
                     <div>
                         <label className="text-sm font-bold text-gray-600 mb-1 flex justify-between">영상 링크 <button onClick={handleAddLink} className="text-blue-600">+추가</button></label>
                         {formData.youtubeLinks.map((link, idx) => (
                             <div key={idx} className="flex gap-2 mb-2">
-                                <input type="text" className="w-full border p-3 rounded-xl" value={link} onChange={e => handleLinkChange(idx, e.target.value)} placeholder="https://youtu.be/..." />
+                                <input type="text" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={link} onChange={e => handleLinkChange(idx, e.target.value)} placeholder="https://youtu.be/..." />
                                 {idx === formData.youtubeLinks.length - 1 ? (
-                                    <button onClick={() => setFormData({...formData, youtubeLinks: [...formData.youtubeLinks, '']})} className="p-3 bg-blue-50 text-blue-600 rounded-xl"><Plus size={20}/></button>
+                                    <button onClick={() => setFormData({...formData, youtubeLinks: [...formData.youtubeLinks, '']})} className="p-3 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors"><Plus size={20}/></button>
                                 ) : (
-                                    <button onClick={() => handleRemoveLink(idx)} className="p-3 bg-red-50 text-red-600 rounded-xl"><Trash2 size={20}/></button>
+                                    <button onClick={() => handleRemoveLink(idx)} className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"><Trash2 size={20}/></button>
                                 )}
                             </div>
                         ))}
                     </div>
-                    <Button className="w-full py-4 text-lg mt-4" onClick={handleSaveLecture}>저장하기</Button>
+                    <Button className="w-full py-4 text-lg mt-4 font-bold" onClick={handleSaveLecture}>저장하기</Button>
                 </div>
             </Modal>
         </div>
@@ -389,11 +385,10 @@ export const AdminLectureManager = ({ users }) => {
     const [selectedClass, setSelectedClass] = useState(null);
     const [isClassModalOpen, setIsClassModalOpen] = useState(false);
     const [editingClassId, setEditingClassId] = useState(null);
-    const [newClass, setNewClass] = useState({ name: '', days: [], lecturerId: '', studentIds: [] });
-    const [studentSearch, setStudentSearch] = useState('');
+    const [newClass, setNewClass] = useState({ name: '', lecturerId: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
 
-    // [추가된 상태] CSV 동기화 관리용 상태
+    // CSV 동기화 관리용 상태
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
     const [csvStudentFile, setCsvStudentFile] = useState(null);
@@ -401,45 +396,100 @@ export const AdminLectureManager = ({ users }) => {
 
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
-        return onSnapshot(q, (s) => setClasses(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+        return onSnapshot(q, (s) => {
+            const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
+            // 가나다 순 정렬
+            list.sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
+            setClasses(list);
+        });
     }, []);
 
     const handleOpenCreateClass = () => {
-        setNewClass({ name: '', days: [], lecturerId: '', studentIds: [] });
+        setNewClass({ 
+            name: '', 
+            lecturerId: '', 
+            schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }] 
+        });
         setEditingClassId(null);
         setIsClassModalOpen(true);
     };
 
     const handleOpenEditClass = (e, cls) => {
         e.stopPropagation();
+        
+        // 🚀 [CTO 패치] 과거 데이터 마이그레이션 (days/time -> schedules)
+        let initialSchedules = cls.schedules || [];
+        if (initialSchedules.length === 0 && cls.days && cls.days.length > 0) {
+            let sTime = "18:00", eTime = "20:00";
+            if (cls.time && cls.time.includes('~')) {
+                const pts = cls.time.split('~');
+                sTime = pts[0].trim(); eTime = pts[1].trim();
+            }
+            initialSchedules = cls.days.map(d => ({
+                dayOfWeek: d,
+                startTime: sTime,
+                endTime: eTime,
+                room: cls.classroom || ''
+            }));
+        }
+
         setNewClass({
             name: cls.name,
-            days: cls.days || [],
             lecturerId: cls.lecturerId || '',
-            studentIds: cls.studentIds || []
+            schedules: initialSchedules
         });
         setEditingClassId(cls.id);
         setIsClassModalOpen(true);
     };
 
+    const handleAddScheduleRow = () => {
+        setNewClass(prev => ({
+            ...prev,
+            schedules: [...prev.schedules, { dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }]
+        }));
+    };
+
+    const handleScheduleChange = (index, field, value) => {
+        setNewClass(prev => {
+            const updated = [...prev.schedules];
+            updated[index][field] = value;
+            return { ...prev, schedules: updated };
+        });
+    };
+
+    const handleRemoveScheduleRow = (index) => {
+        setNewClass(prev => {
+            const updated = [...prev.schedules];
+            updated.splice(index, 1);
+            return { ...prev, schedules: updated };
+        });
+    };
+
     const handleSaveClass = async () => {
         if (!newClass.name.trim()) return alert('반 이름을 입력하세요');
         if (!newClass.lecturerId) return alert('담당 강사를 선택하세요');
+        if (newClass.schedules.length === 0) return alert('최소 1개의 스케줄(요일/시간)을 등록해주세요.');
+
         setIsSaving(true);
         try {
-            const payload = { ...newClass, updatedAt: serverTimestamp() };
+            // 학생 연동 기능(studentIds)은 Phase 2(사용자 관리)에서 처리하므로 삭제하되,
+            // 하위 호환성을 위해 DB 업데이트 시 studentIds를 건드리지 않도록 payload 구성
+            const payload = { 
+                name: newClass.name.trim(),
+                lecturerId: newClass.lecturerId,
+                schedules: newClass.schedules,
+                updatedAt: serverTimestamp() 
+            };
+            
             if (editingClassId) {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), payload);
             } else {
                 payload.createdAt = serverTimestamp();
+                payload.studentIds = []; // 새 반을 만들 때는 빈 배열 세팅
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
         } catch (e) { alert(e.message); } finally { setIsSaving(false); }
-    };
-
-    const toggleArrayItem = (field, value) => {
-        setNewClass(prev => ({ ...prev, [field]: prev[field].includes(value) ? prev[field].filter(v => v !== value) : [...prev[field], value] }));
     };
 
     const handleDeleteClass = async (e, classId) => {
@@ -450,17 +500,16 @@ export const AdminLectureManager = ({ users }) => {
         }
     };
 
-    // [추가된 헬퍼 함수] 파일 읽기 (비동기)
     const readCsvFile = (file) => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => resolve(e.target.result);
             reader.onerror = (e) => reject(e);
-            reader.readAsText(file, 'UTF-8'); // 한글 깨짐 방지
+            reader.readAsText(file, 'UTF-8');
         });
     };
 
-    // [추가된 핵심 로직] CSV 동기화 프로세스
+    // 🚀 [CTO 패치] CSV 동기화 엔진 업그레이드 (schedules 배열 변환)
     const handleSyncCsv = async () => {
         if (!csvLecturerFile || !csvStudentFile) {
             return alert("두 개의 CSV 파일을 모두 업로드해주세요.");
@@ -482,19 +531,20 @@ export const AdminLectureManager = ({ users }) => {
             lecturerData.forEach((row) => {
                 if (row.length === 0) return;
                 
-                // 강사명 추출 (예: "* 강사명 : 김기중")
                 if (row[0] && row[0].startsWith('* 강사명')) {
                     currentTeacherName = row[0].replace('* 강사명', '').replace(':', '').trim();
                     return;
                 }
 
                 const timeStr = row[0];
-                // 시간이 적힌 행(Row)인지 판별 (예: "16:00 ~ 18:00")
                 if (timeStr && timeStr.includes('~')) {
+                    const timeParts = timeStr.split('~');
+                    const startTime = timeParts[0].trim();
+                    const endTime = timeParts[1].trim();
+
                     for (let col = 1; col <= 7; col++) {
                         const cell = row[col];
                         if (cell) {
-                            // 셀 내부 줄바꿈 분리 (1번째 줄: 학년(무시), 2번째 줄: 반이름, 3번째 줄: 교실)
                             const lines = cell.split('\n').map(l => l.trim()).filter(l => l);
                             if (lines.length >= 2) {
                                 const rawClassName = lines[1];
@@ -507,15 +557,19 @@ export const AdminLectureManager = ({ users }) => {
                                         parsedClasses[className] = {
                                             name: className,
                                             lecturerName: currentTeacherName,
-                                            time: timeStr,
-                                            classroom: classroom,
-                                            days: [],
+                                            schedules: [],
                                             studentNames: []
                                         };
                                     }
-                                    // 요일 중복 방지 추가
-                                    if (!parsedClasses[className].days.includes(day)) {
-                                        parsedClasses[className].days.push(day);
+                                    
+                                    // 요일 중복 방지 (같은 반이 같은 요일에 2번 들어가지 않도록)
+                                    if (!parsedClasses[className].schedules.some(s => s.dayOfWeek === day)) {
+                                        parsedClasses[className].schedules.push({
+                                            dayOfWeek: day,
+                                            startTime: startTime,
+                                            endTime: endTime,
+                                            room: classroom
+                                        });
                                     }
                                 }
                             }
@@ -524,25 +578,19 @@ export const AdminLectureManager = ({ users }) => {
                 }
             });
 
-            // 2. 반별 원생 목록 파싱 (학생 연동)
+            // 2. 반별 원생 목록 파싱 (학생 연동 - 기존 코드 호환성 유지)
             if (studentData.length > 0) {
-                const headers = studentData[0]; // 0번째 Row: 반 이름 목록
-                
-                // 각 반별(Column)로 데이터 읽기
+                const headers = studentData[0];
                 for (let col = 1; col < headers.length; col++) {
                     const rawClassName = headers[col];
                     if (!rawClassName) continue;
                     
                     const className = cleanClassName(rawClassName);
-                    
-                    // 강사별 현황 파일에 해당 반이 존재할 때만 학생 병합
                     if (parsedClasses[className]) {
-                        // 2번째 Row부터 끝까지 학생 데이터 추출 (Row 1은 강사/시간 정보이므로 스킵)
                         for (let r = 2; r < studentData.length; r++) {
                             if (studentData[r] && studentData[r][col]) {
                                 const rawStudent = studentData[r][col];
                                 const studentName = cleanStudentName(rawStudent);
-                                
                                 if (studentName && !parsedClasses[className].studentNames.includes(studentName)) {
                                     parsedClasses[className].studentNames.push(studentName);
                                 }
@@ -560,47 +608,41 @@ export const AdminLectureManager = ({ users }) => {
             classes.forEach(c => { existingClassesMap[c.name] = c; });
 
             Object.values(parsedClasses).forEach(newClsData => {
-                // 이름으로 강사 및 학생 ID 매칭 (System에 등록된 유저 기반)
                 const lecturerId = users.find(u => u.role === 'lecturer' && u.name === newClsData.lecturerName)?.id || '';
                 const studentIds = newClsData.studentNames
                     .map(name => users.find(u => u.role === 'student' && u.name === name)?.id)
-                    .filter(Boolean); // undefined 제거
+                    .filter(Boolean);
 
                 const existing = existingClassesMap[newClsData.name];
                 
                 if (existing) {
-                    // [최적화] 변경된 사항이 있는지 검증 (Deep Compare - 배열은 정렬 후 문자열 비교로 완벽 검증)
+                    // Deep Compare를 위한 JSON 변환 비교
+                    const existingSchedules = JSON.stringify(existing.schedules || []);
+                    const newSchedules = JSON.stringify(newClsData.schedules);
                     const existingStudentIdsSorted = [...(existing.studentIds || [])].sort().join(',');
                     const newStudentIdsSorted = [...studentIds].sort().join(',');
                     
                     const hasChanged = 
                         existing.lecturerId !== lecturerId ||
-                        existing.time !== newClsData.time ||
-                        existing.classroom !== newClsData.classroom ||
-                        (existing.days || []).join(',') !== newClsData.days.join(',') ||
+                        existingSchedules !== newSchedules ||
                         existingStudentIdsSorted !== newStudentIdsSorted;
 
                     if (hasChanged) {
                         const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
                         batch.update(classRef, {
                             lecturerId,
-                            time: newClsData.time,
-                            classroom: newClsData.classroom,
-                            days: newClsData.days,
+                            schedules: newClsData.schedules,
                             studentIds,
                             updatedAt: serverTimestamp()
                         });
                         writeCount++;
                     }
                 } else {
-                    // 신규 반 생성
                     const classRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
                     batch.set(classRef, {
                         name: newClsData.name,
                         lecturerId,
-                        time: newClsData.time,
-                        classroom: newClsData.classroom,
-                        days: newClsData.days,
+                        schedules: newClsData.schedules,
                         studentIds,
                         createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
@@ -632,98 +674,147 @@ export const AdminLectureManager = ({ users }) => {
         <div className="space-y-8 w-full animate-in fade-in">
             {/* 1. Class Management Section */}
             <div className="w-full">
-                <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                    <h2 className="text-2xl font-bold text-gray-900">반(Class) 목록</h2>
+                <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><BookOpen className="text-blue-600"/> 클래스 마스터 관리</h2>
+                        <p className="text-gray-500 text-sm mt-1">학원의 모든 정규반 뼈대(스케줄, 강사, 강의실)를 설계합니다.</p>
+                    </div>
                     
-                    {/* [UI 수정] 버튼 그룹화 및 일괄등록 버튼 추가 */}
                     <div className="flex gap-2 w-full md:w-auto">
                         <Button 
                             variant="outline" 
                             onClick={() => setIsCsvModalOpen(true)} 
                             icon={Upload} 
-                            className="w-full md:w-auto bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
+                            className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold"
                         >
-                            CSV 일괄 등록
+                            통통통 CSV 동기화
                         </Button>
-                        <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto">반 생성</Button>
+                        <Button onClick={handleOpenCreateClass} icon={Plus} className="w-full md:w-auto font-bold shadow-md">새로운 반 개설하기</Button>
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 w-full">
-                    {classes.map(cls => (
-                        <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-5 rounded-2xl border cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-gray-200 hover:shadow-md'}`}>
-                            <div className="flex justify-between items-start mb-2">
-                                <h3 className="font-bold text-lg">{cls.name}</h3>
-                                <div className="flex gap-1">
-                                    <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-1.5 hover:bg-gray-100 rounded text-gray-500"><Edit2 size={16}/></button>
-                                    <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-1.5 hover:bg-red-50 rounded text-red-400"><Trash2 size={16}/></button>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 w-full">
+                    {classes.map(cls => {
+                        // 🚀 하위 호환성을 위해 기존 days 배열도 처리
+                        const displaySchedules = cls.schedules || (cls.days ? cls.days.map(d => ({dayOfWeek: d, startTime: cls.time?.split('~')[0]?.trim() || '', endTime: cls.time?.split('~')[1]?.trim() || '', room: cls.classroom || ''})) : []);
+
+                        return (
+                        <div key={cls.id} onClick={() => setSelectedClass(cls)} className={`p-6 rounded-2xl border-2 cursor-pointer transition-all ${selectedClass?.id === cls.id ? 'bg-blue-50/50 border-blue-500 shadow-md' : 'bg-white border-gray-100 hover:border-blue-300 hover:shadow-sm'}`}>
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="font-black text-xl text-gray-800 break-keep leading-tight">{cls.name}</h3>
+                                <div className="flex gap-1 shrink-0">
+                                    <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={18}/></button>
+                                    <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
                                 </div>
                             </div>
 
-                            {/* [UI 추가] 시간 및 교실 정보 표시 영역 */}
-                            {(cls.time || cls.classroom) && (
-                                <div className="text-xs text-gray-500 mb-2 bg-gray-50 p-2 rounded-lg flex flex-col gap-1">
-                                    {cls.time && <span className="flex items-center gap-1">⏰ {cls.time}</span>}
-                                    {cls.classroom && <span className="flex items-center gap-1">🏫 {cls.classroom}</span>}
-                                </div>
-                            )}
-
-                            <div className="flex gap-1 mb-2 flex-wrap">
-                                {cls.days && cls.days.map(d => <span key={d} className="bg-white border border-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{d}</span>)}
+                            <div className="space-y-2 mb-4">
+                                {displaySchedules.length === 0 ? (
+                                    <div className="text-xs text-gray-400 font-bold bg-gray-50 p-2 rounded-lg text-center">등록된 스케줄이 없습니다.</div>
+                                ) : (
+                                    displaySchedules.map((s, idx) => (
+                                        <div key={idx} className="flex items-center gap-2 bg-gray-50 border border-gray-100 p-2.5 rounded-xl text-sm">
+                                            <span className="w-6 h-6 flex items-center justify-center bg-blue-100 text-blue-700 font-black rounded-md shrink-0">{s.dayOfWeek}</span>
+                                            <span className="font-bold text-gray-700 flex items-center gap-1"><Clock size={14} className="text-gray-400"/> {s.startTime}~{s.endTime}</span>
+                                            <span className="text-gray-500 text-xs font-semibold ml-auto border border-gray-200 bg-white px-2 py-0.5 rounded-full truncate max-w-[80px]" title={s.room}>{s.room || '미정'}</span>
+                                        </div>
+                                    ))
+                                )}
                             </div>
-                            <div className="flex justify-between items-center text-sm text-gray-500 mt-2">
-                                <span>강사: <span className="font-bold text-gray-700">{users.find(u => u.id === cls.lecturerId)?.name || '미배정'}</span></span>
-                                <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md">학생: {(cls.studentIds || []).length}명</span>
+
+                            <div className="flex justify-between items-center pt-4 border-t border-gray-100">
+                                <div className="flex items-center gap-1.5">
+                                    <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-black uppercase">
+                                        {(users.find(u => u.id === cls.lecturerId)?.name || '?')[0]}
+                                    </div>
+                                    <span className="text-sm font-bold text-gray-700">{users.find(u => u.id === cls.lecturerId)?.name || '강사 미지정'}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg border border-blue-100">
+                                    <Users size={14}/> {(cls.studentIds || []).length}명
+                                </div>
                             </div>
                         </div>
-                    ))}
+                    )})}
                 </div>
             </div>
 
             {/* 2. Lecture Management Section */}
             {selectedClass ? (
-                <div className="border-t pt-8 animate-in slide-in-from-bottom-4 w-full">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> {selectedClass.name} 강의 관리</h2>
+                <div className="border-t border-gray-200 pt-8 animate-in slide-in-from-bottom-4 w-full">
+                    <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-xl">{selectedClass.name}</span> 강의 일지 관리</h2>
                     <LectureManagementPanel selectedClass={selectedClass} users={users} />
                 </div>
             ) : (
-                <div className="text-center py-12 bg-gray-50 rounded-2xl border border-dashed text-gray-400 w-full">
-                    관리할 반을 선택해주세요.
+                <div className="text-center py-16 mt-8 bg-white rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 w-full flex flex-col items-center justify-center gap-4">
+                    <BookOpen size={48} className="text-gray-300"/>
+                    <p className="font-bold text-lg text-gray-500">위에서 관리할 반을 클릭해주세요.</p>
                 </div>
             )}
 
-            {/* Create/Edit Class Modal */}
-            <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "반 수정" : "반 생성"}>
-                <div className="space-y-4 w-full">
-                    <input className="w-full border p-3 rounded-xl" placeholder="반 이름" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
-                    <div>
-                        <label className="text-xs font-bold text-gray-500">담당 강사</label>
-                        <select className="w-full border p-3 rounded-xl bg-white" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
-                            <option value="">선택</option>
-                            {users.filter(u => u.role === 'lecturer').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 mb-1 block">요일</label>
-                        <div className="flex gap-2 flex-wrap">{DAYS.map(d => <button key={d} onClick={() => toggleArrayItem('days', d)} className={`px-3 py-2 rounded-lg text-sm ${newClass.days.includes(d) ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}>{d}</button>)}</div>
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 mb-1 block">학생 배정</label>
-                        <input className="w-full border p-2 mb-2 rounded-lg text-sm" placeholder="이름 검색" value={studentSearch} onChange={e => setStudentSearch(e.target.value)} />
-                        <div className="max-h-40 overflow-y-auto border rounded-xl divide-y">
-                            {users.filter(u => u.role === 'student' && u.name.includes(studentSearch)).map(u => (
-                                <div key={u.id} onClick={() => toggleArrayItem('studentIds', u.id)} className={`p-2 flex items-center cursor-pointer ${newClass.studentIds.includes(u.id) ? 'bg-blue-50' : ''}`}>
-                                    <div className={`w-4 h-4 border rounded mr-2 flex items-center justify-center ${newClass.studentIds.includes(u.id) ? 'bg-blue-600 border-blue-600' : ''}`}>{newClass.studentIds.includes(u.id) && <Check size={10} className="text-white"/>}</div>
-                                    <span className="text-sm">{u.name}</span>
-                                </div>
-                            ))}
+            {/* Create/Edit Class Modal (Phase 1 뼈대 공사) */}
+            <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "클래스 정보 수정" : "새로운 클래스 마스터 개설"}>
+                <div className="space-y-5 w-full bg-gray-50 p-2 md:p-4 rounded-xl">
+                    
+                    <div className="bg-white p-4 md:p-5 rounded-xl border border-gray-200 shadow-sm space-y-4">
+                        <div>
+                            <label className="text-xs font-bold text-blue-600 mb-1.5 block">강의명 (반 이름)</label>
+                            <input className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-900 focus:border-blue-500 focus:ring-0 outline-none transition-colors" placeholder="예: 고1 수학(상) 정규반" value={newClass.name} onChange={e => setNewClass({...newClass, name: e.target.value})} />
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-blue-600 mb-1.5 block">담당 강사</label>
+                            <select className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-700 bg-white focus:border-blue-500 outline-none transition-colors" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
+                                <option value="">강사를 선택해주세요</option>
+                                {users.filter(u => u.role === 'lecturer').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                            </select>
                         </div>
                     </div>
-                    <Button className="w-full" onClick={handleSaveClass} disabled={isSaving}>{isSaving ? <Loader className="animate-spin"/> : '저장'}</Button>
+
+                    <div className="bg-white p-4 md:p-5 rounded-xl border border-gray-200 shadow-sm space-y-3">
+                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                            <label className="text-sm font-bold text-gray-800 flex items-center gap-1.5"><Calendar size={16} className="text-blue-600"/> 정규 스케줄 뼈대 설정</label>
+                            <button onClick={handleAddScheduleRow} className="text-xs font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-1"><Plus size={14}/> 스케줄 추가</button>
+                        </div>
+                        
+                        <div className="space-y-3">
+                            {newClass.schedules.map((sch, idx) => (
+                                <div key={idx} className="flex flex-col md:flex-row gap-2 md:gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200 relative group">
+                                    <button onClick={() => handleRemoveScheduleRow(idx)} className="absolute -top-2 -right-2 bg-white border border-red-200 text-red-500 hover:bg-red-500 hover:text-white rounded-full p-1 shadow-sm transition-all opacity-100 md:opacity-0 group-hover:opacity-100"><X size={14}/></button>
+                                    
+                                    <div className="w-full md:w-20 shrink-0">
+                                        <label className="text-[10px] font-bold text-gray-500 mb-1 block">요일</label>
+                                        <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.dayOfWeek} onChange={e => handleScheduleChange(idx, 'dayOfWeek', e.target.value)}>
+                                            {DAYS.map(d => <option key={d} value={d}>{d}요일</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex-1 flex gap-2">
+                                        <div className="w-1/2">
+                                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">시작 시간</label>
+                                            <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.startTime} onChange={e => handleScheduleChange(idx, 'startTime', e.target.value)} />
+                                        </div>
+                                        <div className="w-1/2">
+                                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">종료 시간</label>
+                                            <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.endTime} onChange={e => handleScheduleChange(idx, 'endTime', e.target.value)} />
+                                        </div>
+                                    </div>
+                                    <div className="w-full md:w-28 shrink-0">
+                                        <label className="text-[10px] font-bold text-gray-500 mb-1 block">강의실</label>
+                                        <input type="text" placeholder="예: 301호" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)} />
+                                    </div>
+                                </div>
+                            ))}
+                            {newClass.schedules.length === 0 && <div className="text-center py-6 text-sm text-gray-400 font-bold">등록된 스케줄이 없습니다. 상단의 추가 버튼을 눌러주세요.</div>}
+                        </div>
+                    </div>
+
+                    <div className="pt-2">
+                        <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={handleSaveClass} disabled={isSaving}>
+                            {isSaving ? <Loader className="animate-spin mx-auto"/> : '클래스 마스터 저장'}
+                        </Button>
+                    </div>
                 </div>
             </Modal>
 
-            {/* [수정된 모달] CSV 업로드 모달 가이드 문구 변경 */}
+            {/* CSV 업로드 모달 */}
             <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="CSV 일괄 동기화">
                 <div className="space-y-6 w-full">
                     <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
@@ -792,20 +883,23 @@ export const LecturerDashboard = ({ currentUser, users }) => {
                 <>
                     <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                         {classes.map(c => (
-                            <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white hover:bg-gray-50'}`}>
+                            <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all font-bold ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                                 {c.name}
                             </button>
                         ))}
                     </div>
                     {selectedClass ? (
-                        <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                        <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
+                            <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                        </div>
                     ) : (
                         <div className="text-center py-12 text-gray-500">선택된 반이 없습니다.</div>
                     )}
                 </>
             ) : (
-                <div className="text-center py-12 bg-gray-50 rounded-2xl border border-dashed text-gray-400">
-                    담당하는 반이 없습니다. 관리자에게 문의하세요.
+                <div className="text-center py-12 bg-gray-50 rounded-3xl border border-dashed border-gray-300 text-gray-400">
+                    <BookOpen size={48} className="mx-auto mb-3 opacity-20"/>
+                    <p className="font-bold">담당하는 반이 없습니다. 관리자에게 문의하세요.</p>
                 </div>
             )}
         </div>
