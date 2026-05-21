@@ -4,7 +4,7 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
-  Clock, Trash2, UserPlus 
+  Clock, Trash2, UserPlus, Activity
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -26,7 +26,7 @@ const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
 const EnrollmentManager = React.lazy(() => import('./features/EnrollmentManager'));
-const SettingsManager = React.lazy(() => import('./features/SettingsManager')); // 🚀 신규 세팅 마스터
+const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -93,6 +93,16 @@ const Dashboard = ({ currentUser }) => {
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 
+                {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Activity size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">실시간 운영 현황</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">오늘의 시간표와 학생들의 등원 현황, 지각자를 실시간으로 추적합니다.</p>
+                    </div>
+                )}
+
                 {['admin', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/enrollments')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -100,16 +110,6 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">수강 및 등원 배정</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">학생별 수강 과목과 개인화된 '등원 요구 시간(Call-Time)'을 설정합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">스케줄 관제탑</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학원의 모든 일정과 인력 동선을 한눈에 파악하고 통합 관리합니다.</p>
                     </div>
                 )}
 
@@ -126,7 +126,7 @@ const Dashboard = ({ currentUser }) => {
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Receipt size={32} /></div>
+                            <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><Receipt size={32} /></div>
                             <h2 className="text-xl font-bold text-gray-800">지출결의 등록</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">법인카드 및 개인 지출 내역을 등록하고 증빙 영수증을 업로드합니다.</p>
@@ -362,8 +362,8 @@ const AppContent = () => {
 
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, // 🚀 [CTO 패치] 이름 변경 
     { path: '/enrollments', label: '수강 및 등원 배정', icon: UserPlus, roles: ['admin', 'admin_assistant'] }, 
-    { path: '/schedule', label: '스케줄 관제탑', icon: CalendarIcon, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
@@ -377,7 +377,6 @@ const AppContent = () => {
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
-    // 🚀 [CTO 패치] 환경설정 마스터 메뉴 추가 (최고 관리자 전용)
     { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
   ];
 
@@ -434,6 +433,7 @@ const AppContent = () => {
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                         <Route path="/enrollments" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <EnrollmentManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        {/* 🚀 라우트는 그대로 두되 연결되는 컴포넌트가 새로운 레이더로 바뀝니다. */}
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                             <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
                         )}
@@ -455,7 +455,6 @@ const AppContent = () => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        {/* 🚀 신규 라우트: 환경설정 마스터 */}
                         <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
