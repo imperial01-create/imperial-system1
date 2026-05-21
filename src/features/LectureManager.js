@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText, Upload, Clock, Calendar, ChevronDown
+    FileText, Upload, Clock, Calendar, ChevronDown, AlertTriangle
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
@@ -365,7 +365,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
 export const AdminLectureManager = ({ users }) => {
     const [classes, setClasses] = useState([]);
     
-    // 🚀 [CTO 패치] 2-Depth UI를 위한 상태 관리
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
     
@@ -374,10 +373,8 @@ export const AdminLectureManager = ({ users }) => {
     const [newClass, setNewClass] = useState({ name: '', lecturerId: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
 
-    // 환경설정 마스터 데이터 불러오기
     const [masterData, setMasterData] = useState({ classrooms: [], subjects: [] });
 
-    // CSV 동기화 관리용 상태
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
     const [csvStudentFile, setCsvStudentFile] = useState(null);
@@ -387,7 +384,6 @@ export const AdminLectureManager = ({ users }) => {
         return users.filter(u => u.role === 'lecturer' || u.role === 'admin' || u.role === 'ta').sort((a,b) => a.name.localeCompare(b.name));
     }, [users]);
 
-    // 전체 반 목록 가져오기
     useEffect(() => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
         return onSnapshot(q, (s) => {
@@ -397,7 +393,6 @@ export const AdminLectureManager = ({ users }) => {
         });
     }, []);
 
-    // 환경설정 마스터 데이터 가져오기
     useEffect(() => {
         const fetchSettings = async () => {
             try {
@@ -417,23 +412,32 @@ export const AdminLectureManager = ({ users }) => {
         fetchSettings();
     }, []);
 
-    // 선택된 강사의 반만 필터링
+    // 🚀 [CTO 패치] 강사 미배정/오류 클래스 필터링 추가
+    const orphanedClasses = useMemo(() => {
+        return classes.filter(c => !c.lecturerId || !lecturers.some(l => l.id === c.lecturerId));
+    }, [classes, lecturers]);
+
     const displayedClasses = useMemo(() => {
         if (!selectedLecturerId) return [];
+        // 'UNASSIGNED_ORPHANS' 라는 가짜 ID를 클릭했을 때는 오류 반들만 리턴
+        if (selectedLecturerId === 'UNASSIGNED_ORPHANS') {
+            return orphanedClasses;
+        }
         return classes.filter(c => c.lecturerId === selectedLecturerId);
-    }, [classes, selectedLecturerId]);
+    }, [classes, selectedLecturerId, orphanedClasses]);
 
-    // 강사 선택 시, 활성화된 반 초기화
     const handleSelectLecturer = (lecturerId) => {
         setSelectedLecturerId(lecturerId);
-        setSelectedClass(null); // 반 초기화
+        setSelectedClass(null); 
     };
 
     const handleOpenCreateClass = () => {
-        if (!selectedLecturerId) return alert('좌측에서 반을 개설할 담당 강사를 먼저 선택해주세요.');
+        // 미배정 탭이 선택되어 있으면 빈 강사ID, 정상 탭이면 해당 강사ID로 자동 세팅
+        const defaultLecturerId = selectedLecturerId === 'UNASSIGNED_ORPHANS' ? '' : selectedLecturerId;
+        
         setNewClass({ 
             name: '', 
-            lecturerId: selectedLecturerId, 
+            lecturerId: defaultLecturerId, 
             schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }] 
         });
         setEditingClassId(null);
@@ -460,7 +464,7 @@ export const AdminLectureManager = ({ users }) => {
 
         setNewClass({
             name: cls.name,
-            lecturerId: cls.lecturerId || selectedLecturerId,
+            lecturerId: cls.lecturerId || '', // 강사가 없으면 빈칸으로
             schedules: initialSchedules
         });
         setEditingClassId(cls.id);
@@ -506,8 +510,13 @@ export const AdminLectureManager = ({ users }) => {
             
             if (editingClassId) {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), payload);
+                // 강사를 재배정해서 미배정 탭의 마지막 반이 사라졌을 경우 UX 처리
+                if (selectedLecturerId === 'UNASSIGNED_ORPHANS' && displayedClasses.length === 1) {
+                    setSelectedLecturerId(null);
+                }
             } else {
                 payload.createdAt = serverTimestamp();
+                payload.studentIds = []; 
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -519,6 +528,10 @@ export const AdminLectureManager = ({ users }) => {
         if (window.confirm('반을 삭제하면 포함된 강의 기록도 모두 사라집니다. 계속하시겠습니까?')) {
             await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', classId));
             if (selectedClass?.id === classId) setSelectedClass(null);
+            // 삭제 후 미배정 탭 비워지면 닫기
+            if (selectedLecturerId === 'UNASSIGNED_ORPHANS' && displayedClasses.length === 1) {
+                setSelectedLecturerId(null);
+            }
         }
     };
 
@@ -596,8 +609,6 @@ export const AdminLectureManager = ({ users }) => {
                     }
                 }
             });
-
-            // 학생 연동 코드는 삭제 (Phase 2로 이관됨)
 
             const batch = writeBatch(db);
             let writeCount = 0;
@@ -681,6 +692,25 @@ export const AdminLectureManager = ({ users }) => {
                         <h3 className="font-bold text-gray-800">강사 목록</h3>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+                        
+                        {/* 🚀 [CTO 패치] 미배정/오류 클래스 레이더 버튼 */}
+                        <button 
+                            onClick={() => handleSelectLecturer('UNASSIGNED_ORPHANS')} 
+                            className={`w-full text-left p-3 rounded-xl transition-all flex items-center justify-between mb-2 border-2 ${selectedLecturerId === 'UNASSIGNED_ORPHANS' ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white hover:bg-gray-50 border-gray-100'}`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xs font-black shrink-0">
+                                    <AlertTriangle size={16}/>
+                                </div>
+                                <span className={`font-bold ${selectedLecturerId === 'UNASSIGNED_ORPHANS' ? 'text-red-900' : 'text-gray-800'}`}>미배정/오류 클래스</span>
+                            </div>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${orphanedClasses.length > 0 ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-gray-100 text-gray-400'}`}>
+                                {orphanedClasses.length}개
+                            </span>
+                        </button>
+                        
+                        <hr className="my-2 border-gray-100"/>
+
                         {lecturers.map(lecturer => {
                             const myClassesCount = classes.filter(c => c.lecturerId === lecturer.id).length;
                             return (
@@ -714,11 +744,17 @@ export const AdminLectureManager = ({ users }) => {
                     ) : (
                         <div className="flex flex-col h-full absolute inset-0">
                             {/* 상단 반 리스트 헤더 */}
-                            <div className="p-4 border-b border-gray-100 bg-blue-50/30 flex justify-between items-center shrink-0">
+                            <div className={`p-4 border-b border-gray-100 flex justify-between items-center shrink-0 ${selectedLecturerId === 'UNASSIGNED_ORPHANS' ? 'bg-red-50/50' : 'bg-blue-50/30'}`}>
                                 <h3 className="font-black text-lg text-gray-900 flex items-center gap-2">
-                                    <span className="text-blue-600">{lecturers.find(l => l.id === selectedLecturerId)?.name}</span> 강사님의 배정 클래스
+                                    {selectedLecturerId === 'UNASSIGNED_ORPHANS' ? (
+                                        <><span className="text-red-600">미배정/오류</span> 클래스 목록</>
+                                    ) : (
+                                        <><span className="text-blue-600">{lecturers.find(l => l.id === selectedLecturerId)?.name}</span> 강사님의 배정 클래스</>
+                                    )}
                                 </h3>
-                                <Button size="sm" onClick={handleOpenCreateClass} icon={Plus} className="font-bold shadow-md">새 반 개설</Button>
+                                {selectedLecturerId !== 'UNASSIGNED_ORPHANS' && (
+                                    <Button size="sm" onClick={handleOpenCreateClass} icon={Plus} className="font-bold shadow-md">새 반 개설</Button>
+                                )}
                             </div>
                             
                             {/* 반 카드 그리드 (스크롤 가능) */}
@@ -726,7 +762,9 @@ export const AdminLectureManager = ({ users }) => {
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {displayedClasses.length === 0 ? (
                                         <div className="col-span-full text-center py-12 text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-2xl bg-white">
-                                            개설된 반이 없습니다. 우측 상단 버튼을 눌러 개설해주세요.
+                                            {selectedLecturerId === 'UNASSIGNED_ORPHANS' 
+                                                ? "🎉 미배정되거나 오류가 있는 반이 없습니다! 모든 데이터가 완벽합니다."
+                                                : "개설된 반이 없습니다. 우측 상단 버튼을 눌러 개설해주세요."}
                                         </div>
                                     ) : (
                                         displayedClasses.map(cls => {
@@ -763,7 +801,7 @@ export const AdminLectureManager = ({ users }) => {
                                 </div>
 
                                 {/* 하단: 선택된 반의 일지 기록 화면 (Slide up) */}
-                                {selectedClass && (
+                                {selectedClass && selectedLecturerId !== 'UNASSIGNED_ORPHANS' && (
                                     <div className="mt-6 border-t border-gray-200 pt-6 animate-in slide-in-from-bottom-4">
                                         <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg">{selectedClass.name}</span> 일지 및 숙제 기록</h2>
                                         <LectureManagementPanel selectedClass={selectedClass} users={users} />
@@ -782,7 +820,6 @@ export const AdminLectureManager = ({ users }) => {
                     <div className="bg-white p-4 md:p-5 rounded-xl border border-gray-200 shadow-sm space-y-4">
                         <div>
                             <label className="text-xs font-bold text-blue-600 mb-1.5 block">강의명 (반 이름)</label>
-                            {/* [CTO 패치] 텍스트 입력창 대신 환경설정에 저장해둔 과목을 가져와 자동완성 지원 */}
                             <div className="relative">
                                 <input 
                                     list="subject-options"
@@ -799,8 +836,8 @@ export const AdminLectureManager = ({ users }) => {
                         </div>
                         <div>
                             <label className="text-xs font-bold text-blue-600 mb-1.5 block">담당 강사</label>
-                            <select className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-700 bg-white focus:border-blue-500 outline-none transition-colors" value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
-                                <option value="">강사를 선택해주세요</option>
+                            <select className={`w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none transition-colors ${!newClass.lecturerId ? 'text-red-500 border-red-300 focus:border-red-500' : 'text-gray-700 focus:border-blue-500'}`} value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
+                                <option value="">강사를 선택해주세요 (필수)</option>
                                 {lecturers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                             </select>
                         </div>
@@ -835,7 +872,6 @@ export const AdminLectureManager = ({ users }) => {
                                     </div>
                                     <div className="w-full md:w-32 shrink-0">
                                         <label className="text-[10px] font-bold text-gray-500 mb-1 block">강의실</label>
-                                        {/* 🚀 [CTO 패치] 수기 입력 방지, 환경설정 마스터 데이터 드롭다운 연동 */}
                                         <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)}>
                                             <option value="">미정/선택</option>
                                             {masterData.classrooms.map((room, rIdx) => <option key={rIdx} value={room}>{room}</option>)}
