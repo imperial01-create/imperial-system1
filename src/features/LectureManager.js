@@ -42,20 +42,26 @@ const parseCSV = (str) => {
     return result;
 };
 
+// 🚀 [CTO 패치] 학년 및 괄호(그 안의 내용 포함) 완벽 제거 로직
 const cleanClassName = (rawName) => {
     if (!rawName) return '';
     return rawName
-        .replace(/^(초|중|고)\d\s*/, '')
-        .replace(/\s*\(.*$/, '')         
+        .replace(/^(초|중|고)\d\s*/, '') // 시작 부분의 초/중/고 + 숫자 제거
+        .replace(/\(.*?\)/g, '')         // 모든 괄호 및 그 안의 텍스트 제거
         .trim();
 };
 
-const cleanStudentName = (rawName) => {
-    if (!rawName) return '';
-    return rawName
-        .replace(/^\[.*?\]\s*/, '')  
-        .replace(/\s*\(.*?\)$/, '')  
-        .trim();
+// 🚀 [CTO 패치] 문자열 비교를 위한 정규화 (띄어쓰기, 대소문자 무시)
+const normalizeString = (str) => {
+    return (str || '').replace(/\s+/g, '').toLowerCase();
+};
+
+// 환경설정(마스터)의 강의실 목록에서 일치하는 것을 찾아 반환 (없으면 원본 반환)
+const getMatchedMasterRoom = (rawRoom, masterRooms) => {
+    if (!rawRoom) return '';
+    const normRaw = normalizeString(rawRoom);
+    const matched = masterRooms.find(r => normalizeString(r) === normRaw);
+    return matched || rawRoom; 
 };
 
 
@@ -132,7 +138,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         proofImageUrl: '' 
     });
     const [completions, setCompletions] = useState([]);
-    const [studentsInClass, setStudentsInClass] = useState([]);
 
     useEffect(() => {
         if (!selectedClass?.id) return;
@@ -149,14 +154,8 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
             setLectures(lectureList);
         });
         
-        if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
-            setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
-        } else {
-            setStudentsInClass([]);
-        }
-
         return () => unsub();
-    }, [selectedClass, users]);
+    }, [selectedClass]);
 
     const currentLectures = lectures.filter(l => l.date === selectedDate);
 
@@ -377,7 +376,6 @@ export const AdminLectureManager = ({ users }) => {
 
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
-    const [csvStudentFile, setCsvStudentFile] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
 
     const lecturers = useMemo(() => {
@@ -412,14 +410,12 @@ export const AdminLectureManager = ({ users }) => {
         fetchSettings();
     }, []);
 
-    // 🚀 [CTO 패치] 강사 미배정/오류 클래스 필터링 추가
     const orphanedClasses = useMemo(() => {
         return classes.filter(c => !c.lecturerId || !lecturers.some(l => l.id === c.lecturerId));
     }, [classes, lecturers]);
 
     const displayedClasses = useMemo(() => {
         if (!selectedLecturerId) return [];
-        // 'UNASSIGNED_ORPHANS' 라는 가짜 ID를 클릭했을 때는 오류 반들만 리턴
         if (selectedLecturerId === 'UNASSIGNED_ORPHANS') {
             return orphanedClasses;
         }
@@ -432,9 +428,7 @@ export const AdminLectureManager = ({ users }) => {
     };
 
     const handleOpenCreateClass = () => {
-        // 미배정 탭이 선택되어 있으면 빈 강사ID, 정상 탭이면 해당 강사ID로 자동 세팅
         const defaultLecturerId = selectedLecturerId === 'UNASSIGNED_ORPHANS' ? '' : selectedLecturerId;
-        
         setNewClass({ 
             name: '', 
             lecturerId: defaultLecturerId, 
@@ -464,7 +458,7 @@ export const AdminLectureManager = ({ users }) => {
 
         setNewClass({
             name: cls.name,
-            lecturerId: cls.lecturerId || '', // 강사가 없으면 빈칸으로
+            lecturerId: cls.lecturerId || '',
             schedules: initialSchedules
         });
         setEditingClassId(cls.id);
@@ -510,13 +504,11 @@ export const AdminLectureManager = ({ users }) => {
             
             if (editingClassId) {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', editingClassId), payload);
-                // 강사를 재배정해서 미배정 탭의 마지막 반이 사라졌을 경우 UX 처리
                 if (selectedLecturerId === 'UNASSIGNED_ORPHANS' && displayedClasses.length === 1) {
                     setSelectedLecturerId(null);
                 }
             } else {
                 payload.createdAt = serverTimestamp();
-                payload.studentIds = []; 
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -528,7 +520,6 @@ export const AdminLectureManager = ({ users }) => {
         if (window.confirm('반을 삭제하면 포함된 강의 기록도 모두 사라집니다. 계속하시겠습니까?')) {
             await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', classId));
             if (selectedClass?.id === classId) setSelectedClass(null);
-            // 삭제 후 미배정 탭 비워지면 닫기
             if (selectedLecturerId === 'UNASSIGNED_ORPHANS' && displayedClasses.length === 1) {
                 setSelectedLecturerId(null);
             }
@@ -544,18 +535,16 @@ export const AdminLectureManager = ({ users }) => {
         });
     };
 
+    // 🚀 [CTO 패치] 완벽한 덮어쓰기 및 동명이인 검출 스케줄 동기화
     const handleSyncCsv = async () => {
-        if (!csvLecturerFile || !csvStudentFile) {
-            return alert("두 개의 CSV 파일을 모두 업로드해주세요.");
+        if (!csvLecturerFile) {
+            return alert("업로드할 CSV 파일을 선택해주세요.");
         }
         
         setIsSyncing(true);
         try {
             const lecturerRaw = await readCsvFile(csvLecturerFile);
-            const studentRaw = await readCsvFile(csvStudentFile);
-            
             const lecturerData = parseCSV(lecturerRaw);
-            const studentData = parseCSV(studentRaw);
 
             const parsedClasses = {};
             let currentTeacherName = '';
@@ -581,8 +570,11 @@ export const AdminLectureManager = ({ users }) => {
                             const lines = cell.split('\n').map(l => l.trim()).filter(l => l);
                             if (lines.length >= 2) {
                                 const rawClassName = lines[1];
-                                const classroom = lines[2] || '';
+                                const rawClassroom = lines[2] || '';
+                                
+                                // 이름 정제 (학년, 괄호 삭제) 및 강의실 정제
                                 const className = cleanClassName(rawClassName);
+                                const classroom = getMatchedMasterRoom(rawClassroom, masterData.classrooms);
                                 const day = DAYS_OF_WEEK[col - 1];
 
                                 if (className) {
@@ -590,12 +582,12 @@ export const AdminLectureManager = ({ users }) => {
                                         parsedClasses[className] = {
                                             name: className,
                                             lecturerName: currentTeacherName,
-                                            schedules: [],
-                                            studentNames: []
+                                            schedules: []
                                         };
                                     }
                                     
-                                    if (!parsedClasses[className].schedules.some(s => s.dayOfWeek === day)) {
+                                    // 동일 시간/요일 중복 방지
+                                    if (!parsedClasses[className].schedules.some(s => s.dayOfWeek === day && s.startTime === startTime)) {
                                         parsedClasses[className].schedules.push({
                                             dayOfWeek: day,
                                             startTime: startTime,
@@ -617,32 +609,34 @@ export const AdminLectureManager = ({ users }) => {
             classes.forEach(c => { existingClassesMap[c.name] = c; });
 
             Object.values(parsedClasses).forEach(newClsData => {
-                const lecturerId = users.find(u => u.role === 'lecturer' && u.name === newClsData.lecturerName)?.id || '';
+                // 🚀 동명이인 체크 로직
+                const matchedLecturers = lecturers.filter(u => u.name === newClsData.lecturerName);
+                let safeLecturerId = '';
+                
+                if (matchedLecturers.length === 1) {
+                    safeLecturerId = matchedLecturers[0].id;
+                } else if (matchedLecturers.length > 1) {
+                    // 동명이인 발생! 빈칸으로 두어 오류 탭으로 자동 전송
+                    console.warn(`동명이인 강사 감지됨: ${newClsData.lecturerName}. 오류 탭으로 이동합니다.`);
+                }
 
                 const existing = existingClassesMap[newClsData.name];
                 
                 if (existing) {
-                    const existingSchedules = JSON.stringify(existing.schedules || []);
-                    const newSchedules = JSON.stringify(newClsData.schedules);
-                    
-                    const hasChanged = 
-                        existing.lecturerId !== lecturerId ||
-                        existingSchedules !== newSchedules;
-
-                    if (hasChanged) {
-                        const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
-                        batch.update(classRef, {
-                            lecturerId,
-                            schedules: newClsData.schedules,
-                            updatedAt: serverTimestamp()
-                        });
-                        writeCount++;
-                    }
+                    // 🚀 기존 반 껍데기(ID, 일지)는 보존하고, 스케줄(schedules)만 엑셀 데이터로 싹 덮어쓰기(Overwrite)
+                    const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
+                    batch.update(classRef, {
+                        lecturerId: safeLecturerId || existing.lecturerId, // 강사는 기존 것 유지하되, 엑셀에 있으면 덮어씀
+                        schedules: newClsData.schedules, // 시간표 완전 교체
+                        updatedAt: serverTimestamp()
+                    });
+                    writeCount++;
                 } else {
+                    // 엑셀에만 있는 완전 새로운 반은 신규 생성
                     const classRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
                     batch.set(classRef, {
                         name: newClsData.name,
-                        lecturerId,
+                        lecturerId: safeLecturerId,
                         schedules: newClsData.schedules,
                         createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
@@ -653,14 +647,13 @@ export const AdminLectureManager = ({ users }) => {
 
             if (writeCount > 0) {
                 await batch.commit();
-                alert(`성공적으로 동기화되었습니다. (업데이트/생성된 반: ${writeCount}개)`);
+                alert(`시간표 완전 동기화가 완료되었습니다! (적용된 반: ${writeCount}개)\n\n* 동명이인 강사나 미등록 강사의 반은 [미배정/오류 클래스] 탭에서 확인해주세요.`);
             } else {
-                alert("기존 데이터와 동일하여 변경된 사항이 없습니다. (Firebase 과금 방어 완료)");
+                alert("적용할 반 데이터가 없습니다. 파일을 다시 확인해주세요.");
             }
             
             setIsCsvModalOpen(false);
             setCsvLecturerFile(null);
-            setCsvStudentFile(null);
 
         } catch (error) {
             console.error("CSV Sync Error:", error);
@@ -680,20 +673,18 @@ export const AdminLectureManager = ({ users }) => {
                 
                 <div className="flex gap-2 w-full md:w-auto">
                     <Button variant="outline" onClick={() => setIsCsvModalOpen(true)} icon={Upload} className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold">
-                        통통통 CSV 동기화
+                        통통통 시간표 덮어쓰기
                     </Button>
                 </div>
             </div>
 
             <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-                {/* 🚀 2-Depth UI: 좌측 패널 (강사 리스트) */}
                 <div className="w-full lg:w-1/4 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col shrink-0 min-h-[300px]">
                     <div className="p-4 border-b border-gray-100 bg-gray-50 rounded-t-2xl">
                         <h3 className="font-bold text-gray-800">강사 목록</h3>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
                         
-                        {/* 🚀 [CTO 패치] 미배정/오류 클래스 레이더 버튼 */}
                         <button 
                             onClick={() => handleSelectLecturer('UNASSIGNED_ORPHANS')} 
                             className={`w-full text-left p-3 rounded-xl transition-all flex items-center justify-between mb-2 border-2 ${selectedLecturerId === 'UNASSIGNED_ORPHANS' ? 'bg-red-50 border-red-200 shadow-sm' : 'bg-white hover:bg-gray-50 border-gray-100'}`}
@@ -734,7 +725,6 @@ export const AdminLectureManager = ({ users }) => {
                     </div>
                 </div>
 
-                {/* 🚀 2-Depth UI: 우측 패널 (선택된 강사의 반 목록 및 상세) */}
                 <div className="flex-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col min-h-0 overflow-hidden relative">
                     {!selectedLecturerId ? (
                         <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4">
@@ -743,7 +733,6 @@ export const AdminLectureManager = ({ users }) => {
                         </div>
                     ) : (
                         <div className="flex flex-col h-full absolute inset-0">
-                            {/* 상단 반 리스트 헤더 */}
                             <div className={`p-4 border-b border-gray-100 flex justify-between items-center shrink-0 ${selectedLecturerId === 'UNASSIGNED_ORPHANS' ? 'bg-red-50/50' : 'bg-blue-50/30'}`}>
                                 <h3 className="font-black text-lg text-gray-900 flex items-center gap-2">
                                     {selectedLecturerId === 'UNASSIGNED_ORPHANS' ? (
@@ -757,7 +746,6 @@ export const AdminLectureManager = ({ users }) => {
                                 )}
                             </div>
                             
-                            {/* 반 카드 그리드 (스크롤 가능) */}
                             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-gray-50/50">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {displayedClasses.length === 0 ? (
@@ -800,7 +788,6 @@ export const AdminLectureManager = ({ users }) => {
                                     )}
                                 </div>
 
-                                {/* 하단: 선택된 반의 일지 기록 화면 (Slide up) */}
                                 {selectedClass && selectedLecturerId !== 'UNASSIGNED_ORPHANS' && (
                                     <div className="mt-6 border-t border-gray-200 pt-6 animate-in slide-in-from-bottom-4">
                                         <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg">{selectedClass.name}</span> 일지 및 숙제 기록</h2>
@@ -813,7 +800,6 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </div>
 
-            {/* Create/Edit Class Modal (마스터 데이터 연동) */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "클래스 정보 수정" : "새로운 클래스 마스터 개설"}>
                 <div className="space-y-5 w-full bg-gray-50 p-2 md:p-4 rounded-xl">
                     
@@ -892,33 +878,24 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </Modal>
 
-            {/* CSV 업로드 모달 */}
-            <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="CSV 일괄 동기화">
+            {/* 🚀 [CTO 패치] 심플해진 CSV 시간표 덮어쓰기 모달 */}
+            <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="시간표 덮어쓰기 (동기화)">
                 <div className="space-y-6 w-full">
                     <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
-                        <p className="font-bold mb-2 flex items-center gap-1"><BookOpen size={16}/> 데이터 불러오는 법</p>
+                        <p className="font-bold mb-2 flex items-center gap-1"><BookOpen size={16}/> 시간표 덮어쓰기 안내</p>
                         <div className="opacity-90 leading-relaxed space-y-1">
-                            <p>• 강사별 현황은 <b>통통통의 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 에서 엑셀을 저장하여 csv 파일로 저장 후 입력</p>
-                            <p>• 반별 원생 목록은 <b>통통통의 학사관리 &gt; 원생 &gt; 반별 원생목록</b> 에서 엑셀을 저장하여 csv 파일로 저장 후 입력</p>
+                            <p>• <b>통통통 &gt; 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 엑셀(CSV) 파일을 올려주세요.</p>
+                            <p>• 기존 반의 <span className="font-bold text-red-500">시간표만 완벽하게 덮어쓰기</span> 됩니다. (과거 일지 보존)</p>
+                            <p>• 학년(고1, 중2 등) 및 괄호 속 내용은 자동으로 정제됩니다.</p>
                         </div>
                     </div>
 
                     <div>
-                        <label className="text-sm font-bold text-gray-700 mb-2 block">1. 강사별 현황 (CSV)</label>
+                        <label className="text-sm font-bold text-gray-700 mb-2 block">강사별 현황 (CSV)</label>
                         <input 
                             type="file" 
                             accept=".csv"
                             onChange={e => setCsvLecturerFile(e.target.files[0])}
-                            className="w-full border p-3 rounded-xl bg-gray-50 cursor-pointer" 
-                        />
-                    </div>
-
-                    <div>
-                        <label className="text-sm font-bold text-gray-700 mb-2 block">2. 반별 원생 목록 (CSV)</label>
-                        <input 
-                            type="file" 
-                            accept=".csv"
-                            onChange={e => setCsvStudentFile(e.target.files[0])}
                             className="w-full border p-3 rounded-xl bg-gray-50 cursor-pointer" 
                         />
                     </div>
@@ -928,7 +905,7 @@ export const AdminLectureManager = ({ users }) => {
                         onClick={handleSyncCsv} 
                         disabled={isSyncing}
                     >
-                        {isSyncing ? <Loader className="animate-spin mx-auto"/> : '데이터 동기화 실행'}
+                        {isSyncing ? <Loader className="animate-spin mx-auto"/> : '시간표 완벽 덮어쓰기 실행'}
                     </Button>
                 </div>
             </Modal>
