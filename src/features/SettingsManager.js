@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+// 🚀 [CTO 패치] X 아이콘이 추가되었습니다.
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
-  Plus, Trash2, Save, Loader, MapPin, ShieldCheck 
+  Plus, Trash2, Save, Loader, MapPin, ShieldCheck, X 
 } from 'lucide-react';
 import { Button } from '../components/UI';
 
