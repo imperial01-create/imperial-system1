@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, AlertCircle, CheckCircle, 
-    User, Search, Loader, PhoneCall, ShieldAlert, Check
+    User, Users, Search, Loader, PhoneCall, ShieldAlert, Check // 🚀 [CTO 패치] Users 아이콘 추가!
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
