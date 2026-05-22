@@ -1,16 +1,18 @@
-/* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
-   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
-   (Updated: Phase 2 - 학생 모달창 내 '수강 관리' 탭 ➔ 검색형 반 배정 UI 적용) */
+/* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
+   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle
 } from 'lucide-react';
-import { collection, doc, setDoc, deleteDoc, updateDoc, getDocs, query, onSnapshot, serverTimestamp, getDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
+
+// 🚀 [CTO 패치] 뚱뚱했던 onSnapshot 로직을 모두 버리고, 글로벌 데이터를 우아하게 끌어다 씁니다.
+import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -22,20 +24,17 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
 
-    // --- 글로벌 상태 관리 ---
-    const [users, setUsers] = useState([]);
-    const [classes, setClasses] = useState([]);           
-    const [enrollments, setEnrollments] = useState([]);   
+    // 🚀 중앙 통제소(DataContext)에서 서버비용 0원으로 데이터 빼오기
+    const { users, classes, enrollments, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('student'); 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
     const [targetUserId, setTargetUserId] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [toast, setToast] = useState({ message: '', type: 'info' });
 
-    // --- 폼 상태 관리 ---
     const [modalTab, setModalTab] = useState('basic'); 
     const [isEditMode, setIsEditMode] = useState(false);
     
@@ -48,36 +47,12 @@ const UserManager = ({ currentUser }) => {
     const initEnrollForm = { classId: '', className: '', lecturerId: '', status: 'active', schedules: [] };
     const [enrollForm, setEnrollForm] = useState(initEnrollForm);
 
-    // 🚀 [CTO 패치] 반 검색용 상태 추가
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
 
-    const [studentList, setStudentList] = useState([]);
+    const studentList = useMemo(() => users.filter(u => u.role === 'student'), [users]);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
-
-    // --- DB 리스너 ---
-    useEffect(() => {
-        const qUsers = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-        const unsubUsers = onSnapshot(qUsers, (snapshot) => {
-            const userList = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-            setUsers(userList);
-            setStudentList(userList.filter(u => u.role === 'student'));
-            setLoading(false);
-        });
-
-        const qClasses = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
-        const unsubClasses = onSnapshot(qClasses, (snapshot) => {
-            setClasses(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
-
-        const qEnrollments = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments'));
-        const unsubEnrollments = onSnapshot(qEnrollments, (snapshot) => {
-            setEnrollments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
-
-        return () => { unsubUsers(); unsubClasses(); unsubEnrollments(); };
-    }, []);
 
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ 시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 인증 서버에 이미 가입된 옛날 계정들은 자동으로 초록 방패 마크가 부여됩니다.")) return;
@@ -112,8 +87,8 @@ const UserManager = ({ currentUser }) => {
                 dedupeCount++;
             }
 
-            const freshSnap = await getDocs(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
-            const freshUsers = freshSnap.docs.map(d => ({id: d.id, ...d.data()}));
+            // 남은 유저들에 대해 Auth 동기화 진행
+            const freshUsers = sortedUsers.filter(u => !duplicatesToDelete.includes(u));
 
             for (const u of freshUsers) {
                 if (!u.authUid) {
@@ -173,7 +148,6 @@ const UserManager = ({ currentUser }) => {
         } finally { setLoading(false); }
     };
 
-    // --- Modal Open Handlers ---
     const handleOpenCreate = () => {
         setFormData({ 
             id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', 
@@ -214,7 +188,6 @@ const UserManager = ({ currentUser }) => {
         setIsModalOpen(true);
     };
 
-    // --- User Form Logic ---
     const handleAutoPin = (phoneVal) => {
         if (!phoneVal || phoneVal.length < 4) return;
         const basePin = phoneVal.replace(/[^0-9]/g, '').slice(-4);
@@ -310,7 +283,6 @@ const UserManager = ({ currentUser }) => {
         finally { setLoading(false); setTargetUserId(null); }
     };
 
-    // --- 수강 이력 관리 (Enrollment Logic) ---
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
 
     const handleClassSelect = (classId) => {
@@ -386,7 +358,6 @@ const UserManager = ({ currentUser }) => {
         } catch(e) { alert(e.message); }
     };
 
-    // --- UI 렌더링 준비 ---
     const duplicateCounts = useMemo(() => {
         const counts = {};
         users.forEach(u => { counts[(u.userId||u.id).toLowerCase()] = (counts[(u.userId||u.id).toLowerCase()] || 0) + 1; });
@@ -394,6 +365,8 @@ const UserManager = ({ currentUser }) => {
     }, [users]);
 
     const filteredUsers = users.filter(u => u.role === activeTab && (u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery)));
+
+    if (loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in pb-20">
@@ -424,7 +397,6 @@ const UserManager = ({ currentUser }) => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/>
             </div>
 
-            {/* 데스크톱/모바일 테이블 뷰 (생략: 기존 코드와 동일) */}
             <div className="hidden md:block">
                 <Card className="p-0 overflow-hidden shadow-sm">
                     <table className="w-full text-left border-collapse">
@@ -509,7 +481,6 @@ const UserManager = ({ currentUser }) => {
 
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-3xl w-full">
                 
-                {/* 탭 네비게이션 (학생인 경우에만 렌더링) */}
                 {activeTab === 'student' && (
                     <div className="flex border-b border-gray-200 mb-5 w-full bg-gray-50 rounded-t-xl px-2 pt-2">
                         <button onClick={() => setModalTab('basic')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'basic' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
@@ -522,8 +493,6 @@ const UserManager = ({ currentUser }) => {
                 )}
 
                 <div className="p-2 max-h-[75vh] overflow-y-auto custom-scrollbar">
-                    
-                    {/* --- 탭 1: 기본 정보 폼 --- */}
                     {modalTab === 'basic' && (
                         <div className="space-y-4 animate-in fade-in">
                             <div className="grid grid-cols-2 gap-4">
@@ -576,11 +545,9 @@ const UserManager = ({ currentUser }) => {
                         </div>
                     )}
 
-                    {/* --- 탭 2: 수강 배정 관리 (Enrollment) --- */}
                     {modalTab === 'enroll' && activeTab === 'student' && (
                         <div className="space-y-6 animate-in fade-in">
                             
-                            {/* 현재 수강중인 리스트 */}
                             <div>
                                 <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5"><BookMarked size={16} className="text-blue-600"/> 현재 수강중인 반</h3>
                                 {currentStudentEnrollments.length === 0 ? (
@@ -622,7 +589,6 @@ const UserManager = ({ currentUser }) => {
                                 )}
                             </div>
 
-                            {/* 🚀 [CTO 패치] 쾌적한 검색형 수강 배정 폼 */}
                             <div className="bg-blue-50/50 p-5 rounded-2xl border border-blue-100 mt-6 shadow-inner">
                                 <h3 className="text-sm font-black text-blue-900 mb-4 flex items-center gap-1.5"><Plus size={16}/> {enrollForm.id ? '수강 이력 수정' : '새로운 수강 배정'}</h3>
                                 

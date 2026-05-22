@@ -6,9 +6,12 @@ import {
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
   Clock, Trash2, UserPlus, Activity
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, addDoc, serverTimestamp, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
+
+// 🚀 [CTO 패치] 글로벌 데이터 엔진 Import 완료
+import { DataProvider, useData } from './contexts/DataContext';
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
@@ -25,7 +28,6 @@ const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
-const EnrollmentManager = React.lazy(() => import('./features/EnrollmentManager'));
 const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 
 const APP_ID = 'imperial-clinic-v1';
@@ -100,16 +102,6 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">실시간 운영 현황</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">오늘의 시간표와 학생들의 등원 현황, 지각자를 실시간으로 추적합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/enrollments')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><UserPlus size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">수강 및 등원 배정</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학생별 수강 과목과 개인화된 '등원 요구 시간(Call-Time)'을 설정합니다.</p>
                     </div>
                 )}
 
@@ -227,16 +219,126 @@ const Dashboard = ({ currentUser }) => {
     );
 };
 
+// 🚀 [CTO 패치] AppLayout 분리: Context API의 데이터를 안전하게 꺼내어 화면을 그립니다.
+const AppLayout = ({ currentUser, handleLogout }) => {
+  const { users } = useData(); 
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const menuItems = [
+    { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
+    { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
+    { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
+    { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
+    { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
+    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
+    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
+    { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
+    { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
+    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
+    { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
+    { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
+    { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
+  ];
+
+  return (
+    <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
+      {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
+      
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
+        <div className="p-6 border-b flex justify-between items-center shrink-0">
+          <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
+          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><X /></button>
+        </div>
+        
+        <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
+           {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
+              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname.startsWith(item.path) ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
+                <item.icon size={20} /> {item.label}
+              </button>
+           ))}
+        </nav>
+        
+        <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
+            <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
+                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser.name?.[0]}</div>
+                <div className="flex flex-col text-left flex-1">
+                    <span className="font-bold text-sm text-gray-900 leading-tight">{currentUser.name}</span>
+                    <span className="text-xs text-gray-500 uppercase">
+                        {currentUser.role === 'admin_assistant' ? 'ADMIN ASSISTANT' : currentUser.role}
+                    </span>
+                </div>
+            </div>
+            <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 p-2 rounded-lg font-bold transition-colors">
+                <LogOut size={16}/> 로그아웃
+            </button>
+        </div>
+      </aside>
+
+      <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative min-w-0">
+        <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
+            <div className="flex items-center gap-2">
+                <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center shadow-sm">
+                    <span className="text-base font-bold">I</span>
+                </div>
+                <h1 className="text-lg font-bold text-gray-900">Imperial</h1>
+            </div>
+            <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-all active:scale-95" aria-label="메뉴 열기">
+                <Menu size={24} />
+            </button>
+        </header>
+
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
+            <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
+                <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
+                    <Routes>
+                        <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
+                            <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
+                        )}
+                        <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
+                            <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
+                        )}
+                        <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
+                        <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
+                        {currentUser.role === 'admin_assistant' && (
+                            <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
+                        )}
+                        <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
+                        
+                        {/* 🚀 기존과 동일하게 users 프로퍼티를 내려보내서 완벽한 호환성 유지 */}
+                        <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        
+                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
+                        <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
+                        <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
+                        <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
+                        <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                    </Routes>
+                </Suspense>
+            </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
 const AppContent = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [users, setUsers] = useState([]); 
   const [loginForm, setLoginForm] = useState({ id: '', password: '' });
   const [loginProcessing, setLoginProcessing] = useState(false);
   const [loginErrorModal, setLoginErrorModal] = useState({ isOpen: false, msg: '' });
 
-  const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -257,20 +359,6 @@ const AppContent = () => {
     }
     setLoading(false);
   }, []);
-
-  useEffect(() => {
-      if(!currentUser) return;
-      if (['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role)) {
-          const fetchUsers = async () => {
-              try {
-                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'));
-                  const s = await getDocs(q); 
-                  setUsers(s.docs.map(d => ({id: d.id, ...d.data()})));
-              } catch (e) { console.error(e); }
-          };
-          fetchUsers();
-      }
-  }, [currentUser]);
 
   const handleLogin = async () => {
      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
@@ -360,109 +448,11 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  const menuItems = [
-    { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, // 🚀 [CTO 패치] 이름 변경 
-    { path: '/enrollments', label: '수강 및 등원 배정', icon: UserPlus, roles: ['admin', 'admin_assistant'] }, 
-    { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
-    { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
-    { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
-    { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
-    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
-    { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
-    { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
-    { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
-    { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
-    { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
-    { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
-  ];
-
+  // 🚀 [CTO 패치] AppLayout을 DataProvider로 감싸서, 로그인한 순간부터 중앙 통제소가 가동되게 합니다.
   return (
-    <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
-      {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
-      
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
-        <div className="p-6 border-b flex justify-between items-center shrink-0">
-          <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><X /></button>
-        </div>
-        
-        <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
-           {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
-              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname.startsWith(item.path) ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
-                <item.icon size={20} /> {item.label}
-              </button>
-           ))}
-        </nav>
-        
-        <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
-            <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
-                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser.name?.[0]}</div>
-                <div className="flex flex-col text-left flex-1">
-                    <span className="font-bold text-sm text-gray-900 leading-tight">{currentUser.name}</span>
-                    <span className="text-xs text-gray-500 uppercase">
-                        {currentUser.role === 'admin_assistant' ? 'ADMIN ASSISTANT' : currentUser.role}
-                    </span>
-                </div>
-            </div>
-            <button onClick={handleLogout} className="w-full flex items-center gap-2 text-red-500 hover:bg-red-50 p-2 rounded-lg font-bold transition-colors">
-                <LogOut size={16}/> 로그아웃
-            </button>
-        </div>
-      </aside>
-
-      <div className="flex-1 flex flex-col h-full overflow-hidden w-full relative min-w-0">
-        <header className="md:hidden shrink-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between shadow-sm z-30">
-            <div className="flex items-center gap-2">
-                <div className="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center shadow-sm">
-                    <span className="text-base font-bold">I</span>
-                </div>
-                <h1 className="text-lg font-bold text-gray-900">Imperial</h1>
-            </div>
-            <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-gray-600 hover:bg-gray-100 rounded-xl transition-all active:scale-95" aria-label="메뉴 열기">
-                <Menu size={24} />
-            </button>
-        </header>
-
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
-            <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
-                <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
-                    <Routes>
-                        <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        <Route path="/enrollments" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <EnrollmentManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        {/* 🚀 라우트는 그대로 두되 연결되는 컴포넌트가 새로운 레이더로 바뀝니다. */}
-                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
-                            <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
-                        )}
-                        <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
-                            <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
-                        )}
-                        <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
-                        <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
-                        {currentUser.role === 'admin_assistant' && (
-                            <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
-                        )}
-                        <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                        <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
-                        <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
-                        <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
-                        <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
-                        <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                    </Routes>
-                </Suspense>
-            </div>
-        </main>
-      </div>
-    </div>
+      <DataProvider currentUser={currentUser}>
+          <AppLayout currentUser={currentUser} handleLogout={handleLogout} />
+      </DataProvider>
   );
 };
 

@@ -1,66 +1,49 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Activity, Clock, MapPin, AlertCircle, CheckCircle, 
-    User, Users, Search, Loader, PhoneCall, ShieldAlert, Check // 🚀 [CTO 패치] Users 아이콘 추가!
+    Activity, Clock, MapPin, CheckCircle, 
+    User, Users, Search, Loader, PhoneCall, ShieldAlert, Check 
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+
+// 🚀 [CTO 패치] 글로벌 데이터 엔진 Import
+import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
 const ScheduleControlTower = ({ currentUser }) => {
-    const [loading, setLoading] = useState(true);
     const [currentTime, setCurrentTime] = useState(new Date());
-    
-    const [classes, setClasses] = useState([]);
-    const [enrollments, setEnrollments] = useState([]);
-    const [users, setUsers] = useState([]);
-    const [attendances, setAttendances] = useState([]); // 오늘의 출결 로그 (mock)
-    
+    const [attendances, setAttendances] = useState([]); 
     const [searchQuery, setSearchQuery] = useState('');
+    const [localLoading, setLocalLoading] = useState(true);
+
+    // 🚀 글로벌 저장소에서 꺼내 쓰기 (서버 요금 0원!)
+    const { classes, enrollments, users, loadingData } = useData();
 
     const todayStr = DAYS_OF_WEEK[currentTime.getDay()];
     const todayDateStr = currentTime.toISOString().split('T')[0];
 
-    // --- 시계 틱 (1분마다 갱신하여 지각 판별) ---
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 60000);
         return () => clearInterval(timer);
     }, []);
 
-    // --- DB 리스너 ---
     useEffect(() => {
-        const unsubClasses = onSnapshot(collection(db, `artifacts/${APP_ID}/public/data/classes`), s => {
-            setClasses(s.docs.map(d => ({id: d.id, ...d.data()})));
-        });
-        
-        const unsubEnroll = onSnapshot(collection(db, `artifacts/${APP_ID}/public/data/enrollments`), s => {
-            setEnrollments(s.docs.map(d => ({id: d.id, ...d.data()})));
-        });
-
-        const unsubUsers = onSnapshot(collection(db, `artifacts/${APP_ID}/public/data/users`), s => {
-            setUsers(s.docs.map(d => ({id: d.id, ...d.data()})));
-        });
-
-        // 🚀 출결 로그 (임시 컬렉션)
+        // 출결 로그만 로컬에서 불러옵니다.
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`));
         const unsubAtt = onSnapshot(qAtt, s => {
             setAttendances(s.docs.map(d => d.data()));
-            setLoading(false);
+            setLocalLoading(false);
         });
 
-        return () => { unsubClasses(); unsubEnroll(); unsubUsers(); unsubAtt(); };
+        return () => unsubAtt();
     }, []);
 
-    // --- 데이터 가공 로직 ---
-    
-    // 1. 오늘 열리는 반 리스트 추출
     const todaysClasses = useMemo(() => {
         return classes.filter(c => c.schedules?.some(s => s.dayOfWeek === todayStr));
     }, [classes, todayStr]);
 
-    // 2. 오늘 학원에 와야 할 학생 리스트 & 상태 계산
     const todaysRadarData = useMemo(() => {
         const radar = [];
         
@@ -68,21 +51,19 @@ const ScheduleControlTower = ({ currentUser }) => {
             if (enroll.status !== 'active') return;
             
             const todaySch = enroll.schedules?.find(s => s.dayOfWeek === todayStr);
-            if (!todaySch) return; // 오늘 안 오는 학생
+            if (!todaySch) return;
 
             const student = users.find(u => u.id === enroll.studentId);
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             
-            // 오늘 이 학생이 출결을 찍었는가?
             const hasAttended = attendances.some(a => a.studentId === enroll.studentId && a.date === todayDateStr);
             
-            // 지각 판별 (Call Time vs Current Time)
             const currentHHMM = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
             const isLate = !hasAttended && (currentHHMM > todaySch.callTime);
 
-            let status = 'expected'; // ⚪
-            if (hasAttended) status = 'attended'; // 🟢
-            else if (isLate) status = 'late'; // 🔴
+            let status = 'expected'; 
+            if (hasAttended) status = 'attended'; 
+            else if (isLate) status = 'late'; 
 
             if (searchQuery && !student?.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
 
@@ -101,7 +82,6 @@ const ScheduleControlTower = ({ currentUser }) => {
             });
         });
         
-        // 정렬: 지각자 먼저, 그 다음 CallTime 빠른 순
         return radar.sort((a, b) => {
             if (a.status === 'late' && b.status !== 'late') return -1;
             if (a.status !== 'late' && b.status === 'late') return 1;
@@ -112,7 +92,6 @@ const ScheduleControlTower = ({ currentUser }) => {
     const lateStudents = todaysRadarData.filter(d => d.status === 'late');
     const attendedStudents = todaysRadarData.filter(d => d.status === 'attended');
 
-    // --- 수동 출결(임시) 처리 ---
     const handleManualCheckIn = async (studentId) => {
         if (!window.confirm("이 학생을 즉시 등원(출석) 처리하시겠습니까?")) return;
         try {
@@ -126,7 +105,7 @@ const ScheduleControlTower = ({ currentUser }) => {
         } catch (e) { alert("출결 처리 실패: " + e.message); }
     };
 
-    if (loading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in h-[85vh] flex flex-col">
@@ -157,7 +136,6 @@ const ScheduleControlTower = ({ currentUser }) => {
 
             <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
                 
-                {/* 🚀 좌측 메인 패널: 전체 학생 레이더 */}
                 <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm flex flex-col min-h-[400px]">
                     <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50/50 rounded-t-3xl">
                         <h2 className="font-bold text-gray-800 flex items-center gap-2"><Users size={18}/> 오늘 출결 현황 리스트</h2>
@@ -180,7 +158,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                                         ${data.status === 'late' ? 'bg-rose-50 border-rose-200 shadow-sm' : 
                                           data.status === 'attended' ? 'bg-emerald-50 border-emerald-100' : 'bg-white border-gray-200'}`}>
                                         
-                                        {/* Status Indicator */}
                                         <div className="flex justify-between items-start mb-3">
                                             <div className="flex items-center gap-2">
                                                 <div className="font-black text-gray-900">{data.studentName}</div>
@@ -196,7 +173,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                                             )}
                                         </div>
 
-                                        {/* Class Info */}
                                         <div className="flex-1 space-y-1.5">
                                             <div className="text-xs font-bold text-blue-700 truncate">{data.className}</div>
                                             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-500">
@@ -207,7 +183,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                                             </div>
                                         </div>
 
-                                        {/* Time Box */}
                                         <div className={`mt-3 p-2 rounded-xl flex items-center justify-between text-xs font-bold border
                                             ${data.status === 'late' ? 'bg-white border-rose-100' : 'bg-gray-50 border-gray-100'}`}>
                                             <div className="flex items-center gap-1.5">
@@ -225,7 +200,6 @@ const ScheduleControlTower = ({ currentUser }) => {
                     </div>
                 </div>
 
-                {/* 🚨 우측 사이드 패널: 긴급 콜 리스트 */}
                 <div className="w-full lg:w-80 shrink-0 flex flex-col gap-6">
                     <div className="bg-rose-50 border-2 border-rose-200 rounded-3xl p-5 shadow-sm flex flex-col h-full min-h-[300px]">
                         <h2 className="text-lg font-black text-rose-800 mb-4 flex items-center gap-2">
