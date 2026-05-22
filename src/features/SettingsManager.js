@@ -6,11 +6,11 @@ import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
-  Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert 
+  Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
+  AlertTriangle // 🚀 [오류 해결] 누락되었던 경고등 아이콘 Import 완료!
 } from 'lucide-react';
 import { Button } from '../components/UI';
 
-// 🚀 [CTO 패치] 글로벌 데이터 연결
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -22,7 +22,6 @@ const SettingsManager = ({ currentUser }) => {
     const [saving, setSaving] = useState(false);
     const [systemProcessing, setSystemProcessing] = useState(false);
 
-    // 🚀 탭 분리: 마스터 데이터 vs 시스템 도구
     const [activeTab, setActiveTab] = useState('master');
 
     const [settings, setSettings] = useState({
@@ -85,7 +84,6 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    // 🚀 [CTO 패치] 보안이 강화된 공간으로 이사온 계정 최적화 스크립트
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
         

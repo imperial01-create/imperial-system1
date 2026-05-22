@@ -1,14 +1,16 @@
+/* [서비스 가치] 글로벌 Context 데이터를 구독하여 서버 요금을 절감하고,
+   클리닉 V2 고도화 (강의실 협업 배정 허용, 학생 노쇼 방지 락, 퀵 승인) 로직을 제공합니다. */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
-  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw 
+  Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
+  AlertTriangle 
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
+import { Button, Card, Badge, Modal } from '../components/UI';
 
-// 🚀 [CTO 패치] 글로벌 데이터 엔진 Import
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -121,7 +123,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 if (dStr >= getLocalToday()) {
                     hasEvent = sessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                        return s.date === dStr && s.status === 'open' && workerRole !== 'admin_assistant'; 
+                        if (workerRole === 'admin_assistant') return false;
+                        return s.date === dStr && s.status === 'open'; 
                     });
                 } 
             }
@@ -151,7 +154,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             if (isStudent || isParent) {
                 slots = slots.filter(s => {
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                    return workerRole !== 'admin_assistant';
+                    if (workerRole === 'admin_assistant') return false;
+                    return true;
                 });
             }
 
@@ -201,14 +205,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         return (
                              <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
                                 <div className="flex-1 flex flex-col justify-center">
-                                    <div className={`font-bold text-base md:text-lg leading-tight ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
-                                        {s.taName} TA
+                                    <div className={`font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                        {s.taName} 선생님
                                     </div>
-                                    <div className={`text-xs md:text-sm mt-0.5 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
-                                        {taSubject}
+                                    <div className={`text-xs md:text-sm mt-1 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
+                                        {taSubject} {s.classroom ? `· ${s.classroom}` : ''}
                                     </div>
                                 </div>
-                                <div className="ml-3">
+                                <div className="ml-3 shrink-0">
                                   <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus} disabled={isBlocked}>
                                       {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
                                   </Button>
@@ -248,7 +252,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
                             </div>
                             
-                            <div className="text-sm text-gray-600 font-medium">
+                            <div className="text-sm text-gray-600 font-medium mt-1">
                                 {isAsstSlot ? (
                                     <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
                                 ) : (
@@ -270,14 +274,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
-                                {/* 🚀 [CTO 패치] 마스터 데이터 환경설정에서 가져온 강의실 목록 렌더링 */}
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>
-                                      {masterClassrooms.map(r => {
+                                      {masterClassrooms?.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
-                                              <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
+                                              // 🚀 [CTO 패치] disabled={isOccupied} 제거: 협업 방 배정 허용
+                                              <option key={r} value={r} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
                                                   {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                               </option>
                                           );
@@ -295,12 +299,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             )}
                             {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                           </div>
-                          <div className="flex flex-col gap-2 ml-2">
+                          <div className="flex flex-col gap-2 ml-2 shrink-0">
                             {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
                             {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
                             {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s.id)}>철회</Button>}
                             
-                            {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)}>승인</Button>}
+                            {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>}
                             
                             {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
                                 <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
@@ -323,7 +327,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 });
 
 const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
-    // 🚀 글로벌 데이터 엔진 사용
     const { users, masterData, loadingData } = useData();
 
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
@@ -340,7 +343,11 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [applicationItems, setApplicationItems] = useState([{ subject: '', workbook: '', range: '' }]); 
     const [defaultSchedule, setDefaultSchedule] = useState({ 월: { start: '14:00', end: '22:00', active: false }, 화: { start: '14:00', end: '22:00', active: false }, 수: { start: '14:00', end: '22:00', active: false }, 목: { start: '14:00', end: '22:00', active: false }, 금: { start: '14:00', end: '22:00', active: false }, 토: { start: '10:00', end: '18:00', active: false }, 일: { start: '10:00', end: '18:00', active: false } }); 
     const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' }); 
+    
     const [selectedTaIdForSchedule, setSelectedTaIdForSchedule] = useState(''); 
+    // 🚀 [CTO 패치] 대상 반 지정(batchTargetClassId) 상태 및 로직 완전 삭제
+    const [batchClassroom, setBatchClassroom] = useState('');
+
     const [selectedSession, setSelectedSession] = useState(null);
     const [confirmConfig, setConfirmConfig] = useState(null);
     const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
@@ -552,7 +559,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: '' };
+                // 취소 시 선택되어 있던 강의실 정보는 남겨둠 (다음 예약을 위해)
+                const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
                 updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
                 notify('예약 신청이 취소되었습니다.');
@@ -585,23 +593,28 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
   const handleSaveDefaultSchedule = async () => {
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
+      
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
       const batch = writeBatch(db);
       let count = 0;
+
       for (let d = new Date(batchDateRange.start); d <= new Date(batchDateRange.end); d.setDate(d.getDate() + 1)) {
         const dStr = formatDate(d);
         const dayName = DAYS[d.getDay()];
         const sched = defaultSchedule[dayName];
+        
         if (sched && sched.active) {
           const sH = parseInt(sched.start.split(':')[0]), eH = parseInt(sched.end.split(':')[0]);
           for (let h = sH; h < eH; h++) {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
+            
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
                 date: dStr, startTime: sT, endTime: eT, 
-                status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', classroom: ''
+                status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', 
+                classroom: batchClassroom || ''
               });
               count++;
             }
@@ -609,7 +622,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }
       }
       await batch.commit(); 
-      notify(`${count}개의 스케줄 생성 완료`);
+      notify(`${count}개의 스케줄이 해당 조교/강의실 설정과 함께 일괄 생성되었습니다!`);
       fetchSessions(true); 
   };
 
@@ -726,18 +739,27 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                   )}
               </Card>
 
+              {/* 🚀 [CTO 패치] 근무 일괄 생성 UI (대상 반 삭제) */}
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 근무 일괄 생성</h3>
-                      <select className="border rounded-lg p-2 text-sm bg-white" value={selectedTaIdForSchedule} onChange={e=>setSelectedTaIdForSchedule(e.target.value)}>
-                          <option value="">조교 선택</option>
+                      <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 스케줄 일괄 오픈 (마스터 권한)</h3>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                      <select className="border rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-300 font-bold" value={selectedTaIdForSchedule} onChange={e=>setSelectedTaIdForSchedule(e.target.value)}>
+                          <option value="">1. 담당 조교 선택 (필수)</option>
                           {users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(u=><option key={u.id} value={u.id}>[{u.role==='admin_assistant'?'행정':'수업'}] {u.name}</option>)}
                       </select>
+                      <select className="border rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-300 font-bold text-blue-700" value={batchClassroom} onChange={e=>setBatchClassroom(e.target.value)}>
+                          <option value="">2. 배정 강의실 선택 (미정)</option>
+                          {masterData?.classrooms?.map(r=><option key={r} value={r}>{r}</option>)}
+                      </select>
                   </div>
+
                   <div className="flex gap-2 mb-4">
-                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300" value={batchDateRange.start} onChange={e=>setBatchDateRange({...batchDateRange, start:e.target.value})}/>
-                      <span className="self-center">~</span>
-                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300" value={batchDateRange.end} onChange={e=>setBatchDateRange({...batchDateRange, end:e.target.value})}/>
+                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300 font-bold text-gray-700" value={batchDateRange.start} onChange={e=>setBatchDateRange({...batchDateRange, start:e.target.value})}/>
+                      <span className="self-center font-bold text-gray-400">~</span>
+                      <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300 font-bold text-gray-700" value={batchDateRange.end} onChange={e=>setBatchDateRange({...batchDateRange, end:e.target.value})}/>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
                       {DAYS.map(d=>(
@@ -749,17 +771,17 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                               <div className="flex flex-col gap-1.5 mt-auto">
                                   <div className="flex items-center gap-1">
                                       <span className="text-xs text-gray-500 w-6">시작</span>
-                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500" value={defaultSchedule[d].start} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], start:e.target.value}})} disabled={!defaultSchedule[d].active}/>
+                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500 font-bold" value={defaultSchedule[d].start} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], start:e.target.value}})} disabled={!defaultSchedule[d].active}/>
                                   </div>
                                   <div className="flex items-center gap-1">
                                       <span className="text-xs text-gray-500 w-6">종료</span>
-                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500" value={defaultSchedule[d].end} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], end:e.target.value}})} disabled={!defaultSchedule[d].active}/>
+                                      <input type="time" className="w-full text-sm border-gray-300 rounded focus:ring-blue-500 font-bold" value={defaultSchedule[d].end} onChange={e=>setDefaultSchedule({...defaultSchedule, [d]: {...defaultSchedule[d], end:e.target.value}})} disabled={!defaultSchedule[d].active}/>
                                   </div>
                               </div>
                           </div>
                       ))}
                   </div>
-                  <Button onClick={handleSaveDefaultSchedule} className="w-full py-3 font-bold text-lg" size="sm">스케줄 생성 실행</Button>
+                  <Button onClick={handleSaveDefaultSchedule} className="w-full py-3.5 font-bold text-lg shadow-md" size="sm">스케줄 일괄 생성 및 학생에게 오픈하기</Button>
               </Card>
 
               <CalendarView 
@@ -770,34 +792,36 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                   onRefresh={() => fetchSessions(true)}
                   isAdminView={true} isMyScheduleView={false} 
                   checkRoomAvailability={checkRoomAvailability}
-                  masterClassrooms={masterData.classrooms} // 🚀 마스터 데이터 주입
+                  masterClassrooms={masterData?.classrooms} 
               />
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
                 <Card>
-                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 예약 승인 대기</h2>
+                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 퀵-예약 승인 대기</h2>
                     {pendingBookings.length === 0 ? <div className="text-center py-10 bg-gray-50 rounded-xl text-gray-400">대기 중인 예약 없음</div> :
                         <div className="space-y-3">{pendingBookings.map(s => (
-                            <div key={s.id} className="border border-green-100 bg-green-50/30 p-4 rounded-xl flex justify-between items-center">
-                                <div className="flex-1">
-                                    <div className="font-bold text-gray-900">{s.studentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone})</span></div>
-                                    <div className="text-sm text-gray-500">{s.date} {s.startTime} ({s.taName})</div>
-                                    <div className="text-sm text-gray-600 mt-2 p-2 bg-white rounded border border-green-100">
+                            <div key={s.id} className="border border-green-100 bg-green-50/30 p-4 rounded-xl flex justify-between items-center shadow-sm">
+                                <div className="flex-1 pr-3">
+                                    <div className="font-bold text-gray-900 text-lg">{s.studentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone})</span></div>
+                                    <div className="text-sm font-bold text-gray-600 mt-1">{s.date} <span className="text-blue-600">{s.startTime}</span> ({s.taName})</div>
+                                    
+                                    <div className="text-sm text-gray-600 mt-2 p-2 bg-white rounded-lg border border-green-100">
                                         <div className="font-bold text-xs text-green-700 mb-0.5">신청 상세</div>
                                         <div className="whitespace-pre-wrap">{s.topic} / {s.questionRange}</div>
                                     </div>
+                                    
                                     <div className="mt-2">
+                                        {/* 🚀 [CTO 패치] disabled={isOccupied} 제거하여 승인 전 언제든 교실 변경/협업 가능 */}
                                         <select 
-                                            className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
+                                            className={`text-sm border rounded-lg p-2 font-bold focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-800 shadow-inner'}`} 
                                             value={s.classroom || ''} 
                                             onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
-                                            {/* 🚀 마스터 데이터 드롭다운으로 교체 */}
-                                            {masterData.classrooms.map(r => {
+                                            {masterData?.classrooms?.map(r => {
                                                 const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                                 return (
-                                                    <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
+                                                    <option key={r} value={r} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
                                                         {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                                     </option>
                                                 );
@@ -805,9 +829,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         </select>
                                     </div>
                                 </div>
-                                <div className="ml-2 flex flex-col gap-2">
-                                    <Button size="sm" onClick={()=>handleAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>
-                                    <Button size="sm" variant="danger" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
+                                <div className="flex flex-col gap-2 shrink-0">
+                                    <Button className="font-bold py-3 shadow-md" onClick={()=>handleAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>
+                                    <Button variant="danger" className="text-xs" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
                                 </div>
                             </div>
                         ))}</div>
@@ -850,7 +874,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
                     onRefresh={() => fetchSessions(true)}
                     isAdminView={false} isMyScheduleView={true}
-                    masterClassrooms={masterData.classrooms}
+                    masterClassrooms={masterData?.classrooms}
                 />
             </>
         )}
@@ -867,44 +891,53 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                   onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} 
                   onRefresh={() => fetchSessions(true)}
                   isAdminView={false} isMyScheduleView={false}
-                  masterClassrooms={masterData.classrooms}
+                  masterClassrooms={masterData?.classrooms}
               />
            </div>
        )}
 
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
-                <Card className="bg-blue-50 border-blue-100 w-full">
-                    <h2 className="text-lg font-bold mb-4 text-blue-800 flex items-center gap-2">
-                        <CheckCircle size={20}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 예약 현황'}
-                    </h2>
+                <Card className="bg-blue-50 border-blue-100 w-full shadow-sm">
+                    <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-3">
+                        <h2 className="text-lg font-black text-blue-900 flex items-center gap-2">
+                            <CheckCircle size={22}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 확정 예약 현황'}
+                        </h2>
+                        {/* 🚀 [CTO 패치] 노쇼 방지 및 대면 취소 유도 락(Lock) 문구 */}
+                        {currentUser.role === 'student' && (
+                            <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3 py-2 rounded-lg flex items-start gap-1.5 shadow-sm">
+                                <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                                <div>예약 취소 및 변경은 데스크에 직접 방문하여 말씀해주세요. <br className="hidden md:block"/><span className="font-normal text-[10px] text-gray-500">(무단 노쇼 시 클리닉 이용 페널티 부여)</span></div>
+                            </div>
+                        )}
+                    </div>
                     
-                    {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400">예약 내역이 없습니다.</div> : (
+                    {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400 font-bold bg-white rounded-xl border border-dashed border-gray-200">예약 내역이 없습니다.</div> : (
                         <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
                             {studentMyClinics.map(s => (
-                                <div key={s.id} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm relative overflow-hidden">
+                                <div key={s.id} className="bg-white p-5 rounded-xl border-2 border-blue-100 shadow-sm relative overflow-hidden transition-all hover:border-blue-300">
                                     {currentUser.role === 'parent' && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{s.studentName}</div>}
                                     <div className="flex justify-between mb-2 pr-12">
-                                        <span className="font-bold text-gray-800 text-lg">{s.date}</span>
+                                        <span className="font-bold text-gray-900 text-lg tracking-tight">{s.date}</span>
                                         <Badge status={s.status}/>
                                     </div>
-                                    <div className="flex items-center gap-2 text-gray-700 mb-2">
-                                        <Clock size={16} className="text-blue-500"/>
-                                        <span className="font-medium">{s.startTime} ~ {s.endTime}</span>
+                                    <div className="flex items-center gap-2 text-gray-700 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-100 w-fit">
+                                        <Clock size={16} className="text-blue-600"/>
+                                        <span className="font-black text-blue-900">{s.startTime} ~ {s.endTime}</span>
                                         <span className="text-gray-300">|</span>
-                                        <span className="text-sm">{s.taName} TA</span>
+                                        <span className="text-sm font-bold">{s.taName} 선생님</span>
                                     </div>
-                                    <div className="bg-gray-50 p-3 rounded-lg text-sm text-gray-600 border border-gray-100">
-                                        <div className="flex gap-2 mb-1"><span className="font-bold text-gray-500 w-8 shrink-0">과목</span> <span>{s.topic}</span></div>
-                                        <div className="flex gap-2"><span className="font-bold text-gray-500 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap">{s.questionRange}</span></div>
+                                    <div className="bg-indigo-50/50 p-3 rounded-lg text-sm text-gray-600 border border-indigo-50">
+                                        <div className="flex gap-2 mb-1.5"><span className="font-black text-indigo-400 w-8 shrink-0">과목</span> <span className="font-bold text-indigo-900">{s.topic}</span></div>
+                                        <div className="flex gap-2"><span className="font-black text-indigo-400 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap font-medium text-gray-700">{s.questionRange}</span></div>
                                     </div>
                                     
                                     {(s.status === 'completed' && (s.clinicContent || s.feedback || s.improvement)) && (
-                                        <div className="mt-3 bg-green-50 p-3.5 rounded-lg text-sm text-gray-700 border border-green-100">
-                                            <div className="font-bold text-green-800 mb-2 flex items-center gap-1.5"><MessageSquare size={16}/> 클리닉 피드백</div>
-                                            {s.clinicContent && <div className="whitespace-pre-wrap leading-relaxed"><span className="font-bold text-gray-600">진행 내용:</span> {s.clinicContent}</div>}
-                                            {s.feedback && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-600">문제점:</span> {s.feedback}</div>}
-                                            {s.improvement && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-600">개선 방향:</span> {s.improvement}</div>}
+                                        <div className="mt-3 bg-green-50 p-4 rounded-xl text-sm text-gray-700 border-2 border-green-100">
+                                            <div className="font-black text-green-800 mb-3 flex items-center gap-1.5 border-b border-green-200 pb-2"><MessageSquare size={18}/> 선생님의 클리닉 피드백</div>
+                                            {s.clinicContent && <div className="whitespace-pre-wrap leading-relaxed"><span className="font-bold text-gray-500 bg-white px-1.5 py-0.5 rounded border mr-1">진행 내용</span> {s.clinicContent}</div>}
+                                            {s.feedback && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-500 bg-white px-1.5 py-0.5 rounded border mr-1">문제점 분석</span> {s.feedback}</div>}
+                                            {s.improvement && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-emerald-200 mr-1">다음 개선 방향</span> <span className="font-bold">{s.improvement}</span></div>}
                                         </div>
                                     )}
                                 </div>
@@ -914,7 +947,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 </Card>
                 <Card className="w-full">
                     <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-xl font-bold">클리닉 신청 (조회)</h2>
+                        <h2 className="text-xl font-bold flex items-center gap-2"><PlusCircle className="text-blue-600"/> 새로운 클리닉 예약하기</h2>
                     </div>
                     <CalendarView 
                         isInteractive={currentUser.role === 'student'} 
@@ -930,17 +963,16 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         taSubjectMap={taSubjectMap}
                         onRefresh={() => fetchSessions(true)}
                         isAdminView={false} isMyScheduleView={false}
-                        masterClassrooms={masterData.classrooms}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
                     <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
                         <Button 
-                            className="w-full max-w-md shadow-2xl bg-blue-600 hover:bg-blue-700 text-white border-none py-4 text-xl rounded-2xl flex items-center justify-center gap-3"
+                            className="w-full max-w-md shadow-2xl bg-blue-600 hover:bg-blue-700 text-white border-none py-4 text-xl rounded-2xl flex items-center justify-center gap-3 ring-4 ring-blue-200"
                             onClick={()=>setModalState({type:'student_apply'})}
                         >
-                            <span className="bg-white/20 px-3 py-1 rounded-lg text-base font-bold">{studentSelectedSlots.length}건</span>
-                            <span className="font-bold">예약 진행하기</span>
+                            <span className="bg-white text-blue-600 px-3 py-1 rounded-lg text-base font-black shadow-inner">{studentSelectedSlots.length}건</span>
+                            <span className="font-bold">선택한 시간 예약 진행하기</span>
                             <ArrowRight size={24} />
                         </Button>
                     </div>
@@ -960,19 +992,28 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }} className="w-full py-4 text-lg">요청 전송</Button>
       </Modal>
       
-      <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="예약 신청">
+      <Modal isOpen={modalState.type==='student_apply'} onClose={()=>setModalState({type:null})} title="클리닉 예약 신청서 작성">
         {applicationItems.map((item,i)=>(
-            <div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50">
-                <div className="mb-3"><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input placeholder="예시 : 미적분1" className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/></div>
+            <div key={i} className="border-2 rounded-xl p-5 mb-3 bg-gray-50 shadow-sm border-blue-100">
+                <div className="mb-3">
+                    <label className="block text-sm font-bold text-blue-800 mb-1.5 flex items-center gap-1"><BookOpen size={16}/> 질문할 과목명</label>
+                    <input placeholder="예시 : 고1 공통수학1" className="w-full border-2 rounded-lg p-3 text-lg font-bold text-gray-800 focus:ring-2 outline-none focus:ring-blue-300" value={item.subject} onChange={e=>{const n=[...applicationItems];n[i].subject=e.target.value;setApplicationItems(n)}}/>
+                </div>
                 <div className="flex gap-3">
-                    <div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">교재</label><input placeholder="예시 : 개념원리" className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/></div>
-                    <div className="flex-1"><label className="block text-sm font-bold text-gray-600 mb-1">범위</label><input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 outline-none focus:ring-blue-300" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/></div>
+                    <div className="flex-1">
+                        <label className="block text-sm font-bold text-gray-600 mb-1.5">교재명</label>
+                        <input placeholder="예시 : 마플시너지" className="w-full border-2 rounded-lg p-3 text-base focus:ring-2 outline-none focus:ring-blue-300" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/>
+                    </div>
+                    <div className="flex-1">
+                        <label className="block text-sm font-bold text-gray-600 mb-1.5">질문 범위 (페이지/번호)</label>
+                        <input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-base focus:ring-2 outline-none focus:ring-blue-300" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/>
+                    </div>
                 </div>
             </div>
         ))}
-        <Button variant="secondary" className="w-full mb-3 py-3" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button>
-        <Button className="w-full py-4 text-xl font-bold" onClick={submitStudentApplication} disabled={isSubmittingBooking}>
-            {isSubmittingBooking ? <Loader className="animate-spin inline-block text-white" size={24}/> : '신청 완료'}
+        <Button variant="secondary" className="w-full mb-4 py-3 font-bold border-2 border-dashed border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 bg-white" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button>
+        <Button className="w-full py-4 text-xl font-black shadow-lg" onClick={submitStudentApplication} disabled={isSubmittingBooking}>
+            {isSubmittingBooking ? <Loader className="animate-spin inline-block text-white" size={24}/> : '최종 예약 접수하기'}
         </Button>
       </Modal>
       
