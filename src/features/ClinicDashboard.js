@@ -8,8 +8,10 @@ import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal, LoadingSpinner } from '../components/UI';
 
+// 🚀 [CTO 패치] 글로벌 데이터 엔진 Import
+import { useData } from '../contexts/DataContext';
+
 const APP_ID = 'imperial-clinic-v1';
-const CLASSROOMS = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5', 'Class 6', 'Class 7'];
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
@@ -49,7 +51,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms }) => {
   
   const mySessions = useMemo(() => {
      if (isMyScheduleView) {
@@ -215,7 +217,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         );
                     }
 
-                    // 🚀 [CTO 패치] 학부모 뷰잉 로직 고도화 (구버전 호환성 fallback 포함)
                     if (isParent) {
                         const isMyChild = (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || (s.studentName === currentUser.childName);
                         const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
@@ -269,10 +270,11 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                               <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
+                                {/* 🚀 [CTO 패치] 마스터 데이터 환경설정에서 가져온 강의실 목록 렌더링 */}
                                 {!isAsstSlot && (
                                     <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
                                       <option value="">장소 미지정</option>
-                                      {CLASSROOMS.map(r => {
+                                      {masterClassrooms.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
                                               <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
@@ -320,7 +322,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
   );
 });
 
-const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
+const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
+    // 🚀 글로벌 데이터 엔진 사용
+    const { users, masterData, loadingData } = useData();
+
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
     const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
 
@@ -679,7 +684,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
   const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
   const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
   
-  // 🚀 [CTO 패치] 하이브리드 필터링 적용 (다중 자녀 검사 + 구버전 이름 검사 동시 지원)
   const studentMyClinics = useMemo(() => {
     return sessions.filter(s => {
         if (currentUser.role === 'parent') {
@@ -691,7 +695,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
     }).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
   }, [sessions, currentUser]);
 
-  if (appLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+  if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
   return (
     <div className="space-y-6 w-full animate-in fade-in">
@@ -766,6 +770,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                   onRefresh={() => fetchSessions(true)}
                   isAdminView={true} isMyScheduleView={false} 
                   checkRoomAvailability={checkRoomAvailability}
+                  masterClassrooms={masterData.classrooms} // 🚀 마스터 데이터 주입
               />
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
@@ -788,7 +793,8 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                                             onChange={(e) => handleAction('update_classroom', { id: s.id, val: e.target.value })}
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
-                                            {CLASSROOMS.map(r => {
+                                            {/* 🚀 마스터 데이터 드롭다운으로 교체 */}
+                                            {masterData.classrooms.map(r => {
                                                 const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                                 return (
                                                     <option key={r} value={r} disabled={isOccupied} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
@@ -844,6 +850,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                     onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
                     onRefresh={() => fetchSessions(true)}
                     isAdminView={false} isMyScheduleView={true}
+                    masterClassrooms={masterData.classrooms}
                 />
             </>
         )}
@@ -860,6 +867,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                   onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} 
                   onRefresh={() => fetchSessions(true)}
                   isAdminView={false} isMyScheduleView={false}
+                  masterClassrooms={masterData.classrooms}
               />
            </div>
        )}
@@ -867,7 +875,6 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
        {(currentUser.role === 'student' || currentUser.role === 'parent') && (
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full">
-                    {/* 🚀 뷰잉 분리 */}
                     <h2 className="text-lg font-bold mb-4 text-blue-800 flex items-center gap-2">
                         <CheckCircle size={20}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 예약 현황'}
                     </h2>
@@ -923,6 +930,7 @@ const ClinicDashboard = ({ currentUser, users, mode = 'clinic' }) => {
                         taSubjectMap={taSubjectMap}
                         onRefresh={() => fetchSessions(true)}
                         isAdminView={false} isMyScheduleView={false}
+                        masterClassrooms={masterData.classrooms}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (

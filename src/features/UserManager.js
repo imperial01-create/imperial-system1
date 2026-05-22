@@ -1,17 +1,17 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 
-// 🚀 [CTO 패치] 뚱뚱했던 onSnapshot 로직을 모두 버리고, 글로벌 데이터를 우아하게 끌어다 씁니다.
+// 🚀 [CTO 패치] 글로벌 데이터 엔진 연결 완료
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -24,7 +24,7 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
 
-    // 🚀 중앙 통제소(DataContext)에서 서버비용 0원으로 데이터 빼오기
+    // 🚀 서버 호출 없이 중앙 통제소에서 데이터 즉시 꺼내기
     const { users, classes, enrollments, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
@@ -53,79 +53,6 @@ const UserManager = ({ currentUser }) => {
     const studentList = useMemo(() => users.filter(u => u.role === 'student'), [users]);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
-
-    const handleAuthSyncAndDedupe = async () => {
-        if (!window.confirm("⚠️ 시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 인증 서버에 이미 가입된 옛날 계정들은 자동으로 초록 방패 마크가 부여됩니다.")) return;
-        
-        setLoading(true);
-        try {
-            let dedupeCount = 0;
-            let authSyncCount = 0;
-
-            const seenIds = new Set();
-            const duplicatesToDelete = [];
-            
-            const sortedUsers = [...users].sort((a, b) => {
-                if (a.authUid && !b.authUid) return -1;
-                if (!a.authUid && b.authUid) return 1;
-                if (a.id === a.id.toLowerCase() && b.id !== b.id.toLowerCase()) return -1;
-                if (a.id !== a.id.toLowerCase() && b.id === b.id.toLowerCase()) return 1;
-                return 0;
-            });
-
-            for (const u of sortedUsers) {
-                const canonicalId = (u.userId || u.id).toLowerCase();
-                if (seenIds.has(canonicalId)) {
-                    duplicatesToDelete.push(u); 
-                } else {
-                    seenIds.add(canonicalId); 
-                }
-            }
-
-            for (const dupe of duplicatesToDelete) {
-                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
-                dedupeCount++;
-            }
-
-            // 남은 유저들에 대해 Auth 동기화 진행
-            const freshUsers = sortedUsers.filter(u => !duplicatesToDelete.includes(u));
-
-            for (const u of freshUsers) {
-                if (!u.authUid) {
-                    const safeId = encodeURIComponent(u.userId || u.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-                    const email = `${safeId}@imperial.com`;
-                    const userPassword = (u.password && String(u.password).length >= 6) ? String(u.password) : 'imperial123!';
-
-                    try {
-                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, userPassword);
-                        const newAuthUid = userCredential.user.uid;
-                        await signOut(secondaryAuth); 
-                        await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
-                            authUid: newAuthUid,
-                            password: userPassword,
-                            updatedAt: serverTimestamp()
-                        });
-                        authSyncCount++;
-                    } catch (authError) {
-                        if (authError.code === 'auth/email-already-in-use') {
-                            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
-                                authUid: 'legacy_verified_account',
-                                updatedAt: serverTimestamp()
-                            });
-                            authSyncCount++;
-                        } else {
-                            console.error(`가입 실패: ${email}`, authError);
-                        }
-                    }
-                }
-            }
-            alert(`✅ 계정 최적화 및 보안망 동기화 완료!\n\n* 삭제된 중복 찌꺼기 계정: ${dedupeCount}건\n* 초록 방패(안전망) 변환 완료: ${authSyncCount}건`);
-        } catch (err) {
-            alert("작업 중 오류가 발생했습니다: " + err.message);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const handleForcePasswordReset = async (user) => {
         const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상)`);
@@ -375,9 +302,6 @@ const UserManager = ({ currentUser }) => {
             <div className="flex flex-col md:flex-row justify-between items-center gap-4">
                 <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2"><Users /> 통합 사용자 관리</h2>
                 <div className="flex gap-2 w-full md:w-auto">
-                    <Button onClick={handleAuthSyncAndDedupe} variant="secondary" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-200 w-full md:w-auto font-bold border-0 shadow-sm transition-colors">
-                        <Shield size={18} className="mr-1"/> 계정 최적화 (중복제거 및 보안 연동)
-                    </Button>
                     <Button onClick={handleOpenCreate} icon={Plus} className="w-full md:w-auto">사용자 추가</Button>
                 </div>
             </div>

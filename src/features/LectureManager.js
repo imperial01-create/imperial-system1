@@ -1,6 +1,6 @@
-/* [서비스 가치] 강사와 관리자가 직관적으로 반을 관리할 수 있는 2-Depth UI와
-   안전한 CSV 덮어쓰기(동기화) 및 수강 현황 체크 기능을 제공합니다. */
-import React, { useState, useEffect, useMemo } from 'react';
+/* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
+   학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. */
+import React, { useState, useMemo } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
@@ -8,16 +8,17 @@ import {
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
-    query, where, onSnapshot, serverTimestamp, getDocs, getDoc,
-    writeBatch 
+    query, where, onSnapshot, serverTimestamp, writeBatch 
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
+// 🚀 [CTO 패치] 글로벌 데이터 연결
+import { useData } from '../contexts/DataContext';
+
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// --- Helper: CSV Data Cleaners & Parsers ---
 const parseCSV = (str) => {
     const result = [];
     let row = [];
@@ -44,20 +45,14 @@ const parseCSV = (str) => {
     return result;
 };
 
-// 🚀 [CTO 패치] 원장님 지시 반영: 학년은 놔두고 괄호(...)와 그 안의 내용만 완벽하게 제거
 const cleanClassName = (rawName) => {
     if (!rawName) return '';
-    return rawName
-        .replace(/\(.*?\)/g, '') // 모든 괄호 및 그 안의 텍스트만 제거
-        .trim();
+    return rawName.replace(/\(.*?\)/g, '').trim();
 };
 
 const cleanStudentName = (rawName) => {
     if (!rawName) return '';
-    return rawName
-        .replace(/^\[.*?\]\s*/, '')  
-        .replace(/\s*\(.*?\)$/, '')  
-        .trim();
+    return rawName.replace(/^\[.*?\]\s*/, '').replace(/\s*\(.*?\)$/, '').trim();
 };
 
 const normalizeString = (str) => {
@@ -72,7 +67,6 @@ const getMatchedMasterRoom = (rawRoom, masterRooms) => {
 };
 
 
-// --- Helper: Simple Calendar ---
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     
@@ -130,7 +124,10 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
 };
 
 // --- Lecture Management Panel ---
-const LectureManagementPanel = ({ selectedClass, users }) => {
+const LectureManagementPanel = ({ selectedClass }) => {
+    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
+    const { users, enrollments } = useData();
+
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
     const [isLectureModalOpen, setIsLectureModalOpen] = useState(false);
@@ -145,36 +142,28 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         proofImageUrl: '' 
     });
     const [completions, setCompletions] = useState([]);
-    const [studentsInClass, setStudentsInClass] = useState([]);
 
-    useEffect(() => {
+    // 🚀 [CTO 패치] 죽은 코드(studentIds) 대신 진짜 수강 이력(Enrollments) 데이터에서 내 반 학생 추출
+    const studentsInClass = useMemo(() => {
+        if (!selectedClass?.id) return [];
+        const activeStudentIds = enrollments.filter(e => e.classId === selectedClass.id && e.status === 'active').map(e => e.studentId);
+        return users.filter(u => u.role === 'student' && activeStudentIds.includes(u.id));
+    }, [selectedClass, enrollments, users]);
+
+    React.useEffect(() => {
         if (!selectedClass?.id) return;
-        const q = query(
-            collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'),
-            where('classId', '==', selectedClass.id)
-        );
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsub = onSnapshot(q, (snapshot) => {
-            const lectureList = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
+            const lectureList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             lectureList.sort((a, b) => new Date(b.date) - new Date(a.date));
             setLectures(lectureList);
         });
-        
-        // 🚀 [CTO 복구] 학생 연동 데이터 (수강 현황용) 100% 복구 완료
-        if (selectedClass.studentIds?.length > 0 && users && users.length > 0) {
-            setStudentsInClass(users.filter(u => u.role === 'student' && selectedClass.studentIds.includes(u.id)));
-        } else {
-            setStudentsInClass([]);
-        }
-
         return () => unsub();
-    }, [selectedClass, users]);
+    }, [selectedClass]);
 
     const currentLectures = lectures.filter(l => l.date === selectedDate);
 
-    useEffect(() => {
+    React.useEffect(() => {
         if (currentLectures.length === 0) {
             setCompletions([]);
             return;
@@ -189,24 +178,14 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
         if (lecture) {
             setEditingLecture(lecture);
             setFormData({
-                date: lecture.date,
-                round: lecture.round,
-                progress: lecture.progress,
-                homework: lecture.homework,
-                youtubeLink: lecture.youtubeLink || '',
-                youtubeLinks: lecture.youtubeLinks || [lecture.youtubeLink || ''],
-                proofImageUrl: lecture.proofImageUrl || '' 
+                date: lecture.date, round: lecture.round, progress: lecture.progress, homework: lecture.homework,
+                youtubeLink: lecture.youtubeLink || '', youtubeLinks: lecture.youtubeLinks || [lecture.youtubeLink || ''], proofImageUrl: lecture.proofImageUrl || '' 
             });
         } else {
             setEditingLecture(null);
             setFormData({
-                date: selectedDate,
-                round: (lectures.length + 1) + '회차',
-                progress: '',
-                homework: '',
-                youtubeLink: '',
-                youtubeLinks: [''],
-                proofImageUrl: '' 
+                date: selectedDate, round: (lectures.length + 1) + '회차', progress: '', homework: '',
+                youtubeLink: '', youtubeLinks: [''], proofImageUrl: '' 
             });
         }
         setIsLectureModalOpen(true);
@@ -214,25 +193,14 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
 
     const handleSaveLecture = async () => {
         try {
-            const lectureData = {
-                classId: selectedClass.id,
-                className: selectedClass.name,
-                ...formData,
-                updatedAt: serverTimestamp()
-            };
+            const lectureData = { classId: selectedClass.id, className: selectedClass.name, ...formData, updatedAt: serverTimestamp() };
             if (editingLecture) {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'lectures', editingLecture.id), lectureData);
             } else {
-                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), {
-                    ...lectureData,
-                    createdAt: serverTimestamp()
-                });
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), { ...lectureData, createdAt: serverTimestamp() });
             }
             setIsLectureModalOpen(false);
-        } catch (error) {
-            console.error("Error saving lecture:", error);
-            alert("저장 중 오류가 발생했습니다.");
-        }
+        } catch (error) { alert("저장 중 오류가 발생했습니다."); }
     };
 
     const handleDeleteLecture = async (id) => {
@@ -242,11 +210,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
     };
 
     const handleAddLink = () => setFormData(p => ({ ...p, youtubeLinks: [...(p.youtubeLinks || []), ''] }));
-    const handleLinkChange = (i, v) => {
-        const n = [...(formData.youtubeLinks || [''])];
-        n[i] = v;
-        setFormData(p => ({ ...p, youtubeLinks: n }));
-    };
+    const handleLinkChange = (i, v) => { const n = [...(formData.youtubeLinks || [''])]; n[i] = v; setFormData(p => ({ ...p, youtubeLinks: n })); };
     const handleRemoveLink = (i) => setFormData(p => ({ ...p, youtubeLinks: p.youtubeLinks.filter((_, idx) => idx !== i) }));
 
     return (
@@ -289,13 +253,7 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                         <div className="w-6 shrink-0 text-gray-400"><CheckCircle size={16}/></div>
                                         <div className="text-gray-700 break-all"><span className="font-bold text-gray-500 text-xs block">숙제</span>{lecture.homework}</div>
                                     </div>
-                                    {lecture.proofImageUrl && (
-                                        <div className="flex gap-2 items-center text-blue-600 bg-blue-50 p-2 rounded-lg mt-1">
-                                            <LinkIcon size={16}/> <span className="font-bold text-xs truncate max-w-[200px]">인증 사진 링크 등록됨</span>
-                                        </div>
-                                    )}
                                 </div>
-                                {/* 🚀 [CTO 복구] 모바일 화면의 수강 현황 리스트 완벽 복구 */}
                                 <div className="bg-gray-50 p-2 rounded-lg mt-1">
                                     <h5 className="text-xs font-bold text-gray-500 mb-1 flex items-center gap-1"><Users size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lecture.id).length}/{studentsInClass.length})</h5>
                                     <div className="flex flex-wrap gap-1">
@@ -318,7 +276,6 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
                                 <th className="p-3">진도 내용</th>
                                 <th className="p-3">숙제</th>
                                 <th className="p-3 text-center w-20">인증</th>
-                                {/* 🚀 [CTO 복구] 데스크톱 화면의 수강 현황 컬럼 완벽 복구 */}
                                 <th className="p-3 w-48">수강 현황</th>
                                 <th className="p-3 w-24 text-right">관리</th>
                             </tr>
@@ -400,9 +357,10 @@ const LectureManagementPanel = ({ selectedClass, users }) => {
     );
 };
 
-// --- Admin & Lecturer Unified Component ---
-export const AdminLectureManager = ({ users }) => {
-    const [classes, setClasses] = useState([]);
+// --- Admin Unified Component ---
+export const AdminLectureManager = () => {
+    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
+    const { users, classes, masterData, loadingData } = useData();
     
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -412,8 +370,6 @@ export const AdminLectureManager = ({ users }) => {
     const [newClass, setNewClass] = useState({ name: '', lecturerId: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
 
-    const [masterData, setMasterData] = useState({ classrooms: [], subjects: [] });
-
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -421,34 +377,6 @@ export const AdminLectureManager = ({ users }) => {
     const lecturers = useMemo(() => {
         return users.filter(u => u.role === 'lecturer' || u.role === 'admin' || u.role === 'ta').sort((a,b) => a.name.localeCompare(b.name));
     }, [users]);
-
-    useEffect(() => {
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
-        return onSnapshot(q, (s) => {
-            const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
-            list.sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
-            setClasses(list);
-        });
-    }, []);
-
-    useEffect(() => {
-        const fetchSettings = async () => {
-            try {
-                const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data');
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    setMasterData({
-                        classrooms: data.classrooms || [],
-                        subjects: data.subjects || []
-                    });
-                }
-            } catch (err) {
-                console.error("Master data load error:", err);
-            }
-        };
-        fetchSettings();
-    }, []);
 
     const orphanedClasses = useMemo(() => {
         return classes.filter(c => !c.lecturerId || !lecturers.some(l => l.id === c.lecturerId));
@@ -549,8 +477,7 @@ export const AdminLectureManager = ({ users }) => {
                 }
             } else {
                 payload.createdAt = serverTimestamp();
-                // 🚀 [CTO 복구] 반 신규 개설 시 학생 연동을 위한 studentIds 껍데기 보존
-                payload.studentIds = []; 
+                // 🚀 [CTO 패치] 죽은 코드(studentIds: [])를 만들지 않음. 이제 모든 학생관리는 Enrollments가 함.
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -610,11 +537,9 @@ export const AdminLectureManager = ({ users }) => {
                         if (cell) {
                             const lines = cell.split('\n').map(l => l.trim()).filter(l => l);
                             if (lines.length >= 2) {
-                                // 🚀 여기서 첫 번째 줄(lines[0])인 학년 정보는 무시하고, 두 번째 줄(lines[1]) 반 이름만 사용합니다.
                                 const rawClassName = lines[1];
                                 const rawClassroom = lines[2] || '';
                                 
-                                // 🚀 원장님 지시 반영: 학년 텍스트는 그대로 두고 괄호만 삭제
                                 const className = cleanClassName(rawClassName);
                                 const classroom = getMatchedMasterRoom(rawClassroom, masterData.classrooms);
                                 const day = DAYS_OF_WEEK[col - 1];
@@ -675,7 +600,6 @@ export const AdminLectureManager = ({ users }) => {
                         name: newClsData.name,
                         lecturerId: safeLecturerId,
                         schedules: newClsData.schedules,
-                        studentIds: [], // 🚀 [CTO 복구] 학생 연동 데이터 보존
                         createdAt: serverTimestamp(),
                         updatedAt: serverTimestamp()
                     });
@@ -700,6 +624,8 @@ export const AdminLectureManager = ({ users }) => {
             setIsSyncing(false);
         }
     };
+
+    if (loadingData) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in h-[85vh] flex flex-col">
@@ -826,11 +752,10 @@ export const AdminLectureManager = ({ users }) => {
                                     )}
                                 </div>
 
-                                {/* 하단: 선택된 반의 일지 기록 화면 (Slide up) */}
                                 {selectedClass && selectedLecturerId !== 'UNASSIGNED_ORPHANS' && (
                                     <div className="mt-6 border-t border-gray-200 pt-6 animate-in slide-in-from-bottom-4">
                                         <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2"><PenTool className="text-blue-600"/> <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg">{selectedClass.name}</span> 일지 및 숙제 기록</h2>
-                                        <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                                        <LectureManagementPanel selectedClass={selectedClass} />
                                     </div>
                                 )}
                             </div>
@@ -839,7 +764,6 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </div>
 
-            {/* Create/Edit Class Modal (마스터 데이터 연동) */}
             <Modal isOpen={isClassModalOpen} onClose={() => setIsClassModalOpen(false)} title={editingClassId ? "클래스 정보 수정" : "새로운 클래스 마스터 개설"}>
                 <div className="space-y-5 w-full bg-gray-50 p-2 md:p-4 rounded-xl">
                     
@@ -918,7 +842,6 @@ export const AdminLectureManager = ({ users }) => {
                 </div>
             </Modal>
 
-            {/* CSV 업로드 모달 */}
             <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="시간표 덮어쓰기 (동기화)">
                 <div className="space-y-6 w-full">
                     <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
@@ -953,31 +876,26 @@ export const AdminLectureManager = ({ users }) => {
     );
 };
 
-export const LecturerDashboard = ({ currentUser, users }) => {
-    const [classes, setClasses] = useState([]);
+export const LecturerDashboard = ({ currentUser }) => {
+    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
+    const { classes: allClasses, users } = useData();
     const [selectedClass, setSelectedClass] = useState(null);
-    const [loading, setLoading] = useState(true);
+
+    const myClasses = useMemo(() => {
+        if (!currentUser) return [];
+        return allClasses.filter(c => c.lecturerId === currentUser.id);
+    }, [allClasses, currentUser]);
 
     useEffect(() => {
-        if (!currentUser) return;
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), where('lecturerId', '==', currentUser.id));
-        const unsub = onSnapshot(q, (s) => {
-            const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
-            setClasses(list);
-            if(list.length > 0 && !selectedClass) setSelectedClass(list[0]);
-            setLoading(false);
-        });
-        return () => unsub();
-    }, [currentUser]); 
-
-    if (loading) return <div className="flex justify-center items-center h-64"><Loader className="animate-spin text-blue-600"/></div>;
+        if(myClasses.length > 0 && !selectedClass) setSelectedClass(myClasses[0]);
+    }, [myClasses, selectedClass]);
 
     return (
         <div className="space-y-6 w-full animate-in fade-in">
-            {classes.length > 0 ? (
+            {myClasses.length > 0 ? (
                 <>
                     <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                        {classes.map(c => (
+                        {myClasses.map(c => (
                             <button key={c.id} onClick={() => setSelectedClass(c)} className={`px-4 py-2 rounded-xl border whitespace-nowrap transition-all font-bold ${selectedClass?.id === c.id ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                                 {c.name}
                             </button>
@@ -985,7 +903,7 @@ export const LecturerDashboard = ({ currentUser, users }) => {
                     </div>
                     {selectedClass ? (
                         <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
-                            <LectureManagementPanel selectedClass={selectedClass} users={users} />
+                            <LectureManagementPanel selectedClass={selectedClass} />
                         </div>
                     ) : (
                         <div className="text-center py-12 text-gray-500">선택된 반이 없습니다.</div>

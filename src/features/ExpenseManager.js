@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { collection, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback } from 'react';
+import { collection, addDoc, updateDoc, doc, deleteDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase'; 
 import { 
   Receipt, UploadCloud, CheckCircle, FileText, Calendar, CreditCard, 
@@ -46,7 +46,6 @@ const compressImageToBase64 = (file) => new Promise((resolve, reject) => {
   reader.onerror = (err) => reject(err);
 });
 
-// 🚀 [CTO 패치] 세무사 계정과목 + 일상 용어 하이브리드 매핑
 const EXPENSE_CATEGORIES = [
   { account: '복리후생비', label: '복리후생비 (직원/조교 식대, 간식비, 회식비, 경조사비)' },
   { account: '소모품비', label: '소모품비 (문구류, A4용지, 종이컵, 휴지 등 비품 구입)' },
@@ -68,11 +67,7 @@ const EXPENSE_CATEGORIES = [
 
 const ExpenseManager = ({ currentUser }) => {
   const [formData, setFormData] = useState({ 
-    expenseDate: '', 
-    amount: '', 
-    paymentMethod: 'CORPORATE_CARD', 
-    purpose: '', 
-    category: '복리후생비' // 기본값 세팅
+    expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '', category: '복리후생비' 
   });
   
   const [previewUrls, setPreviewUrls] = useState([]);
@@ -82,46 +77,41 @@ const ExpenseManager = ({ currentUser }) => {
   const [errorMsg, setErrorMsg] = useState('');
   const [nlpWarning, setNlpWarning] = useState(null);
   const [expensesList, setExpensesList] = useState([]);
+  const [loadingExpenses, setLoadingExpenses] = useState(true);
   
   const [editingId, setEditingId] = useState(null);
-  
   const [previewReceipts, setPreviewReceipts] = useState([]);
   const [previewIndex, setPreviewIndex] = useState(0);
 
-  useEffect(() => {
+  // 🚀 [CTO 패치] 실시간 리스너 폐기 및 1회성 Fetch 함수 구현 (비용 절약)
+  const fetchExpenses = useCallback(async () => {
     if (!currentUser?.id) return;
-    const q = query(
-      collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), 
-      where('userId', '==', currentUser.id)
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    setLoadingExpenses(true);
+    try {
+      const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), where('userId', '==', currentUser.id));
+      const snapshot = await getDocs(q);
       const realData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       realData.sort((a, b) => new Date(b.expenseDate) - new Date(a.expenseDate));
       setExpensesList(realData);
-    });
-    return () => unsubscribe();
+    } catch (error) {
+      console.error("지출 내역 로딩 실패:", error);
+    } finally {
+      setLoadingExpenses(false);
+    }
   }, [currentUser]);
 
-  // 🚀 적요 기반 NLP 교차 검증 엔진 (계정과목명으로 비교 로직 수정)
   useEffect(() => {
-    if (!formData.purpose) { 
-      setNlpWarning(null); 
-      return; 
-    }
-    
+    fetchExpenses();
+  }, [fetchExpenses]);
+
+  useEffect(() => {
+    if (!formData.purpose) { setNlpWarning(null); return; }
     const text = formData.purpose.replace(/\s/g, ''); 
-    
     if (text.includes('학부모') || text.includes('어머니') || text.includes('아버님') || text.includes('상담') || text.includes('접대')) {
-      if (formData.category !== '접대비') {
-        setNlpWarning({ type: '접대비', msg: "⚠️ '학부모/상담' 관련 지출입니다. 세무법상 이는 '접대비'로 강제 분류되어 한도 관리를 받습니다." });
-        return;
-      }
+      if (formData.category !== '접대비') { setNlpWarning({ type: '접대비', msg: "⚠️ '학부모/상담' 관련 지출입니다. 세무법상 이는 '접대비'로 강제 분류되어 한도 관리를 받습니다." }); return; }
     }
     else if (text.includes('학생') || text.includes('간식') || text.includes('피자') || text.includes('치킨') || text.includes('햄버거')) {
-      if (formData.category === '복리후생비' || formData.category === '접대비') {
-        setNlpWarning({ type: '소모품비', msg: "💡 학생들을 위한 지출은 '소모품비'로 세무 처리되는 것이 안전합니다." });
-        return;
-      }
+      if (formData.category === '복리후생비' || formData.category === '접대비') { setNlpWarning({ type: '소모품비', msg: "💡 학생들을 위한 지출은 '소모품비'로 세무 처리되는 것이 안전합니다." }); return; }
     }
     setNlpWarning(null);
   }, [formData.purpose, formData.category]);
@@ -136,14 +126,9 @@ const ExpenseManager = ({ currentUser }) => {
     if (!files.length) return;
 
     const validFiles = files.filter(f => ['image/jpeg', 'image/png', 'application/pdf'].includes(f.type));
-    if (validFiles.length !== files.length) {
-        setErrorMsg('이미지(JPG, PNG) 또는 PDF 파일만 업로드 가능합니다.');
-    }
+    if (validFiles.length !== files.length) { setErrorMsg('이미지(JPG, PNG) 또는 PDF 파일만 업로드 가능합니다.'); }
 
-    if (previewUrls.length + validFiles.length > 5) {
-      setErrorMsg("영수증은 최대 5장까지 첨부할 수 있습니다.");
-      return;
-    }
+    if (previewUrls.length + validFiles.length > 5) { setErrorMsg("영수증은 최대 5장까지 첨부할 수 있습니다."); return; }
 
     setIsCompressing(true);
     setErrorMsg('');
@@ -156,9 +141,7 @@ const ExpenseManager = ({ currentUser }) => {
       setPreviewUrls(prev => [...prev, ...compressedImages]);
     } catch (error) {
       setErrorMsg(error.message || "이미지 처리 중 오류가 발생했습니다.");
-    } finally {
-      setIsCompressing(false);
-    }
+    } finally { setIsCompressing(false); }
     e.target.value = ''; 
   };
 
@@ -170,57 +153,29 @@ const ExpenseManager = ({ currentUser }) => {
     e.preventDefault();
     setErrorMsg('');
 
-    if (!editingId && previewUrls.length === 0) { 
-      setErrorMsg('증빙 영수증을 1장 이상 첨부해주세요.'); 
-      return; 
-    }
-    if (!formData.expenseDate || !formData.amount || !formData.purpose) { 
-      setErrorMsg('모든 항목을 입력해주세요.'); 
-      return; 
-    }
+    if (!editingId && previewUrls.length === 0) { setErrorMsg('증빙 영수증을 1장 이상 첨부해주세요.'); return; }
+    if (!formData.expenseDate || !formData.amount || !formData.purpose) { setErrorMsg('모든 항목을 입력해주세요.'); return; }
 
     setIsSubmitting(true);
     try {
       const methodLabel = formData.paymentMethod === 'CORPORATE_CARD' ? '법인카드' : (formData.paymentMethod === 'TRANSFER' ? '계좌이체' : '개인카드');
-      
       let finalTaxAccount = formData.category;
       if (nlpWarning) finalTaxAccount = nlpWarning.type;
 
       if (editingId) {
         const expRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'expenses', editingId);
         const updateData = { 
-          expenseDate: formData.expenseDate, 
-          amount: Number(formData.amount), 
-          method: methodLabel, 
-          purpose: formData.purpose, 
-          category: finalTaxAccount, 
-          updatedAt: serverTimestamp() 
+          expenseDate: formData.expenseDate, amount: Number(formData.amount), method: methodLabel, purpose: formData.purpose, category: finalTaxAccount, updatedAt: serverTimestamp() 
         };
-        
-        if (previewUrls.length > 0) {
-          updateData.receiptUrls = previewUrls;
-          updateData.receiptUrl = previewUrls[0];
-        } else {
-          updateData.receiptUrls = [];
-          updateData.receiptUrl = '';
-        }
+        if (previewUrls.length > 0) { updateData.receiptUrls = previewUrls; updateData.receiptUrl = previewUrls[0]; } 
+        else { updateData.receiptUrls = []; updateData.receiptUrl = ''; }
 
         await updateDoc(expRef, updateData);
         alert('지출결의서가 성공적으로 수정되었습니다.');
       } else {
         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'expenses'), {
-          userId: currentUser.id, 
-          userName: currentUser.name, 
-          expenseDate: formData.expenseDate, 
-          amount: Number(formData.amount), 
-          method: methodLabel, 
-          purpose: formData.purpose,
-          category: finalTaxAccount, 
-          receiptUrls: previewUrls,             
-          receiptUrl: previewUrls[0] || '',     
-          status: 'PENDING', 
-          matchedTransactionId: null, 
-          createdAt: serverTimestamp()
+          userId: currentUser.id, userName: currentUser.name, expenseDate: formData.expenseDate, amount: Number(formData.amount), method: methodLabel, purpose: formData.purpose,
+          category: finalTaxAccount, receiptUrls: previewUrls, receiptUrl: previewUrls[0] || '', status: 'PENDING', matchedTransactionId: null, createdAt: serverTimestamp()
         });
         alert('등록 완료! 대시보드로 전송되었습니다.');
       }
@@ -229,22 +184,17 @@ const ExpenseManager = ({ currentUser }) => {
       setPreviewUrls([]); 
       setEditingId(null); 
       setNlpWarning(null);
+      fetchExpenses(); // 🚀 업로드 후 1회성 리프레시 호출
     } catch (error) { 
       setErrorMsg(error.message || 'DB 전송 중 오류가 발생했습니다.'); 
-    } finally { 
-      setIsSubmitting(false); 
-    }
+    } finally { setIsSubmitting(false); }
   };
 
   const handleEdit = (exp) => {
-    // 🚀 수정 시 계정과목 매핑
     const currentCategory = EXPENSE_CATEGORIES.some(c => c.account === exp.category) ? exp.category : '미분류';
     setFormData({
-      expenseDate: exp.expenseDate, 
-      amount: exp.amount, 
-      paymentMethod: exp.method === '법인카드' ? 'CORPORATE_CARD' : (exp.method === '계좌이체' ? 'TRANSFER' : 'PERSONAL_CARD'),
-      purpose: exp.purpose, 
-      category: currentCategory
+      expenseDate: exp.expenseDate, amount: exp.amount, paymentMethod: exp.method === '법인카드' ? 'CORPORATE_CARD' : (exp.method === '계좌이체' ? 'TRANSFER' : 'PERSONAL_CARD'),
+      purpose: exp.purpose, category: currentCategory
     });
     setEditingId(exp.id); 
     setPreviewUrls(exp.receiptUrls?.length > 0 ? exp.receiptUrls : (exp.receiptUrl ? [exp.receiptUrl] : []));
@@ -259,13 +209,11 @@ const ExpenseManager = ({ currentUser }) => {
         await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'expenses', id)); 
         alert('삭제되었습니다.'); 
         if (editingId === id) {
-            setEditingId(null);
-            setPreviewUrls([]);
+            setEditingId(null); setPreviewUrls([]);
             setFormData({ expenseDate: '', amount: '', paymentMethod: 'CORPORATE_CARD', purpose: '', category: '복리후생비' });
         }
-      } catch (err) { 
-        alert('삭제 실패'); 
-      }
+        fetchExpenses(); // 🚀 삭제 후 리프레시
+      } catch (err) { alert('삭제 실패'); }
     }
   };
 
@@ -397,9 +345,10 @@ const ExpenseManager = ({ currentUser }) => {
       <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-gray-100 mt-6">
         <h3 className="text-lg font-bold text-gray-800 mb-6 border-b pb-3 flex items-center gap-2">
           <List size={20} className="text-indigo-600"/> 나의 실제 제출 내역
+          {loadingExpenses && <Loader className="animate-spin text-gray-400 ml-2" size={16}/>}
         </h3>
         <div className="space-y-3">
-          {expensesList.length === 0 ? (
+          {expensesList.length === 0 && !loadingExpenses ? (
             <p className="text-gray-400 font-bold text-center py-6">제출된 내역이 없습니다.</p>
           ) : (
             expensesList.map((item) => {

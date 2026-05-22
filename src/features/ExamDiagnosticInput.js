@@ -1,11 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckSquare, Loader } from 'lucide-react';
 
+// 🚀 [CTO 패치] 글로벌 데이터 엔진 연결 (불필요한 getDocs 제거)
+import { useData } from '../contexts/DataContext';
+
 export default function ExamDiagnosticInput({ currentUser }) {
-  const [data, setData] = useState({ classes: [], students: [] });
-  const [loadingInitial, setLoadingInitial] = useState(true);
+  // 🚀 서버를 찌르지 않고 글로벌 메모리에서 즉시 획득
+  const { classes, users, loadingData } = useData();
+  
+  const data = useMemo(() => ({
+    classes: classes || [],
+    students: (users || []).filter(u => u.role === 'student')
+  }), [classes, users]);
   
   const currentYear = new Date().getFullYear();
   const [filters, setFilters] = useState({
@@ -14,6 +22,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
     gradeSem: '',
     term: ''
   });
+  
   const [searchedExams, setSearchedExams] = useState([]);
   const [loadingExams, setLoadingExams] = useState(false);
   const [selectedExamId, setSelectedExamId] = useState('');
@@ -23,31 +32,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const [inputsByStudent, setInputsByStudent] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    const fetchInitialData = async () => {
-      try {
-        const classSnap = await getDocs(collection(db, 'artifacts/imperial-clinic-v1/public/data/classes'));
-        const classesData = classSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-        let studentsData = [];
-        try {
-          const uSnap = await getDocs(query(collection(db, 'artifacts/imperial-clinic-v1/public/data/users'), where('role', '==', 'student')));
-          studentsData = uSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        } catch (err) {
-          const uSnap = await getDocs(collection(db, 'artifacts/imperial-clinic-v1/public/data/users'));
-          studentsData = uSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.role === 'student');
-        }
-
-        setData({ classes: classesData, students: studentsData });
-      } catch (error) {
-        console.error("데이터 로딩 에러:", error);
-      } finally {
-        setLoadingInitial(false);
-      }
-    };
-    fetchInitialData();
-  }, []);
-
+  // 🚀 시험 데이터는 실시간으로 변하지 않으므로, 검색 버튼을 누를 때 1번만 getDocs로 호출합니다.
   const handleSearchExams = async () => {
     if (!filters.schoolName.trim()) {
       return alert("학교명을 입력해주세요. (예: 목동고, 목동 등 일부 입력 가능)");
@@ -126,12 +111,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
   const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
   
-  // 🚀 [버그 수정 완료] score 필드 우선 인식 및 데이터 전처리
   const examQuestionsList = selectedExamData?.questions && selectedExamData.questions.length > 0 
     ? selectedExamData.questions.map((q, idx) => ({
         ...q,
         displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : String(idx + 1),
-        // score 필드가 있으면 최우선 적용, 없으면 point 적용
         calcPoint: (q.score !== undefined && q.score !== null) ? Number(q.score) : (q.point !== undefined && q.point !== null ? Number(q.point) : null)
       }))
     : Array.from({ length: 30 }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: null }));
@@ -152,7 +135,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
         });
       }
 
-      // 🚀 [버그 수정 완료] 정확한 배점 차감 로직
       let newScore = 100;
       const totalQs = examQuestionsList.length;
       const hasPoints = examQuestionsList.some(q => q.calcPoint !== null);
@@ -163,7 +145,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
           const qInfo = examQuestionsList.find(x => x.displayNumber === n);
           if (qInfo && qInfo.calcPoint) deduction += qInfo.calcPoint;
         });
-        // 100점에서 감점하며, 소수점 오류 방지를 위해 소수점 첫째 자리까지만 반올림
         newScore = Math.max(0, Math.round((100 - deduction) * 10) / 10);
       } else {
         const deductionPerQ = 100 / totalQs;
@@ -221,7 +202,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }
   };
 
-  if (loadingInitial) return <div className="p-10 text-center text-gray-500 font-bold animate-pulse">데이터를 불러오는 중입니다...</div>;
+  if (loadingData) return <div className="p-10 text-center text-blue-600 font-bold flex flex-col items-center"><Loader className="animate-spin mb-2" size={32}/>데이터를 동기화 중입니다...</div>;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in">
@@ -351,12 +332,9 @@ export default function ExamDiagnosticInput({ currentUser }) {
             const input = inputsByStudent[sId];
             if (!input) return null;
 
-            // 🚀 [UI 혁신] 문항들을 객관식/주관식 등 type 별로 그룹화하여 줄바꿈(단락) 형성
             const groupedQuestions = [];
             examQuestionsList.forEach(q => {
-              // 1. type 명시 여부 확인
               let type = q.type || q.questionType;
-              // 2. 명시되어 있지 않으면 문항 번호(예: '객관식1')에서 문자만 추출
               if (!type) {
                 const match = String(q.displayNumber).match(/^([가-힣]+)/);
                 type = match ? match[1] : '일반 문항';
@@ -390,7 +368,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 <div>
                   <p className="text-sm font-bold text-gray-700 mb-3">🎯 오답 문항을 클릭하세요 (자동 점수 차감)</p>
                   
-                  {/* 그룹별 렌더링을 통한 줄바꿈(flex-col) 적용 */}
                   <div className="flex flex-col gap-5">
                     {groupedQuestions.map((group, gIdx) => (
                       <div key={gIdx} className="flex flex-col gap-2 border-l-2 border-indigo-200 pl-3">
@@ -400,7 +377,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
                         <div className="flex flex-wrap gap-2">
                           {group.questions.map((q, idx) => {
                             const isWrong = input.wrongQuestions.includes(q.displayNumber);
-                            // 버튼에는 '객관식1' 대신 '1'만 예쁘게 표시되도록 정규식 처리
                             const btnText = String(q.displayNumber).replace(/^[가-힣\s]+/, '') || String(idx + 1);
                             
                             return (

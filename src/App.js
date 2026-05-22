@@ -10,7 +10,7 @@ import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } fro
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase'; 
 
-// 🚀 [CTO 패치] 글로벌 데이터 엔진 Import 완료
+// 글로벌 데이터 엔진
 import { DataProvider, useData } from './contexts/DataContext';
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -219,8 +219,8 @@ const Dashboard = ({ currentUser }) => {
     );
 };
 
-// 🚀 [CTO 패치] AppLayout 분리: Context API의 데이터를 안전하게 꺼내어 화면을 그립니다.
 const AppLayout = ({ currentUser, handleLogout }) => {
+  // 🚀 안전한 하위 호환성 유지: 글로벌 저장소에서 users를 꺼내서, 아직 리팩토링 안 된 구형 메뉴에 넘겨줍니다.
   const { users } = useData(); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
@@ -297,31 +297,25 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
-                            <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />
-                        )}
+                        {/* 🚀 최적화 완료된 신규 코어 모듈들 (props 없음) */}
+                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
+                        <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+
+                        {/* 🚀 구형 모듈들은 런타임 오류 방지를 위해 users props 유지 */}
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
-                            <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />
-                        )}
+                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
-                        {currentUser.role === 'admin_assistant' && (
-                            <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />
-                        )}
+                        {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
-                        
-                        {/* 🚀 기존과 동일하게 users 프로퍼티를 내려보내서 완벽한 호환성 유지 */}
-                        <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager users={users} /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} users={users} /> : <StudentClassroom currentUser={currentUser} /> } />
-                        
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
-                        <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
@@ -448,7 +442,7 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 [CTO 패치] AppLayout을 DataProvider로 감싸서, 로그인한 순간부터 중앙 통제소가 가동되게 합니다.
+  // 🚀 글로벌 엔진이 런타임 내내 데이터를 캐싱합니다.
   return (
       <DataProvider currentUser={currentUser}>
           <AppLayout currentUser={currentUser} handleLogout={handleLogout} />
