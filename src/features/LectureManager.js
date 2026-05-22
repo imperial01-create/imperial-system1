@@ -334,8 +334,8 @@ const LectureManagementPanel = ({ selectedClass }) => {
                         {(formData.youtubeLinks || []).map((link, idx) => (
                             <div key={idx} className="flex gap-2 mb-2">
                                 <input type="text" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={link} onChange={e => handleLinkChange(idx, e.target.value)} placeholder="https://youtu.be/..." />
-                                {idx === formData.youtubeLinks.length - 1 ? (
-                                    <button onClick={() => setFormData({...formData, youtubeLinks: [...formData.youtubeLinks, '']})} className="p-3 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors"><Plus size={20}/></button>
+                                {idx === (formData.youtubeLinks || []).length - 1 ? (
+                                    <button onClick={() => setFormData({...formData, youtubeLinks: [...(formData.youtubeLinks||[]), '']})} className="p-3 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors"><Plus size={20}/></button>
                                 ) : (
                                     <button onClick={() => handleRemoveLink(idx)} className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"><Trash2 size={20}/></button>
                                 )}
@@ -866,7 +866,8 @@ export const AdminLectureManager = () => {
 };
 
 export const LecturerDashboard = ({ currentUser }) => {
-    const { classes: allClasses, users } = useData();
+    // 🚀 [CTO 패치] 로딩 대기망(loadingData) 추가! 이제 데이터가 오기 전에 죽지 않습니다.
+    const { classes: allClasses, users, loadingData } = useData();
     const [selectedClass, setSelectedClass] = useState(null);
 
     const myClasses = useMemo(() => {
@@ -877,6 +878,9 @@ export const LecturerDashboard = ({ currentUser }) => {
     useEffect(() => {
         if(myClasses.length > 0 && !selectedClass) setSelectedClass(myClasses[0]);
     }, [myClasses, selectedClass]);
+
+    // 🚀 [CTO 패치] 데이터를 다 가져올 때까지 로딩 스피너 출력
+    if (loadingData) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in">

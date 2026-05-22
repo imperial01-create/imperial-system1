@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다.
-   (Updated: 조교 개인 모드에서 주차별 근무 및 수당 산출 내역 상세 탭 추가 및 권한 우회 쿼리 적용) */
+   (Updated: 강사(Lecturer) 고정급 정산 로직 추가 및 권한 우회 쿼리 완벽 적용) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
@@ -115,7 +115,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     }
                 });
             } else {
-                // 🚀 [CTO 패치] 보안 규칙 회피를 위해 getDoc 대신 query 사용
+                // 🚀 [CTO 패치] 권한 우회 쿼리 (본인 아이디로 명시적 검색)
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), 
                     where('userId', '==', currentUser.id), 
@@ -206,14 +206,15 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         });
     }, [monthlySessions, currentUser, isManagementMode]);
 
+    // 🚀 [CTO 패치] 강사(Lecturer) 고정급 추출 로직 추가!
     const getRealtimeCalculation = useCallback((targetUser) => {
         const uid = targetUser.id || targetUser.userId;
-        const wage = targetUser.hourlyRate || targetUser.hourlyWage;
         let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
         let completedHours = 0, expectedHours = 0;
 
         if (targetUser.role === 'ta' || targetUser.role === 'admin_assistant') {
-            hourlyRate = parseInt(wage || 10030, 10);
+            const wage = targetUser.hourlyRate || targetUser.hourlyWage || 10030;
+            hourlyRate = parseInt(wage, 10);
             const todayStr = new Date().toISOString().split('T')[0];
 
             const userSessions = monthlySessions.filter(s =>
@@ -248,7 +249,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
             weeklyHolidayPay = Math.round(weeklyHolidayPay);
             baseSalary = Math.floor(totalHours * hourlyRate);
+        } else {
+            // 🚀 강사 및 관리자는 DB에 등록된 월급/기본급을 1순위로 가져옵니다.
+            baseSalary = parseInt(targetUser.monthlySalary || targetUser.baseSalary || targetUser.fixedSalary || targetUser.hourlyRate || targetUser.hourlyWage || 0, 10);
+            if (isNaN(baseSalary)) baseSalary = 0;
         }
+
         return { baseSalary, weeklyHolidayPay, totalHours, completedHours, expectedHours, totalGross: baseSalary + weeklyHolidayPay, hourlyRate };
     }, [monthlySessions]);
 
@@ -432,6 +438,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             const payroll = payrolls[uid];
                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                             const wage = user.hourlyRate || user.hourlyWage;
+                            
+                            // 🚀 [CTO 패치] 강사의 화면 표시 시급(기본급)
+                            const wageDisplay = ['ta', 'admin_assistant'].includes(user.role) 
+                                ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') 
+                                : (user.monthlySalary || user.baseSalary || user.fixedSalary ? formatCurrency(user.monthlySalary || user.baseSalary || user.fixedSalary) : '미정');
 
                             let needsSync = false;
                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
@@ -454,11 +465,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         </div>
                                     </div>
                                     <div className="text-sm space-y-1 text-gray-600">
-                                        <div className="flex justify-between"><span>시급/기본급</span><span>{['ta', 'admin_assistant'].includes(user.role) ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</span></div>
+                                        <div className="flex justify-between"><span>시급/기본급</span><span>{wageDisplay}</span></div>
                                         <div className="flex justify-between items-center">
                                             <span>근무시간</span>
                                             <div className="text-right">
-                                                <span>{payroll ? `${payroll.totalHours} hrs` : '-'}</span>
+                                                <span>{payroll ? (payroll.totalHours > 0 ? `${payroll.totalHours} hrs` : '-') : '-'}</span>
                                                 {payroll && payroll.expectedHours > 0 && <p className="text-[10px] text-purple-500 font-bold">(예정 {payroll.expectedHours}h 포함)</p>}
                                             </div>
                                         </div>
@@ -517,6 +528,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                                             const wage = user.hourlyRate || user.hourlyWage;
 
+                                            const wageDisplay = ['ta', 'admin_assistant'].includes(user.role) 
+                                                ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') 
+                                                : (user.monthlySalary || user.baseSalary || user.fixedSalary ? formatCurrency(user.monthlySalary || user.baseSalary || user.fixedSalary) : '미정');
+
                                             let needsSync = false;
                                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
                                                 const rt = getRealtimeCalculation(user);
@@ -529,9 +544,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                 <tr key={uid} className={`hover:bg-gray-50 ${needsSync ? 'bg-orange-50/30' : ''}`}>
                                                     <td className="p-4 font-bold">{user.name}</td>
                                                     <td className="p-4 text-xs font-bold"><span className={`px-2 py-1 rounded-md ${user.role==='admin_assistant' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>{roleLabel}</span></td>
-                                                    <td className="p-4">{['ta', 'admin_assistant'].includes(user.role) ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') : (payroll ? formatCurrency(payroll.baseSalary) : '미정')}</td>
+                                                    <td className="p-4">{wageDisplay}</td>
                                                     <td className="p-4">
-                                                        {payroll ? <span className="font-bold">{payroll.totalHours} hrs</span> : '-'}
+                                                        {payroll ? (payroll.totalHours > 0 ? <span className="font-bold">{payroll.totalHours} hrs</span> : '-') : '-'}
                                                         {payroll && payroll.expectedHours > 0 && <span className="ml-2 text-xs text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-bold">예정 {payroll.expectedHours}h 포함</span>}
                                                     </td>
                                                     <td className="p-4 text-blue-600 font-bold">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
@@ -689,7 +704,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                         <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400 w-full flex flex-col items-center">
                             <AlertCircle className="mb-2 opacity-50 text-gray-400" size={48} />
                             <p className="text-lg">해당 월의 급여 내역이 아직 정산되지 않았습니다.</p>
-                            <p className="text-sm mt-2">관리자 정산 직후라면 우측 상단의 <strong className="text-gray-600">새로고침</strong> 버튼을 눌러주세요.</p>
+                            <p className="text-sm mt-2">관리자가 정산을 완료하면 이곳에서 급여 명세서를 확인하실 수 있습니다.</p>
                         </div>
                     )}
                 </div>

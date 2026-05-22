@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.8 - 대기열 파기 기능 및 학생 뷰에서 피드백 리포트 숨김 처리 완료 */
+/* [서비스 가치] 클리닉 V2.9 - 전화번호 딥서치 로직 완료 및 클리닉 간 강의실 오버부킹 완벽 방어 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -276,13 +276,22 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
                                 
                                 {!isAsstSlot && (
-                                    <select className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} value={s.classroom || ''} onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}>
+                                    <select 
+                                        className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
+                                        value={s.classroom || ''} 
+                                        onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
+                                    >
                                       <option value="">장소 미지정</option>
                                       {masterClassrooms?.map(r => {
-                                          const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
+                                          const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.id);
                                           return (
-                                              <option key={r} value={r} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
-                                                  {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
+                                              <option 
+                                                  key={r} 
+                                                  value={r} 
+                                                  className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
+                                                  disabled={occupiedStatus === 'clinic'}
+                                              >
+                                                  {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
                                               </option>
                                           );
                                       })}
@@ -327,7 +336,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 });
 
 const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
-    const { users, classes, masterData, enrollments, loadingData } = useData();
+    const { users = [], classes = [], masterData = {}, enrollments = [], loadingData } = useData();
 
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
     const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
@@ -396,17 +405,50 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         return list;
     }, [baseSchedules, masterScheduleRequests]);
 
-    const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom) => {
+    // 🚀 [CTO 패치] 클리닉 간 오버부킹 검사 로직 완벽 보강
+    const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom, currentSessionId = null) => {
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
-        const targetRoom = clinicRoom.replace('Class ', 'Classroom '); 
+        
+        // 정규화를 통해 'Class 1'과 'Classroom 1'이 다르게 인식되는 현상 방지
+        const normTargetRoom = (clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
 
-        return activeSchedules.some(s => {
-            if (s.room !== targetRoom) return false;
+        // 1. 정규 스케줄(마스터 시간표) 점유 여부
+        const isOccupiedByClass = activeSchedules.some(s => {
+            const normS = (s.room || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
+            if (normS !== normTargetRoom) return false;
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
-            return (s.startTime < endTime && s.endTime > startTime); 
+            
+            // 시간 비교 방어 로직 추가 (종료시간이 없으면 1시간 추가)
+            const startA = s.startTime;
+            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime;
+            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            return (startA < endB && endA > startB); 
         });
-    }, [activeSchedules]);
+
+        if (isOccupiedByClass) return 'class';
+
+        // 2. 다른 클리닉 세션 점유 여부
+        const isOccupiedByClinic = sessions.some(s => {
+            if (currentSessionId && s.id === currentSessionId) return false; // 본인 세션 제외
+            if (s.date !== dateStr) return false;
+            
+            const normS = (s.classroom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
+            if (!normS || normS !== normTargetRoom) return false;
+            if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; // 허수 상태 제외
+            
+            const startA = s.startTime;
+            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime;
+            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            return (startA < endB && endA > startB);
+        });
+
+        if (isOccupiedByClinic) return 'clinic';
+
+        return null;
+    }, [activeSchedules, sessions]);
 
     const taSubjectMap = useMemo(() => {
         const mapById = {};
@@ -569,10 +611,17 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            if(payload) askConfirm("정말 파기/삭제하시겠습니까? 데이터가 완전히 사라집니다.", async () => {
+            if(payload) askConfirm("정말 이 클리닉 기록 전체를 삭제하시겠습니까?\n데이터가 완전히 사라집니다.", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
-                notify('삭제/파기 완료', 'success');
+                notify('기록 삭제 완료', 'success');
+            });
+        } else if (action === 'discard_feedback') {
+            askConfirm("작성된 피드백을 파기하시겠습니까?\n(출석 상태는 유지되며, 피드백 내용만 초기화됩니다.)", async () => {
+                const resetData = { feedbackStatus: null, clinicDetails: '', nextAction: '', tags: '', rating: 5 };
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
+                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
+                notify('피드백이 파기되어 다시 작성할 수 있습니다.', 'success');
             });
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
@@ -738,7 +787,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     return sessions.filter(s => {
         if (currentUser.role === 'parent') {
             const isMatchedByArray = currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId);
-            const isMatchedByName = s.studentName === currentUser.childName; // 구버전 호환용
+            const isMatchedByName = s.studentName === currentUser.childName; 
             return (isMatchedByArray || isMatchedByName) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
         }
         return (s.studentId === currentUser.id || s.studentName === currentUser.name) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
@@ -854,10 +903,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
                                             {masterData?.classrooms?.map(r => {
-                                                const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
+                                                const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.id);
                                                 return (
-                                                    <option key={r} value={r} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
-                                                        {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
+                                                    <option 
+                                                        key={r} 
+                                                        value={r} 
+                                                        className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
+                                                        disabled={occupiedStatus === 'clinic'}
+                                                    >
+                                                        {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
                                                     </option>
                                                 );
                                             })}
@@ -885,10 +939,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                {/* 🚀 [CTO 패치] 발송 취소(삭제) 버튼 적용 완료 */}
                                 <div className="flex gap-2 shrink-0">
                                     <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
-                                    <Button variant="danger" size="sm" icon={Trash2} onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }}>파기</Button>
+                                    <Button variant="danger" size="sm" icon={Trash2} onClick={(e)=>{ e.stopPropagation(); onAction('discard_feedback', s); }}>파기</Button>
                                 </div>
                             </div>
                         ))}</div>
@@ -973,7 +1026,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         <div className="flex gap-2"><span className="font-black text-indigo-400 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap font-medium text-gray-700">{s.questionRange}</span></div>
                                     </div>
                                     
-                                    {/* 🚀 [CTO 패치] currentUser.role !== 'student' 조건을 추가하여 학생 화면에서만 피드백을 숨깁니다! */}
                                     {(currentUser.role !== 'student') && (s.status === 'completed' && (s.clinicDetails || s.nextAction || s.clinicContent)) && (
                                         <div className="mt-4 bg-white p-4 rounded-xl text-sm text-gray-700 border-2 border-green-400 shadow-sm">
                                             <div className="font-black text-green-800 mb-3 flex items-center justify-between border-b border-green-200 pb-2">
@@ -1146,29 +1198,33 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
                 let targetPhone = '';
-                
-                if (selectedSession.studentId) {
-                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(selectedSession.studentId));
-                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
-                    else {
-                        const studentUser = users.find(u => u.id === selectedSession.studentId);
-                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone;
-                    }
+                let targetStudentId = selectedSession.studentId;
+
+                // 🚀 [CTO 패치] 초강력 전화번호 딥서치 로직
+                // 1단계: 이름만 입력된 경우, DB 전체를 뒤져 학생의 고유 ID부터 찾음
+                if (!targetStudentId && selectedSession.studentName) {
+                    const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
+                    if (foundStudent) targetStudentId = foundStudent.id;
                 }
                 
-                if (!targetPhone && selectedSession.studentName) {
-                    const parentByName = users.find(u => u.role === 'parent' && u.childName === selectedSession.studentName);
-                    if (parentByName && parentByName.phone) targetPhone = parentByName.phone;
-                    else {
-                        const studentByName = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
-                        if (studentByName && studentByName.phone) targetPhone = studentByName.phone;
+                // 2단계: 알아낸 학생 ID를 이용해 학부모의 'linkedChildrenIds' 배열을 관통하여 부모님 전화번호 확보
+                if (targetStudentId) {
+                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
+                    if (parentUser && parentUser.phone) {
+                        targetPhone = parentUser.phone; // 학부모 번호 최우선
+                    } else {
+                        // 학부모 번호가 없다면 학생 본인 번호라도 추출
+                        const studentUser = users.find(u => u.id === targetStudentId);
+                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
                     }
                 }
 
+                // 3단계: 그래도 없으면 예약 당시 수동으로 입력했던 번호라도 발송
                 if (!targetPhone && selectedSession.studentPhone) {
                     targetPhone = selectedSession.studentPhone;
                 }
 
+                // 4단계: 최종 실패 시 에러 안내
                 if (!targetPhone) {
                     notify('이 학생과 연결된 학부모 연락처나 학생 본인의 연락처가 시스템에 없습니다.', 'error');
                     return;

@@ -1,5 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
-   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. */
+   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
+   (Updated: 학부모 1:N 자녀 연동(linkedChildrenIds) 구조 최적화 및 구형 데이터 잔재 완전 삭제) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
@@ -11,7 +12,6 @@ import { httpsCallable } from 'firebase/functions';
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 
-// 🚀 [CTO 패치] 글로벌 데이터 엔진 연결 완료
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -24,7 +24,6 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin'];
 
-    // 🚀 서버 호출 없이 중앙 통제소에서 데이터 즉시 꺼내기
     const { users, classes, enrollments, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
@@ -38,9 +37,10 @@ const UserManager = ({ currentUser }) => {
     const [modalTab, setModalTab] = useState('basic'); 
     const [isEditMode, setIsEditMode] = useState(false);
     
+    // 🚀 [CTO 패치] 구형 childId, childName 찌꺼기 완벽 삭제
     const [formData, setFormData] = useState({ 
-        id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '',
-        schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '',
+        id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '',
+        schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
         attendancePin: '', status: 'attending', linkedChildrenIds: []
     });
 
@@ -77,8 +77,8 @@ const UserManager = ({ currentUser }) => {
 
     const handleOpenCreate = () => {
         setFormData({ 
-            id: '', name: '', userId: '', password: '', phone: '', subject: '', childId: '', childName: '', hourlyRate: '', 
-            schoolName: '', grade: '1학년', authUid: '', childSnapshot: null, bankName: '', accountNumber: '',
+            id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '', 
+            schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
             attendancePin: '', status: 'attending', linkedChildrenIds: []
         });
         setIsEditMode(false);
@@ -94,9 +94,6 @@ const UserManager = ({ currentUser }) => {
             ...user, 
             id: user.id,
             password: user.password || '', 
-            childId: user.childId || '',
-            childName: user.childName || '',
-            childSnapshot: user.childSnapshot || null, 
             hourlyRate: user.hourlyRate || user.hourlyWage || '', 
             schoolName: user.schoolName || '',
             grade: user.grade || '1학년',
@@ -160,7 +157,7 @@ const UserManager = ({ currentUser }) => {
             }
             if (activeTab === 'parent') { 
                 payload.linkedChildrenIds = formData.linkedChildrenIds || [];
-                payload.childId = formData.childId; payload.childName = formData.childName; payload.childSnapshot = formData.childSnapshot; 
+                // 더 이상 childId, childName을 payload에 넣지 않습니다.
             }
 
             const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
@@ -373,7 +370,7 @@ const UserManager = ({ currentUser }) => {
                                                     const child = studentList.find(s => s.id === childId);
                                                     return child ? <span key={childId} className="bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">{child.name}</span> : null;
                                                 })}
-                                                {(!u.linkedChildrenIds || u.linkedChildrenIds.length === 0) && <span className="font-bold text-gray-400">{u.childName || '없음'}</span>}
+                                                {(!u.linkedChildrenIds || u.linkedChildrenIds.length === 0) && <span className="font-bold text-gray-400">등록된 자녀 없음</span>}
                                             </div>
                                         )}
                                         {['ta', 'lecturer', 'admin', 'admin_assistant'].includes(activeTab) && (
