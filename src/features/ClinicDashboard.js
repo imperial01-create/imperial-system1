@@ -1,14 +1,15 @@
-/* [서비스 가치] 글로벌 Context 데이터를 구독하여 서버 요금을 절감하고,
-   클리닉 V2 고도화 (강의실 협업 배정 허용, 학생 노쇼 방지 락, 퀵 승인) 로직을 제공합니다. */
+/* [서비스 가치] 클리닉 V2.5 - 실제 Gemini AI 백엔드(Firebase Functions) 연동 완료 및 입체적 피드백 시스템 탑재.
+   (안드로이드 SMS Gateway 연동을 위한 sms_outbox 파이프라인이 포함되어 있습니다.) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
-  AlertTriangle, BookOpen // 🚀 [버그 수정] 누락되었던 BookOpen 아이콘 Import 완료!
+  AlertTriangle, BookOpen, Star, Sparkles
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions'; // 🚀 [AI 연동] 백엔드 함수 호출용 라이브러리
+import { db, functions } from '../firebase'; // 🚀 [AI 연동] functions 객체 불러오기
 import { Button, Card, Badge, Modal } from '../components/UI';
 
 import { useData } from '../contexts/DataContext';
@@ -20,8 +21,8 @@ const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2f
 const CHAT_ID = "8466973475";
 
 const TEMPLATES = {
-  confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 예정 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}\n내용 : [${d.topic}] 개별 Q&A 클리닉\n\n학생이 직접 시간을 선정하였으며 해당 시간은 선생님과의 개인적인 약속이므로 늦지 않도록 지도해주시면 감사하겠습니다.`,
-  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName}학생의 클리닉 피드백입니다.\n\n클리닉 진행 조교 : ${d.taName}\n클리닉 진행 내용 : ${d.clinicContent}\n개별 문제점 : ${d.feedback}\n개선 방향 : ${d.improvement || '꾸준한 연습이 필요함'}\n\n감사합니다.`,
+  confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 본관 ${d.classroom || '미정'}\n내용 : ${d.topic}\n\n학생이 직접 시간을 선정하였으며, 해당 시간은 선생님과의 약속이므로 늦지 않도록 지도 부탁드립니다.`,
+  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n👨‍🏫 담당 조교 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(d.rating || 5)}${'☆'.repeat(5 - (d.rating || 5))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
 };
 
 const getLocalToday = () => {
@@ -53,8 +54,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [버그 수정] 존재하지 않는 myClassIds 프롭스 및 찌꺼기 코드 완전히 제거
-const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms }) => {
+const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms, myClassIds }) => {
   
   const mySessions = useMemo(() => {
      if (isMyScheduleView) {
@@ -125,6 +125,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     hasEvent = sessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                         if (workerRole === 'admin_assistant') return false;
+                        if (s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
                         return s.date === dStr && s.status === 'open'; 
                     });
                 } 
@@ -156,6 +157,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 slots = slots.filter(s => {
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                     if (workerRole === 'admin_assistant') return false;
+                    if (isStudent && s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
                     return true;
                 });
             }
@@ -208,6 +210,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 <div className="flex-1 flex flex-col justify-center">
                                     <div className={`font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
                                         {s.taName} 선생님
+                                        {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded font-black border border-indigo-200">{s.targetClassName} 전용</span>}
                                     </div>
                                     <div className={`text-xs md:text-sm mt-1 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
                                         {taSubject} {s.classroom ? `· ${s.classroom}` : ''}
@@ -254,6 +257,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             </div>
                             
                             <div className="text-sm text-gray-600 font-medium mt-1">
+                                {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-bold">대상: {s.targetClassName}</span>}
                                 {isAsstSlot ? (
                                     <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
                                 ) : (
@@ -327,7 +331,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 });
 
 const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
-    const { users, masterData, loadingData } = useData();
+    const { users, classes, masterData, enrollments, loadingData } = useData();
 
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
     const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
@@ -350,13 +354,21 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [selectedSession, setSelectedSession] = useState(null);
     const [confirmConfig, setConfirmConfig] = useState(null);
     const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
-    const [feedbackData, setFeedbackData] = useState({});
+    
+    const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
+    const [isRefining, setIsRefining] = useState(false); 
+
     const [requestData, setRequestData] = useState({});
     
     const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
     const [baseSchedules, setBaseSchedules] = useState([]);
     const [masterScheduleRequests, setMasterScheduleRequests] = useState([]);
+
+    const myClassIds = useMemo(() => {
+        if (currentUser?.role !== 'student') return [];
+        return enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active').map(e => e.classId);
+    }, [enrollments, currentUser]);
 
     useEffect(() => {
         if (!isAdminView) return; 
@@ -514,6 +526,33 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
+    // 🚀 [CTO 패치] 실제 Gemini AI 백엔드 호출 연결 완료
+    const handleAiRefine = async () => {
+        if (!feedbackData.clinicDetails) return notify('피드백 내용을 먼저 입력해주세요.', 'error');
+        
+        setIsRefining(true);
+        try {
+            // Firebase Functions에 만들어둔 'refineFeedback' 함수를 호출
+            const refineFeedbackFunction = httpsCallable(functions, 'refineFeedback');
+            
+            // 날것의 텍스트(clinicDetails)를 서버로 전송
+            const response = await refineFeedbackFunction({ rawText: feedbackData.clinicDetails });
+            
+            // AI가 예쁘게 다듬어서 돌려준 텍스트로 입력창 덮어쓰기
+            setFeedbackData(prev => ({ 
+                ...prev, 
+                clinicDetails: response.data.refinedText 
+            }));
+            
+            notify('✨ AI가 학부모님 전용 문장으로 깔끔하게 정제했습니다.', 'success');
+        } catch (error) {
+            console.error("AI Error:", error);
+            notify(`AI 정제 실패: ${error.message}`, 'error');
+        } finally {
+            setIsRefining(false);
+        }
+    };
+
     const handleAction = async (action, payload) => {
       try {
         if (action === 'toggle_slot') {
@@ -567,7 +606,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { classroom: payload.val });
             updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], classroom: payload.val } }));
         } else if (action === 'write_feedback') {
-            setSelectedSession(payload); setFeedbackData({clinicContent:payload.clinicContent||'', feedback:payload.feedback||'', improvement:payload.improvement||''}); setModalState({ type: 'feedback' });
+            setSelectedSession(payload); 
+            setFeedbackData({
+                rating: payload.rating || 5,
+                tags: payload.tags || '',
+                clinicDetails: payload.clinicDetails || payload.clinicContent || '',
+                nextAction: payload.nextAction || payload.improvement || ''
+            }); 
+            setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); 
             setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
@@ -593,9 +639,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
       
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
+
       const batch = writeBatch(db);
       let count = 0;
-
       for (let d = new Date(batchDateRange.start); d <= new Date(batchDateRange.end); d.setDate(d.getDate() + 1)) {
         const dStr = formatDate(d);
         const dayName = DAYS[d.getDay()];
@@ -834,16 +880,19 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     }
                 </Card>
                 <Card>
-                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><MessageSquare className="text-blue-600"/> 피드백 발송 대기</h2>
-                    {pendingFeedbacks.length === 0 ? <div className="text-center py-10 bg-gray-50 rounded-xl text-gray-400">발송할 피드백 없음</div> :
+                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><MessageSquare className="text-blue-600"/> 학부모 발송 대기 (피드백)</h2>
+                    {pendingFeedbacks.length === 0 ? <div className="text-center py-10 bg-gray-50 rounded-xl text-gray-400">발송 대기 중인 피드백 없음</div> :
                         <div className="space-y-3">{pendingFeedbacks.map(s => (
-                            <div key={s.id} className="border border-gray-200 p-4 rounded-xl flex justify-between items-center hover:bg-gray-50">
-                                <div className="overflow-hidden mr-2">
-                                    <div className="font-bold text-gray-900 truncate">{s.studentName} 피드백</div>
-                                    <div className="text-sm text-gray-500 truncate">{s.feedback}</div>
-                                    <div className="text-xs text-gray-400">작성자: {s.taName}</div>
+                            <div key={s.id} className="border border-gray-200 p-4 rounded-xl flex justify-between items-center hover:bg-gray-50 transition-all shadow-sm">
+                                <div className="overflow-hidden mr-2 flex-1">
+                                    <div className="font-bold text-gray-900 flex items-center gap-2">
+                                        {s.studentName} 학생 
+                                        <span className="text-yellow-500 text-xs">{'★'.repeat(s.rating||5)}</span>
+                                    </div>
+                                    <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
+                                    <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>전송</Button>
+                                <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
                             </div>
                         ))}</div>
                     }
@@ -927,12 +976,18 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         <div className="flex gap-2"><span className="font-black text-indigo-400 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap font-medium text-gray-700">{s.questionRange}</span></div>
                                     </div>
                                     
-                                    {(s.status === 'completed' && (s.clinicContent || s.feedback || s.improvement)) && (
-                                        <div className="mt-3 bg-green-50 p-4 rounded-xl text-sm text-gray-700 border-2 border-green-100">
-                                            <div className="font-black text-green-800 mb-3 flex items-center gap-1.5 border-b border-green-200 pb-2"><MessageSquare size={18}/> 선생님의 클리닉 피드백</div>
-                                            {s.clinicContent && <div className="whitespace-pre-wrap leading-relaxed"><span className="font-bold text-gray-500 bg-white px-1.5 py-0.5 rounded border mr-1">진행 내용</span> {s.clinicContent}</div>}
-                                            {s.feedback && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-gray-500 bg-white px-1.5 py-0.5 rounded border mr-1">문제점 분석</span> {s.feedback}</div>}
-                                            {s.improvement && <div className="whitespace-pre-wrap mt-2 leading-relaxed"><span className="font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-emerald-200 mr-1">다음 개선 방향</span> <span className="font-bold">{s.improvement}</span></div>}
+                                    {(s.status === 'completed' && (s.clinicDetails || s.nextAction || s.clinicContent)) && (
+                                        <div className="mt-4 bg-white p-4 rounded-xl text-sm text-gray-700 border-2 border-green-400 shadow-sm">
+                                            <div className="font-black text-green-800 mb-3 flex items-center justify-between border-b border-green-200 pb-2">
+                                                <span className="flex items-center gap-1.5"><MessageSquare size={18}/> 선생님의 클리닉 피드백</span>
+                                                <span className="text-yellow-500 text-lg tracking-widest drop-shadow-sm">{'★'.repeat(s.rating||5)}{'☆'.repeat(5-(s.rating||5))}</span>
+                                            </div>
+                                            {s.tags && <div className="mb-3"><span className="text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg">{s.tags}</span></div>}
+                                            
+                                            {(s.clinicDetails || s.clinicContent) && <div className="whitespace-pre-wrap leading-relaxed mb-3"><span className="font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border mr-1 text-[10px]">진행 내용</span> {s.clinicDetails || s.clinicContent}</div>}
+                                            {s.feedback && <div className="whitespace-pre-wrap leading-relaxed mb-3"><span className="font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border mr-1 text-[10px]">문제점</span> {s.feedback}</div>}
+                                            
+                                            {(s.nextAction || s.improvement) && <div className="whitespace-pre-wrap mt-3 bg-emerald-50/50 p-2 rounded-lg leading-relaxed"><span className="font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200 mr-1 text-[10px]">다음 과제</span> <span className="font-bold">{s.nextAction || s.improvement}</span></div>}
                                         </div>
                                     )}
                                 </div>
@@ -958,6 +1013,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         taSubjectMap={taSubjectMap}
                         onRefresh={() => fetchSessions(true)}
                         isAdminView={false} isMyScheduleView={false}
+                        myClassIds={myClassIds}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
@@ -1012,11 +1068,42 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </Button>
       </Modal>
       
-      <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="피드백">
-        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="진행 내용" value={feedbackData.clinicContent} onChange={e=>setFeedbackData({...feedbackData, clinicContent:e.target.value})}/>
-        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="문제점" value={feedbackData.feedback} onChange={e=>setFeedbackData({...feedbackData, feedback:e.target.value})}/>
-        <textarea className="w-full border-2 rounded-xl p-4 mb-3 h-24 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="개선 방향" value={feedbackData.improvement} onChange={e=>setFeedbackData({...feedbackData, improvement:e.target.value})}/>
-        <Button className="w-full py-4 text-lg" onClick={async()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); setModalState({type:null}); notify('저장완료'); }}>저장 완료</Button>
+      <Modal isOpen={modalState.type==='feedback'} onClose={()=>setModalState({type:null})} title="입체적 성취 리포트 작성">
+        <div className="mb-5 border-b pb-4">
+            <label className="block text-sm font-bold text-gray-700 mb-2">이해도 및 학습 태도 평가</label>
+            <div className="flex gap-2">
+                {[1,2,3,4,5].map(star => (
+                    <button key={star} onClick={() => setFeedbackData({...feedbackData, rating: star})} className={`text-3xl transition-transform hover:scale-125 ${feedbackData.rating >= star ? 'text-yellow-400 drop-shadow-sm' : 'text-gray-200'}`}>★</button>
+                ))}
+            </div>
+        </div>
+        
+        <div className="mb-4">
+            <label className="block text-sm font-bold text-gray-700 mb-2">핵심 태그 <span className="font-normal text-xs text-gray-400">(쉼표로 구분)</span></label>
+            <input className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-300 font-bold" placeholder="예: #개념보충, #서술형교정, #오답노트" value={feedbackData.tags} onChange={e=>setFeedbackData({...feedbackData, tags:e.target.value})}/>
+        </div>
+
+        <div className="mb-4">
+            <div className="flex justify-between items-center mb-2">
+                <label className="block text-sm font-bold text-gray-700">진행 내용 및 특이사항</label>
+                <Button size="sm" variant="outline" className="text-purple-600 border-purple-300 bg-purple-50 hover:bg-purple-100 font-bold shadow-sm" onClick={handleAiRefine} disabled={isRefining}>
+                    {isRefining ? <Loader className="animate-spin" size={14}/> : <Sparkles size={14}/>} AI 문장 자동 정제
+                </Button>
+            </div>
+            <textarea className="w-full border-2 border-gray-200 rounded-xl p-4 h-28 text-base outline-none focus:ring-2 focus:ring-blue-300 transition-colors" placeholder="진행 내용과 학생의 취약점을 편하게 작성하세요. AI가 학부모님용으로 다듬어 드립니다." value={feedbackData.clinicDetails} onChange={e=>setFeedbackData({...feedbackData, clinicDetails:e.target.value})}/>
+        </div>
+
+        <div className="mb-4">
+            <label className="block text-sm font-bold text-emerald-700 mb-2">다음 과제 (Next Action)</label>
+            <textarea className="w-full border-2 border-emerald-200 bg-emerald-50 rounded-xl p-4 h-20 text-base outline-none focus:ring-2 focus:ring-emerald-400" placeholder="다음 클리닉 전까지 해와야 할 미션을 명확하게 적어주세요." value={feedbackData.nextAction} onChange={e=>setFeedbackData({...feedbackData, nextAction:e.target.value})}/>
+        </div>
+
+        <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{ 
+            await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); 
+            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); 
+            setModalState({type:null}); 
+            notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
+        }}>저장 및 검수 요청하기</Button>
       </Modal>
       
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title={selectedSession?.workerRole === 'admin_assistant' ? "행정 업무 지시" : "예약/클리닉 수정"}>
@@ -1049,9 +1136,32 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'confirmed' } })); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button>
       </Modal>
       
-      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="피드백 발송">
-        <div className="bg-green-50 p-5 rounded-xl text-base border border-green-200 whitespace-pre-wrap relative cursor-pointer leading-relaxed">{selectedSession&&TEMPLATES.feedbackParent(selectedSession)}</div>
-        <Button className="w-full mt-4 py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); setModalState({type:null}); notify('발송 완료'); }}>전송 완료 처리</Button>
+      <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="학부모 발송용 피드백 검수">
+        <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
+            <CheckCircle size={18}/> 수정이 필요하면 아래 텍스트 창에서 바로 편집하세요.
+        </div>
+        <textarea 
+            className="w-full bg-white p-5 rounded-xl text-base border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-80 custom-scrollbar leading-relaxed" 
+            value={selectedSession ? TEMPLATES.feedbackParent(selectedSession) : ''}
+            readOnly 
+        />
+        <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
+            await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
+            
+            // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                phoneNumber: selectedSession.studentPhone || '', 
+                message: TEMPLATES.feedbackParent(selectedSession),
+                status: 'pending',
+                type: 'clinic_feedback',
+                studentName: selectedSession.studentName,
+                createdAt: serverTimestamp()
+            });
+
+            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); 
+            setModalState({type:null}); 
+            notify('학원 폰으로 자동 발송이 요청되었습니다!', 'success'); 
+        }}>최종 검수 완료 및 안드로이드 앱으로 발송하기</Button>
       </Modal>
       
       <Modal isOpen={!!confirmConfig} onClose={() => setConfirmConfig(null)} title="시스템 확인">
