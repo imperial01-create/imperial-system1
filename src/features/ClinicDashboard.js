@@ -1,5 +1,4 @@
-/* [서비스 가치] 클리닉 V2.5 - 실제 Gemini AI 백엔드(Firebase Functions) 연동 완료 및 입체적 피드백 시스템 탑재.
-   (안드로이드 SMS Gateway 연동을 위한 sms_outbox 파이프라인이 포함되어 있습니다.) */
+/* [서비스 가치] 클리닉 V2.6 - 통합 메시지 센터 연동 및 학부모 발송 검수창 수정 기능 추가 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -8,17 +7,14 @@ import {
   AlertTriangle, BookOpen, Star, Sparkles
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions'; // 🚀 [AI 연동] 백엔드 함수 호출용 라이브러리
-import { db, functions } from '../firebase'; // 🚀 [AI 연동] functions 객체 불러오기
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
-
-const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
-const CHAT_ID = "8466973475";
 
 const TEMPLATES = {
   confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 본관 ${d.classroom || '미정'}\n내용 : ${d.topic}\n\n학생이 직접 시간을 선정하였으며, 해당 시간은 선생님과의 약속이므로 늦지 않도록 지도 부탁드립니다.`,
@@ -357,9 +353,11 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     
     const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
     const [isRefining, setIsRefining] = useState(false); 
+    
+    // 🚀 [추가됨] 검수 창에서 텍스트 수정을 위한 State
+    const [previewMessage, setPreviewMessage] = useState("");
 
     const [requestData, setRequestData] = useState({});
-    
     const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
     const [baseSchedules, setBaseSchedules] = useState([]);
@@ -526,24 +524,18 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
-    // 🚀 [CTO 패치] 실제 Gemini AI 백엔드 호출 연결 완료
+    // 🚀 AI 문장 자동 정제
     const handleAiRefine = async () => {
         if (!feedbackData.clinicDetails) return notify('피드백 내용을 먼저 입력해주세요.', 'error');
         
         setIsRefining(true);
         try {
-            // Firebase Functions에 만들어둔 'refineFeedback' 함수를 호출
             const refineFeedbackFunction = httpsCallable(functions, 'refineFeedback');
-            
-            // 날것의 텍스트(clinicDetails)를 서버로 전송
             const response = await refineFeedbackFunction({ rawText: feedbackData.clinicDetails });
-            
-            // AI가 예쁘게 다듬어서 돌려준 텍스트로 입력창 덮어쓰기
             setFeedbackData(prev => ({ 
                 ...prev, 
                 clinicDetails: response.data.refinedText 
             }));
-            
             notify('✨ AI가 학부모님 전용 문장으로 깔끔하게 정제했습니다.', 'success');
         } catch (error) {
             console.error("AI Error:", error);
@@ -630,7 +622,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                  notify('추가 요청 승인됨'); 
              }
         } else if (action === 'send_feedback_msg') { 
-             setSelectedSession(payload); setModalState({ type: 'message_preview_feedback' });
+             setSelectedSession(payload); 
+             // 🚀 모달이 열릴 때 템플릿 문장을 State에 집어넣어 수정 가능하게 만듭니다.
+             setPreviewMessage(TEMPLATES.feedbackParent(payload));
+             setModalState({ type: 'message_preview_feedback' });
         }
       } catch (e) { notify('오류: ' + e.message, 'error'); }
   };
@@ -1142,25 +1137,35 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
         <textarea 
             className="w-full bg-white p-5 rounded-xl text-base border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-80 custom-scrollbar leading-relaxed" 
-            value={selectedSession ? TEMPLATES.feedbackParent(selectedSession) : ''}
-            readOnly 
+            value={previewMessage}
+            onChange={(e) => setPreviewMessage(e.target.value)}
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
-            await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
-            
-            // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: selectedSession.studentPhone || '', 
-                message: TEMPLATES.feedbackParent(selectedSession),
-                status: 'pending',
-                type: 'clinic_feedback',
-                studentName: selectedSession.studentName,
-                createdAt: serverTimestamp()
-            });
+            try {
+                if (!selectedSession.studentPhone) {
+                    notify('학생의 전화번호가 등록되어 있지 않습니다.', 'error');
+                    return;
+                }
 
-            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); 
-            setModalState({type:null}); 
-            notify('학원 폰으로 자동 발송이 요청되었습니다!', 'success'); 
+                await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
+                
+                // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재 (수정된 previewMessage 사용!)
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                    phoneNumber: selectedSession.studentPhone, 
+                    message: previewMessage,
+                    status: 'pending',
+                    type: 'clinic_feedback',
+                    studentName: selectedSession.studentName,
+                    createdAt: serverTimestamp()
+                });
+
+                updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); 
+                setModalState({type:null}); 
+                notify('학원 폰으로 자동 발송이 요청되었습니다!', 'success'); 
+            } catch (error) {
+                console.error("문자 발송 큐 적재 실패:", error);
+                notify(`발송 요청 실패: ${error.message}`, 'error');
+            }
         }}>최종 검수 완료 및 안드로이드 앱으로 발송하기</Button>
       </Modal>
       
