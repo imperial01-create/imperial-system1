@@ -5,7 +5,7 @@ import {
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
   Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
-  AlertTriangle 
+  AlertTriangle, BookOpen // 🚀 [버그 수정] 누락되었던 BookOpen 아이콘 Import 완료!
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -53,6 +53,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
+// 🚀 [버그 수정] 존재하지 않는 myClassIds 프롭스 및 찌꺼기 코드 완전히 제거
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms }) => {
   
   const mySessions = useMemo(() => {
@@ -280,7 +281,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                       {masterClassrooms?.map(r => {
                                           const isOccupied = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r);
                                           return (
-                                              // 🚀 [CTO 패치] disabled={isOccupied} 제거: 협업 방 배정 허용
                                               <option key={r} value={r} className={isOccupied ? 'text-gray-400 bg-gray-100' : ''}>
                                                   {r} {isOccupied ? '(정규수업중 - 협업시 선택)' : ''}
                                               </option>
@@ -345,7 +345,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [batchDateRange, setBatchDateRange] = useState({ start: '', end: '' }); 
     
     const [selectedTaIdForSchedule, setSelectedTaIdForSchedule] = useState(''); 
-    // 🚀 [CTO 패치] 대상 반 지정(batchTargetClassId) 상태 및 로직 완전 삭제
     const [batchClassroom, setBatchClassroom] = useState('');
 
     const [selectedSession, setSelectedSession] = useState(null);
@@ -559,7 +558,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                // 취소 시 선택되어 있던 강의실 정보는 남겨둠 (다음 예약을 위해)
                 const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
                 updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
@@ -622,7 +620,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }
       }
       await batch.commit(); 
-      notify(`${count}개의 스케줄이 해당 조교/강의실 설정과 함께 일괄 생성되었습니다!`);
+      notify(`${count}개의 스케줄이 일괄 생성되었습니다!`);
       fetchSessions(true); 
   };
 
@@ -739,7 +737,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                   )}
               </Card>
 
-              {/* 🚀 [CTO 패치] 근무 일괄 생성 UI (대상 반 삭제) */}
               <Card className="bg-blue-50/50 border-blue-100 w-full">
                   <div className="flex justify-between items-center mb-4">
                       <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 스케줄 일괄 오픈 (마스터 권한)</h3>
@@ -781,7 +778,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                           </div>
                       ))}
                   </div>
-                  <Button onClick={handleSaveDefaultSchedule} className="w-full py-3.5 font-bold text-lg shadow-md" size="sm">스케줄 일괄 생성 및 학생에게 오픈하기</Button>
+                  <Button onClick={handleSaveDefaultSchedule} className="w-full py-3.5 font-bold text-lg shadow-md" size="sm">스케줄 일괄 생성하기</Button>
               </Card>
 
               <CalendarView 
@@ -811,7 +808,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     </div>
                                     
                                     <div className="mt-2">
-                                        {/* 🚀 [CTO 패치] disabled={isOccupied} 제거하여 승인 전 언제든 교실 변경/협업 가능 */}
                                         <select 
                                             className={`text-sm border rounded-lg p-2 font-bold focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-800 shadow-inner'}`} 
                                             value={s.classroom || ''} 
@@ -903,7 +899,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         <h2 className="text-lg font-black text-blue-900 flex items-center gap-2">
                             <CheckCircle size={22}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 확정 예약 현황'}
                         </h2>
-                        {/* 🚀 [CTO 패치] 노쇼 방지 및 대면 취소 유도 락(Lock) 문구 */}
                         {currentUser.role === 'student' && (
                             <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3 py-2 rounded-lg flex items-start gap-1.5 shadow-sm">
                                 <AlertTriangle size={14} className="shrink-0 mt-0.5" />
