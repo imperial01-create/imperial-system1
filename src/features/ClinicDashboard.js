@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.6 - 통합 메시지 센터 연동 및 학부모 발송 검수창 수정 기능 추가 */
+/* [서비스 가치] 클리닉 V2.6.1 - 학부모 전화번호 스마트 탐색 및 SMS Gateway 연동 적용 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -1142,16 +1142,27 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                if (!selectedSession.studentPhone) {
-                    notify('학생의 전화번호가 등록되어 있지 않습니다.', 'error');
+                // 🚀 [CTO 수정] 학부모 전화번호 우선 탐색 로직
+                // 1. 현재 선택된 학생의 ID와 연결된 학부모(parent) 계정을 찾습니다.
+                const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(selectedSession.studentId));
+                
+                let targetPhone = '';
+                if (parentUser && parentUser.phone) {
+                    targetPhone = parentUser.phone; // 1순위: 학부모 번호
+                } else if (selectedSession.studentPhone) {
+                    targetPhone = selectedSession.studentPhone; // 2순위: 학부모 번호가 없으면 학생 번호 사용
+                }
+
+                if (!targetPhone) {
+                    notify('이 학생과 연결된 학부모 연락처나 학생의 연락처가 없습니다.', 'error');
                     return;
                 }
 
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
                 
-                // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재 (수정된 previewMessage 사용!)
+                // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: selectedSession.studentPhone, 
+                    phoneNumber: targetPhone, // 👈 스마트하게 찾은 번호(targetPhone)로 발송
                     message: previewMessage,
                     status: 'pending',
                     type: 'clinic_feedback',
