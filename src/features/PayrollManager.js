@@ -1,11 +1,12 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
-   PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다. */
+   PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다.
+   (Updated: 조교 개인 모드에서 주차별 근무 및 수당 산출 내역 상세 탭 추가) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
   DollarSign, Calendar, Calculator, Download, Save, Search, 
   FileText, CheckCircle, AlertCircle, ChevronLeft, ChevronRight, Loader, X, Wallet, RefreshCcw, Plus,
-  AlertTriangle // 🚀 [CTO 패치] 경고등 아이콘 추가
+  AlertTriangle 
 } from 'lucide-react';
 import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFromServer, query, where, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -45,6 +46,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false); 
+
+    // 🚀 [CTO 패치] 개인 모드 탭 상태 (요약 vs 상세)
+    const [personalTab, setPersonalTab] = useState('summary'); 
 
     const isManagementMode = viewMode === 'management';
 
@@ -134,21 +138,73 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
+    // 🚀 [CTO 패치] 개인 모드에서도 자신의 스케줄을 가져오도록 로직 수정 (주차별 산출 내역을 보여주기 위함)
     const fetchMonthlyData = useCallback(async () => {
-        if (!isManagementMode) { setMonthlySessions([]); return; }
         setIsSessionsLoading(true);
         try {
             const { startStr, endStr } = getMonthRange(selectedMonth);
             const sQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startStr), where('date', '<=', endStr));
             const sSnap = await getDocs(sQuery);
-            setMonthlySessions(sSnap.docs.map(d => d.data()));
+            let sessions = sSnap.docs.map(d => d.data());
+            
+            // 관리자가 아니면(즉, 개인 모드면) 본인 스케줄만 남기기
+            if (!isManagementMode && currentUser) {
+                sessions = sessions.filter(s => s.taId === currentUser.id || s.taName === currentUser.name);
+            }
+            setMonthlySessions(sessions);
         } catch (e) { console.error("Session Fetch Error:", e); } 
         finally { setIsSessionsLoading(false); }
-    }, [selectedMonth, isManagementMode]);
+    }, [selectedMonth, isManagementMode, currentUser]);
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
 
-    // 🚀 [CTO 패치] 실시간 스케줄 변동 대조를 위한 분리된 계산 엔진 (Dynamic Sync Engine)
+    // 🚀 [CTO 패치] 조교 개인 모드 전용: 주차별 근무 현황 계산 엔진
+    const myWeeklyBreakdown = useMemo(() => {
+        if (isManagementMode || !['ta', 'admin_assistant'].includes(currentUser?.role)) return [];
+        
+        const wage = currentUser.hourlyRate || currentUser.hourlyWage || 10030;
+        const hourlyRate = parseInt(wage, 10);
+        
+        const validLogs = monthlySessions.filter(s => ['open', 'confirmed', 'completed', 'pending'].includes(s.status)).map(s => {
+            const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
+            const endH = parseInt((s.endTime||'00:00').split(':')[0], 10);
+            return { date: s.date, hours: endH - startH };
+        });
+
+        const weekGroups = {};
+        validLogs.forEach(log => {
+            const d = new Date(log.date);
+            const day = d.getDay(); 
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // 월요일을 주의 시작으로 간주
+            const weekStart = new Date(d.setDate(diff));
+            const weekKey = weekStart.toISOString().split('T')[0];
+            weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
+        });
+
+        const sortedWeeks = Object.keys(weekGroups).sort();
+        
+        return sortedWeeks.map((weekKey, index) => {
+            const hours = weekGroups[weekKey];
+            const meetsHolidayPay = hours >= 15;
+            const holidayPay = meetsHolidayPay ? Math.round((Math.min(hours, 40) / 40) * 8 * hourlyRate) : 0;
+            const basePay = hours * hourlyRate;
+            
+            const wStart = new Date(weekKey);
+            const wEnd = new Date(wStart);
+            wEnd.setDate(wStart.getDate() + 6);
+            const weekEndStr = wEnd.toISOString().split('T')[0].substring(5).replace('-', '/');
+            const weekStartStr = weekKey.substring(5).replace('-', '/');
+            
+            return {
+                label: `${index + 1}주차 (${weekStartStr} ~ ${weekEndStr})`,
+                hours,
+                meetsHolidayPay,
+                holidayPay,
+                basePay
+            };
+        });
+    }, [monthlySessions, currentUser, isManagementMode]);
+
     const getRealtimeCalculation = useCallback((targetUser) => {
         const uid = targetUser.id || targetUser.userId;
         const wage = targetUser.hourlyRate || targetUser.hourlyWage;
@@ -258,10 +314,8 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         
         setCalcProcessing(true);
         try {
-            // 🚀 [CTO 패치] 실시간 계산 엔진을 호출하여 데이터 가져오기
             const rt = getRealtimeCalculation(targetUser);
             
-            // 🚀 [CTO 추가 수정] 재정산 시 기존의 세무 공제 내역 및 보너스 초기화 방지 로직
             const existingPayroll = payrolls[uid];
             const initialDeductions = existingPayroll?.deductions || Object.fromEntries(DEDUCTION_KEYS.map(k => [k, 0]));
             const savedBonus = existingPayroll?.bonus || 0;
@@ -378,11 +432,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                             const wage = user.hourlyRate || user.hourlyWage;
 
-                            // 🚀 [CTO 패치] 실시간 변동 대조 검사
                             let needsSync = false;
                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
                                 const rt = getRealtimeCalculation(user);
-                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== rt.totalGross) {
+                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
                                     needsSync = true;
                                 }
                             }
@@ -463,11 +516,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                                             const wage = user.hourlyRate || user.hourlyWage;
 
-                                            // 🚀 [CTO 패치] 실시간 변동 대조 검사
                                             let needsSync = false;
                                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
                                                 const rt = getRealtimeCalculation(user);
-                                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== rt.totalGross) {
+                                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
                                                     needsSync = true;
                                                 }
                                             }
@@ -536,28 +588,101 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                 </div>
                             </Card>
 
-                            <Card className="lg:col-span-2 h-fit">
-                                <h4 className="font-bold text-lg mb-4 flex items-center gap-2 text-gray-800"><FileText className="text-gray-500"/> 상세 내역</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
-                                        <p className="font-bold text-blue-600 mb-3 flex items-center gap-2"><Plus size={16}/> 지급 내역</p>
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between text-sm"><span>기본급</span><span>{formatCurrency(payrolls[currentUser.id].baseSalary)}</span></div>
-                                            <div className="flex justify-between text-sm"><span>주휴수당</span><span>{formatCurrency(payrolls[currentUser.id].weeklyHolidayPay)}</span></div>
-                                            <div className="flex justify-between text-sm"><span>식대</span><span>{formatCurrency(payrolls[currentUser.id].mealAllowance)}</span></div>
-                                            <div className="flex justify-between text-sm font-bold text-blue-600 bg-blue-50 p-1 rounded"><span>상여금</span><span>{formatCurrency(payrolls[currentUser.id].bonus)}</span></div>
-                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg"><span>지급계</span><span>{formatCurrency(payrolls[currentUser.id].totalGross)}</span></div>
+                            <Card className="lg:col-span-2 h-fit p-0 overflow-hidden">
+                                {/* 🚀 [CTO 패치] 조교용 2-Depth 탭 UI (급여 요약 vs 주차별 근무 상세) */}
+                                <div className="flex border-b bg-gray-50">
+                                    <button onClick={() => setPersonalTab('summary')} className={`flex-1 py-4 font-bold text-sm transition-colors ${personalTab === 'summary' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                        급여 요약 내역
+                                    </button>
+                                    {['ta', 'admin_assistant'].includes(currentUser.role) && (
+                                        <button onClick={() => setPersonalTab('weekly')} className={`flex-1 py-4 font-bold text-sm transition-colors ${personalTab === 'weekly' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                            주차별 산출 상세
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div className="p-6">
+                                    {personalTab === 'summary' && (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
+                                            <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
+                                                <p className="font-bold text-blue-600 mb-3 flex items-center gap-2"><Plus size={16}/> 지급 내역</p>
+                                                <div className="space-y-2">
+                                                    <div className="flex justify-between text-sm"><span>기본급</span><span>{formatCurrency(payrolls[currentUser.id].baseSalary)}</span></div>
+                                                    <div className="flex justify-between text-sm"><span>주휴수당</span><span>{formatCurrency(payrolls[currentUser.id].weeklyHolidayPay)}</span></div>
+                                                    <div className="flex justify-between text-sm"><span>식대</span><span>{formatCurrency(payrolls[currentUser.id].mealAllowance)}</span></div>
+                                                    <div className="flex justify-between text-sm font-bold text-blue-600 bg-blue-50 p-1 rounded"><span>상여금</span><span>{formatCurrency(payrolls[currentUser.id].bonus)}</span></div>
+                                                    <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg"><span>지급계</span><span>{formatCurrency(payrolls[currentUser.id].totalGross)}</span></div>
+                                                </div>
+                                            </div>
+                                            <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
+                                                <p className="font-bold text-red-500 mb-3 flex items-center gap-2"><DollarSign size={16}/> 공제 내역</p>
+                                                <div className="space-y-2">
+                                                    {DEDUCTION_KEYS.map((key) => (
+                                                        <div key={key} className="flex justify-between text-sm text-gray-600"><span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span></div>
+                                                    ))}
+                                                    <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg text-gray-700"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
+                                                </div>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="bg-gray-50 p-5 rounded-2xl border border-gray-100">
-                                        <p className="font-bold text-red-500 mb-3 flex items-center gap-2"><DollarSign size={16}/> 공제 내역</p>
-                                        <div className="space-y-2">
-                                            {DEDUCTION_KEYS.map((key) => (
-                                                <div key={key} className="flex justify-between text-sm text-gray-600"><span>{key}</span><span>{formatCurrency(payrolls[currentUser.id].deductions?.[key])}</span></div>
-                                            ))}
-                                            <div className="border-t border-gray-200 mt-2 pt-2 flex justify-between font-bold text-lg text-gray-700"><span>공제계</span><span>{formatCurrency(Object.values(payrolls[currentUser.id].deductions || {}).reduce((a,b)=>a+(b||0),0))}</span></div>
+                                    )}
+
+                                    {/* 🚀 [CTO 패치] 주차별 근무 및 수당 상세 탭 화면 */}
+                                    {personalTab === 'weekly' && (
+                                        <div className="space-y-4 animate-in fade-in">
+                                            <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm leading-relaxed">
+                                                <p className="font-black flex items-center gap-1.5 mb-2"><Calculator size={16}/> 임페리얼 학원 수당 산출 공식</p>
+                                                <ul className="list-disc pl-5 opacity-90 space-y-1.5 font-medium">
+                                                    <li><strong className="text-blue-900">기본급:</strong> 주차별 근무시간 × 나의 시급({formatCurrency(currentUser.hourlyRate || currentUser.hourlyWage || 10030)})</li>
+                                                    <li><strong className="text-blue-900">주휴수당 조건:</strong> 1주(월~일) 간 <span className="underline decoration-blue-400">15시간 이상 근무 시</span> 1일 유급휴일 수당 지급</li>
+                                                    <li><strong className="text-blue-900">주휴수당 계산식:</strong> (주 근무시간 ÷ 40시간) × 8시간 × 시급 <span className="text-[10px] bg-blue-100 px-1 rounded">(주 40시간 초과 시 최대 40시간까지만 인정)</span></li>
+                                                </ul>
+                                            </div>
+                                            
+                                            <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                                <table className="w-full text-left text-sm">
+                                                    <thead className="bg-gray-50 text-gray-500 border-b">
+                                                        <tr>
+                                                            <th className="p-3">주차 (월~일 기준)</th>
+                                                            <th className="p-3 text-center">주간 총 근무시간</th>
+                                                            <th className="p-3 text-right">산출 기본급</th>
+                                                            <th className="p-3 text-center">주휴조건(15h)</th>
+                                                            <th className="p-3 text-right">산출 주휴수당</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y">
+                                                        {myWeeklyBreakdown.length === 0 ? (
+                                                            <tr><td colSpan="5" className="p-8 text-center text-gray-400 font-bold">이번 달 확정된 클리닉 근무 내역이 없습니다.</td></tr>
+                                                        ) : myWeeklyBreakdown.map((week, idx) => (
+                                                            <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                                                                <td className="p-3 font-bold text-gray-700">{week.label}</td>
+                                                                <td className="p-3 text-center font-black text-blue-600">{week.hours}시간</td>
+                                                                <td className="p-3 text-right text-gray-700 font-medium">{formatCurrency(week.basePay)}</td>
+                                                                <td className="p-3 text-center">
+                                                                    {week.meetsHolidayPay ? (
+                                                                        <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-black flex items-center justify-center w-fit mx-auto gap-1"><CheckCircle size={10}/> 충족</span>
+                                                                    ) : (
+                                                                        <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-xs font-bold">미달</span>
+                                                                    )}
+                                                                </td>
+                                                                <td className={`p-3 text-right font-black ${week.meetsHolidayPay ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                                                    {formatCurrency(week.holidayPay)}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                    <tfoot className="bg-blue-50/50 border-t-2 border-blue-200 font-black">
+                                                        <tr>
+                                                            <td className="p-3 text-blue-900">월간 총 합계</td>
+                                                            <td className="p-3 text-center text-blue-700">{myWeeklyBreakdown.reduce((sum, w) => sum + w.hours, 0)}시간</td>
+                                                            <td className="p-3 text-right text-blue-900">{formatCurrency(myWeeklyBreakdown.reduce((sum, w) => sum + w.basePay, 0))}</td>
+                                                            <td className="p-3"></td>
+                                                            <td className="p-3 text-right text-emerald-600">{formatCurrency(myWeeklyBreakdown.reduce((sum, w) => sum + w.holidayPay, 0))}</td>
+                                                        </tr>
+                                                    </tfoot>
+                                                </table>
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
                                 </div>
                             </Card>
                         </div>
