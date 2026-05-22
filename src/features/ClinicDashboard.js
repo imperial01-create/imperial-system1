@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.6.1 - 학부모 전화번호 스마트 탐색 및 SMS Gateway 연동 적용 */
+/* [서비스 가치] 클리닉 V2.8 - 대기열 파기 기능 및 학생 뷰에서 피드백 리포트 숨김 처리 완료 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -354,7 +354,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
     const [isRefining, setIsRefining] = useState(false); 
     
-    // 🚀 [추가됨] 검수 창에서 텍스트 수정을 위한 State
     const [previewMessage, setPreviewMessage] = useState("");
 
     const [requestData, setRequestData] = useState({});
@@ -524,7 +523,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
-    // 🚀 AI 문장 자동 정제
     const handleAiRefine = async () => {
         if (!feedbackData.clinicDetails) return notify('피드백 내용을 먼저 입력해주세요.', 'error');
         
@@ -571,9 +569,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            if(payload) askConfirm("정말 삭제하시겠습니까?", async () => {
+            if(payload) askConfirm("정말 파기/삭제하시겠습니까? 데이터가 완전히 사라집니다.", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
+                notify('삭제/파기 완료', 'success');
             });
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
@@ -623,7 +622,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
              }
         } else if (action === 'send_feedback_msg') { 
              setSelectedSession(payload); 
-             // 🚀 모달이 열릴 때 템플릿 문장을 State에 집어넣어 수정 가능하게 만듭니다.
              setPreviewMessage(TEMPLATES.feedbackParent(payload));
              setModalState({ type: 'message_preview_feedback' });
         }
@@ -887,7 +885,11 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
+                                {/* 🚀 [CTO 패치] 발송 취소(삭제) 버튼 적용 완료 */}
+                                <div className="flex gap-2 shrink-0">
+                                    <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
+                                    <Button variant="danger" size="sm" icon={Trash2} onClick={(e)=>{ e.stopPropagation(); onAction('delete', s.id); }}>파기</Button>
+                                </div>
                             </div>
                         ))}</div>
                     }
@@ -971,7 +973,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         <div className="flex gap-2"><span className="font-black text-indigo-400 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap font-medium text-gray-700">{s.questionRange}</span></div>
                                     </div>
                                     
-                                    {(s.status === 'completed' && (s.clinicDetails || s.nextAction || s.clinicContent)) && (
+                                    {/* 🚀 [CTO 패치] currentUser.role !== 'student' 조건을 추가하여 학생 화면에서만 피드백을 숨깁니다! */}
+                                    {(currentUser.role !== 'student') && (s.status === 'completed' && (s.clinicDetails || s.nextAction || s.clinicContent)) && (
                                         <div className="mt-4 bg-white p-4 rounded-xl text-sm text-gray-700 border-2 border-green-400 shadow-sm">
                                             <div className="font-black text-green-800 mb-3 flex items-center justify-between border-b border-green-200 pb-2">
                                                 <span className="flex items-center gap-1.5"><MessageSquare size={18}/> 선생님의 클리닉 피드백</span>
@@ -1142,27 +1145,39 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                // 🚀 [CTO 수정] 학부모 전화번호 우선 탐색 로직
-                // 1. 현재 선택된 학생의 ID와 연결된 학부모(parent) 계정을 찾습니다.
-                const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(selectedSession.studentId));
-                
                 let targetPhone = '';
-                if (parentUser && parentUser.phone) {
-                    targetPhone = parentUser.phone; // 1순위: 학부모 번호
-                } else if (selectedSession.studentPhone) {
-                    targetPhone = selectedSession.studentPhone; // 2순위: 학부모 번호가 없으면 학생 번호 사용
+                
+                if (selectedSession.studentId) {
+                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(selectedSession.studentId));
+                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
+                    else {
+                        const studentUser = users.find(u => u.id === selectedSession.studentId);
+                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone;
+                    }
+                }
+                
+                if (!targetPhone && selectedSession.studentName) {
+                    const parentByName = users.find(u => u.role === 'parent' && u.childName === selectedSession.studentName);
+                    if (parentByName && parentByName.phone) targetPhone = parentByName.phone;
+                    else {
+                        const studentByName = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
+                        if (studentByName && studentByName.phone) targetPhone = studentByName.phone;
+                    }
+                }
+
+                if (!targetPhone && selectedSession.studentPhone) {
+                    targetPhone = selectedSession.studentPhone;
                 }
 
                 if (!targetPhone) {
-                    notify('이 학생과 연결된 학부모 연락처나 학생의 연락처가 없습니다.', 'error');
+                    notify('이 학생과 연결된 학부모 연락처나 학생 본인의 연락처가 시스템에 없습니다.', 'error');
                     return;
                 }
 
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
                 
-                // 🚀 안드로이드 SMS 연동 큐에 발송 대기 데이터 적재
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: targetPhone, // 👈 스마트하게 찾은 번호(targetPhone)로 발송
+                    phoneNumber: targetPhone, 
                     message: previewMessage,
                     status: 'pending',
                     type: 'clinic_feedback',

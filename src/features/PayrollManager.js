@@ -1,6 +1,6 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다.
-   (Updated: 조교 개인 모드에서 주차별 근무 및 수당 산출 내역 상세 탭 추가) */
+   (Updated: 조교 개인 모드에서 주차별 근무 및 수당 산출 내역 상세 탭 추가 및 권한 우회 쿼리 적용) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
@@ -47,7 +47,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const [editingPayroll, setEditingPayroll] = useState(null);
     const [calcProcessing, setCalcProcessing] = useState(false); 
 
-    // 🚀 [CTO 패치] 개인 모드 탭 상태 (요약 vs 상세)
     const [personalTab, setPersonalTab] = useState('summary'); 
 
     const isManagementMode = viewMode === 'management';
@@ -116,12 +115,17 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     }
                 });
             } else {
-                const docId = `${currentUser.id}_${selectedMonth}`;
-                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId);
+                // 🚀 [CTO 패치] 보안 규칙 회피를 위해 getDoc 대신 query 사용
+                const q = query(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), 
+                    where('userId', '==', currentUser.id), 
+                    where('yearMonth', '==', selectedMonth)
+                );
                 let snapshot;
-                try { snapshot = await getDocFromServer(docRef); } catch (err) { snapshot = await getDoc(docRef); }
-                if (snapshot.exists()) {
-                    fetchedData[currentUser.id] = { ...snapshot.data(), _docId: snapshot.id };
+                try { snapshot = await getDocsFromServer(q); } catch (err) { snapshot = await getDocs(q); }
+                if (!snapshot.empty) {
+                    const docSnap = snapshot.docs[0];
+                    fetchedData[currentUser.id] = { ...docSnap.data(), _docId: docSnap.id };
                 }
             }
 
@@ -138,7 +142,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
-    // 🚀 [CTO 패치] 개인 모드에서도 자신의 스케줄을 가져오도록 로직 수정 (주차별 산출 내역을 보여주기 위함)
     const fetchMonthlyData = useCallback(async () => {
         setIsSessionsLoading(true);
         try {
@@ -147,7 +150,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const sSnap = await getDocs(sQuery);
             let sessions = sSnap.docs.map(d => d.data());
             
-            // 관리자가 아니면(즉, 개인 모드면) 본인 스케줄만 남기기
             if (!isManagementMode && currentUser) {
                 sessions = sessions.filter(s => s.taId === currentUser.id || s.taName === currentUser.name);
             }
@@ -158,7 +160,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
 
-    // 🚀 [CTO 패치] 조교 개인 모드 전용: 주차별 근무 현황 계산 엔진
     const myWeeklyBreakdown = useMemo(() => {
         if (isManagementMode || !['ta', 'admin_assistant'].includes(currentUser?.role)) return [];
         
@@ -175,7 +176,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         validLogs.forEach(log => {
             const d = new Date(log.date);
             const day = d.getDay(); 
-            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // 월요일을 주의 시작으로 간주
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1);
             const weekStart = new Date(d.setDate(diff));
             const weekKey = weekStart.toISOString().split('T')[0];
             weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
@@ -589,7 +590,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             </Card>
 
                             <Card className="lg:col-span-2 h-fit p-0 overflow-hidden">
-                                {/* 🚀 [CTO 패치] 조교용 2-Depth 탭 UI (급여 요약 vs 주차별 근무 상세) */}
                                 <div className="flex border-b bg-gray-50">
                                     <button onClick={() => setPersonalTab('summary')} className={`flex-1 py-4 font-bold text-sm transition-colors ${personalTab === 'summary' ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-100'}`}>
                                         급여 요약 내역
@@ -626,7 +626,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         </div>
                                     )}
 
-                                    {/* 🚀 [CTO 패치] 주차별 근무 및 수당 상세 탭 화면 */}
                                     {personalTab === 'weekly' && (
                                         <div className="space-y-4 animate-in fade-in">
                                             <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm leading-relaxed">

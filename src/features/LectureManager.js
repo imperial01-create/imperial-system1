@@ -1,5 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
-   학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. */
+   학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. 
+   (Updated: 강사 뷰 빈 화면 Crash 방어용 안전망 추가) */
 import React, { useState, useMemo } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
@@ -13,7 +14,6 @@ import {
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 
-// 🚀 [CTO 패치] 글로벌 데이터 연결
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -50,11 +50,6 @@ const cleanClassName = (rawName) => {
     return rawName.replace(/\(.*?\)/g, '').trim();
 };
 
-const cleanStudentName = (rawName) => {
-    if (!rawName) return '';
-    return rawName.replace(/^\[.*?\]\s*/, '').replace(/\s*\(.*?\)$/, '').trim();
-};
-
 const normalizeString = (str) => {
     return (str || '').replace(/\s+/g, '').toLowerCase();
 };
@@ -62,7 +57,7 @@ const normalizeString = (str) => {
 const getMatchedMasterRoom = (rawRoom, masterRooms) => {
     if (!rawRoom) return '';
     const normRaw = normalizeString(rawRoom);
-    const matched = masterRooms.find(r => normalizeString(r) === normRaw);
+    const matched = (masterRooms || []).find(r => normalizeString(r) === normRaw);
     return matched || rawRoom; 
 };
 
@@ -105,7 +100,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
                 {getDays(currentDate).map((d, i) => {
                     if (!d) return <div key={i} />;
                     const dStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                    const hasLecture = lectures.some(l => l.date === dStr);
+                    const hasLecture = (lectures || []).some(l => l.date === dStr);
                     const isSelected = dStr === selectedDate;
                     
                     return (
@@ -123,9 +118,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     );
 };
 
-// --- Lecture Management Panel ---
 const LectureManagementPanel = ({ selectedClass }) => {
-    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
     const { users, enrollments } = useData();
 
     const [lectures, setLectures] = useState([]);
@@ -143,11 +136,10 @@ const LectureManagementPanel = ({ selectedClass }) => {
     });
     const [completions, setCompletions] = useState([]);
 
-    // 🚀 [CTO 패치] 죽은 코드(studentIds) 대신 진짜 수강 이력(Enrollments) 데이터에서 내 반 학생 추출
     const studentsInClass = useMemo(() => {
         if (!selectedClass?.id) return [];
-        const activeStudentIds = enrollments.filter(e => e.classId === selectedClass.id && e.status === 'active').map(e => e.studentId);
-        return users.filter(u => u.role === 'student' && activeStudentIds.includes(u.id));
+        const activeStudentIds = (enrollments || []).filter(e => e.classId === selectedClass.id && e.status === 'active').map(e => e.studentId);
+        return (users || []).filter(u => u.role === 'student' && activeStudentIds.includes(u.id));
     }, [selectedClass, enrollments, users]);
 
     React.useEffect(() => {
@@ -161,7 +153,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
         return () => unsub();
     }, [selectedClass]);
 
-    const currentLectures = lectures.filter(l => l.date === selectedDate);
+    const currentLectures = (lectures || []).filter(l => l.date === selectedDate);
 
     React.useEffect(() => {
         if (currentLectures.length === 0) {
@@ -255,10 +247,10 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                     </div>
                                 </div>
                                 <div className="bg-gray-50 p-2 rounded-lg mt-1">
-                                    <h5 className="text-xs font-bold text-gray-500 mb-1 flex items-center gap-1"><Users size={12}/> 수강 현황 ({completions.filter(c=>c.lectureId===lecture.id).length}/{studentsInClass.length})</h5>
+                                    <h5 className="text-xs font-bold text-gray-500 mb-1 flex items-center gap-1"><Users size={12}/> 수강 현황 ({(completions || []).filter(c=>c.lectureId===lecture.id).length}/{studentsInClass.length})</h5>
                                     <div className="flex flex-wrap gap-1">
                                         {studentsInClass.map(std => {
-                                            const isDone = completions.some(c => c.lectureId === lecture.id && c.studentId === std.id);
+                                            const isDone = (completions || []).some(c => c.lectureId === lecture.id && c.studentId === std.id);
                                             return <span key={std.id} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDone ? 'bg-green-100 border-green-200 text-green-700' : 'bg-white border-gray-200 text-gray-400'}`}>{std.name}</span>
                                         })}
                                     </div>
@@ -292,7 +284,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                     <td className="p-3">
                                         <div className="flex flex-wrap gap-1">
                                             {studentsInClass.map(std => {
-                                                const isDone = completions.some(c => c.lectureId === lecture.id && c.studentId === std.id);
+                                                const isDone = (completions || []).some(c => c.lectureId === lecture.id && c.studentId === std.id);
                                                 return <span key={std.id} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDone ? 'bg-green-100 border-green-200 text-green-700' : 'bg-white border-gray-200 text-gray-400'}`}>{std.name}</span>
                                             })}
                                         </div>
@@ -339,7 +331,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                     </div>
                     <div>
                         <label className="text-sm font-bold text-gray-600 mb-1 flex justify-between">복습용 영상 링크 <button onClick={handleAddLink} className="text-blue-600">+추가</button></label>
-                        {formData.youtubeLinks.map((link, idx) => (
+                        {(formData.youtubeLinks || []).map((link, idx) => (
                             <div key={idx} className="flex gap-2 mb-2">
                                 <input type="text" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-red-500" value={link} onChange={e => handleLinkChange(idx, e.target.value)} placeholder="https://youtu.be/..." />
                                 {idx === formData.youtubeLinks.length - 1 ? (
@@ -357,9 +349,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
     );
 };
 
-// --- Admin Unified Component ---
 export const AdminLectureManager = () => {
-    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
     const { users, classes, masterData, loadingData } = useData();
     
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
@@ -375,11 +365,11 @@ export const AdminLectureManager = () => {
     const [isSyncing, setIsSyncing] = useState(false);
 
     const lecturers = useMemo(() => {
-        return users.filter(u => u.role === 'lecturer' || u.role === 'admin' || u.role === 'ta').sort((a,b) => a.name.localeCompare(b.name));
+        return (users || []).filter(u => u.role === 'lecturer' || u.role === 'admin' || u.role === 'ta').sort((a,b) => a.name.localeCompare(b.name));
     }, [users]);
 
     const orphanedClasses = useMemo(() => {
-        return classes.filter(c => !c.lecturerId || !lecturers.some(l => l.id === c.lecturerId));
+        return (classes || []).filter(c => !c.lecturerId || !lecturers.some(l => l.id === c.lecturerId));
     }, [classes, lecturers]);
 
     const displayedClasses = useMemo(() => {
@@ -387,7 +377,7 @@ export const AdminLectureManager = () => {
         if (selectedLecturerId === 'UNASSIGNED_ORPHANS') {
             return orphanedClasses;
         }
-        return classes.filter(c => c.lecturerId === selectedLecturerId);
+        return (classes || []).filter(c => c.lecturerId === selectedLecturerId);
     }, [classes, selectedLecturerId, orphanedClasses]);
 
     const handleSelectLecturer = (lecturerId) => {
@@ -477,7 +467,6 @@ export const AdminLectureManager = () => {
                 }
             } else {
                 payload.createdAt = serverTimestamp();
-                // 🚀 [CTO 패치] 죽은 코드(studentIds: [])를 만들지 않음. 이제 모든 학생관리는 Enrollments가 함.
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'), payload);
             }
             setIsClassModalOpen(false);
@@ -541,7 +530,7 @@ export const AdminLectureManager = () => {
                                 const rawClassroom = lines[2] || '';
                                 
                                 const className = cleanClassName(rawClassName);
-                                const classroom = getMatchedMasterRoom(rawClassroom, masterData.classrooms);
+                                const classroom = getMatchedMasterRoom(rawClassroom, masterData?.classrooms || []);
                                 const day = DAYS_OF_WEEK[col - 1];
 
                                 if (className) {
@@ -572,7 +561,7 @@ export const AdminLectureManager = () => {
             let writeCount = 0;
 
             const existingClassesMap = {};
-            classes.forEach(c => { existingClassesMap[c.name] = c; });
+            (classes || []).forEach(c => { existingClassesMap[c.name] = c; });
 
             Object.values(parsedClasses).forEach(newClsData => {
                 const matchedLecturers = lecturers.filter(u => u.name === newClsData.lecturerName);
@@ -667,7 +656,7 @@ export const AdminLectureManager = () => {
                         <hr className="my-2 border-gray-100"/>
 
                         {lecturers.map(lecturer => {
-                            const myClassesCount = classes.filter(c => c.lecturerId === lecturer.id).length;
+                            const myClassesCount = (classes || []).filter(c => c.lecturerId === lecturer.id).length;
                             return (
                                 <button 
                                     key={lecturer.id} 
@@ -779,7 +768,7 @@ export const AdminLectureManager = () => {
                                     onChange={e => setNewClass({...newClass, name: e.target.value})} 
                                 />
                                 <datalist id="subject-options">
-                                    {masterData.subjects.map((sub, idx) => <option key={idx} value={sub} />)}
+                                    {(masterData?.subjects || []).map((sub, idx) => <option key={idx} value={sub} />)}
                                 </datalist>
                                 <p className="text-[10px] text-gray-400 mt-1">* 환경설정의 과목명과 조합하여 직접 입력하실 수 있습니다.</p>
                             </div>
@@ -824,8 +813,8 @@ export const AdminLectureManager = () => {
                                         <label className="text-[10px] font-bold text-gray-500 mb-1 block">강의실</label>
                                         <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-blue-500 bg-white" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)}>
                                             <option value="">미정/선택</option>
-                                            {masterData.classrooms.map((room, rIdx) => <option key={rIdx} value={room}>{room}</option>)}
-                                            {sch.room && !masterData.classrooms.includes(sch.room) && <option value={sch.room}>{sch.room} (이전 데이터)</option>}
+                                            {(masterData?.classrooms || []).map((room, rIdx) => <option key={rIdx} value={room}>{room}</option>)}
+                                            {sch.room && !(masterData?.classrooms || []).includes(sch.room) && <option value={sch.room}>{sch.room} (이전 데이터)</option>}
                                         </select>
                                     </div>
                                 </div>
@@ -877,13 +866,12 @@ export const AdminLectureManager = () => {
 };
 
 export const LecturerDashboard = ({ currentUser }) => {
-    // 🚀 글로벌 데이터 엔진에서 꺼내 쓰기
     const { classes: allClasses, users } = useData();
     const [selectedClass, setSelectedClass] = useState(null);
 
     const myClasses = useMemo(() => {
         if (!currentUser) return [];
-        return allClasses.filter(c => c.lecturerId === currentUser.id);
+        return (allClasses || []).filter(c => c.lecturerId === currentUser.id);
     }, [allClasses, currentUser]);
 
     useEffect(() => {
