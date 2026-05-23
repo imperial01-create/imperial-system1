@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (Updated: 학부모 1:N 자녀 연동(linkedChildrenIds) 구조 최적화 및 구형 데이터 잔재 완전 삭제) */
+   (Updated: 학부모 계정 구형 1:1 데이터(childId, childName) 잔재 완전 제거 패치) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
@@ -37,7 +37,7 @@ const UserManager = ({ currentUser }) => {
     const [modalTab, setModalTab] = useState('basic'); 
     const [isEditMode, setIsEditMode] = useState(false);
     
-    // 🚀 [CTO 패치] 구형 childId, childName 찌꺼기 완벽 삭제
+    // 🚀 [CTO 패치] 구형 childId, childName 삭제 완료, 오직 linkedChildrenIds 만 사용
     const [formData, setFormData] = useState({ 
         id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '',
         schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
@@ -157,7 +157,6 @@ const UserManager = ({ currentUser }) => {
             }
             if (activeTab === 'parent') { 
                 payload.linkedChildrenIds = formData.linkedChildrenIds || [];
-                // 더 이상 childId, childName을 payload에 넣지 않습니다.
             }
 
             const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();

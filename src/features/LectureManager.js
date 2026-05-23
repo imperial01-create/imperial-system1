@@ -1,7 +1,7 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
    학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. 
-   (Updated: 강사 뷰 빈 화면 Crash 방어용 안전망 추가) */
-import React, { useState, useMemo } from 'react';
+   (Updated: 강사 뷰 빈 화면(White Screen) 원인이었던 useEffect import 누락 완벽 해결) */
+import React, { useState, useMemo, useEffect } from 'react'; // 🚀 [CTO 패치] useEffect 추가 완료!
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
@@ -61,7 +61,6 @@ const getMatchedMasterRoom = (rawRoom, masterRooms) => {
     return matched || rawRoom; 
 };
 
-
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     
@@ -119,7 +118,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
 };
 
 const LectureManagementPanel = ({ selectedClass }) => {
-    const { users, enrollments } = useData();
+    const { users = [], enrollments = [] } = useData();
 
     const [lectures, setLectures] = useState([]);
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -138,11 +137,11 @@ const LectureManagementPanel = ({ selectedClass }) => {
 
     const studentsInClass = useMemo(() => {
         if (!selectedClass?.id) return [];
-        const activeStudentIds = (enrollments || []).filter(e => e.classId === selectedClass.id && e.status === 'active').map(e => e.studentId);
-        return (users || []).filter(u => u.role === 'student' && activeStudentIds.includes(u.id));
+        const activeStudentIds = (enrollments || []).filter(e => e?.classId === selectedClass.id && e?.status === 'active').map(e => e.studentId);
+        return (users || []).filter(u => u?.role === 'student' && activeStudentIds.includes(u.id));
     }, [selectedClass, enrollments, users]);
 
-    React.useEffect(() => {
+    useEffect(() => {
         if (!selectedClass?.id) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
         const unsub = onSnapshot(q, (snapshot) => {
@@ -153,9 +152,9 @@ const LectureManagementPanel = ({ selectedClass }) => {
         return () => unsub();
     }, [selectedClass]);
 
-    const currentLectures = (lectures || []).filter(l => l.date === selectedDate);
+    const currentLectures = (lectures || []).filter(l => l?.date === selectedDate);
 
-    React.useEffect(() => {
+    useEffect(() => {
         if (currentLectures.length === 0) {
             setCompletions([]);
             return;
@@ -176,7 +175,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
         } else {
             setEditingLecture(null);
             setFormData({
-                date: selectedDate, round: (lectures.length + 1) + '회차', progress: '', homework: '',
+                date: selectedDate, round: ((lectures || []).length + 1) + '회차', progress: '', homework: '',
                 youtubeLink: '', youtubeLinks: [''], proofImageUrl: '' 
             });
         }
@@ -203,12 +202,12 @@ const LectureManagementPanel = ({ selectedClass }) => {
 
     const handleAddLink = () => setFormData(p => ({ ...p, youtubeLinks: [...(p.youtubeLinks || []), ''] }));
     const handleLinkChange = (i, v) => { const n = [...(formData.youtubeLinks || [''])]; n[i] = v; setFormData(p => ({ ...p, youtubeLinks: n })); };
-    const handleRemoveLink = (i) => setFormData(p => ({ ...p, youtubeLinks: p.youtubeLinks.filter((_, idx) => idx !== i) }));
+    const handleRemoveLink = (i) => setFormData(p => ({ ...p, youtubeLinks: (p.youtubeLinks || []).filter((_, idx) => idx !== i) }));
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full animate-in fade-in">
             <div className="space-y-6 w-full">
-                 <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures} />
+                 <LectureCalendar selectedDate={selectedDate} onDateChange={setSelectedDate} lectures={lectures || []} />
             </div>
             
             <div className="lg:col-span-2 space-y-4 w-full">
@@ -350,7 +349,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
 };
 
 export const AdminLectureManager = () => {
-    const { users, classes, masterData, loadingData } = useData();
+    const { users = [], classes = [], masterData = {}, loadingData } = useData();
     
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -866,21 +865,19 @@ export const AdminLectureManager = () => {
 };
 
 export const LecturerDashboard = ({ currentUser }) => {
-    // 🚀 [CTO 패치] 로딩 대기망(loadingData) 추가! 이제 데이터가 오기 전에 죽지 않습니다.
-    const { classes: allClasses, users, loadingData } = useData();
+    const { classes: allClasses = [], users = [], loadingData } = useData();
     const [selectedClass, setSelectedClass] = useState(null);
 
     const myClasses = useMemo(() => {
         if (!currentUser) return [];
-        return (allClasses || []).filter(c => c.lecturerId === currentUser.id);
+        return (allClasses || []).filter(c => c?.lecturerId === currentUser.id);
     }, [allClasses, currentUser]);
 
     useEffect(() => {
         if(myClasses.length > 0 && !selectedClass) setSelectedClass(myClasses[0]);
     }, [myClasses, selectedClass]);
 
-    // 🚀 [CTO 패치] 데이터를 다 가져올 때까지 로딩 스피너 출력
-    if (loadingData) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    if (loadingData) return <div className="flex justify-center items-center h-full w-full min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in">
