@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.9.3 - 안드로이드 SMS 전송 호환성을 위한 전화번호 숫자 정제(하이픈 제거) 로직 추가 */
+/* [서비스 가치] 클리닉 V2.9.4 - 비용 절감을 위한 AI 정제 버튼 관리자(admin/assistant) 전용 권한 제한 패치 적용 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -591,8 +591,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
                 notify('기록 삭제 완료', 'success');
             });
-        
-        // 🚀 [CTO 패치] onAction 오타로 인해 작동하지 않던 [발송 생략] 기능 완벽 정상화
         } else if (action === 'skip_feedback_msg') {
             askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
@@ -916,7 +914,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                {/* 🚀 [CTO 패치] handleAction과 연결된 발송 생략 버튼 */}
                                 <div className="flex gap-2 shrink-0">
                                     <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
                                     <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); handleAction('skip_feedback_msg', s); }}>발송 생략</Button>
@@ -1114,11 +1111,19 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-bold text-gray-700">진행 내용 및 특이사항</label>
-                <Button size="sm" variant="outline" className="text-purple-600 border-purple-300 bg-purple-50 hover:bg-purple-100 font-bold shadow-sm" onClick={handleAiRefine} disabled={isRefining}>
-                    {isRefining ? <Loader className="animate-spin" size={14}/> : <Sparkles size={14}/>} AI 문장 자동 정제
-                </Button>
+                {/* 🚀 [CTO 패치] 관리자 및 행정조교만 AI 버튼을 볼 수 있도록 권한 제한 */}
+                {['admin', 'admin_assistant'].includes(currentUser.role) && (
+                    <Button size="sm" variant="outline" className="text-purple-600 border-purple-300 bg-purple-50 hover:bg-purple-100 font-bold shadow-sm" onClick={handleAiRefine} disabled={isRefining}>
+                        {isRefining ? <Loader className="animate-spin" size={14}/> : <Sparkles size={14}/>} AI 문장 자동 정제
+                    </Button>
+                )}
             </div>
-            <textarea className="w-full border-2 border-gray-200 rounded-xl p-4 h-28 text-base outline-none focus:ring-2 focus:ring-blue-300 transition-colors" placeholder="진행 내용과 학생의 취약점을 편하게 작성하세요. AI가 학부모님용으로 다듬어 드립니다." value={feedbackData.clinicDetails} onChange={e=>setFeedbackData({...feedbackData, clinicDetails:e.target.value})}/>
+            <textarea 
+                className="w-full border-2 border-gray-200 rounded-xl p-4 h-28 text-base outline-none focus:ring-2 focus:ring-blue-300 transition-colors" 
+                placeholder={['admin', 'admin_assistant'].includes(currentUser.role) ? "진행 내용과 학생의 취약점을 편하게 작성하세요. AI가 학부모님용으로 다듬어 드립니다." : "진행 내용과 학생의 취약점을 상세히 작성해 주세요."} 
+                value={feedbackData.clinicDetails} 
+                onChange={e=>setFeedbackData({...feedbackData, clinicDetails:e.target.value})}
+            />
         </div>
 
         <div className="mb-4">
@@ -1206,7 +1211,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     return;
                 }
 
-                // 🚀 [CTO 패치] 안드로이드 SMS 전송 오류 방지를 위한 하이픈(-) 완벽 제거
+                // 🚀 안드로이드 SMS 전송 오류 방지를 위한 하이픈(-) 완벽 제거
                 const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
 
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 

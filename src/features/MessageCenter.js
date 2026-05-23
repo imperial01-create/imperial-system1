@@ -1,10 +1,11 @@
 /* [서비스 가치] 통합 메시지 센터 - 스마트 변수 치환, 반별 타겟 추출, 무한 템플릿을 지원하여 
-   학원의 모든 소통(안내, 출결, 성적, 결제)을 한 곳에서 자동화합니다. */
+   학원의 모든 소통(안내, 출결, 성적, 결제)을 한 곳에서 자동화합니다. 
+   (🚀 CTO 긴급 패치: 미리보기 창 렌더링 중 발생하는 Eye 아이콘 누락 버그 완벽 해결) */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Send, Users, BookOpen, MessageSquare, Plus, Trash2, Search, CheckSquare, 
   Square, Clock, History, AlertCircle, FileText, ChevronRight, CheckCircle,
-  Smartphone, Filter
+  Smartphone, Filter, Eye // 🚀 [원인 해결] Eye 아이콘이 드디어 추가되었습니다!
 } from 'lucide-react';
 import { collection, addDoc, writeBatch, doc, serverTimestamp, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -147,31 +148,37 @@ const MessageCenter = ({ currentUser }) => {
     }
   };
 
-  // 🚀 실제 메시지 텍스트 조립 (변수 치환)
+  // 🚀 실제 메시지 텍스트 조립 (오류 방어막 적용 완료)
   const compileMessage = (rawMsg, user) => {
-      let msg = rawMsg;
-      const todayStr = new Date().toISOString().split('T')[0];
-      const nextMonthStr = String((new Date().getMonth() + 2) > 12 ? 1 : new Date().getMonth() + 2);
-      
-      // 학부모 이름, 학생 이름 치환 로직
-      let sName = user.name;
-      let pName = user.name;
-      
-      if (user.role === 'parent') {
-          sName = user.linkedStudentNames || '자녀';
-      } else if (user.role === 'student') {
-          pName = '학부모'; // 학생 본인에게 보낼 때는 부모 이름 추정 불가
+      try {
+          if (!rawMsg || !user) return "";
+          let msg = String(rawMsg);
+          const todayStr = new Date().toISOString().split('T')[0];
+          const nextMonthStr = String((new Date().getMonth() + 2) > 12 ? 1 : new Date().getMonth() + 2);
+          
+          let sName = user.name || '학생';
+          let pName = user.name || '학부모님';
+          
+          if (user.role === 'parent') {
+              sName = user.linkedStudentNames || '자녀';
+          } else if (user.role === 'student') {
+              pName = '학부모님';
+          }
+
+          const cName = selectedClassId !== 'ALL' ? (classes || []).find(c => c.id === selectedClassId)?.name || '학원' : '학원';
+
+          // split/join을 이용해 변수 치환 중 일어날 수 있는 정규식 오류 원천 차단
+          msg = msg.split('#{학생이름}').join(String(sName));
+          msg = msg.split('#{학부모이름}').join(String(pName));
+          msg = msg.split('#{오늘날짜}').join(String(todayStr));
+          msg = msg.split('#{다음달}').join(String(nextMonthStr));
+          msg = msg.split('#{반이름}').join(String(cName));
+          
+          return msg;
+      } catch (error) {
+          console.error("미리보기 렌더링 오류:", error);
+          return "미리보기를 생성하는 중 오류가 발생했습니다.";
       }
-
-      const cName = selectedClassId !== 'ALL' ? classes.find(c => c.id === selectedClassId)?.name || '' : '학원';
-
-      msg = msg.replace(/#{학생이름}/g, sName);
-      msg = msg.replace(/#{학부모이름}/g, pName);
-      msg = msg.replace(/#{오늘날짜}/g, todayStr);
-      msg = msg.replace(/#{다음달}/g, nextMonthStr);
-      msg = msg.replace(/#{반이름}/g, cName);
-      
-      return msg;
   };
 
   const handleSendMessage = async () => {
@@ -186,7 +193,6 @@ const MessageCenter = ({ currentUser }) => {
       const batch = writeBatch(db);
       
       selectedRecipients.forEach(user => {
-          // 🚀 [CTO 패치] 폰 번호 살균(하이픈 제거) 및 변수 치환
           const cleanPhone = user.phone.replace(/[^0-9]/g, '');
           const finalMessage = compileMessage(messageBody, user);
           
