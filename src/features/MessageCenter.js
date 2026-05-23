@@ -1,11 +1,11 @@
 /* [서비스 가치] 통합 메시지 센터 - 스마트 변수 치환, 반별 타겟 추출, 무한 템플릿을 지원하여 
    학원의 모든 소통(안내, 출결, 성적, 결제)을 한 곳에서 자동화합니다. 
-   (🚀 업데이트: 발송 후 빈 화면 Crash 완벽 방어 및 템플릿 커스텀 기능 DB 연동 완료) */
+   (🚀 CTO 긴급 패치: 발송 중 버튼에 나타나는 Loader 아이콘 누락으로 인한 빈 화면 Crash 완벽 해결!) */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Send, Users, BookOpen, MessageSquare, Plus, Trash2, Search, CheckSquare, 
   Square, Clock, History, AlertCircle, FileText, ChevronRight, CheckCircle,
-  Smartphone, Filter, Eye, Edit2
+  Smartphone, Filter, Eye, Edit2, Loader // 🚀 [원인 해결] 발송 버튼용 Loader 아이콘 추가 완료!
 } from 'lucide-react';
 import { collection, addDoc, writeBatch, doc, setDoc, serverTimestamp, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -178,7 +178,7 @@ const MessageCenter = ({ currentUser }) => {
       setSelectedRecipients([]); setMessageBody(''); setSelectedTemplate('');
       setActiveTab('history');
     } catch (e) { alert(`발송 오류: ${e.message}`); } 
-    finally { setIsSending(false); }
+    finally { setIsSending(false); } // 로딩 아이콘 끄기
   };
 
   // --- 템플릿 탭 핸들러 ---
@@ -213,7 +213,7 @@ const MessageCenter = ({ currentUser }) => {
       } catch (e) { alert('삭제 실패: ' + e.message); }
   };
 
-  // 🚀 [Crash 방어] 철통 방어막이 적용된 날짜 포맷 함수
+  // 날짜 포맷 함수
   const formatTime = (timestamp) => {
       if (!timestamp) return '-';
       try {
@@ -344,7 +344,7 @@ const MessageCenter = ({ currentUser }) => {
           </div>
       )}
 
-      {/* 2. 발송 내역 / 대기열 탭 (🚀 Crash 원천 차단 컴포넌트 렌더링 적용) */}
+      {/* 2. 발송 내역 / 대기열 탭 */}
       {activeTab === 'history' && (
           <Card className="w-full">
               <h3 className="font-black text-xl text-gray-900 mb-6 flex items-center gap-2"><History className="text-gray-700"/> 최근 발송 내역 (최대 100건)</h3>
@@ -373,7 +373,6 @@ const MessageCenter = ({ currentUser }) => {
                                   <td className="p-4 font-bold text-gray-800">{item.recipientName || item.studentName || '이름없음'}</td>
                                   <td className="p-4 font-mono text-gray-500">{item.phoneNumber}</td>
                                   <td className="p-4">
-                                      {/* 외부 Badge 컴포넌트 의존성 제거, 안전한 HTML/CSS로 변경 */}
                                       {item.type === 'manual_notice' && <span className="px-2 py-1 text-[10px] font-bold rounded-md bg-indigo-100 text-indigo-700 border border-indigo-200">수동 공지</span>}
                                       {item.type === 'clinic_feedback' && <span className="px-2 py-1 text-[10px] font-bold rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">클리닉 리포트</span>}
                                   </td>
@@ -387,7 +386,7 @@ const MessageCenter = ({ currentUser }) => {
           </Card>
       )}
 
-      {/* 3. 템플릿 관리 탭 (🚀 실제 DB 연동 기능 추가 완료) */}
+      {/* 3. 템플릿 관리 탭 */}
       {activeTab === 'templates' && (
           <Card className="w-full">
               <div className="flex justify-between items-center mb-6">
