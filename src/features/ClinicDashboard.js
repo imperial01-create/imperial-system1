@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.9 - 전화번호 딥서치 로직 완료 및 클리닉 간 강의실 오버부킹 완벽 방어 */
+/* [서비스 가치] 클리닉 V2.9.1 - 피드백 [발송 생략] 버튼 완벽 적용 (내부 기록은 보존하고 SMS 발송만 스킵) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -405,21 +405,17 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         return list;
     }, [baseSchedules, masterScheduleRequests]);
 
-    // 🚀 [CTO 패치] 클리닉 간 오버부킹 검사 로직 완벽 보강
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom, currentSessionId = null) => {
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
         
-        // 정규화를 통해 'Class 1'과 'Classroom 1'이 다르게 인식되는 현상 방지
         const normTargetRoom = (clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
 
-        // 1. 정규 스케줄(마스터 시간표) 점유 여부
         const isOccupiedByClass = activeSchedules.some(s => {
             const normS = (s.room || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
             if (normS !== normTargetRoom) return false;
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
             
-            // 시간 비교 방어 로직 추가 (종료시간이 없으면 1시간 추가)
             const startA = s.startTime;
             const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
             const startB = startTime;
@@ -429,14 +425,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
         if (isOccupiedByClass) return 'class';
 
-        // 2. 다른 클리닉 세션 점유 여부
         const isOccupiedByClinic = sessions.some(s => {
-            if (currentSessionId && s.id === currentSessionId) return false; // 본인 세션 제외
+            if (currentSessionId && s.id === currentSessionId) return false; 
             if (s.date !== dateStr) return false;
             
             const normS = (s.classroom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
             if (!normS || normS !== normTargetRoom) return false;
-            if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; // 허수 상태 제외
+            if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; 
             
             const startA = s.startTime;
             const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
@@ -616,13 +611,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
                 notify('기록 삭제 완료', 'success');
             });
-        } else if (action === 'discard_feedback') {
-            askConfirm("작성된 피드백을 파기하시겠습니까?\n(출석 상태는 유지되며, 피드백 내용만 초기화됩니다.)", async () => {
-                const resetData = { feedbackStatus: null, clinicDetails: '', nextAction: '', tags: '', rating: 5 };
-                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
-                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
-                notify('피드백이 파기되어 다시 작성할 수 있습니다.', 'success');
+        
+        // 🚀 [CTO 패치] 피드백 발송 생략 (내부 보관용) 기능 완벽 적용
+        } else if (action === 'skip_feedback_msg') {
+            askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
+                await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
+                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], feedbackStatus: 'sent' } }));
+                notify('문자 발송이 생략되고 내부 기록으로 보관되었습니다.', 'success');
             });
+        
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' });
@@ -939,9 +936,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
+                                {/* 🚀 [CTO 패치] [발송 생략] 버튼으로 완벽하게 교체되었습니다! */}
                                 <div className="flex gap-2 shrink-0">
                                     <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
-                                    <Button variant="danger" size="sm" icon={Trash2} onClick={(e)=>{ e.stopPropagation(); onAction('discard_feedback', s); }}>파기</Button>
+                                    <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); onAction('skip_feedback_msg', s); }}>발송 생략</Button>
                                 </div>
                             </div>
                         ))}</div>
@@ -1200,31 +1198,29 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 let targetPhone = '';
                 let targetStudentId = selectedSession.studentId;
 
-                // 🚀 [CTO 패치] 초강력 전화번호 딥서치 로직
-                // 1단계: 이름만 입력된 경우, DB 전체를 뒤져 학생의 고유 ID부터 찾음
+                // 1단계: 직접 이름으로 입력한 경우 시스템 전체를 뒤져 학생 ID를 찾음
                 if (!targetStudentId && selectedSession.studentName) {
                     const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
                     if (foundStudent) targetStudentId = foundStudent.id;
                 }
                 
-                // 2단계: 알아낸 학생 ID를 이용해 학부모의 'linkedChildrenIds' 배열을 관통하여 부모님 전화번호 확보
+                // 2단계: 찾아낸 학생 ID를 기반으로 부모님 계정을 연결고리로 탐색
                 if (targetStudentId) {
                     const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
                     if (parentUser && parentUser.phone) {
                         targetPhone = parentUser.phone; // 학부모 번호 최우선
                     } else {
-                        // 학부모 번호가 없다면 학생 본인 번호라도 추출
                         const studentUser = users.find(u => u.id === targetStudentId);
-                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; // 없으면 학생 본인 번호
                     }
                 }
 
-                // 3단계: 그래도 없으면 예약 당시 수동으로 입력했던 번호라도 발송
+                // 3단계: 그래도 없으면 예약 당시 입력했던 텍스트(문자열) 번호 사용
                 if (!targetPhone && selectedSession.studentPhone) {
                     targetPhone = selectedSession.studentPhone;
                 }
 
-                // 4단계: 최종 실패 시 에러 안내
+                // 최종 검증
                 if (!targetPhone) {
                     notify('이 학생과 연결된 학부모 연락처나 학생 본인의 연락처가 시스템에 없습니다.', 'error');
                     return;
