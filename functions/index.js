@@ -36,7 +36,7 @@ exports.adminResetPassword = onCall(async (request) => {
   }
 });
 
-// [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 (🚀 이중 코어 패치 적용)
+// [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 (🚀 2026년형 3.5 Flash 엔진 탑재 완료)
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
@@ -69,13 +69,13 @@ exports.refineFeedback = onCall(async (request) => {
 
         let result;
         try {
-            // 1순위: 가장 빠르고 똑똑한 최신 모델 시도
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            // 🚀 [CTO 패치] 원장님 지적사항 완벽 반영: 현재 구글 서버에 실존하는 2026년 최신 3.5 Flash 모델 호출!
+            const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
             result = await model.generateContent(prompt);
         } catch (fallbackError) {
-            console.warn("🔥 1.5-flash 모델 호출 실패. 범용 표준 모델(gemini-pro)로 우회합니다.", fallbackError);
-            // 2순위: 404 에러 발생 시, 구버전 SDK에서도 100% 호환되는 표준 모델로 즉시 우회
-            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+            console.warn("🔥 3.5-flash 모델 호출 실패. 3.1 Pro 모델로 자동 우회합니다.", fallbackError);
+            // 🚀 우회용 모델 역시 구글의 최신 3.1 Pro 엔진으로 업그레이드!
+            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
             result = await fallbackModel.generateContent(prompt);
         }
 
@@ -93,9 +93,7 @@ exports.onSmsOutboxCreated = onDocumentCreated("artifacts/imperial-clinic-v1/pub
     
     const smsData = snapshot.data();
 
-    // 상태가 'pending(발송 대기)'인 문자 데이터가 생성되었을 때만 작동
     if (smsData.status === "pending") {
-        
         const pushMessage = {
             data: {
                 action: "TRIGGER_SMS_SEND",
