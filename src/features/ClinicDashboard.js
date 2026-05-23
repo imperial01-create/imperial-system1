@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.9.4 - 비용 절감을 위한 AI 정제 버튼 관리자(admin/assistant) 전용 권한 제한 패치 적용 */
+/* [서비스 가치] 클리닉 V2.9.5 - 발송 후 빈 화면 Crash 완벽 방어 및 클리닉 승인 시 문자 검수/편집 기능 추가 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -16,9 +16,11 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
+// 🚀 [CTO 패치] 클리닉 승인 및 피드백 템플릿 최신화
 const TEMPLATES = {
-  confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 본관 ${d.classroom || '미정'}\n내용 : ${d.topic}\n\n학생이 직접 시간을 선정하였으며, 해당 시간은 선생님과의 약속이므로 늦지 않도록 지도 부탁드립니다.`,
-  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n🗓️ 클리닉 일시 : ${d.date} ${d.startTime}~${d.endTime}\n👨‍🏫 담당 선생님 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(d.rating || 5)}${'☆'.repeat(5 - (d.rating || 5))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
+  confirmParent: (d) => `[목동임페리얼학원]\n안녕하세요. ${d.studentName} 학생의 개인 클리닉 일정이 승인되어 안내해 드립니다.\n\n[클리닉 확정 안내]\n- 일시 : ${d.date} ${d.startTime}~${d.endTime || String(parseInt((d.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00'}\n- 장소 : 본관 ${d.classroom || '미정'}\n- 내용 : ${d.topic}\n\n학생이 직접 필요한 시간을 선정하여 신청한 일정입니다. 해당 시간은 담당 선생님과의 1:1 약속이므로 늦거나 결석하지 않도록 각별한 지도 부탁드립니다. 감사합니다.`,
+  
+  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n🗓️ 클리닉 일시 : ${d.date} ${d.startTime}~${d.endTime || String(parseInt((d.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00'}\n👨‍🏫 담당 선생님 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(Number(d.rating || 5))}${'☆'.repeat(Math.max(0, 5 - Number(d.rating || 5)))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
 };
 
 const getLocalToday = () => {
@@ -514,6 +516,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }
     }, [sessions, currentUser]);
 
+    // 🚀 [Crash 방어] 0.1초 차이 데이터 없음 에러 방지
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
@@ -591,35 +594,54 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
                 notify('기록 삭제 완료', 'success');
             });
+        
         } else if (action === 'skip_feedback_msg') {
             askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
-                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], feedbackStatus: 'sent' } }));
+                // 🚀 [Crash 방어] 
+                updateLocalAndCacheState(prev => {
+                    const current = prev[payload.id] || {};
+                    return { ...prev, [payload.id]: { ...current, feedbackStatus: 'sent' } };
+                });
                 notify('문자 발송이 생략되고 내부 기록으로 보관되었습니다.', 'success');
             });
         
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' });
-                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], status: 'open', cancelReason: '' } }));
+                updateLocalAndCacheState(prev => {
+                    const current = prev[payload.id] || {};
+                    return { ...prev, [payload.id]: { ...current, status: 'open', cancelReason: '' } };
+                });
             });
         } else if (action === 'withdraw_add') {
             if(payload) askConfirm("철회하시겠습니까?", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
             });
+        
+        // 🚀 [CTO 패치] 클리닉 승인 시 안내 문자 검수창 연결
         } else if (action === 'approve_booking') {
-            setSelectedSession(payload); setModalState({ type: 'preview_confirm' });
+            setSelectedSession(payload); 
+            setPreviewMessage(TEMPLATES.confirmParent(payload));
+            setModalState({ type: 'preview_confirm' });
+
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
                 const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
-                updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], ...resetData } }));
+                updateLocalAndCacheState(prev => {
+                    const current = prev[payload.id] || {};
+                    return { ...prev, [payload.id]: { ...current, ...resetData } };
+                });
                 notify('예약 신청이 취소되었습니다.');
             });
         } else if (action === 'update_classroom') {
             await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { classroom: payload.val });
-            updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], classroom: payload.val } }));
+            updateLocalAndCacheState(prev => {
+                const current = prev[payload.id] || {};
+                return { ...prev, [payload.id]: { ...current, classroom: payload.val } };
+            });
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); 
             setFeedbackData({
@@ -641,7 +663,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
              } 
              else if (payload.status === 'addition_requested') { 
                  await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); 
-                 updateLocalAndCacheState(prev => ({ ...prev, [payload.id]: { ...prev[payload.id], status: 'open' } }));
+                 updateLocalAndCacheState(prev => {
+                     const current = prev[payload.id] || {};
+                     return { ...prev, [payload.id]: { ...current, status: 'open' } };
+                 });
                  notify('추가 요청 승인됨'); 
              }
         } else if (action === 'send_feedback_msg') { 
@@ -722,7 +747,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
               return next;
           });
           
-          sendClinicNotificationToTelegram(updates);
           setModalState({type:null}); 
           setStudentSelectedSlots([]); 
           notify('신청이 성공적으로 완료되었습니다!', 'success');
@@ -749,7 +773,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     
     try {
         await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
-        updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...updateData } }));
+        updateLocalAndCacheState(prev => {
+            const current = prev[selectedSession.id] || {};
+            return { ...prev, [selectedSession.id]: { ...current, ...updateData } };
+        });
         setModalState({type:null}); notify('수정완료', 'success'); 
     } catch (e) { notify('수정 권한이 거부되었습니다.', 'error'); }
   };
@@ -766,7 +793,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             return (isMatchedByArray || isMatchedByName) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
         }
         return (s.studentId === currentUser.id || s.studentName === currentUser.name) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
-    }).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
+    }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); // 🚀 [Crash 방어] 문자열 오류 방어
   }, [sessions, currentUser]);
 
   if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
@@ -1005,7 +1032,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         <div className="mt-4 bg-white p-4 rounded-xl text-sm text-gray-700 border-2 border-green-400 shadow-sm">
                                             <div className="font-black text-green-800 mb-3 flex items-center justify-between border-b border-green-200 pb-2">
                                                 <span className="flex items-center gap-1.5"><MessageSquare size={18}/> 선생님의 클리닉 피드백</span>
-                                                <span className="text-yellow-500 text-lg tracking-widest drop-shadow-sm">{'★'.repeat(s.rating||5)}{'☆'.repeat(5-(s.rating||5))}</span>
+                                                <span className="text-yellow-500 text-lg tracking-widest drop-shadow-sm">{'★'.repeat(Number(s.rating||5))}{'☆'.repeat(Math.max(0, 5 - Number(s.rating||5)))}</span>
                                             </div>
                                             {s.tags && <div className="mb-3"><span className="text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg">{s.tags}</span></div>}
                                             
@@ -1062,7 +1089,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <Button onClick={async()=>{ 
             if(!requestData.reason) return notify('사유입력','error'); 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
-            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'cancellation_requested', cancelReason: requestData.reason } }));
+            updateLocalAndCacheState(prev => {
+                const current = prev[selectedSession.id] || {};
+                return { ...prev, [selectedSession.id]: { ...current, status: 'cancellation_requested', cancelReason: requestData.reason } };
+            });
             setModalState({type:null}); 
             notify('요청 완료 (관리자에게 전달되었습니다)'); 
         }} className="w-full py-4 text-lg">요청 전송</Button>
@@ -1111,7 +1141,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-bold text-gray-700">진행 내용 및 특이사항</label>
-                {/* 🚀 [CTO 패치] 관리자 및 행정조교만 AI 버튼을 볼 수 있도록 권한 제한 */}
                 {['admin', 'admin_assistant'].includes(currentUser.role) && (
                     <Button size="sm" variant="outline" className="text-purple-600 border-purple-300 bg-purple-50 hover:bg-purple-100 font-bold shadow-sm" onClick={handleAiRefine} disabled={isRefining}>
                         {isRefining ? <Loader className="animate-spin" size={14}/> : <Sparkles size={14}/>} AI 문장 자동 정제
@@ -1133,7 +1162,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
         <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{ 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); 
-            updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } })); 
+            updateLocalAndCacheState(prev => {
+                const current = prev[selectedSession.id] || {};
+                return { ...prev, [selectedSession.id]: { ...current, ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } };
+            }); 
             setModalState({type:null}); 
             notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
         }}>저장 및 검수 요청하기</Button>
@@ -1164,9 +1196,65 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
       </Modal>
       
-      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="문자 발송">
-        <div className="bg-gray-50 p-5 rounded-xl mb-4 whitespace-pre-wrap text-base leading-relaxed">{selectedSession&&TEMPLATES.confirmParent(selectedSession)}</div>
-        <Button className="w-full py-4 text-lg" onClick={async ()=>{ await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], status: 'confirmed' } })); setModalState({type:null}); notify('확정 완료'); }}>전송 및 확정</Button>
+      {/* 🚀 [CTO 패치] 클리닉 승인 시 안내 문자 검수창 적용 완료 */}
+      <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="클리닉 예약 승인 및 학부모 안내문자 발송">
+        <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
+            <CheckCircle size={18}/> 아래 내용을 확인하신 후 승인하시면 학부모님께 문자가 즉시 발송됩니다. (수정 가능)
+        </div>
+        <textarea 
+            className="w-full bg-white p-5 rounded-xl text-base border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-64 custom-scrollbar leading-relaxed" 
+            value={previewMessage}
+            onChange={(e) => setPreviewMessage(e.target.value)}
+        />
+        <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
+            try {
+                let targetPhone = '';
+                let targetStudentId = selectedSession.studentId;
+
+                if (!targetStudentId && selectedSession.studentName) {
+                    const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
+                    if (foundStudent) targetStudentId = foundStudent.id;
+                }
+                
+                if (targetStudentId) {
+                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
+                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
+                    else {
+                        const studentUser = users.find(u => u.id === targetStudentId);
+                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                    }
+                }
+                if (!targetPhone && selectedSession.studentPhone) {
+                    targetPhone = selectedSession.studentPhone;
+                }
+
+                if (!targetPhone) {
+                    notify('연락처가 없어 문자를 발송할 수 없습니다. 예약만 승인됩니다.', 'error');
+                } else {
+                    const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
+                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                        phoneNumber: cleanPhone, 
+                        message: previewMessage,
+                        status: 'pending',
+                        type: 'clinic_approval',
+                        studentName: selectedSession.studentName,
+                        createdAt: serverTimestamp()
+                    });
+                }
+
+                await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); 
+                updateLocalAndCacheState(prev => {
+                    const current = prev[selectedSession.id] || {};
+                    return { ...prev, [selectedSession.id]: { ...current, status: 'confirmed' } };
+                }); 
+                
+                setModalState({type:null}); 
+                notify(targetPhone ? '승인 완료 및 안내문자 발송 요청됨!' : '승인 완료!', 'success'); 
+            } catch (error) {
+                console.error("승인 오류:", error);
+                notify(`오류: ${error.message}`, 'error');
+            }
+        }}>예약 승인 및 문자 발송하기</Button>
       </Modal>
       
       <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="학부모 발송용 피드백 검수">
@@ -1183,35 +1271,30 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 let targetPhone = '';
                 let targetStudentId = selectedSession.studentId;
 
-                // 1단계: 직접 이름으로 입력한 경우 시스템 전체를 뒤져 학생 ID를 찾음
                 if (!targetStudentId && selectedSession.studentName) {
                     const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
                     if (foundStudent) targetStudentId = foundStudent.id;
                 }
                 
-                // 2단계: 찾아낸 학생 ID를 기반으로 부모님 계정을 연결고리로 탐색
                 if (targetStudentId) {
                     const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
                     if (parentUser && parentUser.phone) {
-                        targetPhone = parentUser.phone; // 학부모 번호 최우선
+                        targetPhone = parentUser.phone;
                     } else {
                         const studentUser = users.find(u => u.id === targetStudentId);
-                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; // 없으면 학생 본인 번호
+                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
                     }
                 }
 
-                // 3단계: 그래도 없으면 예약 당시 입력했던 텍스트(문자열) 번호 사용
                 if (!targetPhone && selectedSession.studentPhone) {
                     targetPhone = selectedSession.studentPhone;
                 }
 
-                // 최종 검증
                 if (!targetPhone) {
                     notify('이 학생과 연결된 학부모 연락처나 학생 본인의 연락처가 시스템에 없습니다.', 'error');
                     return;
                 }
 
-                // 🚀 안드로이드 SMS 전송 오류 방지를 위한 하이픈(-) 완벽 제거
                 const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
 
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
@@ -1225,7 +1308,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     createdAt: serverTimestamp()
                 });
 
-                updateLocalAndCacheState(prev => ({ ...prev, [selectedSession.id]: { ...prev[selectedSession.id], feedbackStatus: 'sent' } })); 
+                updateLocalAndCacheState(prev => {
+                    const current = prev[selectedSession.id] || {};
+                    return { ...prev, [selectedSession.id]: { ...current, feedbackStatus: 'sent' } };
+                }); 
                 setModalState({type:null}); 
                 notify('학원 폰으로 자동 발송이 요청되었습니다!', 'success'); 
             } catch (error) {
