@@ -4,7 +4,7 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity
+  Clock, Trash2, UserPlus, Activity, MessageSquare // 🚀 [CTO 패치] MessageSquare 아이콘 추가
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -29,6 +29,8 @@ const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
 const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
+// 🚀 [CTO 패치] 통합 메시지 센터 모듈 임포트 추가
+const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -122,6 +124,17 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">지출결의 등록</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">법인카드 및 개인 지출 내역을 등록하고 증빙 영수증을 업로드합니다.</p>
+                    </div>
+                )}
+
+                {/* 🚀 [CTO 패치] 통합 메시지 센터 바로가기 대시보드 메뉴 추가 */}
+                {['admin', 'admin_assistant'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/messages')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><MessageSquare size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">대량 알림 발송</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">성적표, 수강료 결제, 휴원 공지 등의 대량 문자를 템플릿으로 발송합니다.</p>
                     </div>
                 )}
 
@@ -220,7 +233,6 @@ const Dashboard = ({ currentUser }) => {
 };
 
 const AppLayout = ({ currentUser, handleLogout }) => {
-  // 🚀 안전한 하위 호환성 유지: 글로벌 저장소에서 users를 꺼내서, 아직 리팩토링 안 된 구형 메뉴에 넘겨줍니다.
   const { users } = useData(); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
@@ -239,6 +251,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
+    // 🚀 [CTO 패치] 통합 메시지 센터 사이드바 메뉴 추가
+    { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
     { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
@@ -297,13 +311,15 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        {/* 🚀 최적화 완료된 신규 코어 모듈들 (props 없음) */}
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
+                        
+                        {/* 🚀 [CTO 패치] 통합 메시지 센터 라우트 추가 */}
+                        <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
 
-                        {/* 🚀 구형 모듈들은 런타임 오류 방지를 위해 users props 유지 */}
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
@@ -355,81 +371,81 @@ const AppContent = () => {
   }, []);
 
   const handleLogin = async () => {
-     if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
-     setLoginProcessing(true);
-     try {
-         const rawId = loginForm.id.trim();
-         let loginPassword = loginForm.password;
-         if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
+      if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
+      setLoginProcessing(true);
+      try {
+          const rawId = loginForm.id.trim();
+          let loginPassword = loginForm.password;
+          if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
 
-         const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
-         let authUid = null;
-         let finalSafeId = null;
+          const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
+          let authUid = null;
+          let finalSafeId = null;
 
-         for (const idVariant of idVariants) {
-             const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-             const email = `${safeId}@imperial.com`;
-             try {
-                 const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
-                 authUid = userCredential.user.uid;
-                 finalSafeId = safeId;
-                 break; 
-             } catch (authErr) {}
-         }
+          for (const idVariant of idVariants) {
+              const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+              const email = `${safeId}@imperial.com`;
+              try {
+                  const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
+                  authUid = userCredential.user.uid;
+                  finalSafeId = safeId;
+                  break; 
+              } catch (authErr) {}
+          }
 
-         if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase(); }
-         
-         try {
-             let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
-             let userDoc = await getDoc(userDocRef);
-             let docData = null;
-             let originalDocId = null; 
-             
-             if (!userDoc.exists()) {
-                 const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
-                 const s = await getDocs(q);
-                 if (!s.empty) {
-                     userDoc = s.docs[0];
-                     docData = userDoc.data();
-                     originalDocId = userDoc.id; 
-                 }
-             } else {
-                 docData = userDoc.data();
-                 originalDocId = userDoc.id;
-             }
-             
-             if(docData) {
-                 if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
+          if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase(); }
+          
+          try {
+              let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
+              let userDoc = await getDoc(userDocRef);
+              let docData = null;
+              let originalDocId = null; 
+              
+              if (!userDoc.exists()) {
+                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
+                  const s = await getDocs(q);
+                  if (!s.empty) {
+                      userDoc = s.docs[0];
+                      docData = userDoc.data();
+                      originalDocId = userDoc.id; 
+                  }
+              } else {
+                  docData = userDoc.data();
+                  originalDocId = userDoc.id;
+              }
+              
+              if(docData) {
+                  if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
 
-                 const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
+                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
-                 if (originalDocId && originalDocId !== finalSafeId) {
-                     setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
-                        .then(() => {
-                            const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
-                            deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
-                        })
-                        .catch(e => console.error("Self-healing failed:", e));
-                 } else {
-                     updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
-                        .catch(e => console.error("Last login update failed:", e));
-                 }
+                  if (originalDocId && originalDocId !== finalSafeId) {
+                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
+                         .then(() => {
+                             const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
+                             deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
+                         })
+                         .catch(e => console.error("Self-healing failed:", e));
+                  } else {
+                      updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
+                         .catch(e => console.error("Last login update failed:", e));
+                  }
 
-                 setCurrentUser(userData);
-                 sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-                 navigate('/dashboard'); 
-             } else { 
-                 setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' }); 
-             }
-         } catch (dbErr) {
-             console.error("Firestore Permission Denied:", dbErr);
-             throw new Error("보안 규칙(Zero Trust) 접근 거부");
-         }
-     } catch (e) { 
-         console.error("Login Final Error:", e);
-         setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
-     } 
-     finally { setLoginProcessing(false); }
+                  setCurrentUser(userData);
+                  sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+                  navigate('/dashboard'); 
+              } else { 
+                  setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' }); 
+              }
+          } catch (dbErr) {
+              console.error("Firestore Permission Denied:", dbErr);
+              throw new Error("보안 규칙(Zero Trust) 접근 거부");
+          }
+      } catch (e) { 
+          console.error("Login Final Error:", e);
+          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
+      } 
+      finally { setLoginProcessing(false); }
   };
 
   const handleLogout = async () => { 
@@ -442,7 +458,6 @@ const AppContent = () => {
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
   if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
 
-  // 🚀 글로벌 엔진이 런타임 내내 데이터를 캐싱합니다.
   return (
       <DataProvider currentUser={currentUser}>
           <AppLayout currentUser={currentUser} handleLogout={handleLogout} />
