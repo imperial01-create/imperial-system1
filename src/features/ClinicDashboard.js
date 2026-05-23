@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.9.1 - 피드백 [발송 생략] 버튼 완벽 적용 (내부 기록은 보존하고 SMS 발송만 스킵) */
+/* [서비스 가치] 클리닉 V2.9.2 - 발송 생략(Skip) 버튼 오타 수정 및 SMS 템플릿 날짜/시간 추가 패치 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -18,7 +18,8 @@ const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const TEMPLATES = {
   confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 본관 ${d.classroom || '미정'}\n내용 : ${d.topic}\n\n학생이 직접 시간을 선정하였으며, 해당 시간은 선생님과의 약속이므로 늦지 않도록 지도 부탁드립니다.`,
-  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n👨‍🏫 담당 조교 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(d.rating || 5)}${'☆'.repeat(5 - (d.rating || 5))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
+  // 🚀 [CTO 패치] 템플릿에 클리닉 일시(Date & Time)가 추가되었습니다.
+  feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n🗓️ 클리닉 일시 : ${d.date} ${d.startTime}~${d.endTime}\n👨‍🏫 담당 선생님 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(d.rating || 5)}${'☆'.repeat(5 - (d.rating || 5))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
 };
 
 const getLocalToday = () => {
@@ -612,7 +613,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 notify('기록 삭제 완료', 'success');
             });
         
-        // 🚀 [CTO 패치] 피드백 발송 생략 (내부 보관용) 기능 완벽 적용
+        // 🚀 [CTO 패치] onAction 오타로 인해 작동하지 않던 [발송 생략] 기능 완벽 정상화
         } else if (action === 'skip_feedback_msg') {
             askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
@@ -936,10 +937,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                {/* 🚀 [CTO 패치] [발송 생략] 버튼으로 완벽하게 교체되었습니다! */}
+                                {/* 🚀 [CTO 패치] handleAction으로 정상 연결되어 발송 생략 버튼이 완벽 작동합니다. */}
                                 <div className="flex gap-2 shrink-0">
                                     <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
-                                    <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); onAction('skip_feedback_msg', s); }}>발송 생략</Button>
+                                    <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); handleAction('skip_feedback_msg', s); }}>발송 생략</Button>
                                 </div>
                             </div>
                         ))}</div>
