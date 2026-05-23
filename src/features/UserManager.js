@@ -1,12 +1,13 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (Updated: 학부모 계정 구형 1:1 데이터(childId, childName) 잔재 완전 제거 패치) */
+   (🚀 CTO 패치: 신규 수강 배정 시 '첫 등원 및 교재 안내 문자' 자동 템플릿 생성 및 발송 모달 연계) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, serverTimestamp, getDoc } from 'firebase/firestore';
+// 🚀 [CTO 패치] 문자 발송(sms_outbox)을 위한 addDoc, collection 임포트 추가
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
@@ -37,7 +38,6 @@ const UserManager = ({ currentUser }) => {
     const [modalTab, setModalTab] = useState('basic'); 
     const [isEditMode, setIsEditMode] = useState(false);
     
-    // 🚀 [CTO 패치] 구형 childId, childName 삭제 완료, 오직 linkedChildrenIds 만 사용
     const [formData, setFormData] = useState({ 
         id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '',
         schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
@@ -49,6 +49,10 @@ const UserManager = ({ currentUser }) => {
 
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
+
+    // 🚀 [CTO 패치] 첫 등원 안내 문자 검수창을 위한 상태값 추가
+    const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, message: '', targetPhone: '', studentName: '' });
+    const [isSendingSms, setIsSendingSms] = useState(false);
 
     const studentList = useMemo(() => users.filter(u => u.role === 'student'), [users]);
 
@@ -243,6 +247,10 @@ const UserManager = ({ currentUser }) => {
 
     const handleSaveEnrollment = async () => {
         if (!enrollForm.classId) return alert('배정할 반을 선택해주세요.');
+        
+        // 🚀 [CTO 패치] 신규 배정인지 기존 정보 수정인지 판별 (수정일 땐 enrollForm.id 가 존재함)
+        const isNewEnrollment = !enrollForm.id;
+        
         setLoading(true);
         try {
             const enrollmentId = `${formData.id}_${enrollForm.classId}`;
@@ -262,6 +270,51 @@ const UserManager = ({ currentUser }) => {
             if (!docSnap.exists()) payload.enrolledAt = serverTimestamp();
 
             await setDoc(eRef, payload, { merge: true });
+            
+            // 🚀 [CTO 패치] 신규 배정일 경우 첫 등원 문자 발송 제안
+            if (isNewEnrollment && enrollForm.status === 'active') {
+                if (window.confirm('신규 수강 배정이 완료되었습니다.\n첫 등원 및 교재 안내 문자를 발송하시겠습니까?')) {
+                    
+                    // 1. 번호 탐색 (학부모 번호 최우선, 없으면 학생 본인 번호)
+                    let targetPhone = '';
+                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(formData.id));
+                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
+                    else if (formData.phone) targetPhone = formData.phone;
+
+                    // 2. 시간표 문자열 조립
+                    const scheduleStr = enrollForm.schedules.map(s => `${s.dayOfWeek} ${s.startTime}~${s.endTime}`).join(', ');
+                    
+                    // 3. 안내 문자 템플릿 생성
+                    const defaultMsg = `[목동임페리얼학원]
+안녕하세요. 목동임페리얼학원 입학을 진심으로 환영합니다!
+${formData.name} 학생의 첫 등원 일정 및 시간표를 안내해 드립니다.
+
+[수업 정보]
+- 수강 수업 : ${enrollForm.className}
+- 수업 시간 : ${scheduleStr}
+- 첫 등원 일자 : (날짜를 입력해주세요)
+
+원활한 수업 진행을 위해 지각하지 않도록 지도 부탁드리며, 해당 수업의 교재를 미리 준비해 주시기 바랍니다.
+
+[교재 정보]
+- (교재명 1)
+- (교재명 2)
+
+처음 등원하는 학생들을 위한 학원 이용 가이드를 아래 링크에 첨부합니다. 어색하지 않은 첫 등원이 될 수 있도록 꼭 확인 부탁드립니다.
+🔗 학원 이용 가이드: https://blog.naver.com/imperialsys01/223922116856
+
+감사합니다.`;
+
+                    // 4. 모달 띄우기
+                    setSmsPreviewModal({
+                        isOpen: true,
+                        message: defaultMsg,
+                        targetPhone: targetPhone,
+                        studentName: formData.name
+                    });
+                }
+            }
+
             setEnrollForm(initEnrollForm);
             setClassSearchInput('');
             setClassSearchQuery('');
@@ -618,6 +671,50 @@ const UserManager = ({ currentUser }) => {
                     </div>
                 </div>
             </Modal>
+
+            {/* 🚀 [CTO 패치] 첫 등원 안내 문자 검수창 모달 */}
+            <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, message: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 문자 발송">
+                <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
+                    <CheckCircle size={18}/> 첫 등원 일자와 교재 정보를 정확히 입력(수정)한 후 발송해주세요.
+                </div>
+                {!smsPreviewModal.targetPhone && (
+                    <div className="bg-rose-50 text-rose-600 p-3 rounded-lg mb-3 text-sm font-bold border border-rose-200">
+                        ⚠️ 등록된 학부모 또는 학생 본인의 연락처가 없습니다. (발송 불가)
+                    </div>
+                )}
+                <textarea 
+                    className="w-full bg-white p-5 rounded-xl text-base border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-80 custom-scrollbar leading-relaxed" 
+                    value={smsPreviewModal.message}
+                    onChange={(e) => setSmsPreviewModal({...smsPreviewModal, message: e.target.value})}
+                />
+                <Button 
+                    className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" 
+                    disabled={!smsPreviewModal.targetPhone || isSendingSms}
+                    onClick={async () => {
+                        setIsSendingSms(true);
+                        try {
+                            const cleanPhone = smsPreviewModal.targetPhone.replace(/[^0-9]/g, '');
+                            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                                phoneNumber: cleanPhone, 
+                                message: smsPreviewModal.message,
+                                status: 'pending',
+                                type: 'welcome_notice',
+                                studentName: smsPreviewModal.studentName,
+                                createdAt: serverTimestamp()
+                            });
+                            setSmsPreviewModal({ isOpen: false, message: '', targetPhone: '', studentName: '' });
+                            showToast('안내 문자가 성공적으로 발송 대기열에 등록되었습니다!', 'success');
+                        } catch(e) {
+                            showToast('문자 발송 오류: ' + e.message, 'error');
+                        } finally {
+                            setIsSendingSms(false);
+                        }
+                    }}
+                >
+                    {isSendingSms ? <Loader className="animate-spin mx-auto"/> : '안내 문자 발송하기'}
+                </Button>
+            </Modal>
+
         </div>
     );
 };
