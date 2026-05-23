@@ -1,6 +1,6 @@
 // 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore"); // 🚀 Firestore 트리거 라이브러리 추가
+const { onDocumentCreated } = require("firebase-functions/v2/firestore"); 
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -20,7 +20,7 @@ exports.adminResetPassword = onCall(async (request) => {
   }
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
-    return { success: true, message: "비밀번호가 성공되었습니다." };
+    return { success: true, message: "비밀번호가 성공적으로 변경되었습니다." };
   } catch (error) {
     if (error.code === 'auth/user-not-found') {
       try {
@@ -45,10 +45,20 @@ exports.refineFeedback = onCall(async (request) => {
     if (!rawText) {
         throw new HttpsError("invalid-argument", "정제할 텍스트가 없습니다.");
     }
+    
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
+        // 🚀 [CTO 패치] API 키 불순물(따옴표, 띄어쓰기, 줄바꿈) 완벽 제거 로직
+        const rawKey = process.env.GEMINI_API_KEY || "";
+        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
+        
+        if (!apiKey) {
+            console.error("🔥 서버 환경변수(GEMINI_API_KEY)가 비어있습니다. .env 파일을 확인하세요.");
+            throw new Error("서버 API 키가 설정되지 않았습니다.");
+        }
+
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // 안정성이 높은 latest 모델로 지정
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
         const prompt = `
             당신은 대한민국 최고 수준의 프리미엄 학원의 교육 전문가이자 원장님입니다. 
@@ -63,13 +73,12 @@ exports.refineFeedback = onCall(async (request) => {
         const result = await model.generateContent(prompt);
         return { refinedText: result.response.text().trim() };
     } catch (error) {
-        console.error("Gemini API Error:", error);
-        throw new HttpsError("internal", "AI 정제 중 서버 오류가 발생했습니다.");
+        console.error("🔥 [Gemini API 정밀 에러 로그]:", error);
+        throw new HttpsError("internal", `AI API 오류 발생: ${error.message}`);
     }
 });
 
-// 🚀 [기능 3] 통합 메시지 센터 FCM 오토 트리거 (새로운 혁신)
-// 데스크 웹에서 어떤 종류의 문자든 발송 대기열(sms_outbox)에 집어넣는 순간 '실시간'으로 작동합니다.
+// [기능 3] 통합 메시지 센터 FCM 오토 트리거 
 exports.onSmsOutboxCreated = onDocumentCreated("artifacts/imperial-clinic-v1/public/data/sms_outbox/{docId}", async (event) => {
     const snapshot = event.data;
     if (!snapshot) return null;
@@ -79,22 +88,19 @@ exports.onSmsOutboxCreated = onDocumentCreated("artifacts/imperial-clinic-v1/pub
     // 상태가 'pending(발송 대기)'인 문자 데이터가 생성되었을 때만 작동
     if (smsData.status === "pending") {
         
-        // 주머니 속 갤럭시 S25 울트라를 깨울 투명한 데이터 푸시 팩키지 구성
         const pushMessage = {
             data: {
                 action: "TRIGGER_SMS_SEND",
-                docId: event.params.docId // 안드로이드 폰에게 어떤 문서 번호를 보낼지 인덱스 전달
+                docId: event.params.docId 
             },
-            // 학원폰 무전 채널인 'imperial_sms_gateway' 주소로 일제히 사격
             topic: "imperial_sms_gateway" 
         };
 
         try {
-            // 구글 FCM 서버를 통해 주머니 속 폰을 무선으로 원격 조종 유도
             await admin.messaging().send(pushMessage);
             console.log(`[통합메시지] 문서번호 ${event.params.docId}에 대한 학원폰 깨우기 신호 전송 성공!`);
         } catch (error) {
-            console.error("FCM 백그라운드 무전 송신 실패:", error);
+            console.error("🔥 FCM 백그라운드 무전 송신 실패:", error);
         }
     }
     return null;
