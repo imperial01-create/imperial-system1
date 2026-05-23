@@ -1,20 +1,20 @@
 /* [서비스 가치] 통합 메시지 센터 - 스마트 변수 치환, 반별 타겟 추출, 무한 템플릿을 지원하여 
    학원의 모든 소통(안내, 출결, 성적, 결제)을 한 곳에서 자동화합니다. 
-   (🚀 CTO 긴급 패치: 미리보기 창 렌더링 중 발생하는 Eye 아이콘 누락 버그 완벽 해결) */
+   (🚀 업데이트: 발송 후 빈 화면 Crash 완벽 방어 및 템플릿 커스텀 기능 DB 연동 완료) */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Send, Users, BookOpen, MessageSquare, Plus, Trash2, Search, CheckSquare, 
   Square, Clock, History, AlertCircle, FileText, ChevronRight, CheckCircle,
-  Smartphone, Filter, Eye // 🚀 [원인 해결] Eye 아이콘이 드디어 추가되었습니다!
+  Smartphone, Filter, Eye, Edit2
 } from 'lucide-react';
-import { collection, addDoc, writeBatch, doc, serverTimestamp, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, writeBatch, doc, setDoc, serverTimestamp, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 기본 템플릿 프리셋
+// 기본 템플릿 프리셋 (삭제 불가)
 const DEFAULT_TEMPLATES = [
   { id: 't1', name: '일반 공지사항', content: '[목동임페리얼학원]\n안녕하세요 #{학부모이름} 학부모님.\n\n#{내용}\n\n감사합니다.' },
   { id: 't2', name: '결석 안내', content: '[목동임페리얼학원]\n#{학생이름} 학생이 오늘(#{오늘날짜}) #{반이름} 수업에 결석하였습니다.\n\n보충 수업 일정은 추후 안내드리겠습니다.' },
@@ -26,7 +26,7 @@ const MessageCenter = ({ currentUser }) => {
   const { users = [], classes = [], enrollments = [] } = useData();
 
   const [activeTab, setActiveTab] = useState('send'); // 'send', 'templates', 'history'
-  const [templates, setTemplates] = useState(DEFAULT_TEMPLATES);
+  const [customTemplates, setCustomTemplates] = useState([]);
   const [outboxHistory, setOutboxHistory] = useState([]);
 
   // --- 발송 탭 상태 ---
@@ -41,25 +41,40 @@ const MessageCenter = ({ currentUser }) => {
   
   const [isSending, setIsSending] = useState(false);
 
-  // --- 실시간 발송 내역 로드 ---
+  // --- 템플릿 관리 상태 ---
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [templateForm, setTemplateForm] = useState({ id: '', name: '', content: '' });
+
+  // 1. 실시간 발송 내역 로드
   useEffect(() => {
     if (activeTab !== 'history') return;
-    const q = query(
-        collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), 
-        orderBy('createdAt', 'desc'), 
-        limit(100)
-    );
+    const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), orderBy('createdAt', 'desc'), limit(100));
     const unsub = onSnapshot(q, (snapshot) => {
         setOutboxHistory(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    }, (err) => console.error("History fetch err:", err));
     return () => unsub();
   }, [activeTab]);
+
+  // 2. 템플릿 로드 (settings 문서 활용하여 규칙 통과)
+  useEffect(() => {
+    const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'message_templates');
+    const unsub = onSnapshot(docRef, (docSnap) => {
+        if (docSnap.exists()) {
+            setCustomTemplates(docSnap.data().list || []);
+        } else {
+            setCustomTemplates([]);
+        }
+    }, (err) => console.error("Template fetch err:", err));
+    return () => unsub();
+  }, []);
+
+  const allTemplates = useMemo(() => {
+      return [...DEFAULT_TEMPLATES, ...customTemplates];
+  }, [customTemplates]);
 
   // --- 수신자 명단 필터링 및 조립 로직 ---
   const filteredUsers = useMemo(() => {
     let baseUsers = [];
-    
-    // 1. 반(Class) 기반 추출
     if (selectedClassId !== 'ALL' && (targetType === 'student' || targetType === 'parent')) {
       const activeEnrollments = enrollments.filter(e => e.classId === selectedClassId && e.status === 'active');
       const studentIdsInClass = activeEnrollments.map(e => e.studentId);
@@ -67,31 +82,19 @@ const MessageCenter = ({ currentUser }) => {
       if (targetType === 'student') {
         baseUsers = users.filter(u => u.role === 'student' && studentIdsInClass.includes(u.id));
       } else if (targetType === 'parent') {
-        // 해당 반 학생들의 ID를 가지고 있는 학부모 추출
-        baseUsers = users.filter(u => 
-          u.role === 'parent' && 
-          u.linkedChildrenIds && 
-          u.linkedChildrenIds.some(childId => studentIdsInClass.includes(childId))
-        );
+        baseUsers = users.filter(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.some(childId => studentIdsInClass.includes(childId)));
       }
-    } 
-    // 2. 전체 조건 추출
-    else {
+    } else {
       if (targetType === 'student') baseUsers = users.filter(u => u.role === 'student');
       else if (targetType === 'parent') baseUsers = users.filter(u => u.role === 'parent');
       else baseUsers = users.filter(u => ['ta', 'admin_assistant', 'lecturer', 'admin'].includes(u.role));
     }
 
-    // 3. 검색어 필터링
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      baseUsers = baseUsers.filter(u => 
-        (u.name || '').toLowerCase().includes(q) || 
-        (u.phone || '').includes(q)
-      );
+      baseUsers = baseUsers.filter(u => (u.name || '').toLowerCase().includes(q) || (u.phone || '').includes(q));
     }
 
-    // 4. 유효한 전화번호가 있는 사람만 필터링 및 이름 가공
     return baseUsers.filter(u => u.phone && u.phone.length > 8).map(u => {
       let linkedStudentNames = '';
       if (u.role === 'parent' && u.linkedChildrenIds) {
@@ -102,53 +105,32 @@ const MessageCenter = ({ currentUser }) => {
     });
   }, [users, enrollments, selectedClassId, targetType, searchQuery]);
 
-  // --- 핸들러 함수 ---
+  // --- 발송 탭 핸들러 ---
   const handleApplyTemplate = (tplId) => {
     setSelectedTemplate(tplId);
-    if (!tplId) {
-        setMessageBody('');
-        return;
-    }
-    const tpl = templates.find(t => t.id === tplId);
+    if (!tplId) { setMessageBody(''); return; }
+    const tpl = allTemplates.find(t => t.id === tplId);
     if (tpl) setMessageBody(tpl.content);
   };
 
   const handleInsertVariable = (variable) => {
     const textarea = document.getElementById('messageTextarea');
-    if (!textarea) {
-        setMessageBody(prev => prev + variable);
-        return;
-    }
+    if (!textarea) { setMessageBody(prev => prev + variable); return; }
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const text = messageBody;
-    const newText = text.substring(0, start) + variable + text.substring(end);
-    setMessageBody(newText);
-    
-    // 커서 위치 재조정
-    setTimeout(() => {
-      textarea.selectionStart = textarea.selectionEnd = start + variable.length;
-      textarea.focus();
-    }, 0);
+    setMessageBody(text.substring(0, start) + variable + text.substring(end));
+    setTimeout(() => { textarea.selectionStart = textarea.selectionEnd = start + variable.length; textarea.focus(); }, 0);
   };
 
   const handleToggleRecipient = (user) => {
-    setSelectedRecipients(prev => {
-      const exists = prev.find(p => p.id === user.id);
-      if (exists) return prev.filter(p => p.id !== user.id);
-      return [...prev, user];
-    });
+    setSelectedRecipients(prev => prev.find(p => p.id === user.id) ? prev.filter(p => p.id !== user.id) : [...prev, user]);
   };
 
   const handleToggleAllRecipients = () => {
-    if (selectedRecipients.length === filteredUsers.length) {
-      setSelectedRecipients([]);
-    } else {
-      setSelectedRecipients(filteredUsers);
-    }
+    setSelectedRecipients(selectedRecipients.length === filteredUsers.length ? [] : filteredUsers);
   };
 
-  // 🚀 실제 메시지 텍스트 조립 (오류 방어막 적용 완료)
   const compileMessage = (rawMsg, user) => {
       try {
           if (!rawMsg || !user) return "";
@@ -158,93 +140,100 @@ const MessageCenter = ({ currentUser }) => {
           
           let sName = user.name || '학생';
           let pName = user.name || '학부모님';
-          
-          if (user.role === 'parent') {
-              sName = user.linkedStudentNames || '자녀';
-          } else if (user.role === 'student') {
-              pName = '학부모님';
-          }
+          if (user.role === 'parent') sName = user.linkedStudentNames || '자녀';
+          else if (user.role === 'student') pName = '학부모님';
 
           const cName = selectedClassId !== 'ALL' ? (classes || []).find(c => c.id === selectedClassId)?.name || '학원' : '학원';
 
-          // split/join을 이용해 변수 치환 중 일어날 수 있는 정규식 오류 원천 차단
           msg = msg.split('#{학생이름}').join(String(sName));
           msg = msg.split('#{학부모이름}').join(String(pName));
           msg = msg.split('#{오늘날짜}').join(String(todayStr));
           msg = msg.split('#{다음달}').join(String(nextMonthStr));
           msg = msg.split('#{반이름}').join(String(cName));
-          
           return msg;
-      } catch (error) {
-          console.error("미리보기 렌더링 오류:", error);
-          return "미리보기를 생성하는 중 오류가 발생했습니다.";
-      }
+      } catch (error) { return "미리보기를 생성하는 중 오류가 발생했습니다."; }
   };
 
   const handleSendMessage = async () => {
     if (selectedRecipients.length === 0) return alert('수신자를 최소 1명 이상 선택해주세요.');
     if (!messageBody.trim()) return alert('발송할 메시지 내용이 비어있습니다.');
-    
-    const confirmMsg = `총 ${selectedRecipients.length}명에게 메시지를 발송하시겠습니까?\n발송 요청 즉시 안드로이드 앱을 통해 문자가 순차 발송됩니다.`;
-    if (!window.confirm(confirmMsg)) return;
+    if (!window.confirm(`총 ${selectedRecipients.length}명에게 메시지를 발송하시겠습니까?\n발송 요청 즉시 앱을 통해 문자가 순차 발송됩니다.`)) return;
 
     setIsSending(true);
     try {
       const batch = writeBatch(db);
-      
       selectedRecipients.forEach(user => {
           const cleanPhone = user.phone.replace(/[^0-9]/g, '');
           const finalMessage = compileMessage(messageBody, user);
-          
-          const newDocRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'));
-          batch.set(newDocRef, {
-              phoneNumber: cleanPhone,
-              message: finalMessage,
-              status: 'pending',
-              type: 'manual_notice',
-              recipientId: user.id,
-              recipientName: user.name,
-              recipientRole: user.role,
-              targetClassId: selectedClassId === 'ALL' ? null : selectedClassId,
+          batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox')), {
+              phoneNumber: cleanPhone, message: finalMessage, status: 'pending',
+              type: 'manual_notice', recipientId: user.id, recipientName: user.name,
+              recipientRole: user.role, targetClassId: selectedClassId === 'ALL' ? null : selectedClassId,
               createdAt: serverTimestamp()
           });
       });
-
       await batch.commit();
       
       alert(`성공적으로 ${selectedRecipients.length}건의 발송 요청이 등록되었습니다!`);
-      setSelectedRecipients([]);
-      setMessageBody('');
-      setSelectedTemplate('');
+      setSelectedRecipients([]); setMessageBody(''); setSelectedTemplate('');
       setActiveTab('history');
-      
-    } catch (e) {
-      alert(`발송 오류: ${e.message}`);
-    } finally {
-      setIsSending(false);
-    }
+    } catch (e) { alert(`발송 오류: ${e.message}`); } 
+    finally { setIsSending(false); }
   };
 
-  // 날짜/시간 포맷팅 유틸
+  // --- 템플릿 탭 핸들러 ---
+  const handleOpenTemplateModal = (tpl = null) => {
+      setTemplateForm(tpl ? { ...tpl } : { id: '', name: '', content: '' });
+      setIsTemplateModalOpen(true);
+  };
+
+  const handleSaveTemplate = async () => {
+      if (!templateForm.name || !templateForm.content) return alert('제목과 내용을 모두 입력하세요.');
+      try {
+          const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'message_templates');
+          let updatedList = [...customTemplates];
+          
+          if (templateForm.id) {
+              const idx = updatedList.findIndex(t => t.id === templateForm.id);
+              if (idx > -1) updatedList[idx] = { ...templateForm, updatedAt: new Date().toISOString() };
+          } else {
+              updatedList.push({ ...templateForm, id: 'tpl_' + Date.now(), createdAt: new Date().toISOString() });
+          }
+          await setDoc(docRef, { list: updatedList }, { merge: true });
+          setIsTemplateModalOpen(false);
+      } catch (e) { alert('저장 실패 (원장님 계정인지 확인하세요): ' + e.message); }
+  };
+
+  const handleDeleteTemplate = async (id) => {
+      if (!window.confirm('정말 이 템플릿을 삭제하시겠습니까?')) return;
+      try {
+          const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'message_templates');
+          const updatedList = customTemplates.filter(t => t.id !== id);
+          await setDoc(docRef, { list: updatedList }, { merge: true });
+      } catch (e) { alert('삭제 실패: ' + e.message); }
+  };
+
+  // 🚀 [Crash 방어] 철통 방어막이 적용된 날짜 포맷 함수
   const formatTime = (timestamp) => {
       if (!timestamp) return '-';
-      const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-      return `${d.getFullYear().toString().substr(2,2)}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+      try {
+          const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+          if (isNaN(d.getTime())) return '-';
+          return `${d.getFullYear().toString().substr(2,2)}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+      } catch (e) { return '-'; }
   };
 
   return (
     <div className="space-y-6 w-full animate-in fade-in pb-20">
         
-      {/* --- 상단 헤더 & 탭 --- */}
+      {/* 상단 헤더 & 탭 */}
       <div className="flex flex-col md:flex-row justify-between items-center bg-white p-6 rounded-3xl border border-gray-200 shadow-sm shrink-0 gap-4">
           <div>
               <h2 className="text-2xl font-black text-gray-900 flex items-center gap-2">
-                  <MessageSquare className="text-blue-600" size={28}/> 
-                  통합 메시지 센터 <Badge variant="primary" className="ml-2">BETA</Badge>
+                  <MessageSquare className="text-blue-600" size={28}/> 통합 메시지 센터 <Badge variant="primary" className="ml-2">BETA</Badge>
               </h2>
               <p className="text-gray-500 text-sm mt-1 font-bold">학생, 학부모, 강사진에게 알림과 공지를 일괄 발송하고 관리합니다.</p>
           </div>
-          
           <div className="flex gap-2 w-full md:w-auto p-1.5 bg-gray-100 rounded-xl">
               <button onClick={() => setActiveTab('send')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg font-bold text-sm transition-all shadow-sm ${activeTab === 'send' ? 'bg-white text-blue-700' : 'text-gray-500 hover:bg-gray-200 shadow-none'}`}>새 메시지</button>
               <button onClick={() => setActiveTab('templates')} className={`flex-1 md:flex-none px-6 py-2.5 rounded-lg font-bold text-sm transition-all shadow-sm ${activeTab === 'templates' ? 'bg-white text-indigo-700' : 'text-gray-500 hover:bg-gray-200 shadow-none'}`}>템플릿 관리</button>
@@ -252,48 +241,31 @@ const MessageCenter = ({ currentUser }) => {
           </div>
       </div>
 
-      {/* ========================================================= */}
       {/* 1. 새 메시지 발송 탭 */}
-      {/* ========================================================= */}
       {activeTab === 'send' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
-              
-              {/* 왼쪽: 메시지 편집기 영역 */}
               <Card className="flex flex-col h-[700px] border-2 border-blue-100 shadow-md p-0 overflow-hidden">
                   <div className="bg-blue-50/50 p-5 border-b border-blue-100 flex justify-between items-center">
                       <h3 className="font-black text-lg text-blue-900 flex items-center gap-2"><FileText size={20}/> 메시지 작성</h3>
-                      <select 
-                          className="border border-blue-200 rounded-lg p-2 text-sm font-bold text-blue-800 bg-white outline-none focus:ring-2 focus:ring-blue-400"
-                          value={selectedTemplate}
-                          onChange={(e) => handleApplyTemplate(e.target.value)}
-                      >
+                      <select className="border border-blue-200 rounded-lg p-2 text-sm font-bold text-blue-800 bg-white outline-none focus:ring-2 focus:ring-blue-400" value={selectedTemplate} onChange={(e) => handleApplyTemplate(e.target.value)}>
                           <option value="">직접 작성하기</option>
-                          {templates.map(t => <option key={t.id} value={t.id}>[{t.name}]</option>)}
+                          {allTemplates.map(t => <option key={t.id} value={t.id}>[{t.name}]</option>)}
                       </select>
                   </div>
-                  
                   <div className="p-5 flex-1 flex flex-col gap-4">
-                      {/* 변수 삽입 툴바 */}
                       <div className="flex flex-wrap gap-2">
                           <span className="text-xs font-bold text-gray-400 w-full mb-1">스마트 변수 삽입 (클릭 시 커서 위치에 들어갑니다)</span>
-                          {['#{학생이름}', '#{학부모이름}', '#{반이름}', '#{오늘날짜}'].map(v => (
-                              <button key={v} onClick={() => handleInsertVariable(v)} className="bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 px-3 py-1.5 rounded-md text-xs font-black transition-colors border border-gray-200">
-                                  {v}
-                              </button>
+                          {['#{학생이름}', '#{학부모이름}', '#{반이름}', '#{오늘날짜}', '#{다음달}'].map(v => (
+                              <button key={v} onClick={() => handleInsertVariable(v)} className="bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 px-3 py-1.5 rounded-md text-xs font-black transition-colors border border-gray-200">{v}</button>
                           ))}
                       </div>
-
-                      {/* 에디터 */}
                       <textarea 
                           id="messageTextarea"
                           className="w-full flex-1 border-2 border-gray-200 rounded-2xl p-5 text-base outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 resize-none transition-all custom-scrollbar leading-relaxed"
                           placeholder="발송할 메시지 내용을 입력하세요.&#13;&#10;우측에서 대상을 선택하면 하단에 실제 발송될 예시가 나타납니다."
-                          value={messageBody}
-                          onChange={(e) => setMessageBody(e.target.value)}
+                          value={messageBody} onChange={(e) => setMessageBody(e.target.value)}
                       />
                   </div>
-
-                  {/* 미리보기 (1명 샘플) */}
                   {selectedRecipients.length > 0 && messageBody && (
                       <div className="bg-indigo-50 border-t border-indigo-100 p-5 shrink-0">
                           <h4 className="text-xs font-black text-indigo-600 mb-2 flex items-center gap-1"><Eye size={14}/> 발송 미리보기 ({selectedRecipients[0].name} 기준)</h4>
@@ -304,22 +276,17 @@ const MessageCenter = ({ currentUser }) => {
                   )}
               </Card>
 
-              {/* 오른쪽: 타겟(수신자) 선택 영역 */}
               <Card className="flex flex-col h-[700px] border border-gray-200 p-0 overflow-hidden">
                   <div className="p-5 border-b border-gray-100 bg-gray-50 flex flex-col gap-4">
                       <div className="flex justify-between items-center">
                           <h3 className="font-black text-lg text-gray-800 flex items-center gap-2"><Users size={20} className="text-indigo-600"/> 발송 대상 선택</h3>
                           <Badge variant={selectedRecipients.length > 0 ? 'primary' : 'secondary'}>총 {selectedRecipients.length}명 선택됨</Badge>
                       </div>
-
-                      {/* 필터 툴바 */}
                       <div className="grid grid-cols-2 gap-3">
                           <div>
                               <label className="block text-[10px] font-bold text-gray-500 mb-1">대상 그룹</label>
                               <select className="w-full border p-2 rounded-lg text-sm font-bold outline-none" value={targetType} onChange={e => {setTargetType(e.target.value); setSelectedRecipients([]);}}>
-                                  <option value="parent">👨‍👩‍👧‍👦 학부모</option>
-                                  <option value="student">🎓 학생 본인</option>
-                                  <option value="staff">👨‍🏫 교직원/강사</option>
+                                  <option value="parent">👨‍👩‍👧‍👦 학부모</option><option value="student">🎓 학생 본인</option><option value="staff">👨‍🏫 교직원/강사</option>
                               </select>
                           </div>
                           <div>
@@ -330,20 +297,12 @@ const MessageCenter = ({ currentUser }) => {
                               </select>
                           </div>
                       </div>
-                      
                       <div className="relative">
-                          <input 
-                              type="text" 
-                              className="w-full border border-gray-300 p-2.5 pl-9 rounded-xl text-sm outline-none focus:border-indigo-500 transition-colors" 
-                              placeholder="이름 또는 전화번호로 명단 검색" 
-                              value={searchQuery}
-                              onChange={(e) => setSearchQuery(e.target.value)}
-                          />
+                          <input type="text" className="w-full border border-gray-300 p-2.5 pl-9 rounded-xl text-sm outline-none focus:border-indigo-500 transition-colors" placeholder="이름 또는 전화번호로 명단 검색" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}/>
                           <Search className="absolute left-3 top-2.5 text-gray-400" size={16}/>
                       </div>
                   </div>
 
-                  {/* 명단 리스트 */}
                   <div className="flex-1 overflow-y-auto bg-white p-2 custom-scrollbar">
                       <div className="flex justify-between items-center p-3 mb-1 bg-white sticky top-0 border-b z-10">
                           <label className="flex items-center gap-2 cursor-pointer font-bold text-sm text-gray-700">
@@ -354,12 +313,8 @@ const MessageCenter = ({ currentUser }) => {
                           </label>
                           <span className="text-xs text-rose-500 font-bold">* 번호가 없는 사람은 제외됨</span>
                       </div>
-
                       {filteredUsers.length === 0 ? (
-                          <div className="text-center py-20 text-gray-400 font-bold flex flex-col items-center">
-                              <Filter size={32} className="mb-2 opacity-20"/>
-                              조건에 맞는 발송 대상이 없습니다.
-                          </div>
+                          <div className="text-center py-20 text-gray-400 font-bold flex flex-col items-center"><Filter size={32} className="mb-2 opacity-20"/>조건에 맞는 대상이 없습니다.</div>
                       ) : (
                           <div className="space-y-1 p-2">
                               {filteredUsers.map(user => {
@@ -367,52 +322,32 @@ const MessageCenter = ({ currentUser }) => {
                                   return (
                                       <div key={user.id} onClick={() => handleToggleRecipient(user)} className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-transparent hover:bg-gray-50 border-b-gray-100'}`}>
                                           <div className="flex items-center gap-3">
-                                              <button className={`transition-colors ${isSelected ? 'text-indigo-600' : 'text-gray-300'}`}>
-                                                  {isSelected ? <CheckSquare size={20} className="fill-indigo-50"/> : <Square size={20}/>}
-                                              </button>
+                                              <button className={`transition-colors ${isSelected ? 'text-indigo-600' : 'text-gray-300'}`}>{isSelected ? <CheckSquare size={20} className="fill-indigo-50"/> : <Square size={20}/>}</button>
                                               <div>
-                                                  <div className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
-                                                      {user.name} 
-                                                      {user.role === 'parent' && <Badge variant="secondary" className="text-[9px]">학부모</Badge>}
-                                                  </div>
+                                                  <div className="font-bold text-gray-900 text-sm flex items-center gap-1.5">{user.name} {user.role === 'parent' && <Badge variant="secondary" className="text-[9px]">학부모</Badge>}</div>
                                                   <div className="text-xs text-gray-500 font-mono mt-0.5">{user.phone}</div>
                                               </div>
                                           </div>
-                                          {user.role === 'parent' && user.linkedStudentNames && (
-                                              <div className="text-[10px] text-right text-gray-400 font-bold max-w-[120px] truncate">
-                                                  자녀: <span className="text-blue-600">{user.linkedStudentNames}</span>
-                                              </div>
-                                          )}
+                                          {user.role === 'parent' && user.linkedStudentNames && <div className="text-[10px] text-right text-gray-400 font-bold max-w-[120px] truncate">자녀: <span className="text-blue-600">{user.linkedStudentNames}</span></div>}
                                       </div>
                                   );
                               })}
                           </div>
                       )}
                   </div>
-
-                  {/* 발송 버튼 영역 */}
                   <div className="p-4 border-t border-gray-200 bg-white shrink-0">
-                      <Button 
-                          className="w-full py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center gap-2"
-                          disabled={selectedRecipients.length === 0 || !messageBody || isSending}
-                          onClick={handleSendMessage}
-                      >
-                          {isSending ? <Loader className="animate-spin" size={24}/> : <Send size={24}/>}
-                          {selectedRecipients.length}명에게 메시지 전송하기
+                      <Button className="w-full py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700 flex items-center justify-center gap-2" disabled={selectedRecipients.length === 0 || !messageBody || isSending} onClick={handleSendMessage}>
+                          {isSending ? <Loader className="animate-spin" size={24}/> : <Send size={24}/>} {selectedRecipients.length}명에게 메시지 전송하기
                       </Button>
                   </div>
               </Card>
-
           </div>
       )}
 
-      {/* ========================================================= */}
-      {/* 2. 발송 내역 / 대기열 탭 */}
-      {/* ========================================================= */}
+      {/* 2. 발송 내역 / 대기열 탭 (🚀 Crash 원천 차단 컴포넌트 렌더링 적용) */}
       {activeTab === 'history' && (
           <Card className="w-full">
               <h3 className="font-black text-xl text-gray-900 mb-6 flex items-center gap-2"><History className="text-gray-700"/> 최근 발송 내역 (최대 100건)</h3>
-              
               <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm whitespace-nowrap">
                       <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200">
@@ -438,12 +373,11 @@ const MessageCenter = ({ currentUser }) => {
                                   <td className="p-4 font-bold text-gray-800">{item.recipientName || item.studentName || '이름없음'}</td>
                                   <td className="p-4 font-mono text-gray-500">{item.phoneNumber}</td>
                                   <td className="p-4">
-                                      {item.type === 'manual_notice' && <Badge variant="primary">수동 공지</Badge>}
-                                      {item.type === 'clinic_feedback' && <Badge variant="secondary">클리닉 리포트</Badge>}
+                                      {/* 외부 Badge 컴포넌트 의존성 제거, 안전한 HTML/CSS로 변경 */}
+                                      {item.type === 'manual_notice' && <span className="px-2 py-1 text-[10px] font-bold rounded-md bg-indigo-100 text-indigo-700 border border-indigo-200">수동 공지</span>}
+                                      {item.type === 'clinic_feedback' && <span className="px-2 py-1 text-[10px] font-bold rounded-md bg-emerald-100 text-emerald-700 border border-emerald-200">클리닉 리포트</span>}
                                   </td>
-                                  <td className="p-4">
-                                      <div className="max-w-md truncate text-gray-600" title={item.message}>{item.message}</div>
-                                  </td>
+                                  <td className="p-4"><div className="max-w-md truncate text-gray-600" title={item.message}>{item.message}</div></td>
                                   <td className="p-4 text-right text-gray-400 font-mono text-xs">{formatTime(item.createdAt)}</td>
                               </tr>
                           ))}
@@ -453,17 +387,62 @@ const MessageCenter = ({ currentUser }) => {
           </Card>
       )}
 
-      {/* ========================================================= */}
-      {/* 3. 템플릿 관리 탭 (UI 껍데기만 구성 - 향후 DB 연동 가능) */}
-      {/* ========================================================= */}
+      {/* 3. 템플릿 관리 탭 (🚀 실제 DB 연동 기능 추가 완료) */}
       {activeTab === 'templates' && (
-          <Card className="w-full text-center py-20 flex flex-col items-center justify-center">
-              <BookOpen size={48} className="text-indigo-200 mb-4"/>
-              <h2 className="text-2xl font-black text-gray-800 mb-2">템플릿 커스텀 매니저 (준비 중)</h2>
-              <p className="text-gray-500 font-bold mb-6">현재 기본 제공되는 4가지 프리셋 템플릿만 사용 가능합니다.<br/>추후 학원만의 고유한 템플릿을 무한대로 생성하고 저장하는 기능이 오픈될 예정입니다.</p>
-              <Button onClick={() => setActiveTab('send')}>새 메시지 작성하러 가기</Button>
+          <Card className="w-full">
+              <div className="flex justify-between items-center mb-6">
+                  <h3 className="font-black text-xl text-gray-900 flex items-center gap-2"><BookOpen className="text-indigo-600"/> 메시지 템플릿 관리</h3>
+                  {currentUser.role === 'admin' && (
+                      <Button onClick={() => handleOpenTemplateModal()} icon={Plus}>새 템플릿 만들기</Button>
+                  )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {allTemplates.map(tpl => {
+                      const isDefault = DEFAULT_TEMPLATES.some(d => d.id === tpl.id);
+                      return (
+                          <div key={tpl.id} className="border border-gray-200 rounded-xl p-5 bg-white shadow-sm hover:shadow-md transition-all flex flex-col h-64">
+                              <div className="flex justify-between items-start mb-3">
+                                  <h4 className="font-bold text-gray-800 text-lg line-clamp-1">{tpl.name}</h4>
+                                  {isDefault ? (
+                                      <span className="bg-gray-100 text-gray-500 text-[10px] px-2 py-1 rounded font-bold">기본 제공</span>
+                                  ) : (
+                                      currentUser.role === 'admin' && (
+                                          <div className="flex gap-1 shrink-0">
+                                              <button onClick={() => handleOpenTemplateModal(tpl)} className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded transition-colors"><Edit2 size={14}/></button>
+                                              <button onClick={() => handleDeleteTemplate(tpl.id)} className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded transition-colors"><Trash2 size={14}/></button>
+                                          </div>
+                                      )
+                                  )}
+                              </div>
+                              <div className="flex-1 bg-gray-50 rounded-lg p-3 text-sm text-gray-600 overflow-y-auto whitespace-pre-wrap custom-scrollbar leading-relaxed">
+                                  {tpl.content}
+                              </div>
+                          </div>
+                      )
+                  })}
+              </div>
           </Card>
       )}
+
+      {/* 템플릿 생성/수정 모달 */}
+      <Modal isOpen={isTemplateModalOpen} onClose={() => setIsTemplateModalOpen(false)} title={templateForm.id ? "템플릿 수정" : "새 템플릿 만들기"}>
+          <div className="space-y-4">
+              <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1">템플릿 제목</label>
+                  <input className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:border-indigo-500 font-bold text-gray-800 transition-colors" value={templateForm.name} onChange={e => setTemplateForm({...templateForm, name: e.target.value})} placeholder="예: 결제 안내문, 보강 공지 등" />
+              </div>
+              <div>
+                  <div className="flex justify-between items-center mb-1">
+                      <label className="block text-sm font-bold text-gray-700">메시지 내용</label>
+                  </div>
+                  <div className="text-xs text-gray-500 font-bold mb-2 bg-gray-50 p-2 rounded border border-gray-100">
+                      사용 가능 변수: <span className="text-indigo-600">#{`{학생이름}`}</span>, <span className="text-indigo-600">#{`{학부모이름}`}</span>, <span className="text-indigo-600">#{`{반이름}`}</span>, <span className="text-indigo-600">#{`{오늘날짜}`}</span>, <span className="text-indigo-600">#{`{다음달}`}</span>
+                  </div>
+                  <textarea className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:border-indigo-500 h-48 resize-none custom-scrollbar text-gray-700 transition-colors" value={templateForm.content} onChange={e => setTemplateForm({...templateForm, content: e.target.value})} placeholder="메시지 내용을 입력하세요." />
+              </div>
+              <Button className="w-full py-4 text-lg font-black shadow-md bg-indigo-600 hover:bg-indigo-700" onClick={handleSaveTemplate}>저장하기</Button>
+          </div>
+      </Modal>
 
     </div>
   );
