@@ -1,4 +1,4 @@
-/* [서비스 가치] 클리닉 V2.9.2 - 발송 생략(Skip) 버튼 오타 수정 및 SMS 템플릿 날짜/시간 추가 패치 */
+/* [서비스 가치] 클리닉 V2.9.3 - 안드로이드 SMS 전송 호환성을 위한 전화번호 숫자 정제(하이픈 제거) 로직 추가 */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -18,7 +18,6 @@ const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const TEMPLATES = {
   confirmParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 예정을 안내드립니다.\n\n[클리닉 안내]\n일시 : ${d.date} ${d.startTime}~${d.endTime}\n장소 : 본관 ${d.classroom || '미정'}\n내용 : ${d.topic}\n\n학생이 직접 시간을 선정하였으며, 해당 시간은 선생님과의 약속이므로 늦지 않도록 지도 부탁드립니다.`,
-  // 🚀 [CTO 패치] 템플릿에 클리닉 일시(Date & Time)가 추가되었습니다.
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 성취 리포트입니다.\n\n🗓️ 클리닉 일시 : ${d.date} ${d.startTime}~${d.endTime}\n👨‍🏫 담당 선생님 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(d.rating || 5)}${'☆'.repeat(5 - (d.rating || 5))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
 };
 
@@ -539,26 +538,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
 
-    const sendClinicNotificationToTelegram = async (updates) => {
-        try {
-            const bookedSessions = Object.values(updates).map(s => {
-                const original = sessionMap[s.id] || sessions.find(sess => sess.id === s.id);
-                return { ...original, ...s };
-            });
-
-            if (bookedSessions.length === 0) return;
-            const studentName = bookedSessions[0].studentName;
-            const topic = bookedSessions[0].topic;
-            
-            bookedSessions.sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
-            let scheduleText = "";
-            bookedSessions.forEach(s => { scheduleText += `- ${s.date} ${s.startTime} (${s.taName})\n`; });
-
-            const messageText = `<b>🔔 클리닉 신청 알림</b>\n\n<b>학생:</b> ${studentName}\n<b>내용:</b> ${topic}\n\n<b>신청 일정:</b>\n${scheduleText}`.trim();
-            await fetch(TELEGRAM_API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: CHAT_ID, text: messageText, parse_mode: 'HTML' }) });
-        } catch (e) { console.error(e); }
-    };
-
     const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
     const handleAiRefine = async () => {
@@ -937,7 +916,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
                                     <div className="text-xs text-gray-400 mt-1">작성자: {s.taName}</div>
                                 </div>
-                                {/* 🚀 [CTO 패치] handleAction으로 정상 연결되어 발송 생략 버튼이 완벽 작동합니다. */}
+                                {/* 🚀 [CTO 패치] handleAction과 연결된 발송 생략 버튼 */}
                                 <div className="flex gap-2 shrink-0">
                                     <Button variant="secondary" size="sm" icon={Send} onClick={()=>handleAction('send_feedback_msg', s)}>검수/발송</Button>
                                     <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); handleAction('skip_feedback_msg', s); }}>발송 생략</Button>
@@ -1227,10 +1206,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     return;
                 }
 
+                // 🚀 [CTO 패치] 안드로이드 SMS 전송 오류 방지를 위한 하이픈(-) 완벽 제거
+                const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
+
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
                 
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: targetPhone, 
+                    phoneNumber: cleanPhone, 
                     message: previewMessage,
                     status: 'pending',
                     type: 'clinic_feedback',
