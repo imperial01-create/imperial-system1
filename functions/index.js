@@ -36,7 +36,7 @@ exports.adminResetPassword = onCall(async (request) => {
   }
 });
 
-// [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진
+// [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 (🚀 이중 코어 패치 적용)
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
@@ -47,7 +47,6 @@ exports.refineFeedback = onCall(async (request) => {
     }
     
     try {
-        // 🚀 [CTO 패치] API 키 불순물(따옴표, 띄어쓰기, 줄바꿈) 완벽 제거 로직
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         
@@ -57,9 +56,7 @@ exports.refineFeedback = onCall(async (request) => {
         }
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        // 안정성이 높은 latest 모델로 지정
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-
+        
         const prompt = `
             당신은 대한민국 최고 수준의 프리미엄 학원의 교육 전문가이자 원장님입니다. 
             학원 조교가 작성한 아래의 날것의 클리닉 피드백을 학부모님께 바로 발송할 수 있도록, 
@@ -70,7 +67,18 @@ exports.refineFeedback = onCall(async (request) => {
             "${rawText}"
         `;
 
-        const result = await model.generateContent(prompt);
+        let result;
+        try {
+            // 1순위: 가장 빠르고 똑똑한 최신 모델 시도
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            result = await model.generateContent(prompt);
+        } catch (fallbackError) {
+            console.warn("🔥 1.5-flash 모델 호출 실패. 범용 표준 모델(gemini-pro)로 우회합니다.", fallbackError);
+            // 2순위: 404 에러 발생 시, 구버전 SDK에서도 100% 호환되는 표준 모델로 즉시 우회
+            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+            result = await fallbackModel.generateContent(prompt);
+        }
+
         return { refinedText: result.response.text().trim() };
     } catch (error) {
         console.error("🔥 [Gemini API 정밀 에러 로그]:", error);
