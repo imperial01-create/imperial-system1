@@ -96,8 +96,13 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
   
   const fileInputRef = useRef(null);
 
-  // --- 성적 입력 폼 상태 (🚀 동석차 tiedRank 추가 완료) ---
-  const initForm = { type: 'school', term: '1학년 1학기 중간', subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] };
+  // 🚀 [CTO 패치] 헷갈리는 입력창 대신 학년/학기 드롭다운으로 분리
+  const initForm = { 
+      type: 'school', 
+      termGrade: '1학년', 
+      termExam: '1학기 중간고사', 
+      subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] 
+  };
   const [inputForm, setInputForm] = useState(initForm);
 
   // --- DB 연동 ---
@@ -111,16 +116,15 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 🚀 등급 자동 계산 (2026년 기준 5등급제 - 동석차 완벽 지원) ---
+  // --- 등급 자동 계산 (2026년 기준 5등급제 - 동석차 완벽 지원) ---
   const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
       const r = Number(rank);
-      const tr = Number(tiedRank) || 1; // 동석차가 비어있으면 1명으로 간주
+      const tr = Number(tiedRank) || 1; 
       const t = Number(total);
       
       if (t <= 0) return '';
       
-      // 중간석차 산출 공식 = 석차 + (동석차인원 - 1) / 2
       const midRank = r + (tr - 1) / 2;
       const pct = (midRank / t) * 100;
       
@@ -135,14 +139,13 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       const newSubjects = [...inputForm.subjects];
       newSubjects[idx][field] = val;
       
-      // 내신인 경우 석차/동석차/수강자수 입력 시 5등급 자동 계산
       if (inputForm.type === 'school' && (field === 'rank' || field === 'tiedRank' || field === 'total')) {
           newSubjects[idx].grade = calc5Grade(newSubjects[idx].rank, newSubjects[idx].tiedRank, newSubjects[idx].total);
       }
       setInputForm({ ...inputForm, subjects: newSubjects });
   };
 
-  // --- 🚀 AI 성적표 파싱 (실제 파일 업로드 연동) ---
+  // --- AI 성적표 파싱 ---
   const handleFileChange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -155,9 +158,16 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
               try {
                   const parseFn = httpsCallable(functions, 'parseReportCard');
                   const result = await parseFn({ fileData: base64Data, type: inputForm.type });
-                  const parsedSubjects = result.data.subjects || [];
                   
-                  // 파싱된 데이터로 폼 업데이트
+                  // 🚀 [CTO 패치] OCR 완료 즉시 5등급제로 환산하여 화면에 주입
+                  const parsedSubjects = (result.data.subjects || []).map(sub => {
+                      let computedGrade = sub.grade;
+                      if (inputForm.type === 'school') {
+                          computedGrade = calc5Grade(sub.rank, sub.tiedRank, sub.total) || sub.grade;
+                      }
+                      return { ...sub, grade: computedGrade };
+                  });
+                  
                   setInputForm(prev => ({ ...prev, subjects: parsedSubjects }));
                   alert('✨ AI 성적표 파싱이 완료되었습니다! 내역을 확인하고 저장해주세요.');
               } catch (error) {
@@ -165,7 +175,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                   alert(`파싱 오류 발생: ${error.message}`);
               } finally {
                   setIsOcrLoading(false);
-                  if (fileInputRef.current) fileInputRef.current.value = ''; // 초기화
+                  if (fileInputRef.current) fileInputRef.current.value = '';
               }
           };
           reader.readAsDataURL(file);
@@ -180,12 +190,15 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
       
       try {
+          // 🚀 [CTO 패치] 저장 시 학년/학기 텍스트를 하나로 합침
+          const combinedTerm = `${inputForm.termGrade} ${inputForm.termExam}`;
+          
           await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), {
               studentId: activeStudentId,
               type: inputForm.type,
-              term: inputForm.term,
+              term: combinedTerm,
               subjects: validSubjects,
-              isLocked: isStudentView, // 학생이 입력하면 즉시 잠금
+              isLocked: isStudentView, 
               createdAt: serverTimestamp()
           });
           setIsInputOpen(false);
@@ -263,14 +276,15 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       );
   };
 
-  const renderUnivCard = (data, category, typeLabel) => {
+  // 🚀 [CTO 패치] 빈 화면 오류 완벽 방어: currentScore 매개변수 추가
+  const renderUnivCard = (data, category, typeLabel, currentScore) => {
       if (!data) return <div className="h-24 bg-gray-50 rounded-xl border border-dashed flex items-center justify-center text-gray-400 text-sm font-bold">데이터 부족</div>;
       const isUp = category === '상향';
       const isMatch = category === '적정';
       
       return (
           <div 
-            onClick={() => setSelectedTarget({ ...data, category, typeLabel })}
+            onClick={() => setSelectedTarget({ ...data, category, typeLabel, score: currentScore })}
             className={`relative p-4 rounded-2xl border-2 transition-all cursor-pointer hover:shadow-lg hover:-translate-y-1 overflow-hidden group
                 ${isUp ? 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200' : isMatch ? 'bg-gradient-to-br from-blue-50 to-white border-blue-200' : 'bg-gradient-to-br from-slate-50 to-white border-slate-200'}
             `}
@@ -317,17 +331,33 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                     <button onClick={() => setIsInputOpen(false)} className="text-gray-400 hover:text-gray-700"><X size={24}/></button>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <div>
                         <label className="block text-xs font-bold text-gray-600 mb-1.5">시험 구분</label>
-                        <select className="w-full border-2 rounded-xl p-3 bg-gray-50 outline-none focus:border-indigo-500 font-bold" value={inputForm.type} onChange={e => setInputForm({...inputForm, type: e.target.value})}>
+                        <select className="w-full border-2 rounded-xl p-3 bg-gray-50 outline-none focus:border-indigo-500 font-bold text-indigo-700" value={inputForm.type} onChange={e => setInputForm({...inputForm, type: e.target.value})}>
                             <option value="school">학교 내신 (5등급제)</option>
                             <option value="mock">모의고사 (9등급제)</option>
                         </select>
                     </div>
+                    {/* 🚀 [CTO 패치] 시험 시기 드롭다운 세분화 적용 */}
                     <div>
-                        <label className="block text-xs font-bold text-gray-600 mb-1.5">시험 시기 (예: 1-1 중간)</label>
-                        <input className="w-full border-2 rounded-xl p-3 bg-white outline-none focus:border-indigo-500 font-bold" value={inputForm.term} onChange={e => setInputForm({...inputForm, term: e.target.value})} />
+                        <label className="block text-xs font-bold text-gray-600 mb-1.5">대상 학년</label>
+                        <select className="w-full border-2 rounded-xl p-3 bg-white outline-none focus:border-indigo-500 font-bold text-gray-800" value={inputForm.termGrade} onChange={e => setInputForm({...inputForm, termGrade: e.target.value})}>
+                            <option value="1학년">1학년</option>
+                            <option value="2학년">2학년</option>
+                            <option value="3학년">3학년</option>
+                            <option value="N수생">N수생</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 mb-1.5">시험 종류</label>
+                        <select className="w-full border-2 rounded-xl p-3 bg-white outline-none focus:border-indigo-500 font-bold text-gray-800" value={inputForm.termExam} onChange={e => setInputForm({...inputForm, termExam: e.target.value})}>
+                            <option value="1학기 중간고사">1학기 중간고사</option>
+                            <option value="1학기 기말고사">1학기 기말고사</option>
+                            <option value="2학기 중간고사">2학기 중간고사</option>
+                            <option value="2학기 기말고사">2학기 기말고사</option>
+                            <option value="모의고사">모의고사</option>
+                        </select>
                     </div>
                 </div>
 
@@ -338,7 +368,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                             <h4 className="font-black text-indigo-900 mb-1">📸 성적표 간편 등록 (Vision AI)</h4>
                             <p className="text-xs text-indigo-700 font-medium">학교 성적표, 모의고사, 리로스쿨 캡처본을 올리면 1초 만에 자동 입력됩니다.</p>
                         </div>
-                        {/* 🚀 실제 파일 업로드 Input 숨김 처리 */}
                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*,.pdf" onChange={handleFileChange} />
                         <Button variant="secondary" className="bg-white border-indigo-200 text-indigo-700 w-full md:w-auto font-black shadow-sm" onClick={() => fileInputRef.current?.click()} disabled={isOcrLoading}>
                             {isOcrLoading ? <Loader className="animate-spin" size={18}/> : <Camera size={18}/>} 성적표 업로드
@@ -382,7 +411,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 중단: 성적 추이 그래프 */}
             <Card className="flex flex-col h-72">
                 <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><TrendingUp size={18} className="text-indigo-600"/> 내신 (5등급제) 성장 곡선</h3>
                 <div className="flex-1 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center overflow-hidden">
@@ -397,7 +425,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             </Card>
         </div>
 
-        {/* 하단: 6-Block 대학 추천 결과 영역 */}
         <Card className="p-0 overflow-hidden border-2 border-slate-200 shadow-xl bg-slate-50">
             <div className="p-6 bg-white border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Award className="text-yellow-500" size={24}/> 나의 목표 대학 6-Block</h3>
@@ -412,9 +439,10 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                         <Badge className="bg-indigo-100 text-indigo-800 border border-indigo-200 mb-2">수시 (학생부 교과/종합)</Badge>
                         <p className="text-[10px] font-bold text-gray-400">내신 5등급제 평균 기반 예측</p>
                     </div>
-                    {renderUnivCard(susiResult?.up, '상향', susiResult?.type)}
-                    {renderUnivCard(susiResult?.match, '적정', susiResult?.type)}
-                    {renderUnivCard(susiResult?.down, '하향', susiResult?.type)}
+                    {/* 🚀 [CTO 패치] 뻗지 않도록 currentScore 명확하게 전달 */}
+                    {renderUnivCard(susiResult?.up, '상향', susiResult?.type, susiResult?.score)}
+                    {renderUnivCard(susiResult?.match, '적정', susiResult?.type, susiResult?.score)}
+                    {renderUnivCard(susiResult?.down, '하향', susiResult?.type, susiResult?.score)}
                 </div>
                 
                 <div className="bg-white p-6 space-y-4">
@@ -422,14 +450,14 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                         <Badge className="bg-blue-100 text-blue-800 border border-blue-200 mb-2">정시 (수능)</Badge>
                         <p className="text-[10px] font-bold text-gray-400">모의고사 9등급제 평균 기반 예측</p>
                     </div>
-                    {renderUnivCard(jungsiResult?.up, '상향', jungsiResult?.type)}
-                    {renderUnivCard(jungsiResult?.match, '적정', jungsiResult?.type)}
-                    {renderUnivCard(jungsiResult?.down, '하향', jungsiResult?.type)}
+                    {renderUnivCard(jungsiResult?.up, '상향', jungsiResult?.type, jungsiResult?.score)}
+                    {renderUnivCard(jungsiResult?.match, '적정', jungsiResult?.type, jungsiResult?.score)}
+                    {renderUnivCard(jungsiResult?.down, '하향', jungsiResult?.type, jungsiResult?.score)}
                 </div>
             </div>
         </Card>
 
-        {/* 목표 대학 타겟 Gap 팝업 */}
+        {/* 🚀 [CTO 패치] 목표 대학 타겟 Gap 팝업 (드디어 안전하게 열립니다!) */}
         <Modal isOpen={!!selectedTarget} onClose={() => setSelectedTarget(null)} title={`${selectedTarget?.primaryUniv} 목표 분석`}>
             {selectedTarget && (
                 <div className="space-y-6 p-2 text-center">
@@ -441,15 +469,15 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                     
                     <div className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-6 mt-6 shadow-inner">
                         <div className="flex items-center justify-center gap-2 mb-4 text-gray-500 font-bold text-sm">
-                            현재 {selectedTarget.typeLabel} <span className="text-gray-900">{selectedTarget.score.toFixed(2)}등급</span>
+                            현재 {selectedTarget.typeLabel} <span className="text-gray-900">{Number(selectedTarget.score || 0).toFixed(2)}등급</span>
                             <ChevronRight size={16}/> 
                             목표 합격선 <span className="text-indigo-600">{selectedTarget.maxGrade}등급</span> 이내
                         </div>
                         
-                        {selectedTarget.score > selectedTarget.maxGrade ? (
+                        {Number(selectedTarget.score || 0) > selectedTarget.maxGrade ? (
                             <div className="text-lg leading-relaxed font-medium text-gray-800">
                                 🔥 안정권 진입을 위해<br/>
-                                <span className="text-rose-600 font-black text-2xl">평균 {(selectedTarget.score - selectedTarget.maxGrade).toFixed(2)}등급</span> 향상이 필요합니다!
+                                <span className="text-rose-600 font-black text-2xl">평균 {(Number(selectedTarget.score || 0) - selectedTarget.maxGrade).toFixed(2)}등급</span> 향상이 필요합니다!
                             </div>
                         ) : (
                             <div className="text-lg leading-relaxed font-medium text-gray-800">
