@@ -150,10 +150,10 @@ const CollegeNavigator = ({ currentUser }) => {
   };
   const [inputForm, setInputForm] = useState(initForm);
 
-  // 🚀 학생 계정일 경우 과거 내역은 수정 불가(읽기 전용) 처리
+  // 🚀 읽기 전용 판별
   const isReadOnly = !isAdminView && !!inputForm.id;
 
-  // --- 관리자 학생 검색 로직 ---
+  // --- 검색 로직 ---
   const handleSearchStudent = () => {
       if (!searchInput.trim()) return alert('이름을 입력해주세요.');
       const results = (users || []).filter(u => u.role === 'student' && u.name.includes(searchInput.trim()));
@@ -171,7 +171,7 @@ const CollegeNavigator = ({ currentUser }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 5등급제 정밀 계산 (동석차) ---
+  // --- 5등급제 정밀 계산 ---
   const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
       const r = Number(rank);
@@ -198,7 +198,6 @@ const CollegeNavigator = ({ currentUser }) => {
       setInputForm(prev => ({ ...prev, subjects: prev.subjects.filter((_, i) => i !== idx) }));
   };
 
-  // 기존 내역 불러오기
   const handleEditEntry = (g) => {
       let parsedGrade = '1학년', parsedExam = '1학기 중간고사';
       if (g.term) {
@@ -210,7 +209,6 @@ const CollegeNavigator = ({ currentUser }) => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // OCR 파싱
   const handleFileChange = async (e) => {
       if (isReadOnly) return;
       const file = e.target.files[0];
@@ -231,17 +229,11 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch (error) { alert(error.message); setIsOcrLoading(false); }
   };
 
-  // 학생 vs 관리자 제출 분기 처리
   const handleSaveClick = () => {
       const validSubjects = inputForm.subjects.filter(s => s.name && s.grade);
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
-      
-      // 학생이 신규 등록하는 경우 경고 모달 표시
-      if (!isAdminView && !inputForm.id) {
-          setIsConfirmModalOpen(true);
-      } else {
-          executeSaveGrade();
-      }
+      if (!isAdminView && !inputForm.id) setIsConfirmModalOpen(true);
+      else executeSaveGrade();
   };
 
   const executeSaveGrade = async () => {
@@ -260,7 +252,6 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch(e) { alert(e.message); setIsConfirmModalOpen(false); }
   };
 
-  // 평균 계산 및 대학 추천
   const avgGrades = useMemo(() => {
       const calcAvg = (type) => {
           const arr = grades.filter(g => g.type === type);
@@ -291,7 +282,6 @@ const CollegeNavigator = ({ currentUser }) => {
       return SUSI_DB.slice(Math.max(0, matchIdx - 5), matchIdx);
   }, [susiResult]);
 
-  // 다음 시험 정밀 목표 역산 로직
   const getNextExamTarget = (targetInfo) => {
       if (!targetInfo) return null;
       const typeKey = targetInfo.typeLabel?.includes('수시') ? 'school' : 'mock';
@@ -404,7 +394,8 @@ const CollegeNavigator = ({ currentUser }) => {
                         <div key={s.id} onClick={() => { setSelectedStudentId(s.id); setSearchModalOpen(false); setSearchInput(''); }} className="flex justify-between items-center p-4 bg-slate-50 border border-slate-100 rounded-2xl hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors group">
                             <div>
                                 <div className="font-black text-slate-800 text-lg group-hover:text-blue-600">{s.name}</div>
-                                <div className="text-sm font-bold text-slate-400">{s.schoolName || '학교미상'} · {s.phone || '연락처없음'}</div>
+                                {/* 🚀 [CTO 패치] 동명이인 구분을 위해 학년 및 학교 정보 상세 표시 */}
+                                <div className="text-sm font-bold text-slate-400">{s.schoolName || '학교미상'} ({s.grade || '학년미상'}) · {s.phone || '연락처없음'}</div>
                             </div>
                             <ChevronRight className="text-slate-300 group-hover:text-blue-500"/>
                         </div>
@@ -420,7 +411,6 @@ const CollegeNavigator = ({ currentUser }) => {
   return (
     <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
         
-        {/* 상단 통합 대시보드 Header */}
         <div className="bg-slate-900 text-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-2xl relative overflow-hidden">
             <div className="absolute right-0 top-0 w-64 h-64 bg-blue-600/20 rounded-full blur-[100px]"></div>
             <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -440,7 +430,6 @@ const CollegeNavigator = ({ currentUser }) => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            {/* 좌측: 과거 성적 히스토리 */}
             <div className="lg:col-span-1 space-y-6">
                 <Card className="p-5 sm:p-6 border-none shadow-sm bg-white rounded-3xl">
                     <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><History size={20} className="text-blue-600"/> 기존 성적 내역</h3>
@@ -462,7 +451,6 @@ const CollegeNavigator = ({ currentUser }) => {
                 </Card>
             </div>
 
-            {/* 우측: 메인 분석 및 입력 영역 */}
             <div className="lg:col-span-3 space-y-8">
                 {isInputOpen && (
                     <Card className="border-4 border-blue-600 shadow-2xl p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] animate-in slide-in-from-top-4">
@@ -536,7 +524,6 @@ const CollegeNavigator = ({ currentUser }) => {
                     </Card>
                 )}
 
-                {/* 그래프 2종 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <Card className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border-none shadow-sm bg-white">
                         <h3 className="font-black text-slate-800 flex items-center gap-2 mb-2"><TrendingUp size={20} className="text-indigo-600"/> 내신성적 성장 곡선</h3>
@@ -552,7 +539,6 @@ const CollegeNavigator = ({ currentUser }) => {
                     </Card>
                 </div>
 
-                {/* 6-Block 대학 추천 시스템 */}
                 <Card className="p-0 overflow-hidden border-none shadow-xl bg-slate-100 rounded-[32px]">
                     <div className="p-6 sm:p-8 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
@@ -587,7 +573,7 @@ const CollegeNavigator = ({ currentUser }) => {
             </div>
         </div>
 
-        {/* 🚀 제출 경고 모달 (학생용) */}
+        {/* 제출 경고 모달 (학생용) */}
         <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="최종 제출 확인">
             <div className="p-4 text-center space-y-4">
                 <div className="w-16 h-16 mx-auto bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4"><Lock size={32}/></div>
@@ -688,4 +674,4 @@ const CollegeNavigator = ({ currentUser }) => {
   );
 };
 
-export default CollegeNavigator;
+export default CollegeNavigator;    
