@@ -1,6 +1,5 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   학생의 약점을 입체적으로 분석하고, 미수강 과목에 대한 수강 동기를 강력하게 부여합니다. 
-   (🚀 CTO 패치: 실제 수강 중인 과목만 잠금 해제되며, 다중 클래스 상세 내역을 지원합니다.) */
+   (🚀 CTO 패치: 강의 관리에서 할당한 '과목' 데이터를 기준으로 잠금 해제가 작동하는 엄격한 로직 적용 완료) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
@@ -70,12 +69,8 @@ const SUBJECT_META = {
   }
 };
 
-// 미수강 과목 호기심 유발용 가짜 데이터 배열
-const DUMMY_STATS = [
-  { value: 90 }, { value: 70 }, { value: 85 }, { value: 60 }, { value: 95 }, { value: 75 }
-];
+const DUMMY_STATS = [ { value: 90 }, { value: 70 }, { value: 85 }, { value: 60 }, { value: 95 }, { value: 75 } ];
 
-// SVG 레이더 차트 컴포넌트
 const RadarChart = ({ stats, isDummy = false }) => {
   const size = 300;
   const center = size / 2;
@@ -123,7 +118,6 @@ const RadarChart = ({ stats, isDummy = false }) => {
 const AcademyUniverse = ({ currentUser }) => {
   const { users, classes, enrollments } = useData();
   
-  // 권한별 학생 명단 필터링
   const accessibleStudents = useMemo(() => {
       const allStudents = (users || []).filter(u => u.role === 'student');
       if (['admin', 'admin_assistant', 'ta'].includes(currentUser.role)) return allStudents;
@@ -155,19 +149,12 @@ const AcademyUniverse = ({ currentUser }) => {
       setSearchModalOpen(true);
   };
 
-  // 🚀 [CTO 패치] 1. 클래스 이름을 바탕으로 해당 클래스의 '과목'을 자동 판별하는 함수
+  // 🚀 [CTO 패치] 강의 관리에서 부여한 명시적 '과목(subject)'만 100% 신뢰하여 추출
   const getSubjectFromClass = (cls) => {
-      if (!cls) return null;
-      if (cls.subject && SUBJECT_META[cls.subject]) return cls.subject; // DB에 명시적 과목이 있으면 우선
-      const name = cls.name || '';
-      if (name.includes('국어') || name.includes('문학') || name.includes('독서') || name.includes('언매') || name.includes('화작') || name.includes('논술')) return '국어';
-      if (name.includes('수학') || name.includes('수1') || name.includes('수2') || name.includes('미적') || name.includes('기하') || name.includes('확통') || name.includes('수리')) return '수학';
-      if (name.includes('영어') || name.includes('영문') || name.includes('English') || name.includes('문법')) return '영어';
-      if (name.includes('과학') || name.includes('물리') || name.includes('화학') || name.includes('생명') || name.includes('지구') || name.includes('통과')) return '과학';
-      return null;
+      if (!cls || !cls.subject) return null;
+      return cls.subject; 
   };
 
-  // 🚀 [CTO 패치] 2. 학생이 현재 '수강 중(active)'인 클래스 목록 추출
   const myActiveClasses = useMemo(() => {
       if (!activeStudentId) return [];
       const myEnrollments = (enrollments || []).filter(e => e.studentId === activeStudentId && e.status === 'active');
@@ -208,31 +195,27 @@ const AcademyUniverse = ({ currentUser }) => {
     });
   };
 
-  // 🚀 [CTO 패치] 3. 잠금 해제(isUnlocked) 기준을 '수강 여부'로 변경
   const subjectData = useMemo(() => {
     const result = {};
     Object.keys(SUBJECT_META).forEach(sub => {
-        // 이 과목에 해당하는 수강 중인 클래스 목록 필터링
+        // 수강 중인 클래스의 '명시적 과목(subject)' 속성이 해당 과목(sub)과 일치하는 경우 필터링
         const enrolledClassesInSubject = myActiveClasses.filter(c => getSubjectFromClass(c) === sub);
         
-        // 수강 중인 클래스가 하나라도 있으면 잠금 해제 (오픈)
         const isUnlocked = enrolledClassesInSubject.length > 0;
         
         let stats = null;
         let avg = 0;
-        let tier = TIERS[TIERS.length - 1]; // 기본 브론즈
+        let tier = TIERS[TIERS.length - 1]; 
         let hasGradeData = false;
 
         if (isUnlocked) {
             const rawStats = generateMockStats(sub);
             if (rawStats) {
-                // 수강 중이고, 성적 데이터도 있는 경우 (정상 출력)
                 stats = rawStats;
                 avg = Math.round(stats.reduce((acc, cur) => acc + cur.value, 0) / stats.length);
                 tier = TIERS.find(t => avg >= t.minScore) || TIERS[TIERS.length - 1];
                 hasGradeData = true;
             } else {
-                // 수강 중이긴 한데, 성적표를 아직 입력하지 않은 경우 (기본 0점 세팅)
                 stats = SUBJECT_META[sub].stats.map(s => ({ ...s, value: 0, diff: 0 }));
             }
             result[sub] = { 
@@ -240,7 +223,6 @@ const AcademyUniverse = ({ currentUser }) => {
                 enrolledClasses: enrolledClassesInSubject, hasGradeData 
             };
         } else {
-            // 미수강 과목
             result[sub] = { isUnlocked: false, meta: SUBJECT_META[sub] };
         }
     });
@@ -250,7 +232,7 @@ const AcademyUniverse = ({ currentUser }) => {
 
   if (!isStudent && !activeStudentId) {
       return (
-          <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
+          <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4 pt-10">
               <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl text-center md:text-left">
                   <h1 className="text-3xl font-black mb-2 flex items-center justify-center md:justify-start gap-3"><Target className="text-blue-400" size={32}/> 역량 분석실 (관리자 모드)</h1>
                   <p className="text-slate-400 font-bold mb-8">분석 리포트를 열람할 학생의 이름을 검색해 주세요.</p>
@@ -279,7 +261,6 @@ const AcademyUniverse = ({ currentUser }) => {
       );
   }
 
-  // --- 과목 대시보드 (메인) ---
   if (!selectedSubject) {
       return (
         <div className="max-w-[1200px] mx-auto space-y-8 animate-in fade-in pb-20 px-4 pt-6">
@@ -291,11 +272,11 @@ const AcademyUniverse = ({ currentUser }) => {
 
             <div className="text-center mb-10 bg-white p-8 rounded-[32px] shadow-sm border border-slate-100">
                 <h1 className="text-3xl font-black text-slate-800 flex items-center justify-center gap-3 mb-4">
-                    <Target className="text-blue-600" size={32}/> 세부 역량 진단 스캐너
+                    <Sparkles className="text-indigo-600" size={32}/> 아카데미 유니버스
                 </h1>
                 <p className="text-slate-500 font-bold text-lg">
                     {studentInfo?.name} 학생의 과목별 성취도를 입체적으로 분석합니다.<br/>
-                    <span className="text-sm font-normal text-slate-400 border bg-slate-50 px-3 py-1 rounded-lg mt-2 inline-block">현재 수강 중인 과목의 분석 리포트만 활성화됩니다.</span>
+                    <span className="text-sm font-normal text-slate-400 border bg-slate-50 px-3 py-1 rounded-lg mt-2 inline-block">현재 학원에서 수강 중인 과목의 분석 리포트만 활성화됩니다.</span>
                 </p>
             </div>
 
@@ -362,7 +343,6 @@ const AcademyUniverse = ({ currentUser }) => {
               <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
           </button>
 
-          {/* 상단 프로필 헤더 */}
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
               
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
@@ -373,7 +353,7 @@ const AcademyUniverse = ({ currentUser }) => {
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-4 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
                   <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep">
-                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 
+                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 부족한 세부 역량을 파악하고 전략을 수립하세요.
                   </p>
               </div>
 
@@ -386,7 +366,6 @@ const AcademyUniverse = ({ currentUser }) => {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              {/* 좌측: 레이더 차트 영역 */}
               <div className="space-y-6">
                   <Card className="bg-white border-slate-200 rounded-[40px] p-8 flex flex-col items-center justify-center shadow-sm h-[500px]">
                       <h3 className="text-xl font-black text-slate-800 mb-8 w-full text-left flex items-center gap-2"><Target className="text-blue-500"/> 6대 세부 역량 스캐너</h3>
@@ -407,10 +386,8 @@ const AcademyUniverse = ({ currentUser }) => {
                   </Card>
               </div>
 
-              {/* 우측: 세부 역량 및 🚀 다중 클래스 분석 영역 */}
               <div className="space-y-6 flex flex-col h-[500px] overflow-hidden">
                   
-                  {/* 스탯 스크롤 영역 */}
                   <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
                       {currData.stats.map(stat => (
                           <Card key={stat.id} className="p-4 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col sm:flex-row items-center gap-4 sm:gap-6 bg-white shrink-0">
@@ -435,7 +412,6 @@ const AcademyUniverse = ({ currentUser }) => {
                           </Card>
                       ))}
 
-                      {/* 🚀 [CTO 패치] 수강 중인 전체 클래스 상세 뷰 */}
                       <div className="mt-8 pt-4 border-t-2 border-dashed border-slate-200">
                           <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                               <BookOpen className="text-indigo-600" size={20}/> 수강 중인 연계 클래스

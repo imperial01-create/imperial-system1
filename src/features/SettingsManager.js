@@ -1,5 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
-   최고 관리자 전용 보안 및 시스템 최적화 스크립트를 안전하게 보호합니다. */
+   최고 관리자 전용 보안 및 시스템 최적화 스크립트를 안전하게 보호합니다. 
+   (🚀 CTO 패치: 과목 데이터의 엄격한 정의 및 아카데미 유니버스 연동 기반 마련) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, query, collection } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -7,10 +8,9 @@ import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle // 🚀 [오류 해결] 누락되었던 경고등 아이콘 Import 완료!
+  AlertTriangle 
 } from 'lucide-react';
 import { Button } from '../components/UI';
-
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -229,10 +229,10 @@ const SettingsManager = ({ currentUser }) => {
 
                         <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
                             <h2 className="text-xl font-bold text-gray-900 border-b pb-4 flex items-center gap-2">
-                                <BookOpen className="text-purple-600"/> 정규 과목/학년 목록 관리
+                                <BookOpen className="text-purple-600"/> 정규 과목 목록 관리
                             </h2>
                             <div className="flex gap-2">
-                                <input type="text" className="flex-1 border-2 border-gray-200 p-3 rounded-xl focus:border-purple-500 outline-none font-bold" value={newSubject} onChange={e => setNewSubject(e.target.value)} onKeyDown={e => e.key === 'Enter' && addArrayItem('subjects', newSubject, setNewSubject)} placeholder="예: 고1 수학, 중3 영어" />
+                                <input type="text" className="flex-1 border-2 border-gray-200 p-3 rounded-xl focus:border-purple-500 outline-none font-bold" value={newSubject} onChange={e => setNewSubject(e.target.value)} onKeyDown={e => e.key === 'Enter' && addArrayItem('subjects', newSubject, setNewSubject)} placeholder="예: 국어, 수학, 영어, 과학" />
                                 <Button onClick={() => addArrayItem('subjects', newSubject, setNewSubject)} className="bg-purple-600 hover:bg-purple-700 border-0"><Plus size={20}/></Button>
                             </div>
                             <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto custom-scrollbar">

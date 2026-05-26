@@ -1,7 +1,7 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
    학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. 
-   (Updated: 강사 뷰 빈 화면(White Screen) 원인이었던 useEffect import 누락 완벽 해결) */
-import React, { useState, useMemo, useEffect } from 'react'; // 🚀 [CTO 패치] useEffect 추가 완료!
+   (🚀 CTO 패치: 클래스 개설/수정 시 '과목' 명시적 할당 기능 추가 완료) */
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
@@ -13,7 +13,6 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
-
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -356,7 +355,9 @@ export const AdminLectureManager = () => {
     
     const [isClassModalOpen, setIsClassModalOpen] = useState(false);
     const [editingClassId, setEditingClassId] = useState(null);
-    const [newClass, setNewClass] = useState({ name: '', lecturerId: '', schedules: [] });
+    
+    // 🚀 [CTO 패치] 새 클래스 생성 시 'subject(과목)' 항목 필수 추가
+    const [newClass, setNewClass] = useState({ name: '', lecturerId: '', subject: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
 
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
@@ -389,6 +390,7 @@ export const AdminLectureManager = () => {
         setNewClass({ 
             name: '', 
             lecturerId: defaultLecturerId, 
+            subject: '', 
             schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }] 
         });
         setEditingClassId(null);
@@ -416,6 +418,7 @@ export const AdminLectureManager = () => {
         setNewClass({
             name: cls.name,
             lecturerId: cls.lecturerId || '',
+            subject: cls.subject || '', // 🚀 기존 데이터 수정 시 과목 불러오기
             schedules: initialSchedules
         });
         setEditingClassId(cls.id);
@@ -448,6 +451,7 @@ export const AdminLectureManager = () => {
     const handleSaveClass = async () => {
         if (!newClass.name.trim()) return alert('반 이름을 입력하세요');
         if (!newClass.lecturerId) return alert('담당 강사를 선택하세요');
+        if (!newClass.subject) return alert('과목을 필수로 선택해야 합니다.');
         if (newClass.schedules.length === 0) return alert('최소 1개의 스케줄(요일/시간)을 등록해주세요.');
 
         setIsSaving(true);
@@ -455,6 +459,7 @@ export const AdminLectureManager = () => {
             const payload = { 
                 name: newClass.name.trim(),
                 lecturerId: newClass.lecturerId,
+                subject: newClass.subject, // 🚀 과목 정보 DB에 저장
                 schedules: newClass.schedules,
                 updatedAt: serverTimestamp() 
             };
@@ -713,7 +718,11 @@ export const AdminLectureManager = () => {
                                                 <div key={cls.id} className={`bg-white rounded-2xl border-2 transition-all overflow-hidden flex flex-col h-full ${selectedClass?.id === cls.id ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-gray-100 hover:border-blue-300'}`}>
                                                     <div className="p-4 cursor-pointer" onClick={() => setSelectedClass(cls)}>
                                                         <div className="flex justify-between items-start mb-3">
-                                                            <h3 className="font-black text-lg text-gray-800 break-keep leading-tight">{cls.name}</h3>
+                                                            <div className="flex-1 pr-2">
+                                                                {/* 🚀 매핑된 과목 표시 뱃지 */}
+                                                                {cls.subject && <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded border border-indigo-100 mb-1">{cls.subject}</span>}
+                                                                <h3 className="font-black text-lg text-gray-800 break-keep leading-tight">{cls.name}</h3>
+                                                            </div>
                                                             <div className="flex gap-1 shrink-0">
                                                                 <button onClick={(e) => handleOpenEditClass(e, cls)} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-blue-600 transition-colors"><Edit2 size={16}/></button>
                                                                 <button onClick={(e) => handleDeleteClass(e, cls.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16}/></button>
@@ -756,28 +765,31 @@ export const AdminLectureManager = () => {
                 <div className="space-y-5 w-full bg-gray-50 p-2 md:p-4 rounded-xl">
                     
                     <div className="bg-white p-4 md:p-5 rounded-xl border border-gray-200 shadow-sm space-y-4">
-                        <div>
-                            <label className="text-xs font-bold text-blue-600 mb-1.5 block">강의명 (반 이름)</label>
-                            <div className="relative">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-blue-600 mb-1.5 block">강의명 (반 이름)</label>
                                 <input 
-                                    list="subject-options"
+                                    type="text"
                                     className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold text-gray-900 focus:border-blue-500 focus:ring-0 outline-none transition-colors" 
                                     placeholder="예: 고1 수학(상) 정규반" 
                                     value={newClass.name} 
                                     onChange={e => setNewClass({...newClass, name: e.target.value})} 
                                 />
-                                <datalist id="subject-options">
-                                    {(masterData?.subjects || []).map((sub, idx) => <option key={idx} value={sub} />)}
-                                </datalist>
-                                <p className="text-[10px] text-gray-400 mt-1">* 환경설정의 과목명과 조합하여 직접 입력하실 수 있습니다.</p>
                             </div>
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-blue-600 mb-1.5 block">담당 강사</label>
-                            <select className={`w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none transition-colors ${!newClass.lecturerId ? 'text-red-500 border-red-300 focus:border-red-500' : 'text-gray-700 focus:border-blue-500'}`} value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
-                                <option value="">강사를 선택해주세요 (필수)</option>
-                                {lecturers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                            </select>
+                            <div>
+                                <label className="text-xs font-bold text-blue-600 mb-1.5 block">과목 (아카데미 유니버스 연동 필수)</label>
+                                <select className={`w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none transition-colors ${!newClass.subject ? 'text-red-500 border-red-300 focus:border-red-500' : 'text-gray-700 focus:border-blue-500'}`} value={newClass.subject} onChange={e => setNewClass({...newClass, subject: e.target.value})}>
+                                    <option value="">과목을 선택해주세요 (필수)</option>
+                                    {(masterData?.subjects || []).map((sub, idx) => <option key={idx} value={sub}>{sub}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-blue-600 mb-1.5 block">담당 강사</label>
+                                <select className={`w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none transition-colors ${!newClass.lecturerId ? 'text-red-500 border-red-300 focus:border-red-500' : 'text-gray-700 focus:border-blue-500'}`} value={newClass.lecturerId} onChange={e => setNewClass({...newClass, lecturerId: e.target.value})}>
+                                    <option value="">강사를 선택해주세요 (필수)</option>
+                                    {lecturers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                                </select>
+                            </div>
                         </div>
                     </div>
 
