@@ -1,18 +1,20 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 신규생 전화번호 입력 버그 수정 & 첫 등원/교재 안내 문자 2분할 발송 기능 적용) */
+   (🚀 CTO 패치: 학생 상세 모달에 '입시 내비게이터' 상담 전용 탭 완벽 연동) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle
+  BookMarked, Clock, Calendar, CheckCircle, Target
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore'; // 🚀 writeBatch 추가
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
-
 import { useData } from '../contexts/DataContext';
+
+// 🚀 [CTO 패치] 입시 내비게이터 컴포넌트 임포트 (상담 탭에서 렌더링하기 위함)
+import CollegeNavigator from './CollegeNavigator';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -49,7 +51,6 @@ const UserManager = ({ currentUser }) => {
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
 
-    // 🚀 [CTO 패치] 분할 발송을 위해 welcomeMsg 와 textbookMsg 로 분리
     const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
     const [isSendingSms, setIsSendingSms] = useState(false);
 
@@ -115,7 +116,6 @@ const UserManager = ({ currentUser }) => {
         setIsModalOpen(true);
     };
 
-    // 🚀 [CTO 패치] 전화번호 입력 버그(4자리 미만 시 뻗음) 완벽 해결 및 중복 경고창 제거
     const handleAutoPin = (phoneVal) => {
         const cleanVal = phoneVal || '';
         const numOnly = cleanVal.replace(/[^0-9]/g, '');
@@ -129,7 +129,6 @@ const UserManager = ({ currentUser }) => {
         const isDuplicate = users.some(u => u.role === 'student' && u.attendancePin === basePin && u.id !== formData.id);
         
         if (isDuplicate) {
-            // 중복 시 성가신 alert 대신 핀번호만 비워 수동 입력을 유도합니다.
             setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' }));
         } else {
             setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: basePin }));
@@ -277,7 +276,6 @@ const UserManager = ({ currentUser }) => {
 
             await setDoc(eRef, payload, { merge: true });
             
-            // 🚀 [CTO 패치] 등원 / 교재 문자 2분할 생성
             if (isNewEnrollment && enrollForm.status === 'active') {
                 if (window.confirm('신규 수강 배정이 완료되었습니다.\n첫 등원 및 교재 안내 문자를 발송하시겠습니까?')) {
                     
@@ -460,7 +458,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                 </Card>
             </div>
 
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-3xl w-full">
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-5xl w-full">
                 
                 {activeTab === 'student' && (
                     <div className="flex border-b border-gray-200 mb-5 w-full bg-gray-50 rounded-t-xl px-2 pt-2">
@@ -468,8 +466,14 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                             👤 기본 정보
                         </button>
                         <button onClick={() => isEditMode && setModalTab('enroll')} disabled={!isEditMode} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'enroll' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed'}`}>
-                            📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후 활성화)</span>}
+                            📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후)</span>}
                         </button>
+                        {/* 🚀 [CTO 패치] 입시 상담 탭 추가 */}
+                        {isEditMode && (
+                            <button onClick={() => setModalTab('navigator')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'navigator' ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                🧭 입시 상담
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -666,6 +670,21 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                             </div>
                         </div>
                     )}
+
+                    {/* 🚀 [CTO 패치] 입시 내비게이터 탭 랜더링 */}
+                    {modalTab === 'navigator' && activeTab === 'student' && (
+                        <div className="animate-in fade-in pt-2">
+                            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-4 text-sm text-indigo-800 font-bold flex items-center gap-2">
+                                <Target size={18} className="shrink-0" />
+                                <div>
+                                    {formData.name} 학생의 입시 시뮬레이션 및 상담 화면입니다.<br/>
+                                    <span className="font-normal text-xs text-indigo-600">성적을 직접 수정하여 목표 대학 진입을 위한 성적 향상치(Gap)를 상담해 보세요.</span>
+                                </div>
+                            </div>
+                            {/* 방금 만든 CollegeNavigator 컴포넌트를 이 탭 안에 쏙 넣습니다. */}
+                            <CollegeNavigator currentUser={currentUser} targetStudent={formData} />
+                        </div>
+                    )}
                 </div>
             </Modal>
 
@@ -680,7 +699,6 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                 </div>
             </Modal>
 
-            {/* 🚀 [CTO 패치] 첫 등원 안내 & 교재 안내 분할 문자 발송 모달 */}
             <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 분할 발송">
                 <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
                     <CheckCircle size={18} className="shrink-0"/> 
