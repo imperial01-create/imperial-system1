@@ -12,7 +12,9 @@ if (admin.apps.length === 0) {
 
 const APP_ID = 'imperial-clinic-v1';
 
+// ============================================================================
 // [기능 1] 관리자 비밀번호 강제 초기화
+// ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
@@ -40,7 +42,9 @@ exports.adminResetPassword = onCall(async (request) => {
   }
 });
 
+// ============================================================================
 // [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 
+// ============================================================================
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
@@ -88,7 +92,9 @@ exports.refineFeedback = onCall(async (request) => {
     }
 });
 
+// ============================================================================
 // [기능 3] 통합 메시지 센터 FCM 오토 트리거 (학원폰 깨우기)
+// ============================================================================
 exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/sms_outbox/{docId}`, async (event) => {
     const snapshot = event.data;
     if (!snapshot) return null;
@@ -114,7 +120,9 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
     return null;
 });
 
-// 🚀 [기능 4] 클리닉 하루 전날 밤 10시 리마인드 자동 발송 (Cron 스케줄러)
+// ============================================================================
+// [기능 4] 클리닉 하루 전날 밤 10시 리마인드 자동 발송 (Cron 스케줄러)
+// ============================================================================
 exports.clinicReminderCron = onSchedule({
     schedule: "0 22 * * *", // 매일 밤 22시 00분
     timeZone: "Asia/Seoul", // 한국 시간 기준
@@ -208,4 +216,61 @@ exports.clinicReminderCron = onSchedule({
         console.error("🔥 예약 발송(Cron) 에러:", error);
     }
     return null;
+});
+
+// ============================================================================
+// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (PDF, 리로스쿨 완벽 지원)
+// ============================================================================
+exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
+    if (!request.auth) {
+        throw new HttpsError("unauthenticated", "인증이 필요합니다.");
+    }
+    
+    const { fileData, type } = request.data; // fileData는 base64 형태의 문자열
+    if (!fileData) {
+        throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
+    }
+
+    try {
+        const rawKey = process.env.GEMINI_API_KEY || "";
+        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
+        
+        if (!apiKey) {
+            throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
+        }
+
+        const genAI = new GoogleGenerativeAI(apiKey);
+        
+        // JSON을 명확하게 뱉어내도록 모델 세팅
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-3.5-flash",
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const mimeType = fileData.split(';')[0].split(':')[1];
+        const base64String = fileData.split(',')[1];
+
+        const prompt = `
+        첨부된 이미지는 대한민국의 ${type === 'school' ? '학교 내신' : '모의고사'} 성적표(또는 리로스쿨 성적표 캡처본)입니다.
+        이 이미지에서 모든 과목별 성적 데이터를 추출하여 반드시 아래 포맷의 JSON 배열로 반환하세요.
+        
+        { "subjects": [ { "name": "과목명", "score": "원점수", "rank": "석차", "tiedRank": "동석차수", "total": "수강자수", "grade": "등급숫자" } ] }
+        
+        [지침사항]
+        1. tiedRank(동석차)는 표기된 경우 그 숫자를 추출하고, 표기가 없거나 공란이면 "1"을 기재하세요.
+        2. rank는 '석차', total은 '수강자수' 또는 '응시자수'를 의미합니다.
+        3. 모의고사일 경우 rank, tiedRank, total은 빈 문자열("")로 두셔도 좋습니다.
+        4. OCR 노이즈가 있더라도 상식적인 '과목명'과 숫자를 정확히 파싱하세요.
+        `;
+
+        const result = await model.generateContent([
+            prompt,
+            { inlineData: { data: base64String, mimeType: mimeType } }
+        ]);
+
+        return JSON.parse(result.response.text());
+    } catch (error) {
+        console.error("🔥 OCR 파싱 실패:", error);
+        throw new HttpsError("internal", `성적표 분석 중 오류 발생: ${error.message}`);
+    }
 });

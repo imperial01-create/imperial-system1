@@ -1,17 +1,18 @@
-/* [서비스 가치] 입시 내비게이터 - 복잡한 입시 데이터를 6-Block(상향/적정/하향)으로 시각화하여 
-   학생과 학부모에게 강력한 동기부여와 명확한 목표(Gap)를 제시합니다. */
-import React, { useState, useEffect, useMemo } from 'react';
+/* [서비스 가치] 입시 내비게이터 - 복잡한 입시 데이터를 6-Block(상향/적정/하향)으로 시각화하며,
+   Gemini 3.5 Flash AI를 통해 성적표/리로스쿨 이미지를 1초 만에 자동 판독합니다. (동석차 완벽 지원) */
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Target, TrendingUp, Camera, Upload, CheckCircle, Lock, Edit2, 
-  ChevronRight, AlertCircle, BookOpen, Award, Sparkles, X, Plus
+  ChevronRight, AlertCircle, BookOpen, Award, Sparkles, X, Plus, Loader
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 입시 매핑 데이터 (원장님 제공 DB) ---
+// --- 입시 매핑 데이터 ---
 const SUSI_DB = [
   { level: 1, primaryUniv: "서울대학교 (의예)", minGrade: 1.00, maxGrade: 1.02, tierName: "전국 최상위 메디컬" },
   { level: 2, primaryUniv: "연세대학교 (의예)", minGrade: 1.02, maxGrade: 1.04, tierName: "메이저 의대" },
@@ -71,15 +72,15 @@ const JUNGSI_DB = [
   { level: 24, primaryUniv: "인하대학교", minGrade: 3.05, maxGrade: 3.15, tierName: "수도권 주요" },
   { level: 25, primaryUniv: "아주대학교", minGrade: 3.15, maxGrade: 3.25, tierName: "수도권 주요" },
   { level: 26, primaryUniv: "부산대학교", minGrade: 3.25, maxGrade: 3.40, tierName: "지거국 상위" },
-  { level: 27, primaryUniv: "경북대학교", minGrade: 3.40, maxGrade: 3.55, "tierName": "지거국 상위" },
-  { level: 28, primaryUniv: "광운대학교", minGrade: 3.55, maxGrade: 3.70, "tierName": "광명상가" },
-  { level: 29, primaryUniv: "가천대학교", minGrade: 3.70, maxGrade: 3.85, "tierName": "인가경" },
-  { level: 30, primaryUniv: "충남대학교", minGrade: 3.85, maxGrade: 4.05, "tierName": "지거국 중위" },
-  { level: 31, primaryUniv: "전남대학교", minGrade: 4.05, maxGrade: 4.25, "tierName": "지거국 중위" },
-  { level: 32, primaryUniv: "경기대학교", minGrade: 4.25, maxGrade: 4.50, "tierName": "수도권 중위" },
-  { level: 33, primaryUniv: "한성대학교", minGrade: 4.50, maxGrade: 4.80, "tierName": "인서울 하위/수도권" },
-  { level: 34, primaryUniv: "지방 거점 국립대", minGrade: 4.80, maxGrade: 5.50, "tierName": "지거국 하위" },
-  { level: 35, primaryUniv: "지방 주요 4년제", minGrade: 5.50, maxGrade: 9.01, "tierName": "기타 대학" }
+  { level: 27, primaryUniv: "경북대학교", minGrade: 3.40, maxGrade: 3.55, tierName: "지거국 상위" },
+  { level: 28, primaryUniv: "광운대학교", minGrade: 3.55, maxGrade: 3.70, tierName: "광명상가" },
+  { level: 29, primaryUniv: "가천대학교", minGrade: 3.70, maxGrade: 3.85, tierName: "인가경" },
+  { level: 30, primaryUniv: "충남대학교", minGrade: 3.85, maxGrade: 4.05, tierName: "지거국 중위" },
+  { level: 31, primaryUniv: "전남대학교", minGrade: 4.05, maxGrade: 4.25, tierName: "지거국 중위" },
+  { level: 32, primaryUniv: "경기대학교", minGrade: 4.25, maxGrade: 4.50, tierName: "수도권 중위" },
+  { level: 33, primaryUniv: "한성대학교", minGrade: 4.50, maxGrade: 4.80, tierName: "인서울 하위/수도권" },
+  { level: 34, primaryUniv: "지방 거점 국립대", minGrade: 4.80, maxGrade: 5.50, tierName: "지거국 하위" },
+  { level: 35, primaryUniv: "지방 주요 4년제", minGrade: 5.50, maxGrade: 9.01, tierName: "기타 대학" }
 ];
 
 const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
@@ -92,9 +93,11 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
   const [isInputOpen, setIsInputOpen] = useState(false);
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState(null);
+  
+  const fileInputRef = useRef(null);
 
-  // --- 성적 입력 폼 상태 ---
-  const initForm = { type: 'school', term: '1학년 1학기 중간', subjects: [{ name: '', score: '', rank: '', total: '', grade: '' }] };
+  // --- 성적 입력 폼 상태 (🚀 동석차 tiedRank 추가 완료) ---
+  const initForm = { type: 'school', term: '1학년 1학기 중간', subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] };
   const [inputForm, setInputForm] = useState(initForm);
 
   // --- DB 연동 ---
@@ -108,12 +111,19 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 등급 자동 계산 (2026년 기준 5등급제) ---
-  const calc5Grade = (rank, total) => {
+  // --- 🚀 등급 자동 계산 (2026년 기준 5등급제 - 동석차 완벽 지원) ---
+  const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
-      const r = Number(rank), t = Number(total);
-      if (t === 0) return '';
-      const pct = (r / t) * 100;
+      const r = Number(rank);
+      const tr = Number(tiedRank) || 1; // 동석차가 비어있으면 1명으로 간주
+      const t = Number(total);
+      
+      if (t <= 0) return '';
+      
+      // 중간석차 산출 공식 = 석차 + (동석차인원 - 1) / 2
+      const midRank = r + (tr - 1) / 2;
+      const pct = (midRank / t) * 100;
+      
       if (pct <= 10) return 1;
       if (pct <= 34) return 2;
       if (pct <= 66) return 3;
@@ -125,28 +135,44 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       const newSubjects = [...inputForm.subjects];
       newSubjects[idx][field] = val;
       
-      // 내신인 경우 석차/수강자수 입력 시 5등급 자동 계산
-      if (inputForm.type === 'school' && (field === 'rank' || field === 'total')) {
-          newSubjects[idx].grade = calc5Grade(newSubjects[idx].rank, newSubjects[idx].total);
+      // 내신인 경우 석차/동석차/수강자수 입력 시 5등급 자동 계산
+      if (inputForm.type === 'school' && (field === 'rank' || field === 'tiedRank' || field === 'total')) {
+          newSubjects[idx].grade = calc5Grade(newSubjects[idx].rank, newSubjects[idx].tiedRank, newSubjects[idx].total);
       }
       setInputForm({ ...inputForm, subjects: newSubjects });
   };
 
-  const handleOcrUpload = () => {
+  // --- 🚀 AI 성적표 파싱 (실제 파일 업로드 연동) ---
+  const handleFileChange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
       setIsOcrLoading(true);
-      // 🚀 Google Cloud Vision API 연동 Placeholder
-      setTimeout(() => {
+      try {
+          const reader = new FileReader();
+          reader.onloadend = async () => {
+              const base64Data = reader.result;
+              try {
+                  const parseFn = httpsCallable(functions, 'parseReportCard');
+                  const result = await parseFn({ fileData: base64Data, type: inputForm.type });
+                  const parsedSubjects = result.data.subjects || [];
+                  
+                  // 파싱된 데이터로 폼 업데이트
+                  setInputForm(prev => ({ ...prev, subjects: parsedSubjects }));
+                  alert('✨ AI 성적표 파싱이 완료되었습니다! 내역을 확인하고 저장해주세요.');
+              } catch (error) {
+                  console.error("OCR API 오류:", error);
+                  alert(`파싱 오류 발생: ${error.message}`);
+              } finally {
+                  setIsOcrLoading(false);
+                  if (fileInputRef.current) fileInputRef.current.value = ''; // 초기화
+              }
+          };
+          reader.readAsDataURL(file);
+      } catch (err) {
           setIsOcrLoading(false);
-          setInputForm(prev => ({
-              ...prev,
-              subjects: [
-                  { name: '국어', score: '92', rank: '12', total: '200', grade: 1 },
-                  { name: '수학', score: '88', rank: '35', total: '200', grade: 2 },
-                  { name: '영어', score: '96', rank: '8', total: '200', grade: 1 }
-              ]
-          }));
-          alert('Vision API 성적표 파싱이 완료되었습니다!');
-      }, 1500);
+          alert('파일을 읽는 중 오류가 발생했습니다.');
+      }
   };
 
   const handleSaveGrade = async () => {
@@ -159,7 +185,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
               type: inputForm.type,
               term: inputForm.term,
               subjects: validSubjects,
-              isLocked: true, // 학생이 입력하면 즉시 잠금
+              isLocked: isStudentView, // 학생이 입력하면 즉시 잠금
               createdAt: serverTimestamp()
           });
           setIsInputOpen(false);
@@ -176,7 +202,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
           if(arr.length === 0) return 0;
           let sum = 0, count = 0;
           arr.forEach(g => {
-              g.subjects.forEach(s => { sum += Number(s.grade); count++; });
+              (g.subjects || []).forEach(s => { sum += Number(s.grade); count++; });
           });
           return count > 0 ? (sum / count).toFixed(2) : 0;
       };
@@ -189,10 +215,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       const DB = isSusi ? SUSI_DB : JUNGSI_DB;
       
       let matchIdx = DB.findIndex(univ => score >= univ.minGrade && score < univ.maxGrade);
-      if (matchIdx === -1) {
-          // 범위를 벗어난 최상/최하위 예외 처리
-          matchIdx = score < DB[0].minGrade ? 0 : DB.length - 1;
-      }
+      if (matchIdx === -1) matchIdx = score < DB[0].minGrade ? 0 : DB.length - 1;
       
       const upIdx = Math.max(0, matchIdx - 2);
       const downIdx = Math.min(DB.length - 1, matchIdx + 2);
@@ -206,39 +229,33 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
   const susiResult = getUniversities(avgGrades.school, true);
   const jungsiResult = getUniversities(avgGrades.mock, false);
 
-  // --- 성적 추이 그래프 (순수 SVG) ---
+  // --- 성적 추이 그래프 ---
   const renderGraph = (type) => {
       const targetGrades = grades.filter(g => g.type === type);
-      if (targetGrades.length < 2) return <div className="text-center text-sm text-gray-400 py-8 bg-gray-50 rounded-xl border border-dashed">데이터가 2회 이상 누적되면 그래프가 생성됩니다.</div>;
+      if (targetGrades.length < 2) return <div className="text-center text-sm text-gray-400 py-8 bg-gray-50 rounded-xl border border-dashed w-full mx-4">데이터가 2회 이상 누적되면 생성됩니다.</div>;
 
       const maxGrade = type === 'school' ? 5 : 9;
       const points = targetGrades.map((g, i) => {
-          let sum = 0; g.subjects.forEach(s => sum += Number(s.grade));
-          const avg = sum / g.subjects.length;
-          // Y축 역순 배치 (1등급이 맨 위)
-          const y = ((avg - 1) / (maxGrade - 1)) * 100; 
+          let sum = 0; (g.subjects || []).forEach(s => sum += Number(s.grade));
+          const avg = sum / Math.max(1, (g.subjects || []).length);
+          const y = ((avg - 1) / Math.max(1, maxGrade - 1)) * 100; 
           return { x: i * (100 / (targetGrades.length - 1)), y, term: g.term, avg: avg.toFixed(1) };
       });
 
       const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
 
       return (
-          <div className="relative w-full h-40 pt-4 pb-6 px-4">
-              <svg className="w-full h-full" viewBox="0 -10 100 120" preserveAspectRatio="none">
-                  {/* 기준선 */}
+          <div className="relative w-full h-40 pt-4 pb-6 px-8">
+              <svg className="w-full h-full overflow-visible" viewBox="0 -10 100 120" preserveAspectRatio="none">
                   <line x1="0" y1="0" x2="100" y2="0" stroke="#f1f5f9" strokeWidth="1" />
                   <line x1="0" y1="50" x2="100" y2="50" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="2,2" />
                   <line x1="0" y1="100" x2="100" y2="100" stroke="#f1f5f9" strokeWidth="1" />
-                  
-                  {/* 꺾은선 */}
-                  <path d={linePath} fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  
-                  {/* 포인트 */}
+                  <path d={linePath} fill="none" stroke="#4f46e5" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                   {points.map((p, i) => (
                       <g key={i}>
-                          <circle cx={p.x} cy={p.y} r="3" fill="#fff" stroke="#4f46e5" strokeWidth="2" />
-                          <text x={p.x} y={p.y - 6} fontSize="4" fontWeight="bold" fill="#4f46e5" textAnchor="middle">{p.avg}</text>
-                          <text x={p.x} y={115} fontSize="3.5" fill="#94a3b8" textAnchor="middle">{p.term}</text>
+                          <circle cx={p.x} cy={p.y} r="3.5" fill="#fff" stroke="#4f46e5" strokeWidth="2" />
+                          <text x={p.x} y={p.y - 8} fontSize="4.5" fontWeight="bold" fill="#4f46e5" textAnchor="middle">{p.avg}</text>
+                          <text x={p.x} y={115} fontSize="4" fill="#64748b" textAnchor="middle" fontWeight="bold">{p.term}</text>
                       </g>
                   ))}
               </svg>
@@ -248,7 +265,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
 
   const renderUnivCard = (data, category, typeLabel) => {
       if (!data) return <div className="h-24 bg-gray-50 rounded-xl border border-dashed flex items-center justify-center text-gray-400 text-sm font-bold">데이터 부족</div>;
-      
       const isUp = category === '상향';
       const isMatch = category === '적정';
       
@@ -263,14 +279,11 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                   <Badge variant={isUp ? 'secondary' : isMatch ? 'primary' : 'outline'} className="shadow-sm">{category} 지원</Badge>
                   <span className="text-[10px] font-black text-gray-400">{data.tierName}</span>
               </div>
-              
               <div className="flex items-center gap-3 relative z-10 mt-3">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-xs shadow-md shrink-0 ${isUp ? 'bg-indigo-500' : isMatch ? 'bg-blue-500' : 'bg-slate-400'}`}>
                       {data.primaryUniv.substring(0, 2)}
                   </div>
-                  <div>
-                      <h4 className="font-black text-gray-900 text-lg md:text-xl leading-tight">{data.primaryUniv}</h4>
-                  </div>
+                  <h4 className="font-black text-gray-900 text-lg md:text-xl leading-tight">{data.primaryUniv}</h4>
               </div>
           </div>
       );
@@ -323,10 +336,12 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                     <div className="flex flex-col md:flex-row justify-between items-center gap-4 relative z-10">
                         <div>
                             <h4 className="font-black text-indigo-900 mb-1">📸 성적표 간편 등록 (Vision AI)</h4>
-                            <p className="text-xs text-indigo-700 font-medium">성적표 사진을 찍어 올리면 과목, 원점수, 석차가 1초 만에 자동 입력됩니다.</p>
+                            <p className="text-xs text-indigo-700 font-medium">학교 성적표, 모의고사, 리로스쿨 캡처본을 올리면 1초 만에 자동 입력됩니다.</p>
                         </div>
-                        <Button variant="secondary" className="bg-white border-indigo-200 text-indigo-700 w-full md:w-auto font-black shadow-sm" onClick={handleOcrUpload} disabled={isOcrLoading}>
-                            {isOcrLoading ? <Loader className="animate-spin" size={18}/> : <Camera size={18}/>} 사진 업로드
+                        {/* 🚀 실제 파일 업로드 Input 숨김 처리 */}
+                        <input type="file" ref={fileInputRef} className="hidden" accept="image/*,.pdf" onChange={handleFileChange} />
+                        <Button variant="secondary" className="bg-white border-indigo-200 text-indigo-700 w-full md:w-auto font-black shadow-sm" onClick={() => fileInputRef.current?.click()} disabled={isOcrLoading}>
+                            {isOcrLoading ? <Loader className="animate-spin" size={18}/> : <Camera size={18}/>} 성적표 업로드
                         </Button>
                     </div>
                 </div>
@@ -334,25 +349,32 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                 <div className="space-y-3 mb-6">
                     <div className="flex justify-between items-end mb-2">
                         <label className="text-sm font-bold text-gray-800">과목별 점수</label>
-                        {inputForm.type === 'school' && <span className="text-[10px] text-gray-500 font-bold">* 석차/수강자수 입력 시 5등급 기준이 자동 계산됩니다.</span>}
+                        {inputForm.type === 'school' && <span className="text-[10px] text-gray-500 font-bold">* 석차/동석차/수강자수 입력 시 5등급이 자동 계산됩니다.</span>}
                     </div>
                     {inputForm.subjects.map((sub, idx) => (
-                        <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
-                            <input className="flex-1 md:w-1/4 border p-2.5 rounded-lg text-sm font-bold outline-none" placeholder="과목 (예: 국어)" value={sub.name} onChange={e => handleSubjectChange(idx, 'name', e.target.value)} />
-                            <input type="number" className="w-1/3 md:w-20 border p-2.5 rounded-lg text-sm font-bold outline-none" placeholder="원점수" value={sub.score} onChange={e => handleSubjectChange(idx, 'score', e.target.value)} />
+                        <div key={idx} className="flex flex-col md:flex-row gap-2 items-center bg-gray-50 p-2 rounded-lg border border-gray-100">
+                            <div className="flex gap-2 w-full md:w-auto flex-1">
+                                <input className="w-1/2 border p-2.5 rounded-lg text-sm font-bold outline-none" placeholder="과목명 (예: 국어)" value={sub.name} onChange={e => handleSubjectChange(idx, 'name', e.target.value)} />
+                                <input type="number" className="w-1/2 border p-2.5 rounded-lg text-sm font-bold outline-none" placeholder="원점수" value={sub.score} onChange={e => handleSubjectChange(idx, 'score', e.target.value)} />
+                            </div>
                             
                             {inputForm.type === 'school' ? (
-                                <>
-                                    <input type="number" className="w-1/3 md:w-20 border p-2.5 rounded-lg text-sm outline-none" placeholder="석차" value={sub.rank} onChange={e => handleSubjectChange(idx, 'rank', e.target.value)} />
-                                    <span className="text-gray-400">/</span>
-                                    <input type="number" className="w-1/3 md:w-20 border p-2.5 rounded-lg text-sm outline-none" placeholder="총인원" value={sub.total} onChange={e => handleSubjectChange(idx, 'total', e.target.value)} />
-                                </>
+                                <div className="flex items-center gap-1 w-full md:w-auto bg-white p-1 rounded-lg border border-gray-200">
+                                    <input type="number" className="w-16 border-none p-1.5 text-sm outline-none text-center bg-transparent" placeholder="석차" value={sub.rank} onChange={e => handleSubjectChange(idx, 'rank', e.target.value)} />
+                                    <span className="text-gray-400 text-xs">등</span>
+                                    <span className="text-gray-300">|</span>
+                                    <input type="number" className="w-16 border-none p-1.5 text-sm outline-none text-center bg-transparent" placeholder="동석차" value={sub.tiedRank} onChange={e => handleSubjectChange(idx, 'tiedRank', e.target.value)} />
+                                    <span className="text-gray-400 text-xs">명</span>
+                                    <span className="text-gray-300">/총</span>
+                                    <input type="number" className="w-16 border-none p-1.5 text-sm outline-none text-center bg-transparent" placeholder="인원" value={sub.total} onChange={e => handleSubjectChange(idx, 'total', e.target.value)} />
+                                    <span className="text-gray-400 text-xs">명</span>
+                                </div>
                             ) : null}
                             
-                            <input type="number" className={`w-1/3 md:w-24 border p-2.5 rounded-lg text-sm font-black outline-none ${sub.grade ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white'}`} placeholder="등급" value={sub.grade} onChange={e => handleSubjectChange(idx, 'grade', e.target.value)} />
+                            <input type="number" className={`w-full md:w-24 border p-2.5 rounded-lg text-sm font-black outline-none text-center ${sub.grade ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white'}`} placeholder="최종 등급" value={sub.grade} onChange={e => handleSubjectChange(idx, 'grade', e.target.value)} />
                         </div>
                     ))}
-                    <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setInputForm({...inputForm, subjects: [...inputForm.subjects, {name:'', score:'', rank:'', total:'', grade:''}]})}><Plus size={16}/> 과목 추가</Button>
+                    <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setInputForm({...inputForm, subjects: [...inputForm.subjects, {name:'', score:'', rank:'', tiedRank:'', total:'', grade:''}]})}><Plus size={16}/> 과목 추가</Button>
                 </div>
 
                 <Button className="w-full py-4 text-lg font-black bg-indigo-600 hover:bg-indigo-700 shadow-md" onClick={handleSaveGrade}>성적 안전하게 저장하기</Button>
@@ -363,13 +385,13 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             {/* 중단: 성적 추이 그래프 */}
             <Card className="flex flex-col h-72">
                 <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><TrendingUp size={18} className="text-indigo-600"/> 내신 (5등급제) 성장 곡선</h3>
-                <div className="flex-1 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center">
+                <div className="flex-1 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center overflow-hidden">
                     {renderGraph('school')}
                 </div>
             </Card>
             <Card className="flex flex-col h-72">
                 <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><TrendingUp size={18} className="text-blue-600"/> 모의고사 (9등급제) 성장 곡선</h3>
-                <div className="flex-1 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center">
+                <div className="flex-1 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center overflow-hidden">
                     {renderGraph('mock')}
                 </div>
             </Card>
@@ -380,27 +402,25 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             <div className="p-6 bg-white border-b border-slate-200 flex justify-between items-center">
                 <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><Award className="text-yellow-500" size={24}/> 나의 목표 대학 6-Block</h3>
                 <div className="text-sm font-bold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg">
-                    내신 평균: <span className="text-indigo-600">{avgGrades.school > 0 ? avgGrades.school : '-'}</span> / 모의고사 평균: <span className="text-blue-600">{avgGrades.mock > 0 ? avgGrades.mock : '-'}</span>
+                    내신: <span className="text-indigo-600">{avgGrades.school > 0 ? avgGrades.school : '-'}</span> / 모의: <span className="text-blue-600">{avgGrades.mock > 0 ? avgGrades.mock : '-'}</span>
                 </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-slate-200">
-                {/* 수시 칼럼 */}
                 <div className="bg-white p-6 space-y-4">
                     <div className="text-center mb-6">
                         <Badge className="bg-indigo-100 text-indigo-800 border border-indigo-200 mb-2">수시 (학생부 교과/종합)</Badge>
-                        <p className="text-xs font-bold text-gray-400">내신 5등급제 평균 기반 예측</p>
+                        <p className="text-[10px] font-bold text-gray-400">내신 5등급제 평균 기반 예측</p>
                     </div>
                     {renderUnivCard(susiResult?.up, '상향', susiResult?.type)}
                     {renderUnivCard(susiResult?.match, '적정', susiResult?.type)}
                     {renderUnivCard(susiResult?.down, '하향', susiResult?.type)}
                 </div>
                 
-                {/* 정시 칼럼 */}
                 <div className="bg-white p-6 space-y-4">
                     <div className="text-center mb-6">
                         <Badge className="bg-blue-100 text-blue-800 border border-blue-200 mb-2">정시 (수능)</Badge>
-                        <p className="text-xs font-bold text-gray-400">모의고사 9등급제 평균 기반 예측</p>
+                        <p className="text-[10px] font-bold text-gray-400">모의고사 9등급제 평균 기반 예측</p>
                     </div>
                     {renderUnivCard(jungsiResult?.up, '상향', jungsiResult?.type)}
                     {renderUnivCard(jungsiResult?.match, '적정', jungsiResult?.type)}
