@@ -11,7 +11,9 @@ if (admin.apps.length === 0) {
 
 const APP_ID = 'imperial-clinic-v1';
 
+// ============================================================================
 // [기능 1] 관리자 비밀번호 강제 초기화
+// ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) {
     throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
@@ -39,7 +41,9 @@ exports.adminResetPassword = onCall(async (request) => {
   }
 });
 
+// ============================================================================
 // [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 
+// ============================================================================
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
@@ -87,7 +91,9 @@ exports.refineFeedback = onCall(async (request) => {
     }
 });
 
+// ============================================================================
 // [기능 3] 통합 메시지 센터 FCM 오토 트리거 (학원폰 깨우기)
+// ============================================================================
 exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/sms_outbox/{docId}`, async (event) => {
     const snapshot = event.data;
     if (!snapshot) return null;
@@ -113,7 +119,9 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
     return null;
 });
 
+// ============================================================================
 // [기능 4] 클리닉 하루 전날 밤 10시 리마인드 자동 발송 (Cron 스케줄러)
+// ============================================================================
 exports.clinicReminderCron = onSchedule({
     schedule: "0 22 * * *", // 매일 밤 22시 00분
     timeZone: "Asia/Seoul", // 한국 시간 기준

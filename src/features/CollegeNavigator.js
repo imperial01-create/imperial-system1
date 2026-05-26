@@ -1,16 +1,17 @@
-/* [서비스 가치] 입시 내비게이터 2.0 (독립 메뉴판) - 
-   관리자는 학생을 직접 선택하여 시뮬레이션을 진행할 수 있으며, 
-   동석차 계산, AI 파싱, 로고 깨짐 방지 등 모든 기능이 완벽하게 독립 구동됩니다. */
+/* [서비스 가치] 입시 내비게이터 2.0 (완전 독립 & 정밀 분석판) - 
+   관리자는 검색으로 학생을 쾌적하게 불러오며, 동석차 정밀 계산 및 AI 파싱은 물론
+   '다음 시험에서 몇 과목, 몇 등급을 받아야 하는지' 역산하는 초정밀 시뮬레이터를 제공합니다. */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
-  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users
+  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -99,15 +100,19 @@ const JUNGSI_DB = [
   ];
 
 const CollegeNavigator = ({ currentUser }) => {
+  const { studentId } = useParams(); 
+  const navigate = useNavigate();
   const { users } = useData();
   const isAdminView = ['admin', 'admin_assistant'].includes(currentUser?.role);
   
-  // 🚀 [CTO 패치] 관리자용 학생 리스트 및 선택기 로직
-  const studentList = useMemo(() => (users || []).filter(u => u.role === 'student'), [users]);
-  const [selectedStudentId, setSelectedStudentId] = useState('');
+  // 🚀 [CTO 패치] 낭비없는 '검색 기반' 학생 선택기
+  const [searchInput, setSearchInput] = useState('');
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState(studentId || '');
 
   const activeStudentId = isAdminView ? selectedStudentId : currentUser.id;
-  const studentInfo = isAdminView ? studentList.find(s => s.id === activeStudentId) : currentUser;
+  const studentInfo = isAdminView ? (users || []).find(s => s.id === activeStudentId) : currentUser;
 
   const [grades, setGrades] = useState([]);
   const [isInputOpen, setIsInputOpen] = useState(false);
@@ -124,12 +129,17 @@ const CollegeNavigator = ({ currentUser }) => {
   };
   const [inputForm, setInputForm] = useState(initForm);
 
+  // --- 검색 로직 ---
+  const handleSearchStudent = () => {
+      if (!searchInput.trim()) return alert('이름을 입력해주세요.');
+      const results = (users || []).filter(u => u.role === 'student' && u.name.includes(searchInput.trim()));
+      setSearchResults(results);
+      setSearchModalOpen(true);
+  };
+
   // --- DB 연동 ---
   useEffect(() => {
-    if (!activeStudentId) {
-        setGrades([]); // 선택 해제 시 성적 초기화
-        return;
-    }
+    if (!activeStudentId) { setGrades([]); return; }
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), where('studentId', '==', activeStudentId));
     const unsub = onSnapshot(q, (snapshot) => {
         setGrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.createdAt?.seconds - b.createdAt?.seconds));
@@ -137,17 +147,15 @@ const CollegeNavigator = ({ currentUser }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 5등급제 정밀 계산 ---
+  // --- 5등급제 정밀 계산 (동석차) ---
   const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
       const r = Number(rank);
       const tr = Number(tiedRank) || 1; 
       const t = Number(total);
       if (t <= 0) return '';
-      
       const midRank = r + (tr - 1) / 2;
       const pct = (midRank / t) * 100;
-      
       if (pct <= 10) return 1; if (pct <= 34) return 2; if (pct <= 66) return 3; if (pct <= 90) return 4; return 5;
   };
 
@@ -160,28 +168,17 @@ const CollegeNavigator = ({ currentUser }) => {
       setInputForm({ ...inputForm, subjects: newSubjects });
   };
 
-  // 🚀 [CTO 패치] 폼 휴지통 삭제 기능 오류 해결
   const handleRemoveSubject = (idx) => {
-      setInputForm(prev => ({
-          ...prev, 
-          subjects: prev.subjects.filter((_, i) => i !== idx)
-      }));
+      setInputForm(prev => ({ ...prev, subjects: prev.subjects.filter((_, i) => i !== idx) }));
   };
 
   const handleEditEntry = (g) => {
-      let parsedGrade = '1학년';
-      let parsedExam = '1학기 중간고사';
+      let parsedGrade = '1학년', parsedExam = '1학기 중간고사';
       if (g.term) {
           const parts = g.term.split(' ');
-          if (parts.length >= 2) {
-              parsedGrade = parts[0];
-              parsedExam = parts.slice(1).join(' ');
-          }
+          if (parts.length >= 2) { parsedGrade = parts[0]; parsedExam = parts.slice(1).join(' '); }
       }
-      setInputForm({ 
-          id: g.id, type: g.type, termGrade: parsedGrade, termExam: parsedExam, 
-          subjects: g.subjects || [] 
-      });
+      setInputForm({ id: g.id, type: g.type, termGrade: parsedGrade, termExam: parsedExam, subjects: g.subjects || [] });
       setIsInputOpen(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -210,21 +207,14 @@ const CollegeNavigator = ({ currentUser }) => {
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
       try {
           const combinedTerm = `${inputForm.termGrade} ${inputForm.termExam}`;
-          const payload = {
-              studentId: activeStudentId, type: inputForm.type, term: combinedTerm,
-              subjects: validSubjects, isLocked: !isAdminView, updatedAt: serverTimestamp()
-          };
-          
-          if (inputForm.id) {
-              await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', inputForm.id), payload);
-          } else {
-              payload.createdAt = serverTimestamp();
-              await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), payload);
-          }
+          const payload = { studentId: activeStudentId, type: inputForm.type, term: combinedTerm, subjects: validSubjects, isLocked: !isAdminView, updatedAt: serverTimestamp() };
+          if (inputForm.id) await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', inputForm.id), payload);
+          else { payload.createdAt = serverTimestamp(); await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), payload); }
           setIsInputOpen(false); setInputForm(initForm);
       } catch(e) { alert(e.message); }
   };
 
+  // 평균 계산 및 결과 도출
   const avgGrades = useMemo(() => {
       const calcAvg = (type) => {
           const arr = grades.filter(g => g.type === type);
@@ -243,12 +233,7 @@ const CollegeNavigator = ({ currentUser }) => {
       const DB = isSusi ? SUSI_DB : JUNGSI_DB;
       let matchIdx = DB.findIndex(univ => score >= univ.minGrade && score < univ.maxGrade);
       if (matchIdx === -1) matchIdx = score < DB[0].minGrade ? 0 : DB.length - 1;
-      return { 
-          up: DB[Math.max(0, matchIdx - 2)], 
-          match: DB[matchIdx], 
-          down: DB[Math.min(DB.length - 1, matchIdx + 2)], 
-          score, type: isSusi ? '수시' : '정시' 
-      };
+      return { up: DB[Math.max(0, matchIdx - 2)], match: DB[matchIdx], down: DB[Math.min(DB.length - 1, matchIdx + 2)], score, type: isSusi ? '수시' : '정시' };
   };
 
   const susiResult = getUniversities(avgGrades.school, true);
@@ -259,6 +244,31 @@ const CollegeNavigator = ({ currentUser }) => {
       const matchIdx = SUSI_DB.findIndex(u => u.primaryUniv === susiResult.match.primaryUniv);
       return SUSI_DB.slice(Math.max(0, matchIdx - 5), matchIdx);
   }, [susiResult]);
+
+  // 🚀 [CTO 패치] 다음 시험 정밀 목표 역산 로직
+  const getNextExamTarget = (targetInfo) => {
+      if (!targetInfo) return null;
+      const typeKey = targetInfo.typeLabel?.includes('수시') ? 'school' : 'mock';
+      const relevantGrades = grades.filter(g => g.type === typeKey);
+      
+      let currentSubjCount = 0;
+      let currentSum = 0;
+      relevantGrades.forEach(g => {
+          (g.subjects || []).forEach(s => {
+              if (s.grade && !isNaN(Number(s.grade))) { currentSum += Number(s.grade); currentSubjCount++; }
+          });
+      });
+
+      const examCount = relevantGrades.length || 1;
+      const avgSubjPerExam = currentSubjCount > 0 ? Math.round(currentSubjCount / examCount) : 5;
+      const targetMaxGrade = targetInfo.maxGrade || 1;
+      
+      const nextExamRequiredAvg = currentSubjCount > 0 
+          ? ((targetMaxGrade * (currentSubjCount + avgSubjPerExam)) - currentSum) / avgSubjPerExam 
+          : targetMaxGrade;
+
+      return { avgSubjPerExam, requiredAvg: nextExamRequiredAvg, maxSysGrade: typeKey === 'school' ? 5 : 9 };
+  };
 
   // --- UI Components ---
   const renderGraph = (type) => {
@@ -300,33 +310,18 @@ const CollegeNavigator = ({ currentUser }) => {
       const isUp = category === '상향';
       const isMatch = category === '적정';
       const logoUrl = UNIV_LOGOS[data.primaryUniv.split(' ')[0]];
-      
-      // 🚀 [CTO 패치] 이미지 깨짐 텍스트 대체 안전장치 (onError)
-      const handleImageError = (e) => {
-          e.target.style.display = 'none';
-          if (e.target.nextElementSibling) {
-              e.target.nextElementSibling.style.display = 'flex';
-          }
-      };
+      const handleImageError = (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; };
 
       return (
-          <div 
-            onClick={() => setSelectedTarget({ ...data, category, typeLabel, score: currentScore })}
-            className={`relative p-4 rounded-2xl border-2 transition-all cursor-pointer hover:shadow-lg hover:-translate-y-1 overflow-hidden group
-                ${isUp ? 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200' : isMatch ? 'bg-gradient-to-br from-blue-50 to-white border-blue-200' : 'bg-gradient-to-br from-slate-50 to-white border-slate-200'}
-            `}
-          >
+          <div onClick={() => setSelectedTarget({ ...data, category, typeLabel, score: currentScore })} className={`relative p-4 rounded-2xl border-2 transition-all cursor-pointer hover:shadow-lg hover:-translate-y-1 overflow-hidden group ${isUp ? 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200' : isMatch ? 'bg-gradient-to-br from-blue-50 to-white border-blue-200' : 'bg-gradient-to-br from-slate-50 to-white border-slate-200'}`}>
               <div className="flex justify-between items-start mb-2 relative z-10">
                   <Badge variant={isUp ? 'secondary' : isMatch ? 'primary' : 'outline'} className="shadow-sm">{category} 지원</Badge>
                   <span className="text-[10px] font-black text-gray-400">{data.tierName}</span>
               </div>
               <div className="flex items-center gap-3 relative z-10 mt-3">
-                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-slate-400 font-black text-xs shadow-md shrink-0 bg-white border border-gray-100 p-1.5 relative">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-slate-400 font-black text-xs shadow-md shrink-0 bg-white border border-gray-100 p-1.5 relative overflow-hidden">
                       {logoUrl ? (
-                          <>
-                              <img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={handleImageError} />
-                              <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full">{data.primaryUniv.substring(0,2)}</span>
-                          </>
+                          <><img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={handleImageError} /><span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full">{data.primaryUniv.substring(0,2)}</span></>
                       ) : <span className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full">{data.primaryUniv.substring(0,2)}</span>}
                   </div>
                   <h4 className="font-black text-gray-900 text-lg md:text-xl leading-tight">{data.primaryUniv}</h4>
@@ -339,25 +334,35 @@ const CollegeNavigator = ({ currentUser }) => {
   if (isAdminView && !activeStudentId) {
       return (
         <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
-            <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl">
-                <h1 className="text-3xl font-black mb-2 flex items-center gap-3"><Compass className="text-blue-400" size={32}/> 입시 상담실 (관리자 모드)</h1>
-                <p className="text-slate-400 font-bold mb-6">아래에서 상담할 학생을 선택해 주세요.</p>
-                <div className="flex items-center gap-4 bg-white/10 p-2 rounded-2xl border border-white/20 max-w-lg">
-                    <Users className="ml-4 text-white/50" />
-                    <select 
-                        className="w-full p-4 bg-transparent text-white font-bold outline-none appearance-none"
-                        value={selectedStudentId}
-                        onChange={(e) => setSelectedStudentId(e.target.value)}
-                    >
-                        <option value="" className="text-gray-900">학생을 선택해주세요</option>
-                        {studentList.map(s => <option key={s.id} value={s.id} className="text-gray-900">{s.name} ({s.schoolName || '학교미상'})</option>)}
-                    </select>
+            <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl text-center md:text-left">
+                <h1 className="text-3xl font-black mb-2 flex items-center justify-center md:justify-start gap-3"><Compass className="text-blue-400" size={32}/> 입시 상담실 (관리자 모드)</h1>
+                <p className="text-slate-400 font-bold mb-8">상담을 진행할 학생의 이름을 검색해 주세요.</p>
+                <div className="flex flex-col sm:flex-row items-center gap-2 bg-white/10 p-2 rounded-2xl border border-white/20 max-w-lg mx-auto md:mx-0">
+                    <Search className="ml-4 text-white/50 shrink-0 hidden sm:block" />
+                    <input type="text" className="w-full p-3 bg-transparent text-white font-bold outline-none placeholder:text-white/40 text-center sm:text-left" placeholder="학생 이름 검색 (예: 홍길동)" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchStudent()} />
+                    <Button onClick={handleSearchStudent} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-3 px-6 font-black shrink-0 shadow-lg">검색</Button>
                 </div>
             </div>
-            <div className="text-center py-20 text-gray-400 font-bold">학생을 선택하면 성적 데이터와 6-Block 대학 분석이 표시됩니다.</div>
+
+            <Modal isOpen={searchModalOpen} onClose={() => setSearchModalOpen(false)} title="학생 검색 결과">
+                <div className="space-y-2 p-2 max-h-96 overflow-y-auto custom-scrollbar">
+                    {searchResults.length === 0 ? <div className="text-center py-10 text-slate-400 font-bold">조건에 맞는 학생이 없습니다.</div> :
+                    searchResults.map(s => (
+                        <div key={s.id} onClick={() => { setSelectedStudentId(s.id); setSearchModalOpen(false); setSearchInput(''); }} className="flex justify-between items-center p-4 bg-slate-50 border border-slate-100 rounded-2xl hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors group">
+                            <div>
+                                <div className="font-black text-slate-800 text-lg group-hover:text-blue-600">{s.name}</div>
+                                <div className="text-sm font-bold text-slate-400">{s.schoolName || '학교미상'} · {s.phone || '연락처없음'}</div>
+                            </div>
+                            <ChevronRight className="text-slate-300 group-hover:text-blue-500"/>
+                        </div>
+                    ))}
+                </div>
+            </Modal>
         </div>
       );
   }
+
+  const targetSimData = selectedTarget ? getNextExamTarget(selectedTarget) : null;
 
   return (
     <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
@@ -375,7 +380,7 @@ const CollegeNavigator = ({ currentUser }) => {
                         {isInputOpen ? '닫기' : '새로운 성적 입력'}
                     </Button>
                     {isAdminView && (
-                        <Button variant="secondary" onClick={() => setSelectedStudentId('')} className="bg-slate-800 text-white hover:bg-slate-700 border-slate-700 font-bold px-6 py-3 sm:px-6 sm:py-4 rounded-2xl flex-1 md:flex-none justify-center">다른 학생 선택</Button>
+                        <Button variant="secondary" onClick={() => setSelectedStudentId('')} className="bg-slate-800 text-white hover:bg-slate-700 border-slate-700 font-bold px-6 py-3 sm:px-6 sm:py-4 rounded-2xl flex-1 md:flex-none justify-center">다른 학생 검색</Button>
                     )}
                 </div>
             </div>
@@ -452,7 +457,6 @@ const CollegeNavigator = ({ currentUser }) => {
                                     )}
                                     
                                     <input className={`w-[calc(50%-4px)] md:w-24 border-none p-3 rounded-xl font-black text-center text-sm md:text-base outline-none ${sub.grade ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-800'}`} placeholder="등급" value={sub.grade} onChange={e=>handleSubjectChange(idx, 'grade', e.target.value)}/>
-                                    
                                     <button onClick={() => handleRemoveSubject(idx)} className="w-full md:w-10 p-3 flex justify-center text-slate-300 hover:text-red-500 bg-white rounded-xl md:bg-transparent"><Trash2 size={20}/></button>
                                 </div>
                             ))}
@@ -484,7 +488,7 @@ const CollegeNavigator = ({ currentUser }) => {
                 {/* 6-Block 대학 추천 시스템 */}
                 <Card className="p-0 overflow-hidden border-none shadow-xl bg-slate-100 rounded-[32px]">
                     <div className="p-6 sm:p-8 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
+                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Target className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
                         <div className="text-sm font-black text-slate-500 bg-slate-100 px-4 py-2 rounded-xl border border-slate-200">
                             내신 평균: <span className="text-indigo-600 text-lg">{avgGrades.school > 0 ? avgGrades.school : '-'}</span> / 모의 평균: <span className="text-blue-600 text-lg">{avgGrades.mock > 0 ? avgGrades.mock : '-'}</span>
                         </div>
@@ -515,46 +519,63 @@ const CollegeNavigator = ({ currentUser }) => {
                         </div>
                     </div>
                 </Card>
-
             </div>
         </div>
 
-        {/* 정밀 분석 팝업 (Gap Analysis) */}
+        {/* 🚀 [CTO 패치] 정밀 분석 팝업 (다음 시험 시뮬레이터 적용) */}
         <Modal isOpen={!!selectedTarget} onClose={() => setSelectedTarget(null)} title={`${selectedTarget?.primaryUniv} 목표 분석`}>
             {selectedTarget && (
-                <div className="text-center p-2 sm:p-6">
+                <div className="text-center p-2 sm:p-4">
                     <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto rounded-full bg-white flex items-center justify-center shadow-xl mb-6 ring-4 ring-slate-100 p-2 relative overflow-hidden">
                         {UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]] ? (
-                            <>
-                                <img src={UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]]} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/>
-                                <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span>
-                            </>
+                            <><img src={UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]]} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/><span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span></>
                         ) : <span className="text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span>}
                     </div>
                     <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2">{selectedTarget.primaryUniv}</h2>
                     <p className="text-blue-600 font-bold mb-8 text-sm sm:text-base">{selectedTarget.tierName} · {selectedTarget.category} 지원 권장</p>
                     
-                    <div className="bg-slate-50 rounded-[32px] p-6 sm:p-8 border-2 border-slate-100 shadow-inner">
+                    <div className="bg-slate-50 rounded-[32px] p-6 border-2 border-slate-100 shadow-inner">
                         <div className="flex flex-col sm:flex-row justify-between items-center gap-2 mb-6 text-sm font-black text-slate-400 border-b border-slate-200 pb-4">
                             <span>현재 {selectedTarget.typeLabel} : <span className="text-slate-800 text-base">{Number(selectedTarget.score || 0).toFixed(2)}등급</span></span>
                             <span className="hidden sm:inline"><ArrowRight size={16}/></span>
-                            <span>합격 안정선 : <span className="text-indigo-600 text-base">{selectedTarget.maxGrade}등급</span> 이내</span>
+                            <span>목표 합격선 : <span className="text-indigo-600 text-base">{selectedTarget.maxGrade}등급</span> 이내</span>
                         </div>
                         {Number(selectedTarget.score || 0) > selectedTarget.maxGrade ? (
                             <div className="space-y-4">
-                                <p className="text-slate-500 font-bold text-base sm:text-lg">해당 대학 안정권 진입을 위해</p>
-                                <div className="text-3xl sm:text-4xl font-black text-rose-600 bg-white inline-block px-6 py-3 rounded-2xl shadow-sm border border-rose-100">평균 {(Number(selectedTarget.score || 0) - selectedTarget.maxGrade).toFixed(2)}등급</div>
-                                <p className="text-slate-500 font-bold text-base sm:text-lg">을 더 올려야 합니다. 🔥</p>
+                                <p className="text-slate-500 font-bold text-base">합격선 진입을 위해 종합 평균</p>
+                                <div className="text-3xl font-black text-rose-600 bg-white inline-block px-6 py-3 rounded-2xl shadow-sm border border-rose-100">{(Number(selectedTarget.score || 0) - selectedTarget.maxGrade).toFixed(2)}등급</div>
+                                <p className="text-slate-500 font-bold text-base">향상이 필요합니다.</p>
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                <p className="text-slate-500 font-bold text-base sm:text-lg">🎉 현재 매우 안정적인 성적입니다!</p>
-                                <div className="text-3xl sm:text-4xl font-black text-emerald-600 bg-white inline-block px-6 py-3 rounded-2xl shadow-sm border border-emerald-100">합격 유력</div>
-                                <p className="text-slate-500 font-bold text-base sm:text-lg">성적 유지에 집중해 주세요. ✨</p>
+                                <p className="text-slate-500 font-bold text-base">🎉 현재 매우 안정적인 성적입니다!</p>
+                                <div className="text-3xl font-black text-emerald-600 bg-white inline-block px-6 py-3 rounded-2xl shadow-sm border border-emerald-100">합격 유력</div>
+                                <p className="text-slate-500 font-bold text-base">성적 유지에 집중해 주세요. ✨</p>
                             </div>
                         )}
                     </div>
-                    <Button onClick={()=>setSelectedTarget(null)} className="w-full mt-8 py-4 sm:py-5 text-lg sm:text-xl font-black rounded-2xl shadow-xl bg-slate-900 hover:bg-slate-800">분석 내용 확인 완료</Button>
+
+                    {/* 🚀 다음 시험 목표 시뮬레이터 (동적 렌더링) */}
+                    {targetSimData && Number(selectedTarget.score || 0) > selectedTarget.maxGrade && (
+                        <div className="bg-indigo-50 rounded-3xl p-6 mt-4 text-left border border-indigo-100">
+                            <h4 className="font-black text-indigo-900 mb-3 flex items-center gap-2"><Target size={20}/> 다음 시험 목표 시뮬레이터</h4>
+                            {targetSimData.requiredAvg < 1.0 ? (
+                                <p className="text-sm text-indigo-700 font-bold leading-relaxed">
+                                    ⚠️ 다음 시험(예상 <span className="text-indigo-900">{targetSimData.avgSubjPerExam}</span>과목)에서 <span className="text-rose-600 font-black bg-white px-1.5 py-0.5 rounded">올 1등급</span>을 받아도 즉각적인 안정권 진입이 어렵습니다. 최소 2~3학기에 걸친 장기적인 등급 향상 계획이 필요합니다.
+                                </p>
+                            ) : targetSimData.requiredAvg <= targetSimData.maxSysGrade ? (
+                                <p className="text-sm text-indigo-700 font-bold leading-relaxed">
+                                    💡 다음 시험(예상 <span className="text-indigo-900">{targetSimData.avgSubjPerExam}</span>과목)에서 평균 <span className="text-rose-600 font-black text-lg bg-white px-2 py-0.5 rounded shadow-sm">{targetSimData.requiredAvg.toFixed(2)}등급</span> 이상을 받으면 목표 대학 합격선에 즉각 진입할 수 있습니다!
+                                </p>
+                            ) : (
+                                <p className="text-sm text-indigo-700 font-bold leading-relaxed">
+                                    💡 다음 시험(예상 <span className="text-indigo-900">{targetSimData.avgSubjPerExam}</span>과목)에서 <span className="text-emerald-600 font-black text-lg bg-white px-2 py-0.5 rounded shadow-sm">{targetSimData.maxSysGrade.toFixed(2)}등급</span>만 유지해도 안정권입니다!
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    <Button onClick={()=>setSelectedTarget(null)} className="w-full mt-6 py-5 text-lg font-black rounded-2xl shadow-xl bg-slate-900 hover:bg-slate-800">분석 내용 확인 완료</Button>
                 </div>
             )}
         </Modal>
@@ -570,10 +591,7 @@ const CollegeNavigator = ({ currentUser }) => {
                     <div key={u.level} onClick={() => { setSelectedTarget({...u, category: '상향', typeLabel: '수시 내신', score: avgGrades.school}); setIsUpperListOpen(false); }} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100 hover:border-blue-500 hover:shadow-md cursor-pointer transition-all group">
                          <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100 p-1.5 relative overflow-hidden">
                             {logoUrl ? (
-                                <>
-                                    <img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/>
-                                    <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center font-black text-slate-400 text-xs bg-slate-50">{u.primaryUniv.substring(0,2)}</span>
-                                </>
+                                <><img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/><span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center font-black text-slate-400 text-xs bg-slate-50">{u.primaryUniv.substring(0,2)}</span></>
                             ) : <span className="font-black text-slate-400 text-xs">{u.primaryUniv.substring(0,2)}</span>}
                          </div>
                          <div className="flex-1">

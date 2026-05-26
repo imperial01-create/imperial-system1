@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 입시 상담 모달 코드를 제거하고, 본연의 사용자 및 수강 관리 역할만 독립적으로 수행) */
+   (🚀 CTO 패치: 입시 상담 모달 코드를 깔끔히 제거하고 본연의 사용자 및 수강 관리 역할만 독립 수행) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -12,10 +12,13 @@ import { httpsCallable } from 'firebase/functions';
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const UserManager = ({ currentUser }) => {
+    const navigate = useNavigate();
+
     if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
         return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
     }
