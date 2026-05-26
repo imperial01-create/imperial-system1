@@ -4,11 +4,12 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare // 🚀 [CTO 패치] MessageSquare 아이콘 추가
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket // 🚀 [CTO 패치] MessageSquare 아이콘 추가
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { auth, db } from './firebase'; 
+import { auth, db } from './firebase';
+ 
 
 // 글로벌 데이터 엔진
 import { DataProvider, useData } from './contexts/DataContext';
@@ -32,6 +33,7 @@ const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 // 🚀 [CTO 패치] 통합 메시지 센터 모듈 임포트 추가
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
+const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -253,7 +255,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    // 🚀 [CTO 패치] 통합 메시지 센터 사이드바 메뉴 추가
+    { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
     { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'] },
@@ -337,6 +339,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={<CollegeNavigator currentUser={currentUser} />} />
+                        <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
             </div>
