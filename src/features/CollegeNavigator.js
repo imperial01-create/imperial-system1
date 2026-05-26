@@ -15,7 +15,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 대학 로고 맵 (위키백과 등 공용 URL) ---
+// 🚀 [CTO 패치] DB에 등록된 모든 대학교의 로고 맵핑 (원장님이 직접 URL을 변경하기 쉽도록 전부 나열해 두었습니다.)
 const UNIV_LOGOS = {
   "서울대학교": "https://i.postimg.cc/SNx2knJ9/seouldaehaggyo.png",
   "연세대학교": "https://i.postimg.cc/k4ZJCgZp/yeonsedaehaggyo.png",
@@ -26,7 +26,26 @@ const UNIV_LOGOS = {
   "경희대학교": "https://i.postimg.cc/m2ZsnMtx/keugibyeonhwan-gyeonghuidaehaggyo.png",
   "건국대학교": "https://i.postimg.cc/MHWhh2Z4/geongugdaehaggyo.jpg",
   "동국대학교": "https://i.postimg.cc/VkS3yF1Y/dong-gugdaehaggyo.png",
-  "홍익대학교": "https://i.postimg.cc/sDxLSJMC/hong-igdaehaggyo.jpg"
+  "홍익대학교": "https://i.postimg.cc/sDxLSJMC/hong-igdaehaggyo.jpg",
+  "서강대학교": "https://i.postimg.cc/j2hr56SK/seogangdaehaggyo.gif",
+  "한국외국어대학교": "https://i.postimg.cc/7Zfp8r0P/hangug-oegug-eodaehaggyo.gif",
+  "서울시립대학교": "https://i.postimg.cc/yxLrtLNT/seoulsilibdaehaggyo.png",
+  "국민대학교": "https://i.postimg.cc/h4ZsFzrm/gugmindaehaggyo.png",
+  "숭실대학교": "https://i.postimg.cc/PqMbSPJ8/sungsildaehaggyo.jpg",
+  "세종대학교": "https://i.postimg.cc/6pJdwdGC/sejongdaehaggyo.png",
+  "단국대학교": "https://i.postimg.cc/J0HkCnrZ/dangugdaehaggyo.png",
+  "가천대학교": "https://i.postimg.cc/K82JQXQ2/gacheondaehaggyo.jpg",
+  "가톨릭대학교": "https://i.postimg.cc/QtwqTvVT/gatolligdaehaggyo.jpg",
+  "인하대학교": "https://i.postimg.cc/W186ndhT/inhadaehaggyo.png",
+  "아주대학교": "https://i.postimg.cc/fLGxLXrn/ajudaehaggyo.jpg",
+  "광운대학교": "https://i.postimg.cc/CLHjhRCc/gwang-undaehaggyo.png",
+  "경기대학교": "https://i.postimg.cc/43hy3Mky/logo-1947-01-10.png",
+  "한성대학교": "https://i.postimg.cc/kX1gv9qp/hanseongdaehaggyo.jpg",
+  "부산대학교": "https://i.postimg.cc/XYtNt8ZR/busandaehaggyo.png",
+  "경북대학교": "https://i.postimg.cc/L4v9mRYq/gyeongbugdaehaggyo.png",
+  "충남대학교": "https://i.postimg.cc/bvX8mwWY/chungnamdaehaggyo.jpg",
+  "전남대학교": "https://i.postimg.cc/ZnqhWBB0/jeonnamdaehaggyo.png",
+  "지방": "" // "지방 주요 4년제" 또는 "지방 거점 국립대" 등 포괄적인 단어 매핑용
 };
 
 const SUSI_DB = [
@@ -105,7 +124,6 @@ const CollegeNavigator = ({ currentUser }) => {
   const { users } = useData();
   const isAdminView = ['admin', 'admin_assistant'].includes(currentUser?.role);
   
-  // 🚀 [CTO 패치] 낭비없는 '검색 기반' 학생 선택기
   const [searchInput, setSearchInput] = useState('');
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
@@ -245,7 +263,7 @@ const CollegeNavigator = ({ currentUser }) => {
       return SUSI_DB.slice(Math.max(0, matchIdx - 5), matchIdx);
   }, [susiResult]);
 
-  // 🚀 [CTO 패치] 다음 시험 정밀 목표 역산 로직
+  // 다음 시험 정밀 목표 역산 로직
   const getNextExamTarget = (targetInfo) => {
       if (!targetInfo) return null;
       const typeKey = targetInfo.typeLabel?.includes('수시') ? 'school' : 'mock';
@@ -488,7 +506,7 @@ const CollegeNavigator = ({ currentUser }) => {
                 {/* 6-Block 대학 추천 시스템 */}
                 <Card className="p-0 overflow-hidden border-none shadow-xl bg-slate-100 rounded-[32px]">
                     <div className="p-6 sm:p-8 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Target className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
+                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
                         <div className="text-sm font-black text-slate-500 bg-slate-100 px-4 py-2 rounded-xl border border-slate-200">
                             내신 평균: <span className="text-indigo-600 text-lg">{avgGrades.school > 0 ? avgGrades.school : '-'}</span> / 모의 평균: <span className="text-blue-600 text-lg">{avgGrades.mock > 0 ? avgGrades.mock : '-'}</span>
                         </div>
@@ -522,7 +540,7 @@ const CollegeNavigator = ({ currentUser }) => {
             </div>
         </div>
 
-        {/* 🚀 [CTO 패치] 정밀 분석 팝업 (다음 시험 시뮬레이터 적용) */}
+        {/* 🚀 정밀 분석 팝업 (다음 시험 시뮬레이터 적용) */}
         <Modal isOpen={!!selectedTarget} onClose={() => setSelectedTarget(null)} title={`${selectedTarget?.primaryUniv} 목표 분석`}>
             {selectedTarget && (
                 <div className="text-center p-2 sm:p-4">
