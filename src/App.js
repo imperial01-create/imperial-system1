@@ -336,6 +336,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/navigator/:studentId" element={<CollegeNavigator currentUser={currentUser} />} />
                     </Routes>
                 </Suspense>
             </div>

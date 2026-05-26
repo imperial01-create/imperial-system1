@@ -1,10 +1,10 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 학생 상세 모달에 '입시 내비게이터' 상담 전용 탭 완벽 연동) */
+   (🚀 CTO 패치: 신규생 전화번호 버그 픽스, 분할 문자, 전체화면 입시 내비게이터 연동 버튼 적용) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle, Target
+  BookMarked, Clock, Calendar, CheckCircle, Target, ChevronRight
 } from 'lucide-react';
 import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -12,13 +12,13 @@ import { httpsCallable } from 'firebase/functions';
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
-
-// 🚀 [CTO 패치] 입시 내비게이터 컴포넌트 임포트 (상담 탭에서 렌더링하기 위함)
-import CollegeNavigator from './CollegeNavigator';
+import { useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const UserManager = ({ currentUser }) => {
+    const navigate = useNavigate();
+
     if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
         return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
     }
@@ -220,54 +220,34 @@ const UserManager = ({ currentUser }) => {
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
 
     const handleClassSelect = (classId) => {
-        if (!classId) {
-            setEnrollForm(initEnrollForm);
-            return;
-        }
+        if (!classId) { setEnrollForm(initEnrollForm); return; }
         const cls = classes.find(c => c.id === classId);
         if (!cls) return;
 
         const mappedSchedules = (cls.schedules || []).map(s => ({
-            dayOfWeek: s.dayOfWeek,
-            startTime: s.startTime,
-            endTime: s.endTime,
-            room: s.room,
-            callTime: s.startTime 
+            dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime, room: s.room, callTime: s.startTime 
         }));
 
         setEnrollForm({
-            classId: cls.id,
-            className: cls.name,
-            lecturerId: cls.lecturerId,
-            status: 'active',
-            schedules: mappedSchedules
+            classId: cls.id, className: cls.name, lecturerId: cls.lecturerId, status: 'active', schedules: mappedSchedules
         });
     };
 
     const handleCallTimeChange = (index, value) => {
         setEnrollForm(prev => {
-            const arr = [...prev.schedules];
-            arr[index].callTime = value;
-            return { ...prev, schedules: arr };
+            const arr = [...prev.schedules]; arr[index].callTime = value; return { ...prev, schedules: arr };
         });
     };
 
     const handleSaveEnrollment = async () => {
         if (!enrollForm.classId) return alert('배정할 반을 선택해주세요.');
-        
         const isNewEnrollment = !enrollForm.id;
         setLoading(true);
         try {
             const enrollmentId = `${formData.id}_${enrollForm.classId}`;
             const payload = {
-                studentId: formData.id,
-                studentName: formData.name,
-                classId: enrollForm.classId,
-                className: enrollForm.className,
-                lecturerId: enrollForm.lecturerId,
-                status: enrollForm.status,
-                schedules: enrollForm.schedules,
-                updatedAt: serverTimestamp()
+                studentId: formData.id, studentName: formData.name, classId: enrollForm.classId, className: enrollForm.className,
+                lecturerId: enrollForm.lecturerId, status: enrollForm.status, schedules: enrollForm.schedules, updatedAt: serverTimestamp()
             };
 
             const eRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments', enrollmentId);
@@ -278,7 +258,6 @@ const UserManager = ({ currentUser }) => {
             
             if (isNewEnrollment && enrollForm.status === 'active') {
                 if (window.confirm('신규 수강 배정이 완료되었습니다.\n첫 등원 및 교재 안내 문자를 발송하시겠습니까?')) {
-                    
                     let targetPhone = '';
                     const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(formData.id));
                     if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
@@ -311,25 +290,14 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
 
 원활한 진도 진행을 위해 첫 수업 전까지 해당 교재를 꼭 지참할 수 있도록 챙겨주시면 감사하겠습니다.`;
 
-                    setSmsPreviewModal({
-                        isOpen: true,
-                        welcomeMsg: welcomeMsg,
-                        textbookMsg: textbookMsg,
-                        targetPhone: targetPhone,
-                        studentName: formData.name
-                    });
+                    setSmsPreviewModal({ isOpen: true, welcomeMsg, textbookMsg, targetPhone, studentName: formData.name });
                 }
             }
 
-            setEnrollForm(initEnrollForm);
-            setClassSearchInput('');
-            setClassSearchQuery('');
+            setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery('');
             showToast('수강 배정이 성공적으로 저장되었습니다.', 'success');
-        } catch (e) {
-            showToast('수강 배정 실패: ' + e.message, 'error');
-        } finally {
-            setLoading(false);
-        }
+        } catch (e) { showToast('수강 배정 실패: ' + e.message, 'error'); } 
+        finally { setLoading(false); }
     };
 
     const handleDeleteEnrollment = async (enrollId) => {
@@ -468,7 +436,6 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                         <button onClick={() => isEditMode && setModalTab('enroll')} disabled={!isEditMode} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'enroll' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed'}`}>
                             📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후)</span>}
                         </button>
-                        {/* 🚀 [CTO 패치] 입시 상담 탭 추가 */}
                         {isEditMode && (
                             <button onClick={() => setModalTab('navigator')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'navigator' ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
                                 🧭 입시 상담
@@ -532,7 +499,6 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
 
                     {modalTab === 'enroll' && activeTab === 'student' && (
                         <div className="space-y-6 animate-in fade-in">
-                            
                             <div>
                                 <h3 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-1.5"><BookMarked size={16} className="text-blue-600"/> 현재 수강중인 반</h3>
                                 {currentStudentEnrollments.length === 0 ? (
@@ -671,18 +637,17 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                         </div>
                     )}
 
-                    {/* 🚀 [CTO 패치] 입시 내비게이터 탭 랜더링 */}
                     {modalTab === 'navigator' && activeTab === 'student' && (
-                        <div className="animate-in fade-in pt-2">
-                            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-4 text-sm text-indigo-800 font-bold flex items-center gap-2">
-                                <Target size={18} className="shrink-0" />
-                                <div>
-                                    {formData.name} 학생의 입시 시뮬레이션 및 상담 화면입니다.<br/>
-                                    <span className="font-normal text-xs text-indigo-600">성적을 직접 수정하여 목표 대학 진입을 위한 성적 향상치(Gap)를 상담해 보세요.</span>
-                                </div>
-                            </div>
-                            {/* 방금 만든 CollegeNavigator 컴포넌트를 이 탭 안에 쏙 넣습니다. */}
-                            <CollegeNavigator currentUser={currentUser} targetStudent={formData} />
+                        <div className="animate-in fade-in py-20 flex flex-col items-center justify-center text-center">
+                            <div className="bg-indigo-100 p-6 rounded-full text-indigo-600 mb-6 shadow-inner"><Target size={64}/></div>
+                            <h3 className="text-3xl font-black text-slate-900 mb-4">{formData.name} 학생 전용 입시 상담실</h3>
+                            <p className="text-slate-500 font-bold text-lg mb-8 max-w-md">비좁은 창을 벗어나 넓은 화면에서<br/>6-Block 대학 추천 및 정밀 성적 분석을 진행합니다.</p>
+                            <Button 
+                                className="px-12 py-5 text-2xl font-black shadow-2xl bg-indigo-600 hover:bg-indigo-700 rounded-[24px] flex items-center gap-3 animate-bounce" 
+                                onClick={() => { setIsModalOpen(false); navigate(`/navigator/${formData.id}`); }}
+                            >
+                                입시 상담실 입장하기 <ChevronRight size={28}/>
+                            </Button>
                         </div>
                     )}
                 </div>
