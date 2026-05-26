@@ -31,6 +31,7 @@ const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControl
 const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 // 🚀 [CTO 패치] 통합 메시지 센터 모듈 임포트 추가
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
+const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -246,6 +247,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
+    { path: '/navigator', label: '입시 내비게이터', icon: Target, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
@@ -333,6 +335,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
             </div>
