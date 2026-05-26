@@ -1,7 +1,6 @@
-/* [서비스 가치] 입시 내비게이터 2.0 (완전 독립 & 정밀 분석판) - 
-   관리자는 검색으로 학생을 쾌적하게 불러오며, 동석차 정밀 계산 및 AI 파싱은 물론
-   '다음 시험에서 몇 과목, 몇 등급을 받아야 하는지' 역산하는 초정밀 시뮬레이터를 제공합니다. 
-   (🚀 CTO 패치: 6-Block 대학 카드의 [상향/적정/하향] 시인성 및 색상 테마 극대화) */
+/* [서비스 가치] 입시 내비게이터 2.0 (초정밀 분석 & 완벽 독립판) - 
+   관리자는 검색으로 쾌적하게 학생을 불러오며, 학생은 안전하게 열람만 가능합니다.
+   동석차 계산, AI 파싱, 로고 깨짐 방지, 다음 시험 시뮬레이터 등 모든 기능이 탑재된 최종판입니다. */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
@@ -16,7 +15,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 대학 로고 맵 (위키백과 등 공용 URL) ---
+// --- 대학 로고 맵 (원장님 맞춤 커스텀) ---
 const UNIV_LOGOS = {
   "서울대학교": "https://i.postimg.cc/SNx2knJ9/seouldaehaggyo.png",
   "연세대학교": "https://i.postimg.cc/k4ZJCgZp/yeonsedaehaggyo.png",
@@ -46,7 +45,7 @@ const UNIV_LOGOS = {
   "경북대학교": "https://i.postimg.cc/L4v9mRYq/gyeongbugdaehaggyo.png",
   "충남대학교": "https://i.postimg.cc/bvX8mwWY/chungnamdaehaggyo.jpg",
   "전남대학교": "https://i.postimg.cc/ZnqhWBB0/jeonnamdaehaggyo.png",
-  "지방": "" // "지방 주요 4년제" 또는 "지방 거점 국립대" 등 포괄적인 단어 매핑용
+  "지방": ""
 };
 
 const SUSI_DB = [
@@ -144,17 +143,17 @@ const CollegeNavigator = ({ currentUser }) => {
   
   const fileInputRef = useRef(null);
 
-  // --- 성적 입력 폼 ---
+  // --- 성적 입력 폼 초기화 데이터 ---
   const initForm = { 
       id: null, type: 'school', termGrade: '1학년', termExam: '1학기 중간고사', 
       subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] 
   };
   const [inputForm, setInputForm] = useState(initForm);
 
-  // 🚀 읽기 전용 판별
+  // 🚀 학생 계정일 경우 과거 내역은 수정 불가(읽기 전용) 처리
   const isReadOnly = !isAdminView && !!inputForm.id;
 
-  // --- 검색 로직 ---
+  // --- 관리자 학생 검색 로직 ---
   const handleSearchStudent = () => {
       if (!searchInput.trim()) return alert('이름을 입력해주세요.');
       const results = (users || []).filter(u => u.role === 'student' && u.name.includes(searchInput.trim()));
@@ -172,7 +171,7 @@ const CollegeNavigator = ({ currentUser }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 5등급제 정밀 계산 ---
+  // --- 5등급제 정밀 계산 (동석차) ---
   const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
       const r = Number(rank);
@@ -199,6 +198,7 @@ const CollegeNavigator = ({ currentUser }) => {
       setInputForm(prev => ({ ...prev, subjects: prev.subjects.filter((_, i) => i !== idx) }));
   };
 
+  // 기존 내역 불러오기
   const handleEditEntry = (g) => {
       let parsedGrade = '1학년', parsedExam = '1학기 중간고사';
       if (g.term) {
@@ -210,6 +210,7 @@ const CollegeNavigator = ({ currentUser }) => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // OCR 파싱
   const handleFileChange = async (e) => {
       if (isReadOnly) return;
       const file = e.target.files[0];
@@ -230,11 +231,17 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch (error) { alert(error.message); setIsOcrLoading(false); }
   };
 
+  // 학생 vs 관리자 제출 분기 처리
   const handleSaveClick = () => {
       const validSubjects = inputForm.subjects.filter(s => s.name && s.grade);
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
-      if (!isAdminView && !inputForm.id) setIsConfirmModalOpen(true);
-      else executeSaveGrade();
+      
+      // 학생이 신규 등록하는 경우 경고 모달 표시
+      if (!isAdminView && !inputForm.id) {
+          setIsConfirmModalOpen(true);
+      } else {
+          executeSaveGrade();
+      }
   };
 
   const executeSaveGrade = async () => {
@@ -242,6 +249,7 @@ const CollegeNavigator = ({ currentUser }) => {
       try {
           const combinedTerm = `${inputForm.termGrade} ${inputForm.termExam}`;
           const payload = { studentId: activeStudentId, type: inputForm.type, term: combinedTerm, subjects: validSubjects, isLocked: !isAdminView, updatedAt: serverTimestamp() };
+          
           if (inputForm.id) {
               await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', inputForm.id), payload);
           } else {
@@ -252,6 +260,7 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch(e) { alert(e.message); setIsConfirmModalOpen(false); }
   };
 
+  // 평균 계산 및 대학 추천
   const avgGrades = useMemo(() => {
       const calcAvg = (type) => {
           const arr = grades.filter(g => g.type === type);
@@ -282,6 +291,7 @@ const CollegeNavigator = ({ currentUser }) => {
       return SUSI_DB.slice(Math.max(0, matchIdx - 5), matchIdx);
   }, [susiResult]);
 
+  // 다음 시험 정밀 목표 역산 로직
   const getNextExamTarget = (targetInfo) => {
       if (!targetInfo) return null;
       const typeKey = targetInfo.typeLabel?.includes('수시') ? 'school' : 'mock';
@@ -338,7 +348,6 @@ const CollegeNavigator = ({ currentUser }) => {
       );
   };
 
-  // 🚀 [CTO 패치] 6-Block 카드 UI: 색상 테마 및 [상향/적정/하향] 직관성 극대화
   const renderUnivCard = (data, category, typeLabel, currentScore) => {
       if (!data) return <div className="h-24 bg-gray-50 rounded-xl border border-dashed flex items-center justify-center text-gray-400 text-sm font-bold">데이터 부족</div>;
       
@@ -347,7 +356,6 @@ const CollegeNavigator = ({ currentUser }) => {
       const logoUrl = UNIV_LOGOS[data.primaryUniv.split(' ')[0]];
       const handleImageError = (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; };
 
-      // 색상 테마 지정 (상향: Rose, 적정: Blue, 하향: Emerald)
       const theme = isUp 
           ? { bg: 'bg-rose-50 hover:border-rose-400 border-rose-200', text: 'text-rose-600', badge: 'bg-rose-500 text-white shadow-rose-200' }
           : isMatch 
@@ -357,9 +365,7 @@ const CollegeNavigator = ({ currentUser }) => {
       return (
           <div onClick={() => setSelectedTarget({ ...data, category, typeLabel, score: currentScore })} className={`relative p-5 rounded-2xl border-2 transition-all cursor-pointer hover:shadow-lg hover:-translate-y-1 overflow-hidden group ${theme.bg}`}>
               <div className="flex justify-between items-center mb-3 relative z-10">
-                  <div className={`px-3 py-1.5 rounded-lg text-xs font-black shadow-md ${theme.badge}`}>
-                      {category} 지원
-                  </div>
+                  <div className={`px-3 py-1.5 rounded-lg text-xs font-black shadow-md ${theme.badge}`}>{category} 지원</div>
                   <span className="text-[11px] font-black text-slate-400 bg-white px-2 py-1 rounded-md border border-slate-100">{data.tierName}</span>
               </div>
               <div className="flex items-center gap-4 relative z-10 mt-2">
@@ -377,6 +383,7 @@ const CollegeNavigator = ({ currentUser }) => {
       );
   };
 
+  // --- 관리자 선택 UI 렌더링 ---
   if (isAdminView && !activeStudentId) {
       return (
         <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
@@ -408,9 +415,12 @@ const CollegeNavigator = ({ currentUser }) => {
       );
   }
 
+  const targetSimData = selectedTarget ? getNextExamTarget(selectedTarget) : null;
+
   return (
     <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
         
+        {/* 상단 통합 대시보드 Header */}
         <div className="bg-slate-900 text-white p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] shadow-2xl relative overflow-hidden">
             <div className="absolute right-0 top-0 w-64 h-64 bg-blue-600/20 rounded-full blur-[100px]"></div>
             <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -430,6 +440,7 @@ const CollegeNavigator = ({ currentUser }) => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            {/* 좌측: 과거 성적 히스토리 */}
             <div className="lg:col-span-1 space-y-6">
                 <Card className="p-5 sm:p-6 border-none shadow-sm bg-white rounded-3xl">
                     <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><History size={20} className="text-blue-600"/> 기존 성적 내역</h3>
@@ -451,6 +462,7 @@ const CollegeNavigator = ({ currentUser }) => {
                 </Card>
             </div>
 
+            {/* 우측: 메인 분석 및 입력 영역 */}
             <div className="lg:col-span-3 space-y-8">
                 {isInputOpen && (
                     <Card className="border-4 border-blue-600 shadow-2xl p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] animate-in slide-in-from-top-4">
@@ -524,6 +536,7 @@ const CollegeNavigator = ({ currentUser }) => {
                     </Card>
                 )}
 
+                {/* 그래프 2종 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <Card className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border-none shadow-sm bg-white">
                         <h3 className="font-black text-slate-800 flex items-center gap-2 mb-2"><TrendingUp size={20} className="text-indigo-600"/> 내신성적 성장 곡선</h3>
@@ -539,6 +552,7 @@ const CollegeNavigator = ({ currentUser }) => {
                     </Card>
                 </div>
 
+                {/* 6-Block 대학 추천 시스템 */}
                 <Card className="p-0 overflow-hidden border-none shadow-xl bg-slate-100 rounded-[32px]">
                     <div className="p-6 sm:p-8 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
@@ -573,7 +587,7 @@ const CollegeNavigator = ({ currentUser }) => {
             </div>
         </div>
 
-        {/* 제출 경고 모달 (학생용) */}
+        {/* 🚀 제출 경고 모달 (학생용) */}
         <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="최종 제출 확인">
             <div className="p-4 text-center space-y-4">
                 <div className="w-16 h-16 mx-auto bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4"><Lock size={32}/></div>

@@ -1,10 +1,10 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 입시 상담 모달 코드를 깔끔히 제거하고 본연의 사용자 및 수강 관리 역할만 독립 수행) */
+   (🚀 CTO 패치: 입시 상담 기능을 분리하여 본연의 사용자 및 수강 관리 역할만 독립적으로 안전하게 수행합니다.) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle
+  BookMarked, Clock, Calendar, CheckCircle, Target, ChevronRight
 } from 'lucide-react';
 import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -391,6 +391,11 @@ const UserManager = ({ currentUser }) => {
                         <button onClick={() => isEditMode && setModalTab('enroll')} disabled={!isEditMode} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'enroll' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed'}`}>
                             📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후)</span>}
                         </button>
+                        {isEditMode && (
+                            <button onClick={() => setModalTab('navigator')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'navigator' ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
+                                🧭 입시 상담
+                            </button>
+                        )}
                     </div>
                 )}
 
@@ -565,6 +570,20 @@ const UserManager = ({ currentUser }) => {
                                     </Button>
                                 </div>
                             </div>
+                        </div>
+                    )}
+
+                    {modalTab === 'navigator' && activeTab === 'student' && (
+                        <div className="animate-in fade-in py-20 flex flex-col items-center justify-center text-center">
+                            <div className="bg-indigo-100 p-6 rounded-full text-indigo-600 mb-6 shadow-inner"><Target size={64}/></div>
+                            <h3 className="text-3xl font-black text-slate-900 mb-4">{formData.name} 학생 전용 입시 상담실</h3>
+                            <p className="text-slate-500 font-bold text-lg mb-8 max-w-md">비좁은 창을 벗어나 넓은 화면에서<br/>6-Block 대학 추천 및 정밀 성적 분석을 진행합니다.</p>
+                            <Button 
+                                className="px-12 py-5 text-2xl font-black shadow-2xl bg-indigo-600 hover:bg-indigo-700 rounded-[24px] flex items-center gap-3 animate-bounce" 
+                                onClick={() => { setIsModalOpen(false); navigate(`/navigator/${formData.id}`); }}
+                            >
+                                입시 상담실 입장하기 <ChevronRight size={28}/>
+                            </Button>
                         </div>
                     )}
                 </div>

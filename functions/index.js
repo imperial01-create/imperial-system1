@@ -218,7 +218,7 @@ exports.clinicReminderCron = onSchedule({
 });
 
 // ============================================================================
-// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
+// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출 완벽 지원)
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
     if (!request.auth) {
@@ -249,6 +249,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         const mimeType = fileData.split(';')[0].split(':')[1];
         const base64String = fileData.split(',')[1];
 
+        // 🚀 [CTO 패치] 원장님의 특별 지침이 완벽하게 들어간 최종 프롬프트
         const prompt = `
         첨부된 이미지는 대한민국의 ${type === 'school' ? '학교 내신' : '모의고사'} 성적표(또는 리로스쿨 성적표 캡처본)입니다.
         이 이미지에서 모든 과목별 성적 데이터를 추출하여 반드시 아래 포맷의 JSON 배열로 반환하세요.
