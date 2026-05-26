@@ -1,10 +1,11 @@
 /* [서비스 가치] 입시 내비게이터 2.0 (완전 독립 & 정밀 분석판) - 
    관리자는 검색으로 학생을 쾌적하게 불러오며, 동석차 정밀 계산 및 AI 파싱은 물론
-   '다음 시험에서 몇 과목, 몇 등급을 받아야 하는지' 역산하는 초정밀 시뮬레이터를 제공합니다. */
+   '다음 시험에서 몇 과목, 몇 등급을 받아야 하는지' 역산하는 초정밀 시뮬레이터를 제공합니다. 
+   (🚀 CTO 패치: 학생 계정 무단 수정 방지, 새 양식 초기화, 최종 제출 경고 모달 완벽 적용) */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
-  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target
+  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target, Lock
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
@@ -15,7 +16,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] DB에 등록된 모든 대학교의 로고 맵핑 (원장님이 직접 URL을 변경하기 쉽도록 전부 나열해 두었습니다.)
+// --- 대학 로고 맵 (위키백과 등 공용 URL) ---
 const UNIV_LOGOS = {
   "서울대학교": "https://i.postimg.cc/SNx2knJ9/seouldaehaggyo.png",
   "연세대학교": "https://i.postimg.cc/k4ZJCgZp/yeonsedaehaggyo.png",
@@ -137,6 +138,9 @@ const CollegeNavigator = ({ currentUser }) => {
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState(null);
   const [isUpperListOpen, setIsUpperListOpen] = useState(false);
+
+  // 🚀 학생이 최종 제출 버튼을 눌렀을 때 뜨는 경고 모달 상태
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   
   const fileInputRef = useRef(null);
 
@@ -146,6 +150,9 @@ const CollegeNavigator = ({ currentUser }) => {
       subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] 
   };
   const [inputForm, setInputForm] = useState(initForm);
+
+  // 🚀 학생 계정일 경우, 불러온 성적이 있으면 읽기 전용으로 전환
+  const isReadOnly = !isAdminView && !!inputForm.id;
 
   // --- 검색 로직 ---
   const handleSearchStudent = () => {
@@ -178,6 +185,7 @@ const CollegeNavigator = ({ currentUser }) => {
   };
 
   const handleSubjectChange = (idx, field, val) => {
+      if (isReadOnly) return; // 읽기 전용 방어코드
       const newSubjects = [...inputForm.subjects];
       newSubjects[idx][field] = val;
       if (inputForm.type === 'school' && (field === 'rank' || field === 'tiedRank' || field === 'total')) {
@@ -187,6 +195,7 @@ const CollegeNavigator = ({ currentUser }) => {
   };
 
   const handleRemoveSubject = (idx) => {
+      if (isReadOnly) return;
       setInputForm(prev => ({ ...prev, subjects: prev.subjects.filter((_, i) => i !== idx) }));
   };
 
@@ -202,6 +211,7 @@ const CollegeNavigator = ({ currentUser }) => {
   };
 
   const handleFileChange = async (e) => {
+      if (isReadOnly) return;
       const file = e.target.files[0];
       if (!file) return;
       setIsOcrLoading(true);
@@ -220,16 +230,37 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch (error) { alert(error.message); setIsOcrLoading(false); }
   };
 
-  const handleSaveGrade = async () => {
+  // 🚀 제출 버튼 클릭 시 학생과 관리자의 분기 처리
+  const handleSaveClick = () => {
       const validSubjects = inputForm.subjects.filter(s => s.name && s.grade);
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
+      
+      // 학생이 신규 등록하는 경우 모달을 띄워 경고
+      if (!isAdminView && !inputForm.id) {
+          setIsConfirmModalOpen(true);
+      } else {
+          executeSaveGrade();
+      }
+  };
+
+  const executeSaveGrade = async () => {
+      const validSubjects = inputForm.subjects.filter(s => s.name && s.grade);
       try {
           const combinedTerm = `${inputForm.termGrade} ${inputForm.termExam}`;
           const payload = { studentId: activeStudentId, type: inputForm.type, term: combinedTerm, subjects: validSubjects, isLocked: !isAdminView, updatedAt: serverTimestamp() };
-          if (inputForm.id) await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', inputForm.id), payload);
-          else { payload.createdAt = serverTimestamp(); await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), payload); }
-          setIsInputOpen(false); setInputForm(initForm);
-      } catch(e) { alert(e.message); }
+          if (inputForm.id) {
+              await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', inputForm.id), payload);
+          } else {
+              payload.createdAt = serverTimestamp(); 
+              await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), payload); 
+          }
+          setIsInputOpen(false); 
+          setInputForm(initForm);
+          setIsConfirmModalOpen(false); // 모달 닫기
+      } catch(e) { 
+          alert(e.message); 
+          setIsConfirmModalOpen(false);
+      }
   };
 
   // 평균 계산 및 결과 도출
@@ -394,7 +425,8 @@ const CollegeNavigator = ({ currentUser }) => {
                     <p className="text-slate-400 font-bold text-sm sm:text-base">현재 위치를 진단하고 상위 대학 진입을 위한 실질적인 Gap을 분석합니다.</p>
                 </div>
                 <div className="flex flex-wrap gap-3 w-full md:w-auto">
-                    <Button onClick={() => setIsInputOpen(!isInputOpen)} className="bg-white text-slate-900 hover:bg-slate-100 font-black px-6 py-3 sm:px-8 sm:py-4 rounded-2xl shadow-xl flex-1 md:flex-none justify-center">
+                    {/* 🚀 [CTO 패치] '새로운 성적 입력' 클릭 시 항상 폼 초기화 보장 */}
+                    <Button onClick={() => { if(!isInputOpen) setInputForm(initForm); setIsInputOpen(!isInputOpen); }} className="bg-white text-slate-900 hover:bg-slate-100 font-black px-6 py-3 sm:px-8 sm:py-4 rounded-2xl shadow-xl flex-1 md:flex-none justify-center">
                         {isInputOpen ? '닫기' : '새로운 성적 입력'}
                     </Button>
                     {isAdminView && (
@@ -409,7 +441,9 @@ const CollegeNavigator = ({ currentUser }) => {
             <div className="lg:col-span-1 space-y-6">
                 <Card className="p-5 sm:p-6 border-none shadow-sm bg-white rounded-3xl">
                     <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><History size={20} className="text-blue-600"/> 기존 성적 내역</h3>
-                    <p className="text-xs text-slate-400 font-bold mb-4 bg-slate-50 p-2 rounded-lg">클릭 시 우측 폼으로 불러와 점수를 수정/시뮬레이션 할 수 있습니다.</p>
+                    <p className="text-xs text-slate-400 font-bold mb-4 bg-slate-50 p-2 rounded-lg">
+                        {isAdminView ? '클릭 시 우측 폼으로 불러와 점수를 수정/시뮬레이션 할 수 있습니다.' : '클릭하여 과거 성적 상세 내역을 열람할 수 있습니다.'}
+                    </p>
                     <div className="space-y-3">
                         {grades.length === 0 ? <p className="text-center py-10 text-slate-400 font-bold">등록된 성적이 없습니다.</p> :
                         grades.map(g => {
@@ -430,26 +464,28 @@ const CollegeNavigator = ({ currentUser }) => {
                 {isInputOpen && (
                     <Card className="border-4 border-blue-600 shadow-2xl p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] animate-in slide-in-from-top-4">
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-black text-blue-900">{inputForm.id ? '성적 수정 및 시뮬레이션' : '새로운 성적 등록'}</h3>
+                            <h3 className="text-xl font-black text-blue-900">{inputForm.id ? (isAdminView ? '성적 수정 및 시뮬레이션' : '과거 성적 상세 내역') : '새로운 성적 등록'}</h3>
                             <button onClick={()=>setIsInputOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:text-slate-600"><X size={20}/></button>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">시험구분</label><select className="w-full border-2 rounded-2xl p-3 bg-slate-50 font-black text-blue-600 outline-none" value={inputForm.type} onChange={e => setInputForm({...inputForm, type: e.target.value})}><option value="school">내신 5등급제</option><option value="mock">모의고사 9등급제</option></select></div>
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">학년</label><select className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none" value={inputForm.termGrade} onChange={e => setInputForm({...inputForm, termGrade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">종류</label><select className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none" value={inputForm.termExam} onChange={e => setInputForm({...inputForm, termExam: e.target.value})}><option value="1학기 중간고사">1학기 중간고사</option><option value="1학기 기말고사">1학기 기말고사</option><option value="2학기 중간고사">2학기 중간고사</option><option value="2학기 기말고사">2학기 기말고사</option><option value="모의고사">모의고사</option></select></div>
+                            <div><label className="block text-xs font-black text-slate-500 mb-2">시험구분</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-slate-50 font-black text-blue-600 outline-none disabled:opacity-60" value={inputForm.type} onChange={e => setInputForm({...inputForm, type: e.target.value})}><option value="school">내신 5등급제</option><option value="mock">모의고사 9등급제</option></select></div>
+                            <div><label className="block text-xs font-black text-slate-500 mb-2">학년</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termGrade} onChange={e => setInputForm({...inputForm, termGrade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
+                            <div><label className="block text-xs font-black text-slate-500 mb-2">종류</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termExam} onChange={e => setInputForm({...inputForm, termExam: e.target.value})}><option value="1학기 중간고사">1학기 중간고사</option><option value="1학기 기말고사">1학기 기말고사</option><option value="2학기 중간고사">2학기 중간고사</option><option value="2학기 기말고사">2학기 기말고사</option><option value="모의고사">모의고사</option></select></div>
                         </div>
 
-                        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-5 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div>
-                                <h4 className="font-black text-indigo-900 mb-1 flex items-center gap-2"><Camera size={18}/> 성적표 사진(리로스쿨) 자동 파싱</h4>
-                                <p className="text-xs text-indigo-700 font-bold">1초 만에 사진에서 과목명, 합계점수, 석차를 모두 추출합니다.</p>
+                        {!isReadOnly && (
+                            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-5 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                                <div>
+                                    <h4 className="font-black text-indigo-900 mb-1 flex items-center gap-2"><Camera size={18}/> 성적표 사진(리로스쿨) 자동 파싱</h4>
+                                    <p className="text-xs text-indigo-700 font-bold">1초 만에 사진에서 과목명, 합계점수, 석차를 모두 추출합니다.</p>
+                                </div>
+                                <Button variant="secondary" className="bg-white text-indigo-600 border-indigo-200 shadow-sm w-full md:w-auto font-black" onClick={() => fileInputRef.current.click()} disabled={isOcrLoading}>
+                                    {isOcrLoading ? <Loader className="animate-spin" size={18}/> : '사진 업로드'}
+                                </Button>
+                                <input type="file" ref={fileInputRef} className="hidden" accept="image/*,.pdf" onChange={handleFileChange}/>
                             </div>
-                            <Button variant="secondary" className="bg-white text-indigo-600 border-indigo-200 shadow-sm w-full md:w-auto font-black" onClick={() => fileInputRef.current.click()} disabled={isOcrLoading}>
-                                {isOcrLoading ? <Loader className="animate-spin" size={18}/> : '사진 업로드'}
-                            </Button>
-                            <input type="file" ref={fileInputRef} className="hidden" accept="image/*,.pdf" onChange={handleFileChange}/>
-                        </div>
+                        )}
                         
                         <div className="space-y-3 mb-8">
                             <div className="hidden md:flex gap-2 text-xs font-black text-slate-400 px-2">
@@ -457,33 +493,44 @@ const CollegeNavigator = ({ currentUser }) => {
                                 <div className="w-24 text-center">원점수</div>
                                 {inputForm.type === 'school' && <div className="w-48 text-center">석차 / 동석 / 인원</div>}
                                 <div className="w-24 text-center">등급</div>
-                                <div className="w-10"></div>
+                                {!isReadOnly && <div className="w-10"></div>}
                             </div>
                             {inputForm.subjects.map((sub, idx) => (
-                                <div key={idx} className="flex flex-wrap md:flex-nowrap gap-2 items-center bg-slate-50 p-2 sm:p-3 rounded-2xl border border-slate-200 transition-all hover:border-blue-300">
-                                    <input className="w-full md:flex-1 border-none bg-white p-3 rounded-xl font-black text-sm md:text-base outline-none focus:ring-2 focus:ring-blue-100" placeholder="과목명" value={sub.name} onChange={e=>handleSubjectChange(idx, 'name', e.target.value)}/>
-                                    <input className="w-[calc(50%-4px)] md:w-24 border-none bg-white p-3 rounded-xl font-black text-center text-sm outline-none" placeholder="원점수" value={sub.score} onChange={e=>handleSubjectChange(idx, 'score', e.target.value)}/>
+                                <div key={idx} className={`flex flex-wrap md:flex-nowrap gap-2 items-center p-2 sm:p-3 rounded-2xl border transition-all ${isReadOnly ? 'bg-slate-100 border-transparent opacity-80' : 'bg-slate-50 border-slate-200 hover:border-blue-300'}`}>
+                                    <input disabled={isReadOnly} className="w-full md:flex-1 border-none bg-white p-3 rounded-xl font-black text-sm md:text-base outline-none focus:ring-2 focus:ring-blue-100 disabled:bg-transparent" placeholder="과목명" value={sub.name} onChange={e=>handleSubjectChange(idx, 'name', e.target.value)}/>
+                                    <input disabled={isReadOnly} className="w-[calc(50%-4px)] md:w-24 border-none bg-white p-3 rounded-xl font-black text-center text-sm outline-none disabled:bg-transparent" placeholder="원점수" value={sub.score} onChange={e=>handleSubjectChange(idx, 'score', e.target.value)}/>
                                     
                                     {inputForm.type === 'school' && (
-                                        <div className="w-full md:w-48 flex items-center gap-1 bg-white px-2 rounded-xl border border-transparent focus-within:border-blue-200">
-                                            <input className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="석차" value={sub.rank} onChange={e=>handleSubjectChange(idx, 'rank', e.target.value)}/>
+                                        <div className={`w-full md:w-48 flex items-center gap-1 px-2 rounded-xl border ${isReadOnly ? 'bg-transparent border-transparent' : 'bg-white border-transparent focus-within:border-blue-200'}`}>
+                                            <input disabled={isReadOnly} className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="석차" value={sub.rank} onChange={e=>handleSubjectChange(idx, 'rank', e.target.value)}/>
                                             <span className="text-slate-300">/</span>
-                                            <input className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="동석" value={sub.tiedRank} onChange={e=>handleSubjectChange(idx, 'tiedRank', e.target.value)}/>
+                                            <input disabled={isReadOnly} className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="동석" value={sub.tiedRank} onChange={e=>handleSubjectChange(idx, 'tiedRank', e.target.value)}/>
                                             <span className="text-slate-300">/</span>
-                                            <input className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="인원" value={sub.total} onChange={e=>handleSubjectChange(idx, 'total', e.target.value)}/>
+                                            <input disabled={isReadOnly} className="w-full p-3 font-bold text-center text-sm bg-transparent outline-none" placeholder="인원" value={sub.total} onChange={e=>handleSubjectChange(idx, 'total', e.target.value)}/>
                                         </div>
                                     )}
                                     
-                                    <input className={`w-[calc(50%-4px)] md:w-24 border-none p-3 rounded-xl font-black text-center text-sm md:text-base outline-none ${sub.grade ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-800'}`} placeholder="등급" value={sub.grade} onChange={e=>handleSubjectChange(idx, 'grade', e.target.value)}/>
-                                    <button onClick={() => handleRemoveSubject(idx)} className="w-full md:w-10 p-3 flex justify-center text-slate-300 hover:text-red-500 bg-white rounded-xl md:bg-transparent"><Trash2 size={20}/></button>
+                                    <input disabled={isReadOnly} className={`w-[calc(50%-4px)] md:w-24 border-none p-3 rounded-xl font-black text-center text-sm md:text-base outline-none disabled:bg-transparent disabled:text-blue-700 ${sub.grade && !isReadOnly ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-800'}`} placeholder="등급" value={sub.grade} onChange={e=>handleSubjectChange(idx, 'grade', e.target.value)}/>
+                                    
+                                    {!isReadOnly && (
+                                        <button onClick={() => handleRemoveSubject(idx)} className="w-full md:w-10 p-3 flex justify-center text-slate-300 hover:text-red-500 bg-white rounded-xl md:bg-transparent"><Trash2 size={20}/></button>
+                                    )}
                                 </div>
                             ))}
-                            <Button variant="ghost" onClick={() => setInputForm(prev=>({...prev, subjects: [...prev.subjects, {name:'', score:'', rank:'', tiedRank:'', total:'', grade:''}]}))} className="text-blue-600 font-bold mt-2"><Plus size={16} className="mr-1"/> 과목 추가</Button>
+                            {!isReadOnly && <Button variant="ghost" onClick={() => setInputForm(prev=>({...prev, subjects: [...prev.subjects, {name:'', score:'', rank:'', tiedRank:'', total:'', grade:''}]}))} className="text-blue-600 font-bold mt-2"><Plus size={16} className="mr-1"/> 과목 추가</Button>}
                         </div>
                         
-                        <Button className="w-full py-5 text-lg font-black bg-blue-600 hover:bg-blue-700 shadow-xl rounded-2xl" onClick={handleSaveGrade}>
-                            {inputForm.id ? '수정 및 시뮬레이션 적용' : '성적 안전하게 저장하기'}
-                        </Button>
+                        {/* 🚀 [CTO 패치] 학생용 읽기 전용 메시지 표시 또는 버튼 처리 */}
+                        {isReadOnly ? (
+                            <div className="text-center p-5 bg-slate-100 rounded-2xl text-slate-500 font-bold flex flex-col items-center justify-center gap-2 border border-dashed border-slate-300">
+                                <Lock size={24} className="text-slate-400" />
+                                학생 계정에서는 기존에 등록된 성적을 임의로 수정할 수 없습니다. (열람 전용)
+                            </div>
+                        ) : (
+                            <Button className="w-full py-5 text-lg font-black bg-blue-600 hover:bg-blue-700 shadow-xl rounded-2xl" onClick={handleSaveClick}>
+                                {inputForm.id ? '수정 및 시뮬레이션 적용' : (isAdminView ? '성적 안전하게 저장하기' : '성적 최종 제출하기')}
+                            </Button>
+                        )}
                     </Card>
                 )}
 
@@ -540,7 +587,23 @@ const CollegeNavigator = ({ currentUser }) => {
             </div>
         </div>
 
-        {/* 🚀 정밀 분석 팝업 (다음 시험 시뮬레이터 적용) */}
+        {/* 🚀 [CTO 패치] 제출 전 경고 모달 (학생용) */}
+        <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="최종 제출 확인">
+            <div className="p-4 text-center space-y-4">
+                <div className="w-16 h-16 mx-auto bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4"><Lock size={32}/></div>
+                <h3 className="text-xl font-black text-slate-800">새로운 성적을 최종 제출하시겠습니까?</h3>
+                <p className="text-slate-500 font-bold leading-relaxed">
+                    제출된 데이터는 학원 데이터베이스에 안전하게 기록되며,<br/>
+                    <span className="text-rose-500">이후 학생 계정에서는 직접 수정이나 삭제가 불가능합니다.</span>
+                </p>
+                <div className="flex gap-3 mt-6">
+                    <Button variant="secondary" className="flex-1 py-4 font-black bg-slate-100 text-slate-600" onClick={() => setIsConfirmModalOpen(false)}>취소</Button>
+                    <Button className="flex-1 py-4 bg-blue-600 font-black shadow-lg hover:bg-blue-700" onClick={executeSaveGrade}>네, 제출합니다</Button>
+                </div>
+            </div>
+        </Modal>
+
+        {/* 정밀 분석 팝업 (다음 시험 시뮬레이터 적용) */}
         <Modal isOpen={!!selectedTarget} onClose={() => setSelectedTarget(null)} title={`${selectedTarget?.primaryUniv} 목표 분석`}>
             {selectedTarget && (
                 <div className="text-center p-2 sm:p-4">
@@ -573,7 +636,7 @@ const CollegeNavigator = ({ currentUser }) => {
                         )}
                     </div>
 
-                    {/* 🚀 다음 시험 목표 시뮬레이터 (동적 렌더링) */}
+                    {/* 다음 시험 목표 시뮬레이터 */}
                     {targetSimData && Number(selectedTarget.score || 0) > selectedTarget.maxGrade && (
                         <div className="bg-indigo-50 rounded-3xl p-6 mt-4 text-left border border-indigo-100">
                             <h4 className="font-black text-indigo-900 mb-3 flex items-center gap-2"><Target size={20}/> 다음 시험 목표 시뮬레이터</h4>
