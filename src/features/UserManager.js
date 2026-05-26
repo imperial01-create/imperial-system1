@@ -1,10 +1,10 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 신규생 전화번호 버그 픽스, 분할 문자, 전체화면 입시 내비게이터 연동 버튼 적용) */
+   (🚀 CTO 패치: 입시 상담 모달 코드를 제거하고, 본연의 사용자 및 수강 관리 역할만 독립적으로 수행) */
 import React, { useState, useMemo } from 'react';
 import { 
-  Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, User, School, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle, Target, ChevronRight
+  Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
+  BookMarked, Clock, Calendar, CheckCircle
 } from 'lucide-react';
 import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -12,13 +12,10 @@ import { httpsCallable } from 'firebase/functions';
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
-import { useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const UserManager = ({ currentUser }) => {
-    const navigate = useNavigate();
-
     if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
         return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
     }
@@ -119,15 +116,12 @@ const UserManager = ({ currentUser }) => {
     const handleAutoPin = (phoneVal) => {
         const cleanVal = phoneVal || '';
         const numOnly = cleanVal.replace(/[^0-9]/g, '');
-        
         if (numOnly.length < 4) {
             setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' }));
             return;
         }
-        
         const basePin = numOnly.slice(-4);
         const isDuplicate = users.some(u => u.role === 'student' && u.attendancePin === basePin && u.id !== formData.id);
-        
         if (isDuplicate) {
             setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' }));
         } else {
@@ -155,20 +149,15 @@ const UserManager = ({ currentUser }) => {
             };
             
             if (activeTab === 'student') { 
-                payload.schoolName = formData.schoolName; 
-                payload.grade = formData.grade; 
-                payload.attendancePin = formData.attendancePin;
-                payload.status = formData.status;
+                payload.schoolName = formData.schoolName; payload.grade = formData.grade; 
+                payload.attendancePin = formData.attendancePin; payload.status = formData.status;
             }
             if (['ta', 'lecturer', 'admin', 'admin_assistant'].includes(activeTab)) { 
                 if (activeTab !== 'admin' && activeTab !== 'admin_assistant') payload.subject = formData.subject || '';
                 if (activeTab === 'ta' || activeTab === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
-                payload.bankName = formData.bankName || '';
-                payload.accountNumber = formData.accountNumber || '';
+                payload.bankName = formData.bankName || ''; payload.accountNumber = formData.accountNumber || '';
             }
-            if (activeTab === 'parent') { 
-                payload.linkedChildrenIds = formData.linkedChildrenIds || [];
-            }
+            if (activeTab === 'parent') { payload.linkedChildrenIds = formData.linkedChildrenIds || []; }
 
             const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
@@ -193,17 +182,12 @@ const UserManager = ({ currentUser }) => {
                 }
                 payload.authUid = authUid; payload.password = formData.password; payload.createdAt = serverTimestamp();
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
-                
-                setIsEditMode(true);
-                setFormData(prev => ({ ...prev, id: safeId, authUid }));
-                showToast('사용자가 성공적으로 생성되었습니다. 이제 상단 탭에서 수강을 배정할 수 있습니다.', 'success');
-                setLoading(false);
-                return; 
+                setIsEditMode(true); setFormData(prev => ({ ...prev, id: safeId, authUid }));
+                showToast('사용자가 성공적으로 생성되었습니다.', 'success');
+                setLoading(false); return; 
             }
             setIsModalOpen(false);
-        } catch (e) { 
-            showToast(e.message || '저장에 실패했습니다.', 'error'); 
-        } finally { setLoading(false); }
+        } catch (e) { showToast(e.message || '저장에 실패했습니다.', 'error'); } finally { setLoading(false); }
     };
 
     const handleDeleteUser = async () => {
@@ -227,16 +211,11 @@ const UserManager = ({ currentUser }) => {
         const mappedSchedules = (cls.schedules || []).map(s => ({
             dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime, room: s.room, callTime: s.startTime 
         }));
-
-        setEnrollForm({
-            classId: cls.id, className: cls.name, lecturerId: cls.lecturerId, status: 'active', schedules: mappedSchedules
-        });
+        setEnrollForm({ classId: cls.id, className: cls.name, lecturerId: cls.lecturerId, status: 'active', schedules: mappedSchedules });
     };
 
     const handleCallTimeChange = (index, value) => {
-        setEnrollForm(prev => {
-            const arr = [...prev.schedules]; arr[index].callTime = value; return { ...prev, schedules: arr };
-        });
+        setEnrollForm(prev => { const arr = [...prev.schedules]; arr[index].callTime = value; return { ...prev, schedules: arr }; });
     };
 
     const handleSaveEnrollment = async () => {
@@ -265,35 +244,12 @@ const UserManager = ({ currentUser }) => {
 
                     const scheduleStr = enrollForm.schedules.map(s => `${s.dayOfWeek} ${s.startTime}~${s.endTime}`).join(', ');
                     
-                    const welcomeMsg = `[목동임페리얼학원]
-안녕하세요. 목동임페리얼학원 입학을 진심으로 환영합니다!
-${formData.name} 학생의 첫 등원 일정 및 시간표를 안내해 드립니다.
-
-[수업 정보]
-- 수강 수업 : ${enrollForm.className}
-- 수업 시간 : ${scheduleStr}
-- 첫 등원 일자 : (날짜를 입력해주세요)
-
-원활한 수업 진행을 위해 지각하지 않도록 지도 부탁드립니다.
-
-처음 등원하는 학생들을 위한 학원 이용 가이드를 아래 링크에 첨부합니다. 어색하지 않은 첫 등원이 될 수 있도록 꼭 확인 부탁드립니다.
-🔗 학원 이용 가이드: https://blog.naver.com/imperialsys01/223922116856
-
-감사합니다.`;
-
-                    const textbookMsg = `[목동임페리얼학원]
-${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 드립니다.
-
-[교재 정보]
-- (교재명 1)
-- (교재명 2)
-
-원활한 진도 진행을 위해 첫 수업 전까지 해당 교재를 꼭 지참할 수 있도록 챙겨주시면 감사하겠습니다.`;
+                    const welcomeMsg = `[목동임페리얼학원]\n안녕하세요. 목동임페리얼학원 입학을 진심으로 환영합니다!\n${formData.name} 학생의 첫 등원 일정 및 시간표를 안내해 드립니다.\n\n[수업 정보]\n- 수강 수업 : ${enrollForm.className}\n- 수업 시간 : ${scheduleStr}\n- 첫 등원 일자 : (날짜를 입력해주세요)\n\n원활한 수업 진행을 위해 지각하지 않도록 지도 부탁드립니다.\n\n처음 등원하는 학생들을 위한 학원 이용 가이드를 아래 링크에 첨부합니다. 어색하지 않은 첫 등원이 될 수 있도록 꼭 확인 부탁드립니다.\n🔗 학원 이용 가이드: https://blog.naver.com/imperialsys01/223922116856\n\n감사합니다.`;
+                    const textbookMsg = `[목동임페리얼학원]\n${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 드립니다.\n\n[교재 정보]\n- (교재명 1)\n- (교재명 2)\n\n원활한 진도 진행을 위해 첫 수업 전까지 해당 교재를 꼭 지참할 수 있도록 챙겨주시면 감사하겠습니다.`;
 
                     setSmsPreviewModal({ isOpen: true, welcomeMsg, textbookMsg, targetPhone, studentName: formData.name });
                 }
             }
-
             setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery('');
             showToast('수강 배정이 성공적으로 저장되었습니다.', 'success');
         } catch (e) { showToast('수강 배정 실패: ' + e.message, 'error'); } 
@@ -302,10 +258,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
 
     const handleDeleteEnrollment = async (enrollId) => {
         if(!window.confirm('정말 이 수강 이력을 삭제하시겠습니까?\n단순 휴원/퇴원이라면 삭제하지 말고 상태를 [퇴원]으로 변경하는 것을 권장합니다.')) return;
-        try {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments', enrollId));
-            showToast('수강 이력이 삭제되었습니다.', 'success');
-        } catch(e) { alert(e.message); }
+        try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments', enrollId)); showToast('수강 이력이 삭제되었습니다.', 'success'); } catch(e) { alert(e.message); }
     };
 
     const duplicateCounts = useMemo(() => {
@@ -426,8 +379,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                 </Card>
             </div>
 
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-5xl w-full">
-                
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`${activeTab.toUpperCase()} 정보 및 관리`} className="max-w-4xl w-full">
                 {activeTab === 'student' && (
                     <div className="flex border-b border-gray-200 mb-5 w-full bg-gray-50 rounded-t-xl px-2 pt-2">
                         <button onClick={() => setModalTab('basic')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'basic' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
@@ -436,11 +388,6 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                         <button onClick={() => isEditMode && setModalTab('enroll')} disabled={!isEditMode} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'enroll' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed'}`}>
                             📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후)</span>}
                         </button>
-                        {isEditMode && (
-                            <button onClick={() => setModalTab('navigator')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'navigator' ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
-                                🧭 입시 상담
-                            </button>
-                        )}
                     </div>
                 )}
 
@@ -453,7 +400,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                             </div>
                             
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div><label className="block text-xs font-bold text-gray-600 mb-1">로그인 아이디 (영문/숫자/한글)</label><input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-gray-50" placeholder="student123" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} /></div>
+                                <div><label className="block text-xs font-bold text-gray-600 mb-1">로그인 아이디</label><input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-gray-50" placeholder="student123" value={formData.userId} onChange={e => setFormData({...formData, userId: e.target.value})} disabled={isEditMode} /></div>
                                 {!formData.authUid && (
                                     <div><label className="block text-xs font-bold text-gray-600 mb-1">초기 비밀번호</label><input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none" placeholder="6자리 이상" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} /></div>
                                 )}
@@ -467,12 +414,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <div><label className="block text-xs font-bold text-indigo-800 mb-1">출결 PIN (4자리)</label><input type="text" maxLength={4} className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold text-indigo-600 bg-indigo-50" value={formData.attendancePin} onChange={e => setFormData({...formData, attendancePin: e.target.value.replace(/[^0-9]/g, '')})} placeholder="뒷자리 자동추출"/></div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-700 mb-1">재원 상태</label>
-                                            <select className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}>
-                                                <option value="attending">재원중 (정상)</option><option value="resting">휴원 (잠시 쉼)</option><option value="dropped">퇴원 (다니지 않음)</option>
-                                            </select>
-                                        </div>
+                                        <div><label className="block text-xs font-bold text-gray-700 mb-1">재원 상태</label><select className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}><option value="attending">재원중 (정상)</option><option value="resting">휴원 (잠시 쉼)</option><option value="dropped">퇴원 (다니지 않음)</option></select></div>
                                     </div>
                                 </>
                             )}
@@ -517,12 +459,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                                                         <h4 className="font-black text-gray-900">{e.className}</h4>
                                                     </div>
                                                     <div className="flex gap-1">
-                                                        <button onClick={() => {
-                                                            setEnrollForm(e); 
-                                                            setClassSearchInput('');
-                                                            setClassSearchQuery('');
-                                                            window.scrollTo(0, document.body.scrollHeight);
-                                                        }} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={14}/></button>
+                                                        <button onClick={() => { setEnrollForm(e); setClassSearchInput(''); setClassSearchQuery(''); window.scrollTo(0, document.body.scrollHeight); }} className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg"><Edit2 size={14}/></button>
                                                         <button onClick={() => handleDeleteEnrollment(e.id)} className="p-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg"><Trash2 size={14}/></button>
                                                     </div>
                                                 </div>
@@ -556,12 +493,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                                                             placeholder="반 이름 또는 강사명 검색 후 엔터" 
                                                             value={classSearchInput} 
                                                             onChange={e => setClassSearchInput(e.target.value)} 
-                                                            onKeyDown={e => {
-                                                                if (e.key === 'Enter') {
-                                                                    e.preventDefault();
-                                                                    setClassSearchQuery(classSearchInput);
-                                                                }
-                                                            }}
+                                                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setClassSearchQuery(classSearchInput); } }}
                                                         />
                                                         <Search className="absolute left-2.5 top-2.5 text-gray-400" size={16}/>
                                                     </div>
@@ -579,9 +511,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                                                                 className={`w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between border ${enrollForm.classId === c.id ? 'bg-blue-50 border-blue-300 font-bold text-blue-900 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50 text-gray-700'}`}
                                                             >
                                                                 <div>
-                                                                    <span className="text-xs text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mr-2 font-bold inline-block w-14 text-center">
-                                                                        {users.find(u=>u.id===c.lecturerId)?.name || '미지정'}
-                                                                    </span>
+                                                                    <span className="text-xs text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mr-2 font-bold inline-block w-14 text-center">{users.find(u=>u.id===c.lecturerId)?.name || '미지정'}</span>
                                                                     {c.name}
                                                                 </div>
                                                                 {enrollForm.classId === c.id && <CheckCircle size={16} className="text-blue-600"/>}
@@ -595,9 +525,7 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                                             </div>
                                         ) : (
                                             <div className="w-full border-2 border-gray-200 bg-gray-100 p-3.5 rounded-xl font-bold text-gray-500 shadow-sm flex items-center gap-2">
-                                                <span className="text-xs text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded font-bold">
-                                                    {users.find(u=>u.id===enrollForm.lecturerId)?.name || '미지정'}
-                                                </span>
+                                                <span className="text-xs text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded font-bold">{users.find(u=>u.id===enrollForm.lecturerId)?.name || '미지정'}</span>
                                                 {enrollForm.className}
                                                 <span className="ml-auto text-xs font-normal text-rose-500 hidden md:inline">* 배정된 반은 변경불가 (필요시 삭제 후 재배정)</span>
                                             </div>
@@ -636,20 +564,6 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
                             </div>
                         </div>
                     )}
-
-                    {modalTab === 'navigator' && activeTab === 'student' && (
-                        <div className="animate-in fade-in py-20 flex flex-col items-center justify-center text-center">
-                            <div className="bg-indigo-100 p-6 rounded-full text-indigo-600 mb-6 shadow-inner"><Target size={64}/></div>
-                            <h3 className="text-3xl font-black text-slate-900 mb-4">{formData.name} 학생 전용 입시 상담실</h3>
-                            <p className="text-slate-500 font-bold text-lg mb-8 max-w-md">비좁은 창을 벗어나 넓은 화면에서<br/>6-Block 대학 추천 및 정밀 성적 분석을 진행합니다.</p>
-                            <Button 
-                                className="px-12 py-5 text-2xl font-black shadow-2xl bg-indigo-600 hover:bg-indigo-700 rounded-[24px] flex items-center gap-3 animate-bounce" 
-                                onClick={() => { setIsModalOpen(false); navigate(`/navigator/${formData.id}`); }}
-                            >
-                                입시 상담실 입장하기 <ChevronRight size={28}/>
-                            </Button>
-                        </div>
-                    )}
                 </div>
             </Modal>
 
@@ -667,84 +581,50 @@ ${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 
             <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 분할 발송">
                 <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
                     <CheckCircle size={18} className="shrink-0"/> 
-                    <div>
-                        가시성을 위해 문자가 2통으로 나누어 발송됩니다.<br/>
-                        <span className="font-normal text-xs text-indigo-600">(필요 없는 문자는 창 안의 내용을 전부 지우면 발송되지 않습니다.)</span>
-                    </div>
+                    <div>가시성을 위해 문자가 2통으로 나누어 발송됩니다.<br/><span className="font-normal text-xs text-indigo-600">(필요 없는 문자는 창 안의 내용을 전부 지우면 발송되지 않습니다.)</span></div>
                 </div>
                 {!smsPreviewModal.targetPhone && (
-                    <div className="bg-rose-50 text-rose-600 p-3 rounded-lg mb-3 text-sm font-bold border border-rose-200">
-                        ⚠️ 등록된 학부모 또는 학생 본인의 연락처가 없습니다. (발송 불가)
-                    </div>
+                    <div className="bg-rose-50 text-rose-600 p-3 rounded-lg mb-3 text-sm font-bold border border-rose-200">⚠️ 등록된 학부모 또는 학생 본인의 연락처가 없습니다. (발송 불가)</div>
                 )}
                 
                 <div className="space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2">
                     <div>
                         <label className="block text-xs font-bold text-indigo-700 mb-1.5 ml-1">1. 첫 등원 안내 문자</label>
-                        <textarea 
-                            className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-64 custom-scrollbar leading-relaxed" 
-                            value={smsPreviewModal.welcomeMsg}
-                            onChange={(e) => setSmsPreviewModal({...smsPreviewModal, welcomeMsg: e.target.value})}
-                        />
+                        <textarea className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-64 custom-scrollbar leading-relaxed" value={smsPreviewModal.welcomeMsg} onChange={(e) => setSmsPreviewModal({...smsPreviewModal, welcomeMsg: e.target.value})} />
                     </div>
                     <div>
                         <label className="block text-xs font-bold text-indigo-700 mb-1.5 ml-1">2. 수업 교재 안내 문자</label>
-                        <textarea 
-                            className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-40 custom-scrollbar leading-relaxed" 
-                            value={smsPreviewModal.textbookMsg}
-                            onChange={(e) => setSmsPreviewModal({...smsPreviewModal, textbookMsg: e.target.value})}
-                        />
+                        <textarea className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-40 custom-scrollbar leading-relaxed" value={smsPreviewModal.textbookMsg} onChange={(e) => setSmsPreviewModal({...smsPreviewModal, textbookMsg: e.target.value})} />
                     </div>
                 </div>
 
-                <Button 
-                    className="w-full mt-5 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" 
-                    disabled={!smsPreviewModal.targetPhone || isSendingSms}
-                    onClick={async () => {
+                <Button className="w-full mt-5 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" disabled={!smsPreviewModal.targetPhone || isSendingSms} onClick={async () => {
                         setIsSendingSms(true);
                         try {
                             const cleanPhone = smsPreviewModal.targetPhone.replace(/[^0-9]/g, '');
                             const batch = writeBatch(db);
 
                             if (smsPreviewModal.welcomeMsg.trim()) {
-                                const ref1 = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'));
-                                batch.set(ref1, {
-                                    phoneNumber: cleanPhone, 
-                                    message: smsPreviewModal.welcomeMsg.trim(),
-                                    status: 'pending',
-                                    type: 'welcome_notice',
-                                    studentName: smsPreviewModal.studentName,
-                                    createdAt: serverTimestamp()
+                                batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox')), {
+                                    phoneNumber: cleanPhone, message: smsPreviewModal.welcomeMsg.trim(), status: 'pending', type: 'welcome_notice', studentName: smsPreviewModal.studentName, createdAt: serverTimestamp()
                                 });
                             }
 
                             if (smsPreviewModal.textbookMsg.trim()) {
-                                const ref2 = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'));
-                                batch.set(ref2, {
-                                    phoneNumber: cleanPhone, 
-                                    message: smsPreviewModal.textbookMsg.trim(),
-                                    status: 'pending',
-                                    type: 'textbook_notice',
-                                    studentName: smsPreviewModal.studentName,
-                                    createdAt: serverTimestamp()
+                                batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox')), {
+                                    phoneNumber: cleanPhone, message: smsPreviewModal.textbookMsg.trim(), status: 'pending', type: 'textbook_notice', studentName: smsPreviewModal.studentName, createdAt: serverTimestamp()
                                 });
                             }
 
                             await batch.commit();
-
                             setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
                             showToast('2통의 문자가 분할되어 발송 대기열에 등록되었습니다!', 'success');
-                        } catch(e) {
-                            showToast('문자 발송 오류: ' + e.message, 'error');
-                        } finally {
-                            setIsSendingSms(false);
-                        }
+                        } catch(e) { showToast('문자 발송 오류: ' + e.message, 'error'); } finally { setIsSendingSms(false); }
                     }}
                 >
                     {isSendingSms ? <Loader className="animate-spin mx-auto"/> : '안내 문자 분할 발송하기'}
                 </Button>
             </Modal>
-
         </div>
     );
 };

@@ -1,19 +1,20 @@
-/* [서비스 가치] 입시 내비게이터 - 복잡한 입시 데이터를 6-Block(상향/적정/하향)으로 시각화하며,
-   Gemini 3.5 Flash AI를 통해 성적표/리로스쿨 이미지를 1초 만에 자동 판독합니다. (동석차 완벽 지원) */
+/* [서비스 가치] 입시 내비게이터 2.0 (독립 메뉴판) - 
+   관리자는 학생을 직접 선택하여 시뮬레이션을 진행할 수 있으며, 
+   동석차 계산, AI 파싱, 로고 깨짐 방지 등 모든 기능이 완벽하게 독립 구동됩니다. */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  Target, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
-  Sparkles, X, Plus, Loader, History, Search, ArrowRight, BarChart
+  Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
+  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 대학 로고 맵 ---
+// --- 대학 로고 맵 (위키백과 등 공용 URL) ---
 const UNIV_LOGOS = {
   "서울대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/4/44/Seoul_National_University_emblem.svg/200px-Seoul_National_University_emblem.svg.png",
   "연세대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/e/e0/Yonsei_University_emblem.svg/200px-Yonsei_University_emblem.svg.png",
@@ -97,16 +98,18 @@ const JUNGSI_DB = [
     { level: 35, primaryUniv: "지방 주요 4년제", minGrade: 5.50, maxGrade: 9.01, tierName: "기타 대학" }
   ];
 
-const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
-  const { studentId } = useParams(); 
-  const navigate = useNavigate();
+const CollegeNavigator = ({ currentUser }) => {
+  const { users } = useData();
   const isAdminView = ['admin', 'admin_assistant'].includes(currentUser?.role);
   
-  // URL 파라미터가 있으면 우선 사용, 없으면 prop이나 currentUser 사용
-  const activeStudentId = studentId || targetStudent?.id || currentUser?.id;
+  // 🚀 [CTO 패치] 관리자용 학생 리스트 및 선택기 로직
+  const studentList = useMemo(() => (users || []).filter(u => u.role === 'student'), [users]);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+
+  const activeStudentId = isAdminView ? selectedStudentId : currentUser.id;
+  const studentInfo = isAdminView ? studentList.find(s => s.id === activeStudentId) : currentUser;
 
   const [grades, setGrades] = useState([]);
-  const [studentInfo, setStudentInfo] = useState(null);
   const [isInputOpen, setIsInputOpen] = useState(false);
   const [isOcrLoading, setIsOcrLoading] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState(null);
@@ -114,7 +117,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
   
   const fileInputRef = useRef(null);
 
-  // --- 🚀 학년/학기 분리 및 동석차 지원 폼 ---
+  // --- 성적 입력 폼 ---
   const initForm = { 
       id: null, type: 'school', termGrade: '1학년', termExam: '1학기 중간고사', 
       subjects: [{ name: '', score: '', rank: '', tiedRank: '', total: '', grade: '' }] 
@@ -123,22 +126,18 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
 
   // --- DB 연동 ---
   useEffect(() => {
-    if (!activeStudentId) return;
+    if (!activeStudentId) {
+        setGrades([]); // 선택 해제 시 성적 초기화
+        return;
+    }
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), where('studentId', '==', activeStudentId));
     const unsub = onSnapshot(q, (snapshot) => {
         setGrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.createdAt?.seconds - b.createdAt?.seconds));
     });
-    
-    // 타겟 학생 이름 가져오기
-    const fetchInfo = async () => {
-        const snap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', activeStudentId));
-        if (snap.exists()) setStudentInfo(snap.data());
-    };
-    fetchInfo();
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 🚀 5등급제 정밀 계산 (동석차 완벽 지원) ---
+  // --- 5등급제 정밀 계산 ---
   const calc5Grade = (rank, tiedRank, total) => {
       if (!rank || !total) return '';
       const r = Number(rank);
@@ -161,7 +160,14 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       setInputForm({ ...inputForm, subjects: newSubjects });
   };
 
-  // 기존 내역 불러와서 수정(시뮬레이션)하기
+  // 🚀 [CTO 패치] 폼 휴지통 삭제 기능 오류 해결
+  const handleRemoveSubject = (idx) => {
+      setInputForm(prev => ({
+          ...prev, 
+          subjects: prev.subjects.filter((_, i) => i !== idx)
+      }));
+  };
+
   const handleEditEntry = (g) => {
       let parsedGrade = '1학년';
       let parsedExam = '1학기 중간고사';
@@ -180,7 +186,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // OCR 처리
   const handleFileChange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -220,7 +225,6 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       } catch(e) { alert(e.message); }
   };
 
-  // 평균 계산 및 결과 도출
   const avgGrades = useMemo(() => {
       const calcAvg = (type) => {
           const arr = grades.filter(g => g.type === type);
@@ -250,14 +254,13 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
   const susiResult = getUniversities(avgGrades.school, true);
   const jungsiResult = getUniversities(avgGrades.mock, false);
 
-  // 상위 리스트 산출
   const upperUnivList = useMemo(() => {
       if (!susiResult) return [];
       const matchIdx = SUSI_DB.findIndex(u => u.primaryUniv === susiResult.match.primaryUniv);
       return SUSI_DB.slice(Math.max(0, matchIdx - 5), matchIdx);
   }, [susiResult]);
 
-  // UI Components
+  // --- UI Components ---
   const renderGraph = (type) => {
       const targetGrades = grades.filter(g => g.type === type);
       if (targetGrades.length < 2) return <div className="text-center text-sm text-gray-400 py-8 bg-gray-50 rounded-xl border border-dashed w-full mx-4 flex items-center justify-center">데이터가 2회 이상 누적되면 생성됩니다.</div>;
@@ -298,6 +301,14 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       const isMatch = category === '적정';
       const logoUrl = UNIV_LOGOS[data.primaryUniv.split(' ')[0]];
       
+      // 🚀 [CTO 패치] 이미지 깨짐 텍스트 대체 안전장치 (onError)
+      const handleImageError = (e) => {
+          e.target.style.display = 'none';
+          if (e.target.nextElementSibling) {
+              e.target.nextElementSibling.style.display = 'flex';
+          }
+      };
+
       return (
           <div 
             onClick={() => setSelectedTarget({ ...data, category, typeLabel, score: currentScore })}
@@ -310,8 +321,13 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                   <span className="text-[10px] font-black text-gray-400">{data.tierName}</span>
               </div>
               <div className="flex items-center gap-3 relative z-10 mt-3">
-                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-black text-sm shadow-md shrink-0 bg-white border border-gray-100 p-1`}>
-                      {logoUrl ? <img src={logoUrl} className="w-full h-full object-contain" alt="logo"/> : <span className="text-gray-400">{data.primaryUniv.substring(0,2)}</span>}
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-slate-400 font-black text-xs shadow-md shrink-0 bg-white border border-gray-100 p-1.5 relative">
+                      {logoUrl ? (
+                          <>
+                              <img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={handleImageError} />
+                              <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full">{data.primaryUniv.substring(0,2)}</span>
+                          </>
+                      ) : <span className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full">{data.primaryUniv.substring(0,2)}</span>}
                   </div>
                   <h4 className="font-black text-gray-900 text-lg md:text-xl leading-tight">{data.primaryUniv}</h4>
               </div>
@@ -319,7 +335,29 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
       );
   };
 
-  if (!activeStudentId) return <div className="text-center p-10 text-gray-400">학생 정보가 없습니다.</div>;
+  // --- 관리자 선택 UI 렌더링 ---
+  if (isAdminView && !activeStudentId) {
+      return (
+        <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
+            <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl">
+                <h1 className="text-3xl font-black mb-2 flex items-center gap-3"><Compass className="text-blue-400" size={32}/> 입시 상담실 (관리자 모드)</h1>
+                <p className="text-slate-400 font-bold mb-6">아래에서 상담할 학생을 선택해 주세요.</p>
+                <div className="flex items-center gap-4 bg-white/10 p-2 rounded-2xl border border-white/20 max-w-lg">
+                    <Users className="ml-4 text-white/50" />
+                    <select 
+                        className="w-full p-4 bg-transparent text-white font-bold outline-none appearance-none"
+                        value={selectedStudentId}
+                        onChange={(e) => setSelectedStudentId(e.target.value)}
+                    >
+                        <option value="" className="text-gray-900">학생을 선택해주세요</option>
+                        {studentList.map(s => <option key={s.id} value={s.id} className="text-gray-900">{s.name} ({s.schoolName || '학교미상'})</option>)}
+                    </select>
+                </div>
+            </div>
+            <div className="text-center py-20 text-gray-400 font-bold">학생을 선택하면 성적 데이터와 6-Block 대학 분석이 표시됩니다.</div>
+        </div>
+      );
+  }
 
   return (
     <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
@@ -329,14 +367,16 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             <div className="absolute right-0 top-0 w-64 h-64 bg-blue-600/20 rounded-full blur-[100px]"></div>
             <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-black mb-2 flex items-center gap-3"><Award className="text-yellow-400" size={32}/> {studentInfo?.name || '학생'} 입시 상담실</h1>
+                    <h1 className="text-2xl sm:text-3xl font-black mb-2 flex items-center gap-3"><Compass className="text-blue-400" size={32}/> {studentInfo?.name || '학생'} 입시 상담실</h1>
                     <p className="text-slate-400 font-bold text-sm sm:text-base">현재 위치를 진단하고 상위 대학 진입을 위한 실질적인 Gap을 분석합니다.</p>
                 </div>
                 <div className="flex flex-wrap gap-3 w-full md:w-auto">
                     <Button onClick={() => setIsInputOpen(!isInputOpen)} className="bg-white text-slate-900 hover:bg-slate-100 font-black px-6 py-3 sm:px-8 sm:py-4 rounded-2xl shadow-xl flex-1 md:flex-none justify-center">
                         {isInputOpen ? '닫기' : '새로운 성적 입력'}
                     </Button>
-                    {isAdminView && <Button variant="secondary" onClick={() => navigate('/users')} className="bg-slate-800 text-white hover:bg-slate-700 border-slate-700 font-bold px-6 py-3 sm:px-6 sm:py-4 rounded-2xl flex-1 md:flex-none justify-center">목록으로</Button>}
+                    {isAdminView && (
+                        <Button variant="secondary" onClick={() => setSelectedStudentId('')} className="bg-slate-800 text-white hover:bg-slate-700 border-slate-700 font-bold px-6 py-3 sm:px-6 sm:py-4 rounded-2xl flex-1 md:flex-none justify-center">다른 학생 선택</Button>
+                    )}
                 </div>
             </div>
         </div>
@@ -413,7 +453,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                                     
                                     <input className={`w-[calc(50%-4px)] md:w-24 border-none p-3 rounded-xl font-black text-center text-sm md:text-base outline-none ${sub.grade ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-800'}`} placeholder="등급" value={sub.grade} onChange={e=>handleSubjectChange(idx, 'grade', e.target.value)}/>
                                     
-                                    <button onClick={() => setInputForm(prev => ({...prev, subjects: prev.subjects.filter((_,i)=>i!==idx)}))} className="w-full md:w-10 p-3 flex justify-center text-slate-300 hover:text-red-500 bg-white rounded-xl md:bg-transparent"><Trash2 size={20}/></button>
+                                    <button onClick={() => handleRemoveSubject(idx)} className="w-full md:w-10 p-3 flex justify-center text-slate-300 hover:text-red-500 bg-white rounded-xl md:bg-transparent"><Trash2 size={20}/></button>
                                 </div>
                             ))}
                             <Button variant="ghost" onClick={() => setInputForm(prev=>({...prev, subjects: [...prev.subjects, {name:'', score:'', rank:'', tiedRank:'', total:'', grade:''}]}))} className="text-blue-600 font-bold mt-2"><Plus size={16} className="mr-1"/> 과목 추가</Button>
@@ -444,7 +484,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                 {/* 6-Block 대학 추천 시스템 */}
                 <Card className="p-0 overflow-hidden border-none shadow-xl bg-slate-100 rounded-[32px]">
                     <div className="p-6 sm:p-8 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Target className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
+                        <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Award className="text-rose-500" size={28}/> 나의 목표 대학 6-Block</h3>
                         <div className="text-sm font-black text-slate-500 bg-slate-100 px-4 py-2 rounded-xl border border-slate-200">
                             내신 평균: <span className="text-indigo-600 text-lg">{avgGrades.school > 0 ? avgGrades.school : '-'}</span> / 모의 평균: <span className="text-blue-600 text-lg">{avgGrades.mock > 0 ? avgGrades.mock : '-'}</span>
                         </div>
@@ -479,12 +519,17 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             </div>
         </div>
 
-        {/* 🚀 정밀 분석 팝업 (Gap Analysis) */}
+        {/* 정밀 분석 팝업 (Gap Analysis) */}
         <Modal isOpen={!!selectedTarget} onClose={() => setSelectedTarget(null)} title={`${selectedTarget?.primaryUniv} 목표 분석`}>
             {selectedTarget && (
                 <div className="text-center p-2 sm:p-6">
-                    <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto rounded-full bg-white flex items-center justify-center shadow-xl mb-6 ring-4 ring-slate-100 p-2">
-                        {UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]] ? <img src={UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]]} className="w-full h-full object-contain" alt="logo"/> : <span className="text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span>}
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 mx-auto rounded-full bg-white flex items-center justify-center shadow-xl mb-6 ring-4 ring-slate-100 p-2 relative overflow-hidden">
+                        {UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]] ? (
+                            <>
+                                <img src={UNIV_LOGOS[selectedTarget.primaryUniv.split(' ')[0]]} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/>
+                                <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center bg-slate-50 rounded-full text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span>
+                            </>
+                        ) : <span className="text-slate-400 font-black text-3xl">{selectedTarget.primaryUniv.substring(0,2)}</span>}
                     </div>
                     <h2 className="text-2xl sm:text-3xl font-black text-slate-900 mb-2">{selectedTarget.primaryUniv}</h2>
                     <p className="text-blue-600 font-bold mb-8 text-sm sm:text-base">{selectedTarget.tierName} · {selectedTarget.category} 지원 권장</p>
@@ -519,10 +564,17 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
             <div className="space-y-3 p-1">
                 <p className="text-slate-400 font-bold mb-4 text-center text-sm">현재 수준에서 1~2단계 상위에 위치한 대학군입니다.</p>
                 {upperUnivList.length === 0 ? <p className="text-center text-slate-400 py-10 font-bold">표시할 상위 대학이 없습니다.</p> :
-                upperUnivList.map(u => (
+                upperUnivList.map(u => {
+                    const logoUrl = UNIV_LOGOS[u.primaryUniv.split(' ')[0]];
+                    return (
                     <div key={u.level} onClick={() => { setSelectedTarget({...u, category: '상향', typeLabel: '수시 내신', score: avgGrades.school}); setIsUpperListOpen(false); }} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100 hover:border-blue-500 hover:shadow-md cursor-pointer transition-all group">
-                         <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100 p-1">
-                            {UNIV_LOGOS[u.primaryUniv.split(' ')[0]] ? <img src={UNIV_LOGOS[u.primaryUniv.split(' ')[0]]} className="w-full h-full object-contain" alt="logo"/> : <span className="font-black text-slate-400 text-xs">{u.primaryUniv.substring(0,2)}</span>}
+                         <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center shrink-0 border border-slate-100 p-1.5 relative overflow-hidden">
+                            {logoUrl ? (
+                                <>
+                                    <img src={logoUrl} className="w-full h-full object-contain" alt="logo" onError={(e) => { e.target.style.display='none'; e.target.nextElementSibling.style.display='flex'; }}/>
+                                    <span style={{display: 'none'}} className="absolute inset-0 flex items-center justify-center font-black text-slate-400 text-xs bg-slate-50">{u.primaryUniv.substring(0,2)}</span>
+                                </>
+                            ) : <span className="font-black text-slate-400 text-xs">{u.primaryUniv.substring(0,2)}</span>}
                          </div>
                          <div className="flex-1">
                             <div className="font-black text-slate-800 text-base group-hover:text-blue-600 transition-colors">{u.primaryUniv}</div>
@@ -530,7 +582,7 @@ const CollegeNavigator = ({ currentUser, targetStudent = null }) => {
                          </div>
                          <ChevronRight size={20} className="text-slate-200 group-hover:text-blue-500"/>
                     </div>
-                ))}
+                )})}
             </div>
         </Modal>
     </div>
