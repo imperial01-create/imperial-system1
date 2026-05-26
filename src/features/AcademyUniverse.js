@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Swords, Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
-  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Zap
+  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Zap,
+  Target, Sparkles // 🚀 [CTO 패치] 빈 화면(Crash)을 유발했던 누락 아이콘 추가 완료!
 } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';

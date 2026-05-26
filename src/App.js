@@ -4,7 +4,7 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket // 🚀 [CTO 패치] MessageSquare 아이콘 추가
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -30,7 +30,6 @@ const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
 const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
 const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
-// 🚀 [CTO 패치] 통합 메시지 센터 모듈 임포트 추가
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
@@ -130,7 +129,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [CTO 패치] 통합 메시지 센터 바로가기 대시보드 메뉴 추가 */}
                 {['admin', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/messages')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -318,7 +316,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
                         
-                        {/* 🚀 [CTO 패치] 통합 메시지 센터 라우트 추가 */}
                         <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
