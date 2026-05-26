@@ -17,16 +17,16 @@ const APP_ID = 'imperial-clinic-v1';
 
 // --- 대학 로고 맵 (위키백과 등 공용 URL) ---
 const UNIV_LOGOS = {
-  "서울대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/4/44/Seoul_National_University_emblem.svg/200px-Seoul_National_University_emblem.svg.png",
-  "연세대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/e/e0/Yonsei_University_emblem.svg/200px-Yonsei_University_emblem.svg.png",
-  "고려대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/4/4b/Korea_University_emblem.png/200px-Korea_University_emblem.png",
-  "성균관대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/c/cd/Sungkyunkwan_University_emblem.svg/200px-Sungkyunkwan_University_emblem.svg.png",
-  "한양대학교": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Hanyang_University_emblem.svg/200px-Hanyang_University_emblem.svg.png",
-  "중앙대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/5/52/Chung-Ang_University_emblem.svg/200px-Chung-Ang_University_emblem.svg.png",
-  "경희대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/e/e8/Kyung_Hee_University_emblem.png/200px-Kyung_Hee_University_emblem.png",
-  "건국대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/f/f6/Konkuk_University_emblem.png/200px-Konkuk_University_emblem.png",
-  "동국대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/b/b3/Dongguk_University_emblem.png/200px-Dongguk_University_emblem.png",
-  "홍익대학교": "https://upload.wikimedia.org/wikipedia/ko/thumb/e/ef/Hongik_University_emblem.png/200px-Hongik_University_emblem.png"
+  "서울대학교": "https://i.postimg.cc/SNx2knJ9/seouldaehaggyo.png",
+  "연세대학교": "https://i.postimg.cc/k4ZJCgZp/yeonsedaehaggyo.png",
+  "고려대학교": "https://i.postimg.cc/d3rLSC1R/keugibyeonhwan-golyeodaehaggyo.jpg",
+  "성균관대학교": "https://i.postimg.cc/J0VhJhQg/seong-gyungwandaehaggyo.png",
+  "한양대학교": "https://i.postimg.cc/D0T20Mv7/han-yangdaehaggyo.jpg",
+  "중앙대학교": "https://i.postimg.cc/Pqvh4jNz/jung-angdaehaggyo.png",
+  "경희대학교": "https://i.postimg.cc/m2ZsnMtx/keugibyeonhwan-gyeonghuidaehaggyo.png",
+  "건국대학교": "https://i.postimg.cc/MHWhh2Z4/geongugdaehaggyo.jpg",
+  "동국대학교": "https://i.postimg.cc/VkS3yF1Y/dong-gugdaehaggyo.png",
+  "홍익대학교": "https://i.postimg.cc/sDxLSJMC/hong-igdaehaggyo.jpg"
 };
 
 const SUSI_DB = [
