@@ -1,24 +1,21 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 입시 상담 기능을 분리하여 본연의 사용자 및 수강 관리 역할만 독립적으로 안전하게 수행합니다.) */
+   (🚀 CTO 패치: 사슬 고유 ID 강제 이주 차단 및 유령 계정 복구 연동 풀버전) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle, Target, ChevronRight
+  BookMarked, Clock, Calendar, CheckCircle
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, addDoc, collection, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
-import { useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const UserManager = ({ currentUser }) => {
-    const navigate = useNavigate();
-
     if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
         return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
     }
@@ -58,22 +55,33 @@ const UserManager = ({ currentUser }) => {
 
     const showToast = (message, type = 'error') => setToast({ message, type });
 
+    // 🚀 [CTO 패치] 암 복구 기능이 결합된 강력한 강제 패스워드 리셋 로직
     const handleForcePasswordReset = async (user) => {
-        const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상)`);
+        const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상 숫자 권장)`);
         if (!newPassword) return; 
         if (newPassword.length < 6) return showToast('비밀번호는 최소 6자리 이상이어야 합니다.', 'error');
-        if (!window.confirm(`정말 [${user.name}] 사용자의 비밀번호를 '${newPassword}'(으)로 강제 변경하시겠습니까?`)) return;
+        if (!window.confirm(`정말 [${user.name}] 사용자의 비밀번호를 강제 변경하시겠습니까?\n인증소에서 삭제된 계정인 경우 자동으로 부활 처리됩니다.`)) return;
 
         setLoading(true);
         try {
             const resetPasswordFn = httpsCallable(functions, 'adminResetPassword');
-            const targetUid = user.authUid || user.id; 
-            await resetPasswordFn({ uid: targetUid, newPassword: newPassword });
+            // 유효하지 않은 임시 방패 마크면 유저의 고유 문서 ID를 타격
+            const targetUid = user.authUid && user.authUid !== 'legacy_verified_account' ? user.authUid : user.id; 
+            const safeId = encodeURIComponent(user.userId || user.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+            const realEmail = `${safeId}@imperial.com`;
+
+            // 백엔드 클라우드 함수에 정확한 타겟 이메일을 주입하여 복구 명령 전송
+            const result = await resetPasswordFn({ uid: targetUid, newPassword: newPassword, email: realEmail });
+            const freshAuthUid = result.data.authUid || targetUid;
+
+            // 사슬 ID 문서 내부 데이터 동기화
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
                 password: newPassword,
+                authUid: freshAuthUid,
                 updatedAt: serverTimestamp()
             }, { merge: true });
-            showToast(`✅ 성공적으로 변경되었습니다!`, 'success');
+
+            showToast(`✅ 성공적으로 계정이 복구되었으며 비밀번호가 변경되었습니다!`, 'success');
         } catch (error) {
             showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error');
         } finally { setLoading(false); }
@@ -162,18 +170,19 @@ const UserManager = ({ currentUser }) => {
             }
             if (activeTab === 'parent') { payload.linkedChildrenIds = formData.linkedChildrenIds || []; }
 
-            const safeId = encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+            // 🚀 [CTO 패치] 사슬 ID 보존 법칙: 수정 모드일 때는 무조건 기존 문서 고유 주소(formData.id)를 유지합니다.
+            const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
-                if (formData.password && !formData.authUid) payload.password = formData.password;
-                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload, { merge: true });
-                if (formData.id && formData.id !== safeId) {
-                    try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', formData.id)); } catch (e) {}
-                }
+                if (formData.password) payload.password = formData.password;
+                if (formData.authUid) payload.authUid = formData.authUid;
+                
+                // 머지 방식으로 기존 사슬 문서 정보만 안전하게 덮어쓰기 (과거 기출 및 클리닉 보존)
+                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload, { merge: true });
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
             } else {
-                if (users.some(u => u.id === safeId)) throw new Error("이미 존재하는 아이디입니다.");
-                const email = `${safeId}@imperial.com`;
+                if (users.some(u => u.id === targetDocId)) throw new Error("이미 존재하는 아이디입니다.");
+                const email = `${targetDocId}@imperial.com`;
                 let authUid = '';
                 try {
                     const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
@@ -184,8 +193,8 @@ const UserManager = ({ currentUser }) => {
                     throw authError;
                 }
                 payload.authUid = authUid; payload.password = formData.password; payload.createdAt = serverTimestamp();
-                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId), payload);
-                setIsEditMode(true); setFormData(prev => ({ ...prev, id: safeId, authUid }));
+                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload);
+                setIsEditMode(true); setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
                 showToast('사용자가 성공적으로 생성되었습니다.', 'success');
                 setLoading(false); return; 
             }
@@ -391,11 +400,6 @@ const UserManager = ({ currentUser }) => {
                         <button onClick={() => isEditMode && setModalTab('enroll')} disabled={!isEditMode} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'enroll' ? 'bg-white text-blue-600 border-t-2 border-blue-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed'}`}>
                             📚 수강 관리 {!isEditMode && <span className="text-[10px] text-red-500 font-normal ml-1">(저장 후)</span>}
                         </button>
-                        {isEditMode && (
-                            <button onClick={() => setModalTab('navigator')} className={`px-5 py-3 font-bold text-sm transition-colors rounded-t-lg ${modalTab === 'navigator' ? 'bg-white text-indigo-600 border-t-2 border-indigo-600 shadow-[0_2px_0_0_white]' : 'text-gray-500 hover:bg-gray-100'}`}>
-                                🧭 입시 상담
-                            </button>
-                        )}
                     </div>
                 )}
 
@@ -570,20 +574,6 @@ const UserManager = ({ currentUser }) => {
                                     </Button>
                                 </div>
                             </div>
-                        </div>
-                    )}
-
-                    {modalTab === 'navigator' && activeTab === 'student' && (
-                        <div className="animate-in fade-in py-20 flex flex-col items-center justify-center text-center">
-                            <div className="bg-indigo-100 p-6 rounded-full text-indigo-600 mb-6 shadow-inner"><Target size={64}/></div>
-                            <h3 className="text-3xl font-black text-slate-900 mb-4">{formData.name} 학생 전용 입시 상담실</h3>
-                            <p className="text-slate-500 font-bold text-lg mb-8 max-w-md">비좁은 창을 벗어나 넓은 화면에서<br/>6-Block 대학 추천 및 정밀 성적 분석을 진행합니다.</p>
-                            <Button 
-                                className="px-12 py-5 text-2xl font-black shadow-2xl bg-indigo-600 hover:bg-indigo-700 rounded-[24px] flex items-center gap-3 animate-bounce" 
-                                onClick={() => { setIsModalOpen(false); navigate(`/navigator/${formData.id}`); }}
-                            >
-                                입시 상담실 입장하기 <ChevronRight size={28}/>
-                            </Button>
                         </div>
                     )}
                 </div>

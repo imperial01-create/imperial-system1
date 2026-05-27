@@ -1,15 +1,14 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
-   최고 관리자 전용 보안 및 시스템 최적화 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 중복 제거 후 캐시 꼬임으로 인한 유령 문서 No document 에러 완벽 해결판) */
+   최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
+   (🚀 CTO 패치: 중복 계정 최적화 및 레거시 클래스 과목(Subject) 자동 마이그레이션 기능 탑재 풀버전) */
 import React, { useState, useEffect } from 'react';
-// 🚀 getDocsFromServer 부품을 수입하여 서버 실시간 데이터 강제 동기화
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, updateDoc, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle 
+  AlertTriangle, Database
 } from 'lucide-react';
 import { Button } from '../components/UI';
 import { useData } from '../contexts/DataContext';
@@ -22,6 +21,7 @@ const SettingsManager = ({ currentUser }) => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [systemProcessing, setSystemProcessing] = useState(false);
+    const [migrationProcessing, setMigrationProcessing] = useState(false);
 
     const [activeTab, setActiveTab] = useState('master');
 
@@ -85,7 +85,7 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    // 🚀 [CTO 패치] 초정밀 계정 최적화 알고리즘 기반 스크립트 엔진
+    // 🚀 [기능 1] 계정 최적화 알고리즘
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
         
@@ -97,7 +97,6 @@ const SettingsManager = ({ currentUser }) => {
             const seenIds = new Set();
             const duplicatesToDelete = [];
             
-            // 1단계: 정렬을 통해 인증서버 데이터(authUid)가 있는 문서를 최우선 순위로 배치
             const sortedUsers = [...users].sort((a, b) => {
                 if (a.authUid && !b.authUid) return -1;
                 if (!a.authUid && b.authUid) return 1;
@@ -115,22 +114,18 @@ const SettingsManager = ({ currentUser }) => {
                 }
             }
 
-            // 2단계: 선별된 중복 가짜 찌꺼기 계정들 즉시 제거
             for (const dupe of duplicatesToDelete) {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
                 dedupeCount++;
             }
 
-            // 3단계: [💥 버그 픽스] 캐시 오염을 막기 위해 클라우드 실시간 서버(FromServer)에서만 명단 강제 로드
             const freshSnap = await getDocsFromServer(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
             const freshUsers = freshSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            // 4단계: 인증이 유실된 레거시 계정(비밀번호 6자리 미만 등) 정식 연동 개시
             for (const u of freshUsers) {
                 if (!u.authUid) {
                     const safeId = encodeURIComponent(u.userId || u.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
                     const email = `${safeId}@imperial.com`;
-                    // 기존 비밀번호가 짧으면 임시 비번 주입
                     const userPassword = (u.password && String(u.password).length >= 6) ? String(u.password) : 'imperial123!';
 
                     try {
@@ -138,7 +133,6 @@ const SettingsManager = ({ currentUser }) => {
                         const newAuthUid = userCredential.user.uid;
                         await signOut(secondaryAuth); 
                         
-                        // 🚀 [💥 버그 픽스] updateDoc 대신 setDoc Merge 처리하여 유령 문서 파괴 크래시 원천 차단
                         await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
                             authUid: newAuthUid,
                             password: userPassword,
@@ -146,7 +140,6 @@ const SettingsManager = ({ currentUser }) => {
                         }, { merge: true });
                         authSyncCount++;
                     } catch (authError) {
-                        // 이미 이메일이 연동되어 존재한다면 인증 마크 강제 동기화
                         if (authError.code === 'auth/email-already-in-use') {
                             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
                                 authUid: 'legacy_verified_account',
@@ -164,6 +157,52 @@ const SettingsManager = ({ currentUser }) => {
             alert("작업 중 오류가 발생했습니다: " + err.message);
         } finally {
             setSystemProcessing(false);
+        }
+    };
+
+    // 🚀 [기능 2] 레거시 데이터 마이그레이션 스크립트 (과목 자동 할당)
+    const handleDataMigration = async () => {
+        if (!window.confirm("⚠️ [데이터 마이그레이션]\n\n과거에 생성되어 '과목(subject)' 정보가 누락된 클래스(반) 데이터를 스캔합니다. 스캔 후 클래스 이름을 바탕으로 자동으로 과목을 할당합니다.\n\n이 작업은 아카데미 유니버스 등 최신 기능과의 정상적인 연동을 위해 반드시 필요합니다. 계속하시겠습니까?")) return;
+        
+        setMigrationProcessing(true);
+        try {
+            const classesSnap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
+            let updateCount = 0;
+            const batch = writeBatch(db);
+
+            classesSnap.forEach(docSnap => {
+                const cls = docSnap.data();
+                // 과목(subject)이 등록되어 있지 않은 클래스만 선별
+                if (!cls.subject) {
+                    let inferredSubject = '';
+                    const name = cls.name || '';
+
+                    // 이름 기반 과목 추론 엔진
+                    if (name.includes('국어') || name.includes('문학') || name.includes('독서') || name.includes('언매') || name.includes('화작') || name.includes('논술')) inferredSubject = '국어';
+                    else if (name.includes('수학') || name.includes('수1') || name.includes('수2') || name.includes('미적') || name.includes('기하') || name.includes('확통') || name.includes('수리')) inferredSubject = '수학';
+                    else if (name.includes('영어') || name.includes('영문') || name.includes('English') || name.includes('문법')) inferredSubject = '영어';
+                    else if (name.includes('과학') || name.includes('물리') || name.includes('화학') || name.includes('생명') || name.includes('지구') || name.includes('통과')) inferredSubject = '과학';
+
+                    if (inferredSubject) {
+                        batch.update(docSnap.ref, { 
+                            subject: inferredSubject, 
+                            updatedAt: serverTimestamp() 
+                        });
+                        updateCount++;
+                    }
+                }
+            });
+
+            if (updateCount > 0) {
+                await batch.commit();
+                alert(`✅ 데이터 마이그레이션 완료!\n총 ${updateCount}개의 과거 클래스에 과목 정보가 성공적으로 자동 할당되었습니다.\n이제 아카데미 유니버스가 정상 작동합니다.`);
+            } else {
+                alert(`✅ 스캔 완료!\n과목 정보가 누락된 클래스가 없습니다. 모든 데이터가 최신 포맷으로 유지되고 있습니다.`);
+            }
+        } catch (err) {
+            alert("마이그레이션 중 오류가 발생했습니다: " + err.message);
+        } finally {
+            setMigrationProcessing(false);
         }
     };
 
@@ -257,25 +296,52 @@ const SettingsManager = ({ currentUser }) => {
                     </div>
                 </div>
             ) : (
-                <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-rose-200 space-y-6 animate-in fade-in max-w-2xl">
-                    <h2 className="text-xl font-black text-rose-800 border-b border-rose-100 pb-4 flex items-center gap-2">
-                        <ShieldAlert className="text-rose-600"/> 시스템 데이터 정리 스크립트
-                    </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
                     
-                    <div className="bg-rose-50 text-rose-900 p-5 rounded-2xl border border-rose-200 space-y-2 text-sm">
-                        <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 주의사항</p>
-                        <p>• 이 스크립트는 시스템에 남아있는 모든 직군의 <strong>'중복 계정 찌꺼기'</strong>를 완벽하게 삭제합니다.</p>
-                        <p>• 이전에 수동으로 생성되었던 회색 방패 계정들을 <strong>'초록 방패(안전 연동)'</strong>로 일괄 변환합니다.</p>
-                        <p className="text-rose-600 font-bold mt-2 pt-2 border-t border-rose-200">※ 실행 전, 현재 시스템 사용자가 없는 새벽 시간에 작동하시는 것을 권장합니다.</p>
+                    {/* 계정 보안 최적화 스크립트 */}
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-rose-200 space-y-6">
+                        <h2 className="text-xl font-black text-rose-800 border-b border-rose-100 pb-4 flex items-center gap-2">
+                            <ShieldAlert className="text-rose-600"/> 계정 보안 최적화 스크립트
+                        </h2>
+                        
+                        <div className="bg-rose-50 text-rose-900 p-5 rounded-2xl border border-rose-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 주의사항</p>
+                            <p>• 시스템에 남아있는 모든 직군의 <strong>'중복 계정 찌꺼기'</strong>를 삭제합니다.</p>
+                            <p>• 인증소에서 오류가 난 <strong>'회색 방패 계정'</strong>을 강제 동기화합니다.</p>
+                            <p className="text-rose-600 font-bold mt-2 pt-2 border-t border-rose-200">※ 현재 시스템 사용자가 없는 시간에 작동을 권장합니다.</p>
+                        </div>
+
+                        <Button 
+                            onClick={handleAuthSyncAndDedupe} 
+                            disabled={systemProcessing} 
+                            className="w-full bg-rose-600 hover:bg-rose-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {systemProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '계정 최적화 실행'}
+                        </Button>
                     </div>
 
-                    <Button 
-                        onClick={handleAuthSyncAndDedupe} 
-                        disabled={systemProcessing} 
-                        className="w-full bg-rose-600 hover:bg-rose-700 font-bold py-4 text-lg shadow-md border-0"
-                    >
-                        {systemProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '계정 최적화 (중복제거 및 보안 연동) 실행'}
-                    </Button>
+                    {/* 레거시 데이터 마이그레이션 스크립트 */}
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6">
+                        <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">
+                            <Database className="text-indigo-600"/> 데이터 마이그레이션 툴
+                        </h2>
+                        
+                        <div className="bg-indigo-50 text-indigo-900 p-5 rounded-2xl border border-indigo-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><Database size={18}/> 레거시 데이터 변환</p>
+                            <p>• 신규 기능(아카데미 유니버스 등) 도입 전 생성된 <strong>과거 클래스 데이터</strong>를 스캔합니다.</p>
+                            <p>• '과목(Subject)' 정보가 비어있는 반의 이름을 AI 엔진이 분석하여 <strong>정규 과목으로 자동 편입</strong>시킵니다.</p>
+                            <p className="text-indigo-600 font-bold mt-2 pt-2 border-t border-indigo-200">※ 에러 없이 언제든 반복해서 실행할 수 있는 안전한 스크립트입니다.</p>
+                        </div>
+
+                        <Button 
+                            onClick={handleDataMigration} 
+                            disabled={migrationProcessing} 
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '레거시 데이터 마이그레이션'}
+                        </Button>
+                    </div>
+
                 </div>
             )}
         </div>

@@ -12,7 +12,7 @@ if (admin.apps.length === 0) {
 const APP_ID = 'imperial-clinic-v1';
 
 // ============================================================================
-// [기능 1] 관리자 비밀번호 강제 초기화
+// [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) {
@@ -20,21 +20,43 @@ exports.adminResetPassword = onCall(async (request) => {
   }
   const uid = request.data.uid;
   const newPassword = request.data.newPassword;
-  if (!uid || !newPassword || newPassword.length < 6) {
-    throw new HttpsError("invalid-argument", "유효한 인자 값이 아닙니다.");
+  const email = request.data.email; 
+
+  if (!newPassword || newPassword.length < 6) {
+    throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
   }
+
+  // 이메일이 전달된 경우 (인증소에서 삭제된 유령 계정 복구 시도)
+  if (email) {
+    try {
+      const userRecord = await admin.auth().getUserByEmail(email);
+      await admin.auth().updateUser(userRecord.uid, { password: newPassword });
+      return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
+    } catch (error) {
+      if (error.code === 'auth/user-not-found') {
+        const newUserRecord = await admin.auth().createUser({
+          email: email,
+          password: newPassword,
+          emailVerified: true
+        });
+        return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
+      }
+      throw new HttpsError("unknown", error.message);
+    }
+  }
+
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
-    return { success: true, message: "비밀번호가 성공적으로 변경되었습니다." };
+    return { success: true, authUid: uid };
   } catch (error) {
     if (error.code === 'auth/user-not-found') {
       try {
         const fallbackEmail = `${uid}@imperial.com`;
         const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
         await admin.auth().updateUser(userRecord.uid, { password: newPassword });
-        return { success: true };
+        return { success: true, authUid: userRecord.uid };
       } catch (fError) {
-        throw new HttpsError("not-found", "계정을 찾을 수 없습니다.");
+        throw new HttpsError("not-found", "인증 서버에서 계정을 식별할 수 없습니다. 이메일을 명시해 주세요.");
       }
     }
     throw new HttpsError("unknown", error.message);
@@ -131,28 +153,22 @@ exports.clinicReminderCron = onSchedule({
     try {
         const db = admin.firestore();
 
-        // 1. 서버 시간을 KST(한국 시간)로 변환하여 내일 날짜 계산
         const now = new Date();
         const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
         const kstTime = new Date(utcNow + (9 * 3600000));
-        kstTime.setDate(kstTime.getDate() + 1); // 하루 더하기 (내일)
+        kstTime.setDate(kstTime.getDate() + 1); 
         
         const tomorrowStr = `${kstTime.getFullYear()}-${String(kstTime.getMonth() + 1).padStart(2, '0')}-${String(kstTime.getDate()).padStart(2, '0')}`;
         
-        console.log(`[예약발송 시작] ${tomorrowStr} 일자 클리닉 리마인드 대상자 조회 중...`);
-
-        // 2. 내일 날짜로 예정된 '승인(confirmed)' 상태의 클리닉만 색출
         const sessionsSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/sessions`)
             .where('date', '==', tomorrowStr)
             .where('status', '==', 'confirmed')
             .get();
 
         if (sessionsSnapshot.empty) {
-            console.log("발송할 리마인드 대상이 없습니다.");
             return null;
         }
 
-        // 3. 연락처 매칭을 위해 전체 유저 정보 로드
         const usersSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/users`).get();
         const users = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
@@ -162,7 +178,6 @@ exports.clinicReminderCron = onSchedule({
         sessionsSnapshot.forEach(docSnap => {
             const session = docSnap.data();
             
-            // 번호 찾기 알고리즘 (학부모 > 학생 본인 > 수기 입력 번호)
             let targetPhone = '';
             let targetStudentId = session.studentId;
 
@@ -186,10 +201,8 @@ exports.clinicReminderCron = onSchedule({
             if (targetPhone) {
                 const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
                 
-                // 종료 시간이 없으면 시작 시간 + 1시간으로 자동 계산
                 const endTime = session.endTime || String(parseInt((session.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00';
                 
-                // 템플릿 조립
                 const message = `[목동임페리얼학원]\n${session.studentName || '학생'} 학생, 내일은 클리닉이 있는 날입니다! ⏰\n\n[내일 클리닉 안내]\n- 일시 : 내일(${session.date}) ${session.startTime}~${endTime}\n- 장소 : 본관 ${session.classroom || '미정'}\n- 내용 : ${session.topic || '개별 클리닉'}\n\n담당 선생님께서 ${session.studentName || '학생'} 학생을 위해 비워두신 시간입니다. 늦거나 무단결석 시 페널티가 부여될 수 있으니 꼭 시간 맞춰 등원해 주세요. 내일 만나요! 😊`;
 
                 const outboxRef = db.collection(`artifacts/${APP_ID}/public/data/sms_outbox`).doc();
@@ -205,7 +218,6 @@ exports.clinicReminderCron = onSchedule({
             }
         });
 
-        // 4. 대기열(sms_outbox)에 일괄 삽입
         if (count > 0) {
             await batch.commit();
             console.log(`[예약발송 완료] 총 ${count}건의 내일자 리마인드 문자가 대기열에 성공적으로 등록되었습니다!`);
@@ -218,14 +230,14 @@ exports.clinicReminderCron = onSchedule({
 });
 
 // ============================================================================
-// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출 완벽 지원)
+// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     }
     
-    const { fileData, type } = request.data; // fileData는 base64 형태의 문자열
+    const { fileData, type } = request.data; 
     if (!fileData) {
         throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
     }
@@ -240,7 +252,6 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 
         const genAI = new GoogleGenerativeAI(apiKey);
         
-        // JSON을 명확하게 뱉어내도록 모델 세팅
         const model = genAI.getGenerativeModel({ 
             model: "gemini-3.5-flash",
             generationConfig: { responseMimeType: "application/json" }
@@ -249,7 +260,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         const mimeType = fileData.split(';')[0].split(':')[1];
         const base64String = fileData.split(',')[1];
 
-        // 🚀 [CTO 패치] 원장님의 특별 지침이 완벽하게 들어간 최종 프롬프트
+        // 🚀 [CTO 복구] 원장님의 핵심 지침 6가지가 완벽히 적용된 풀버전 프롬프트
         const prompt = `
         첨부된 이미지는 대한민국의 ${type === 'school' ? '학교 내신' : '모의고사'} 성적표(또는 리로스쿨 성적표 캡처본)입니다.
         이 이미지에서 모든 과목별 성적 데이터를 추출하여 반드시 아래 포맷의 JSON 배열로 반환하세요.
