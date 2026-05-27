@@ -1,8 +1,9 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 최적화 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 과목 데이터의 엄격한 정의 및 아카데미 유니버스 연동 기반 마련) */
+   (🚀 CTO 패치: updateDoc import 누락으로 인한 스크립트 에러 완벽 해결) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, query, collection } from 'firebase/firestore';
+// 🚀 아래 줄에 updateDoc이 추가되었습니다!
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, query, collection, updateDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
