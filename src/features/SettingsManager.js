@@ -1,9 +1,9 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 최적화 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: updateDoc import 누락으로 인한 스크립트 에러 완벽 해결) */
+   (🚀 CTO 패치: 중복 제거 후 캐시 꼬임으로 인한 유령 문서 No document 에러 완벽 해결판) */
 import React, { useState, useEffect } from 'react';
-// 🚀 아래 줄에 updateDoc이 추가되었습니다!
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, query, collection, updateDoc } from 'firebase/firestore';
+// 🚀 getDocsFromServer 부품을 수입하여 서버 실시간 데이터 강제 동기화
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
@@ -85,6 +85,7 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
+    // 🚀 [CTO 패치] 초정밀 계정 최적화 알고리즘 기반 스크립트 엔진
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
         
@@ -96,6 +97,7 @@ const SettingsManager = ({ currentUser }) => {
             const seenIds = new Set();
             const duplicatesToDelete = [];
             
+            // 1단계: 정렬을 통해 인증서버 데이터(authUid)가 있는 문서를 최우선 순위로 배치
             const sortedUsers = [...users].sort((a, b) => {
                 if (a.authUid && !b.authUid) return -1;
                 if (!a.authUid && b.authUid) return 1;
@@ -113,44 +115,51 @@ const SettingsManager = ({ currentUser }) => {
                 }
             }
 
+            // 2단계: 선별된 중복 가짜 찌꺼기 계정들 즉시 제거
             for (const dupe of duplicatesToDelete) {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
                 dedupeCount++;
             }
 
-            const freshSnap = await getDocs(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
-            const freshUsers = freshSnap.docs.map(d => ({id: d.id, ...d.data()}));
+            // 3단계: [💥 버그 픽스] 캐시 오염을 막기 위해 클라우드 실시간 서버(FromServer)에서만 명단 강제 로드
+            const freshSnap = await getDocsFromServer(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
+            const freshUsers = freshSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+            // 4단계: 인증이 유실된 레거시 계정(비밀번호 6자리 미만 등) 정식 연동 개시
             for (const u of freshUsers) {
                 if (!u.authUid) {
                     const safeId = encodeURIComponent(u.userId || u.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
                     const email = `${safeId}@imperial.com`;
+                    // 기존 비밀번호가 짧으면 임시 비번 주입
                     const userPassword = (u.password && String(u.password).length >= 6) ? String(u.password) : 'imperial123!';
 
                     try {
                         const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, userPassword);
                         const newAuthUid = userCredential.user.uid;
                         await signOut(secondaryAuth); 
-                        await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
+                        
+                        // 🚀 [💥 버그 픽스] updateDoc 대신 setDoc Merge 처리하여 유령 문서 파괴 크래시 원천 차단
+                        await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
                             authUid: newAuthUid,
                             password: userPassword,
                             updatedAt: serverTimestamp()
-                        });
+                        }, { merge: true });
                         authSyncCount++;
                     } catch (authError) {
+                        // 이미 이메일이 연동되어 존재한다면 인증 마크 강제 동기화
                         if (authError.code === 'auth/email-already-in-use') {
-                            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
+                            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
                                 authUid: 'legacy_verified_account',
                                 updatedAt: serverTimestamp()
-                            });
+                            }, { merge: true });
                             authSyncCount++;
                         } else {
-                            console.error(`가입 실패: ${email}`, authError);
+                            console.error(`보안망 가입 실패: ${email}`, authError);
                         }
                     }
                 }
             }
-            alert(`✅ 계정 최적화 및 보안망 동기화 완료!\n\n* 삭제된 중복 찌꺼기 계정: ${dedupeCount}건\n* 초록 방패(안전망) 변환 완료: ${authSyncCount}건`);
+            alert(`✅ [최적화 완수] 계정 청소 및 보안망 동기화 완료!\n\n* 제거된 중복 찌꺼기 계정: ${dedupeCount}건\n* 초록 방패(정식 보안망) 연동 성공: ${authSyncCount}건`);
         } catch (err) {
             alert("작업 중 오류가 발생했습니다: " + err.message);
         } finally {
