@@ -12,7 +12,7 @@ if (admin.apps.length === 0) {
 const APP_ID = 'imperial-clinic-v1';
 
 // ============================================================================
-// [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
+// [기능 1] 관리자 비밀번호 강제 초기화
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) {
@@ -20,43 +20,21 @@ exports.adminResetPassword = onCall(async (request) => {
   }
   const uid = request.data.uid;
   const newPassword = request.data.newPassword;
-  const email = request.data.email; 
-
-  if (!newPassword || newPassword.length < 6) {
-    throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
+  if (!uid || !newPassword || newPassword.length < 6) {
+    throw new HttpsError("invalid-argument", "유효한 인자 값이 아닙니다.");
   }
-
-  // 이메일이 전달된 경우 (인증소에서 삭제된 유령 계정 복구 시도)
-  if (email) {
-    try {
-      const userRecord = await admin.auth().getUserByEmail(email);
-      await admin.auth().updateUser(userRecord.uid, { password: newPassword });
-      return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
-    } catch (error) {
-      if (error.code === 'auth/user-not-found') {
-        const newUserRecord = await admin.auth().createUser({
-          email: email,
-          password: newPassword,
-          emailVerified: true
-        });
-        return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
-      }
-      throw new HttpsError("unknown", error.message);
-    }
-  }
-
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
-    return { success: true, authUid: uid };
+    return { success: true, message: "비밀번호가 성공적으로 변경되었습니다." };
   } catch (error) {
     if (error.code === 'auth/user-not-found') {
       try {
         const fallbackEmail = `${uid}@imperial.com`;
         const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
         await admin.auth().updateUser(userRecord.uid, { password: newPassword });
-        return { success: true, authUid: userRecord.uid };
+        return { success: true };
       } catch (fError) {
-        throw new HttpsError("not-found", "인증 서버에서 계정을 식별할 수 없습니다. 이메일을 명시해 주세요.");
+        throw new HttpsError("not-found", "계정을 찾을 수 없습니다.");
       }
     }
     throw new HttpsError("unknown", error.message);
@@ -145,8 +123,8 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
 // [기능 4] 클리닉 하루 전날 밤 10시 리마인드 자동 발송 (Cron 스케줄러)
 // ============================================================================
 exports.clinicReminderCron = onSchedule({
-    schedule: "0 22 * * *", // 매일 밤 22시 00분
-    timeZone: "Asia/Seoul", // 한국 시간 기준
+    schedule: "0 22 * * *", 
+    timeZone: "Asia/Seoul", 
     timeoutSeconds: 300,
     memory: "512MiB"
 }, async (event) => {
@@ -220,7 +198,6 @@ exports.clinicReminderCron = onSchedule({
 
         if (count > 0) {
             await batch.commit();
-            console.log(`[예약발송 완료] 총 ${count}건의 내일자 리마인드 문자가 대기열에 성공적으로 등록되었습니다!`);
         }
 
     } catch (error) {
@@ -230,7 +207,7 @@ exports.clinicReminderCron = onSchedule({
 });
 
 // ============================================================================
-// 🚀 [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
+// [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
     if (!request.auth) {
@@ -245,13 +222,9 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
-        
-        if (!apiKey) {
-            throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
-        }
+        if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        
         const model = genAI.getGenerativeModel({ 
             model: "gemini-3.5-flash",
             generationConfig: { responseMimeType: "application/json" }
@@ -260,20 +233,13 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         const mimeType = fileData.split(';')[0].split(':')[1];
         const base64String = fileData.split(',')[1];
 
-        // 🚀 [CTO 복구] 원장님의 핵심 지침 6가지가 완벽히 적용된 풀버전 프롬프트
         const prompt = `
-        첨부된 이미지는 대한민국의 ${type === 'school' ? '학교 내신' : '모의고사'} 성적표(또는 리로스쿨 성적표 캡처본)입니다.
-        이 이미지에서 모든 과목별 성적 데이터를 추출하여 반드시 아래 포맷의 JSON 배열로 반환하세요.
-        
-        { "subjects": [ { "name": "과목명", "score": "원점수", "rank": "석차", "tiedRank": "동석차수", "total": "수강자수", "grade": "등급숫자" } ] }
-        
-        [특명 지침사항]
-        1. 과목명(name): '공통국어1(3)' 처럼 괄호 안에 숫자가 있는 경우, 괄호와 숫자는 완전히 지우고 '공통국어1'만 추출하세요.
-        2. 원점수(score): 학교 내신 성적표(종이/리로스쿨)의 경우, 단순 '원점수' 칸의 반올림된 숫자가 아니라, 반드시 소수점이 포함된 '합계' 또는 '합계점수' 칸에 적힌 점수를 우선적으로 추출하세요.
-        3. 동석차(tiedRank): 표기된 경우 그 숫자를 추출하고, 표기가 없거나 공란이면 "1"을 기재하세요.
-        4. rank는 '석차', total은 '수강자수' 또는 '응시자수'를 의미합니다.
-        5. 모의고사일 경우 rank, tiedRank, total은 빈 문자열("")로 두셔도 좋습니다.
-        6. OCR 노이즈가 있더라도 상식적인 '과목명'과 숫자를 정확히 파싱하세요.
+        첨부된 이미지는 대한민국의 ${type === 'school' ? '학교 내신' : '모의고사'} 성적표입니다.
+        과목별 성적 데이터를 추출하여 {"subjects": [{"name": "과목명", "score": "원점수", "rank": "석차", "tiedRank": "동석차수", "total": "수강자수", "grade": "등급숫자"}]} 포맷의 JSON 배열로 반환하세요.
+        1. 과목명의 괄호 속 숫자는 완전히 지우세요.
+        2. 소수점이 포함된 '합계' 점수를 우선 추출하세요.
+        3. 동석차가 없으면 1을 기재하세요.
+        4. rank는 석차, total은 수강자수를 의미합니다.
         `;
 
         const result = await model.generateContent([
@@ -285,5 +251,37 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
     } catch (error) {
         console.error("🔥 OCR 파싱 실패:", error);
         throw new HttpsError("internal", `성적표 분석 중 오류 발생: ${error.message}`);
+    }
+});
+
+// ============================================================================
+// 🚀 [기능 6] 텔레그램 봇 보안 알림 전송 (프론트엔드 은닉용)
+// ============================================================================
+exports.sendTelegramAlert = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
+    
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    
+    // 환경 변수가 없는 경우 에러를 반환하여 안전하게 처리합니다.
+    if (!botToken || !chatId) {
+        console.warn("서버 환경변수(TELEGRAM)가 누락되었습니다.");
+        return { success: false, message: "환경변수 누락" };
+    }
+
+    const text = request.data.text;
+    if (!text) throw new HttpsError("invalid-argument", "메시지가 없습니다.");
+
+    try {
+        const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: text })
+        });
+        const data = await response.json();
+        return { success: true, data };
+    } catch (error) {
+        console.error("텔레그램 발송 실패:", error);
+        throw new HttpsError("internal", "텔레그램 전송 중 서버 오류");
     }
 });

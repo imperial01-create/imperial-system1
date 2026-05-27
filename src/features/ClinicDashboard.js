@@ -1,4 +1,5 @@
-/* [서비스 가치] 클리닉 V2.9.5 - 발송 후 빈 화면 Crash 완벽 방어 및 클리닉 승인 시 문자 검수/편집 기능 추가 */
+/* [서비스 가치] 클리닉 V2.9.5 - 발송 후 빈 화면 Crash 완벽 방어 및 클리닉 승인 시 문자 검수/편집 기능 추가 
+   (🚀 CTO 패치: 텔레그램 봇 토큰 프론트엔드 은닉 및 보안 강화형 백엔드 호출 통신 적용) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -16,7 +17,6 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 [CTO 패치] 클리닉 승인 및 피드백 템플릿 최신화
 const TEMPLATES = {
   confirmParent: (d) => `[목동임페리얼학원]\n안녕하세요. ${d.studentName} 학생의 개인 클리닉 일정이 승인되어 안내해 드립니다.\n\n[클리닉 확정 안내]\n- 일시 : ${d.date} ${d.startTime}~${d.endTime || String(parseInt((d.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00'}\n- 장소 : 본관 ${d.classroom || '미정'}\n- 내용 : ${d.topic}\n\n학생이 직접 필요한 시간을 선정하여 신청한 일정입니다. 해당 시간은 담당 선생님과의 1:1 약속이므로 늦거나 결석하지 않도록 각별한 지도 부탁드립니다. 감사합니다.`,
   
@@ -516,7 +516,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }
     }, [sessions, currentUser]);
 
-    // 🚀 [Crash 방어] 0.1초 차이 데이터 없음 에러 방지
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
@@ -598,7 +597,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'skip_feedback_msg') {
             askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
-                // 🚀 [Crash 방어] 
                 updateLocalAndCacheState(prev => {
                     const current = prev[payload.id] || {};
                     return { ...prev, [payload.id]: { ...current, feedbackStatus: 'sent' } };
@@ -620,7 +618,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
             });
         
-        // 🚀 [CTO 패치] 클리닉 승인 시 안내 문자 검수창 연결
         } else if (action === 'approve_booking') {
             setSelectedSession(payload); 
             setPreviewMessage(TEMPLATES.confirmParent(payload));
@@ -712,6 +709,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       fetchSessions(true); 
   };
 
+  // 🚀 [CTO 패치] 클리닉 신청 처리 및 백엔드를 통한 안전한 텔레그램 봇 연동
   const submitStudentApplication = async () => {
       if (isSubmittingBooking) return; 
       setIsSubmittingBooking(true);
@@ -747,6 +745,19 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
               return next;
           });
           
+          // ==========================================
+          // 🚀 [CTO 패치] 프론트엔드 은닉 백엔드 텔레그램 호출
+          // ==========================================
+          try {
+              const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목/내용: ${formattedTopic}\n📖 교재/범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 신청 슬롯: 총 ${studentSelectedSlots.length}건\n\n원장님, 시스템에서 승인을 진행해 주세요!`;
+              
+              const sendTelegram = httpsCallable(functions, 'sendTelegramAlert');
+              await sendTelegram({ text: telegramMsg });
+          } catch (teleErr) {
+              console.error("텔레그램 알림 발송 실패:", teleErr);
+          }
+          // ==========================================
+
           setModalState({type:null}); 
           setStudentSelectedSlots([]); 
           notify('신청이 성공적으로 완료되었습니다!', 'success');
@@ -793,7 +804,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             return (isMatchedByArray || isMatchedByName) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
         }
         return (s.studentId === currentUser.id || s.studentName === currentUser.name) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
-    }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); // 🚀 [Crash 방어] 문자열 오류 방어
+    }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); 
   }, [sessions, currentUser]);
 
   if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
@@ -1196,7 +1207,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
       </Modal>
       
-      {/* 🚀 [CTO 패치] 클리닉 승인 시 안내 문자 검수창 적용 완료 */}
       <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="클리닉 예약 승인 및 학부모 안내문자 발송">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 아래 내용을 확인하신 후 승인하시면 학부모님께 문자가 즉시 발송됩니다. (수정 가능)
