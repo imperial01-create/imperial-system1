@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 사슬 고유 ID 강제 이주 차단 및 유령 계정 복구 연동 풀버전) */
+   (🚀 CTO 패치: 조교, 강사, 관리자용 담당 과목, 시급, 은행명, 계좌번호 입력창 완벽 복구판) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -55,7 +55,7 @@ const UserManager = ({ currentUser }) => {
 
     const showToast = (message, type = 'error') => setToast({ message, type });
 
-    // 🚀 [CTO 패치] 암 복구 기능이 결합된 강력한 강제 패스워드 리셋 로직
+    // 강제 패스워드 리셋 및 유령 계정 복구 로직
     const handleForcePasswordReset = async (user) => {
         const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상 숫자 권장)`);
         if (!newPassword) return; 
@@ -65,16 +65,13 @@ const UserManager = ({ currentUser }) => {
         setLoading(true);
         try {
             const resetPasswordFn = httpsCallable(functions, 'adminResetPassword');
-            // 유효하지 않은 임시 방패 마크면 유저의 고유 문서 ID를 타격
             const targetUid = user.authUid && user.authUid !== 'legacy_verified_account' ? user.authUid : user.id; 
             const safeId = encodeURIComponent(user.userId || user.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
             const realEmail = `${safeId}@imperial.com`;
 
-            // 백엔드 클라우드 함수에 정확한 타겟 이메일을 주입하여 복구 명령 전송
             const result = await resetPasswordFn({ uid: targetUid, newPassword: newPassword, email: realEmail });
             const freshAuthUid = result.data.authUid || targetUid;
 
-            // 사슬 ID 문서 내부 데이터 동기화
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
                 password: newPassword,
                 authUid: freshAuthUid,
@@ -170,14 +167,12 @@ const UserManager = ({ currentUser }) => {
             }
             if (activeTab === 'parent') { payload.linkedChildrenIds = formData.linkedChildrenIds || []; }
 
-            // 🚀 [CTO 패치] 사슬 ID 보존 법칙: 수정 모드일 때는 무조건 기존 문서 고유 주소(formData.id)를 유지합니다.
             const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
                 if (formData.password) payload.password = formData.password;
                 if (formData.authUid) payload.authUid = formData.authUid;
                 
-                // 머지 방식으로 기존 사슬 문서 정보만 안전하게 덮어쓰기 (과거 기출 및 클리닉 보존)
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload, { merge: true });
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
             } else {
@@ -431,6 +426,36 @@ const UserManager = ({ currentUser }) => {
                                 </>
                             )}
 
+                            {/* 🚀 [CTO 패치] 조교, 강사, 관리자용 담당 과목, 시급, 은행 및 계좌번호 입력 필드 완벽 복구 */}
+                            {['ta', 'lecturer', 'admin_assistant', 'admin'].includes(activeTab) && (
+                                <>
+                                    <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                                        {['ta', 'lecturer'].includes(activeTab) && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-600 mb-1">담당 과목</label>
+                                                <input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white" placeholder="예: 수학, 국어" value={formData.subject || ''} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                                            </div>
+                                        )}
+                                        {['ta', 'admin_assistant'].includes(activeTab) && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-600 mb-1">시급 (원)</label>
+                                                <input type="number" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white" placeholder="13000" value={formData.hourlyRate || ''} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-600 mb-1">은행명</label>
+                                            <input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none" placeholder="국민은행" value={formData.bankName || ''} onChange={e => setFormData({...formData, bankName: e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-600 mb-1">계좌번호</label>
+                                            <input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none" placeholder="123456-78-901234" value={formData.accountNumber || ''} onChange={e => setFormData({...formData, accountNumber: e.target.value})} />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
                             {activeTab === 'parent' && (
                                 <div className="border-t pt-4">
                                     <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><LinkIcon size={14}/> 내 자녀 선택 (다중 선택 가능)</label>
@@ -590,7 +615,7 @@ const UserManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 분할 발송">
+            <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 문자를 분할 발송">
                 <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
                     <CheckCircle size={18} className="shrink-0"/> 
                     <div>가시성을 위해 문자가 2통으로 나누어 발송됩니다.<br/><span className="font-normal text-xs text-indigo-600">(필요 없는 문자는 창 안의 내용을 전부 지우면 발송되지 않습니다.)</span></div>
