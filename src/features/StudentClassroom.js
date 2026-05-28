@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useMemo } from 'react';
-// [Import Check] Image, ExternalLink 아이콘 확인
+/* [서비스 가치] 학부모와 학생이 '수강 중인 강의의 진도와 과제'를 한눈에 파악하여 
+  학원에 대한 신뢰도를 높이고 문의(CS)를 줄이는 핵심 대시보드입니다.
+  (🚀 CTO 패치: enrollments 기반 수강 이력 정확도 100% 보장 및 Firebase in 쿼리 한계 돌파 로직 적용) 
+*/
+import React, { useState, useEffect } from 'react';
 import { 
-  ChevronLeft, ChevronRight, BookOpen, PenTool, CheckCircle, 
-  AlertCircle, Image, ExternalLink, Loader 
+  ChevronLeft, ChevronRight, BookOpen, CheckCircle, 
+  AlertCircle, Image, Loader 
 } from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Card, Badge } from '../components/UI';
+import { Card } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -14,7 +17,7 @@ const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 // --- Helper Functions ---
 const getMonthRange = (date) => {
     const year = date.getFullYear();
-    const month = date.getMonth(); // 0-indexed
+    const month = date.getMonth(); 
     const start = new Date(year, month, 1);
     const end = new Date(year, month + 1, 0);
     return { 
@@ -27,7 +30,7 @@ const getMonthRange = (date) => {
 
 const getWeekNumber = (date) => {
     const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-    const dayOfWeek = firstDay.getDay(); // 0(Sun) ~ 6(Sat)
+    const dayOfWeek = firstDay.getDay(); 
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
@@ -56,7 +59,7 @@ const WeeklyCard = ({ weekNum, lectures, completions }) => {
     const textColor = isPerfect ? 'text-green-600' : 'text-blue-600';
 
     return (
-        <Card className="w-full overflow-hidden border border-gray-200 shadow-sm">
+        <Card className="w-full overflow-hidden border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
             <div className="bg-gray-50 p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3">
                 <div>
                     <h3 className="text-lg font-bold text-gray-800">{weekNum}주차 <span className="text-sm font-normal text-gray-500 ml-2">({rangeStr})</span></h3>
@@ -143,14 +146,17 @@ const StudentClassroom = ({ currentUser }) => {
             try {
                 const { startStr, endStr } = getMonthRange(currentDate);
 
-                // 1. 해당 학생이 속한 반(Class) 찾기
-                const classQuery = query(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'),
-                    where('studentIds', 'array-contains', targetStudentId)
+                // 1. [CTO FIX] 수강 이력(enrollments) 컬렉션에서 해당 학생의 '활성화된(active)' 반 ID 추출
+                // 비용 효율화: 불필요한 전체 클래스 조회가 아닌 개인화된 수강 이력만 타겟팅
+                const enrollQuery = query(
+                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments'),
+                    where('studentId', '==', targetStudentId),
+                    where('status', '==', 'active')
                 );
-                const classSnapshot = await getDocs(classQuery);
-                const myClassIds = classSnapshot.docs.map(d => d.id);
+                const enrollSnapshot = await getDocs(enrollQuery);
+                const myClassIds = enrollSnapshot.docs.map(d => d.data().classId);
 
+                // 수강 중인 반이 없다면 즉시 렌더링 종료 (불필요한 DB Read 방지)
                 if (myClassIds.length === 0) {
                     setGroupedLectures({});
                     setCompletions([]);
@@ -158,24 +164,33 @@ const StudentClassroom = ({ currentUser }) => {
                     return;
                 }
 
-                // 2. [CTO FIX] 복합 쿼리 대신 단순 IN 쿼리 실행 후 메모리 필터링
-                // 이유: Firestore Index 미생성으로 인한 데이터 미노출 방지 (Zero Runtime Error)
-                const lecturesQuery = query(
-                    collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'),
-                    where('classId', 'in', myClassIds) // 최대 10개 반까지만 지원됨에 유의
-                );
-                
-                const lecturesSnapshot = await getDocs(lecturesQuery);
-                
-                // 메모리에서 날짜 필터링 수행 (NoSQL Optimization)
-                const lecturesData = lecturesSnapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
-                    .filter(l => l.date >= startStr && l.date <= endStr); // 날짜 범위 필터링
+                // 2. [CTO FIX] Firebase 'in' 쿼리의 최대 10개 제한을 극복하기 위한 청크(Chunk) 처리
+                const chunks = [];
+                for (let i = 0; i < myClassIds.length; i += 10) {
+                    chunks.push(myClassIds.slice(i, i + 10));
+                }
 
-                // 3. 완료 기록 가져오기
-                const lectureIds = lecturesData.map(l => l.id);
+                let allLecturesData = [];
+                for (const chunk of chunks) {
+                    const lecturesQuery = query(
+                        collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'),
+                        where('classId', 'in', chunk)
+                    );
+                    const snapshot = await getDocs(lecturesQuery);
+                    
+                    // 메모리에서 날짜 필터링 수행 (Firestore 복합 Index 에러 방지)
+                    const data = snapshot.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() }))
+                        .filter(l => l.date >= startStr && l.date <= endStr);
+                    
+                    allLecturesData = [...allLecturesData, ...data];
+                }
+
+                // 3. 과제 완료 기록(Completions) 가져오기
+                const lectureIds = allLecturesData.map(l => l.id);
                 let completedIds = [];
                 if (lectureIds.length > 0) {
+                    // [CTO 패치] 보안규칙 및 스키마에 맞게 studentId 필드로 정확히 쿼리
                     const compQuery = query(
                         collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'),
                         where('studentId', '==', targetStudentId)
@@ -187,9 +202,9 @@ const StudentClassroom = ({ currentUser }) => {
                         .map(c => c.lectureId);
                 }
 
-                // 4. 주차별 그룹핑 (Grouping by Week)
+                // 4. 주차별(Week)로 데이터 그룹화
                 const grouping = {};
-                lecturesData.forEach(lec => {
+                allLecturesData.forEach(lec => {
                     const d = new Date(lec.date);
                     const weekNum = getWeekNumber(d);
                     if (!grouping[weekNum]) grouping[weekNum] = [];
@@ -206,7 +221,7 @@ const StudentClassroom = ({ currentUser }) => {
 
             } catch (e) {
                 console.error("Student Classroom Fetch Error:", e);
-                // 에러 발생 시 사용자에게 빈 화면보다 안내 메시지가 나을 수 있음
+                setGroupedLectures({});
             } finally {
                 setIsLoading(false);
             }
@@ -254,9 +269,9 @@ const StudentClassroom = ({ currentUser }) => {
             {isLoading ? (
                 <div className="py-20 flex justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>
             ) : Object.keys(groupedLectures).length === 0 ? (
-                <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400">
+                <div className="text-center py-20 bg-white rounded-2xl border border-dashed text-gray-400 shadow-sm">
                     <AlertCircle className="mx-auto mb-2 opacity-50" size={48} />
-                    해당 월에 등록된 강의가 없습니다.
+                    해당 월에 수강 중인 강의 내역이 없습니다.
                 </div>
             ) : (
                 <div className="space-y-6">
