@@ -1,5 +1,5 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 비용 0원 커스텀 SMS 본인인증(OTP) 및 비밀번호 토글, 행정조교 과목 입력란 제거 완벽 적용) */
+   (🚀 CTO 패치: 학교 마스터 데이터 연동 이중 드롭다운 및 동적 학년(Grade) 선택 기능 탑재) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -44,13 +44,29 @@ const ReportWrapper = () => {
 
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
-    const [showPassword, setShowPassword] = useState(false); // 🚀 [CTO 패치] 비밀번호 토글 상태 추가
+    const [showPassword, setShowPassword] = useState(false); 
     const [form, setForm] = useState({
         role: 'student', userId: '', password: '', name: '', phone: '',
         schoolName: '', grade: '1학년', childName: '', subject: ''
     });
 
     const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
+
+    // 🚀 [CTO 패치] 학교 마스터 데이터 연동 상태
+    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [] });
+    const [schoolType, setSchoolType] = useState('high'); // 기본값 고등학교
+    const [isCustomSchool, setIsCustomSchool] = useState(false); // 리스트에 없어 직접 입력하는 모드
+
+    useEffect(() => {
+        const fetchSchools = async () => {
+            try {
+                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) setSchoolsData(docSnap.data());
+            } catch (e) { console.error("학교 리스트 로드 실패", e); }
+        };
+        fetchSchools();
+    }, []);
 
     useEffect(() => {
         let interval = null;
@@ -75,29 +91,24 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
             const message = `[목동임페리얼학원]\n회원가입 본인인증 번호는 [${generatedCode}] 입니다. 3분 이내에 입력해주세요.`;
 
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: cleanPhone,
-                message: message,
-                status: 'pending',
-                type: 'auth_code',
-                studentName: form.name || '신규가입자',
-                createdAt: serverTimestamp()
+                phoneNumber: cleanPhone, message: message, status: 'pending', type: 'auth_code', studentName: form.name || '신규가입자', createdAt: serverTimestamp()
             });
 
             setSmsAuth({ code: generatedCode, input: '', sent: true, verified: false, timer: 180 });
             alert('인증번호가 발송되었습니다. (휴대폰 문자를 확인하세요)');
-        } catch (error) {
-            setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + error.message });
-        } finally {
-            setLoading(false);
-        }
+        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + error.message }); } finally { setLoading(false); }
     };
 
     const handleVerifyCode = () => {
-        if (smsAuth.input === smsAuth.code) {
-            setSmsAuth(prev => ({ ...prev, verified: true }));
-        } else {
-            setLoginErrorModal({ isOpen: true, msg: '인증번호가 일치하지 않습니다.' });
-        }
+        if (smsAuth.input === smsAuth.code) { setSmsAuth(prev => ({ ...prev, verified: true })); } 
+        else { setLoginErrorModal({ isOpen: true, msg: '인증번호가 일치하지 않습니다.' }); }
+    };
+
+    // 🚀 [CTO 패치] 학교급에 따른 동적 학년 리스트 생성
+    const getGradeOptions = (type) => {
+        if (type === 'elementary') return ['1학년','2학년','3학년','4학년','5학년','6학년'];
+        if (type === 'middle') return ['1학년','2학년','3학년'];
+        return ['1학년','2학년','3학년','N수생'];
     };
 
     const handleSignUp = async (e) => {
@@ -105,6 +116,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
         if (!smsAuth.verified) return setLoginErrorModal({ isOpen: true, msg: '먼저 휴대폰 본인 인증을 완료해주세요.' });
         if (!form.userId || !form.password || !form.name) return setLoginErrorModal({ isOpen: true, msg: '필수 정보를 모두 입력해주세요.' });
         if (form.password.length < 6) return setLoginErrorModal({ isOpen: true, msg: '비밀번호는 6자리 이상이어야 합니다.' });
+        if (form.role === 'student' && !form.schoolName) return setLoginErrorModal({ isOpen: true, msg: '학교를 정확히 선택하거나 입력해주세요.' });
 
         setLoading(true);
         try {
@@ -120,19 +132,15 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
             const cleanPhone = form.phone.replace(/[^0-9]/g, '');
             const payload = {
                 id: safeId, userId: form.userId, name: form.name, phone: cleanPhone,
-                role: form.role, password: form.password, status: 'pending',
-                createdAt: serverTimestamp()
+                role: form.role, password: form.password, status: 'pending', createdAt: serverTimestamp()
             };
 
             if (form.role === 'student') {
                 payload.schoolName = form.schoolName;
                 payload.grade = form.grade;
                 payload.attendancePin = cleanPhone.slice(-4);
-            } else if (form.role === 'parent') {
-                payload.childName = form.childName;
-            } else if (['ta', 'lecturer'].includes(form.role)) { // 행정조교 제외
-                payload.subject = form.subject;
-            }
+            } else if (form.role === 'parent') { payload.childName = form.childName; } 
+            else if (['ta', 'lecturer'].includes(form.role)) { payload.subject = form.subject; }
 
             await setDoc(docRef, payload);
 
@@ -144,11 +152,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
             alert('가입 신청이 완료되었습니다. 데스크 승인 후 로그인 가능합니다.');
             onCancel(); 
-        } catch (error) {
-            setLoginErrorModal({ isOpen: true, msg: '가입 신청 중 오류가 발생했습니다: ' + error.message });
-        } finally {
-            setLoading(false);
-        }
+        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '가입 신청 중 오류가 발생했습니다: ' + error.message }); } finally { setLoading(false); }
     };
 
     return (
@@ -170,15 +174,14 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">이름</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" placeholder="실명 입력" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
-                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} /></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">이름</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" placeholder="실명 입력" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} /></div>
             </div>
 
-            {/* 🚀 [CTO 패치] 비밀번호 토글 기능 적용 */}
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
                 <div className="relative">
-                    <input required type={showPassword ? "text" : "password"} placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
+                    <input required type={showPassword ? "text" : "password"} placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
                     <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
                         {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                     </button>
@@ -203,29 +206,60 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 {smsAuth.verified && <div className="text-sm font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={16}/> 인증이 완료되었습니다.</div>}
             </div>
 
+            {/* 🚀 [CTO 패치] 학교 마스터 데이터 연동 이중 드롭다운 */}
             {form.role === 'student' && (
-                <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-xl border">
-                    <div><label className="block text-xs font-bold text-gray-500 mb-1">학교명</label><input required className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 임페리얼고" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} /></div>
-                    <div><label className="block text-xs font-bold text-gray-500 mb-1">학년</label><select className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
+                <div className="grid grid-cols-1 gap-3 bg-gray-50 p-3 rounded-xl border">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 선택)</label>
+                        <div className="flex gap-2">
+                            <select className="w-1/3 border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setForm({...form, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
+                                <option value="elementary">초등학교</option>
+                                <option value="middle">중학교</option>
+                                <option value="high">고등학교</option>
+                            </select>
+                            
+                            {!isCustomSchool ? (
+                                <select className="w-2/3 border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold text-sm" value={form.schoolName} onChange={e => {
+                                    if (e.target.value === 'custom_input') setIsCustomSchool(true);
+                                    else setForm({...form, schoolName: e.target.value});
+                                }}>
+                                    <option value="" className="text-gray-400">👇 학교명 선택</option>
+                                    {(schoolsData[schoolType] || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                    <option value="custom_input" className="text-blue-600 font-bold bg-blue-50">➕ 목록에 없음 (직접입력)</option>
+                                </select>
+                            ) : (
+                                <div className="w-2/3 relative">
+                                    <input required className="w-full border-2 border-blue-300 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
+                                    <button type="button" onClick={() => { setIsCustomSchool(false); setForm({...form, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500"><X size={16}/></button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학년</label>
+                        <select className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}>
+                            {getGradeOptions(schoolType).map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                    </div>
                 </div>
             )}
+            
             {form.role === 'parent' && (
                 <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1">자녀 이름 (수강생)</label>
-                    <input required className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
+                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">자녀 이름 (수강생)</label>
+                    <input required className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
                 </div>
             )}
-            {/* 🚀 [CTO 패치] 행정조교의 경우 과목 입력란을 숨김 처리 */}
             {['ta', 'lecturer'].includes(form.role) && (
                 <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1">담당 과목 (또는 분야)</label>
-                    <input className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
+                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">담당 과목 (또는 분야)</label>
+                    <input className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
                 </div>
             )}
 
             <div className="pt-2 flex flex-col gap-3">
-                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-xl font-bold transition-all">
-                    {loading ? <Loader className="animate-spin mx-auto" /> : '가입 신청하기'}
+                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-xl font-bold transition-all shadow-md">
+                    {loading ? <Loader className="animate-spin mx-auto" /> : '가입 신청 완료하기'}
                 </button>
             </div>
         </form>
@@ -235,13 +269,11 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
-
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 border border-gray-100">
-        
         {isSignUpMode ? (
             <SignUpForm onCancel={() => setIsSignUpMode(false)} setLoginErrorModal={setLoginErrorModal} />
         ) : (
@@ -256,18 +288,18 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
                 <div className="space-y-5">
                 <div>
                     <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
-                    <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+                    <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-bold" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
                 </div>
                 <div>
                     <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
                     <div className="relative">
-                    <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
+                    <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-bold" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
                     <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
                         {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
                     </button>
                     </div>
                 </div>
-                <button onClick={onLogin} className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl font-bold transition-all" disabled={isLoading}>
+                <button onClick={onLogin} className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl font-bold transition-all shadow-md" disabled={isLoading}>
                     {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
                 </button>
                 <div className="pt-2 text-center border-t border-gray-100">

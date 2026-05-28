@@ -1,7 +1,7 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: Self-Serve 회원가입 승인 대기열(Pending) 게이트키퍼 시스템 및 반려(Reject) 버튼 완벽 탑재) */
-import React, { useState, useMemo } from 'react';
+   (🚀 CTO 패치: 회원 편집 시 마스터 학교 데이터 연동 이중 드롭다운 탑재) */
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle, Bell
@@ -44,19 +44,32 @@ const UserManager = ({ currentUser }) => {
 
     const initEnrollForm = { classId: '', className: '', lecturerId: '', status: 'active', schedules: [] };
     const [enrollForm, setEnrollForm] = useState(initEnrollForm);
-
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
-
     const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
     const [isSendingSms, setIsSendingSms] = useState(false);
+
+    // 🚀 [CTO 패치] 마스터 학교 데이터 연동 상태
+    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [] });
+    const [schoolType, setSchoolType] = useState('high');
+    const [isCustomSchool, setIsCustomSchool] = useState(false);
+
+    useEffect(() => {
+        const fetchSchools = async () => {
+            try {
+                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) setSchoolsData(docSnap.data());
+            } catch(e) {}
+        };
+        fetchSchools();
+    }, []);
 
     const studentList = useMemo(() => users.filter(u => u.role === 'student' && u.status !== 'pending'), [users]);
     const pendingUsers = useMemo(() => users.filter(u => u.status === 'pending'), [users]);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
 
-    // 강제 패스워드 리셋 및 유령 계정 복구 로직
     const handleForcePasswordReset = async (user) => {
         const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상 숫자 권장)`);
         if (!newPassword) return; 
@@ -73,22 +86,13 @@ const UserManager = ({ currentUser }) => {
             const result = await resetPasswordFn({ uid: targetUid, newPassword: newPassword, email: realEmail });
             const freshAuthUid = result.data.authUid || targetUid;
 
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
-                password: newPassword,
-                authUid: freshAuthUid,
-                updatedAt: serverTimestamp()
-            }, { merge: true });
-
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { password: newPassword, authUid: freshAuthUid, updatedAt: serverTimestamp() }, { merge: true });
             showToast(`✅ 성공적으로 계정이 복구되었으며 비밀번호가 변경되었습니다!`, 'success');
-        } catch (error) {
-            showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error');
-        } finally { setLoading(false); }
+        } catch (error) { showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error'); } finally { setLoading(false); }
     };
 
-    // 대기열 가입자 승인 (정식 계정 편입) 로직
     const handleApproveUser = async (user) => {
         if (!window.confirm(`[${user.name}]님의 가입을 승인하시겠습니까?\n승인 시 즉시 로그인이 가능해집니다.`)) return;
-        
         setLoading(true);
         try {
             const safeId = encodeURIComponent(user.userId || user.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
@@ -100,116 +104,84 @@ const UserManager = ({ currentUser }) => {
                 authUid = userCredential.user.uid;
                 await signOut(secondaryAuth);
             } catch (authError) {
-                if (authError.code === 'auth/email-already-in-use') {
-                    authUid = 'legacy_verified_account';
-                } else {
-                    throw new Error("인증 서버 등록 실패: " + authError.message);
-                }
+                if (authError.code === 'auth/email-already-in-use') { authUid = 'legacy_verified_account'; } 
+                else { throw new Error("인증 서버 등록 실패: " + authError.message); }
             }
 
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
             
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
-                authUid: authUid,
-                status: targetStatus,
-                updatedAt: serverTimestamp()
-            }, { merge: true });
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() }, { merge: true });
 
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: cleanPhone,
-                    message: `[목동임페리얼학원]\n안녕하세요 ${user.name}님, 시스템 가입 승인이 완료되었습니다.\n지금부터 가입하신 아이디로 로그인하여 서비스를 이용하실 수 있습니다.`,
+                    phoneNumber: cleanPhone, message: `[목동임페리얼학원]\n안녕하세요 ${user.name}님, 시스템 가입 승인이 완료되었습니다.\n지금부터 가입하신 아이디로 로그인하여 서비스를 이용하실 수 있습니다.`,
                     status: 'pending', type: 'welcome_notice', studentName: user.name, createdAt: serverTimestamp()
                 });
             }
-
             showToast(`${user.name}님의 가입이 승인되었습니다.`, 'success');
-        } catch (error) {
-            showToast('승인 처리 중 오류 발생: ' + error.message, 'error');
-        } finally {
-            setLoading(false);
-        }
+        } catch (error) { showToast('승인 처리 중 오류 발생: ' + error.message, 'error'); } finally { setLoading(false); }
     };
 
-    // 🚀 [CTO 패치] 대기열 가입자 반려 (삭제) 로직 추가
     const handleRejectUser = async (user) => {
         if (!window.confirm(`[${user.name}]님의 가입 신청을 반려(삭제)하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
-        
         setLoading(true);
         try {
-            // DB에서 해당 유저 문서 삭제
             await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id));
-            
-            // 반려 알림 문자 발송 (선택적)
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: cleanPhone,
-                    message: `[목동임페리얼학원]\n안녕하세요 ${user.name}님, 회원가입 신청이 반려되었습니다. 학원 데스크로 문의해주시기 바랍니다.`,
+                    phoneNumber: cleanPhone, message: `[목동임페리얼학원]\n안녕하세요 ${user.name}님, 회원가입 신청이 반려되었습니다. 학원 데스크로 문의해주시기 바랍니다.`,
                     status: 'pending', type: 'reject_notice', studentName: user.name, createdAt: serverTimestamp()
                 });
             }
-
             showToast(`${user.name}님의 가입이 반려되었습니다.`, 'success');
-        } catch (error) {
-            showToast('반려 처리 중 오류 발생: ' + error.message, 'error');
-        } finally {
-            setLoading(false);
-        }
+        } catch (error) { showToast('반려 처리 중 오류 발생: ' + error.message, 'error'); } finally { setLoading(false); }
     };
 
     const handleOpenCreate = () => {
         setFormData({ 
             id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '', 
-            schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
-            attendancePin: '', status: 'attending', linkedChildrenIds: []
+            schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '', attendancePin: '', status: 'attending', linkedChildrenIds: []
         });
-        setIsEditMode(false);
-        setModalTab('basic');
-        setEnrollForm(initEnrollForm);
-        setClassSearchInput('');
-        setClassSearchQuery('');
-        setIsModalOpen(true);
+        setSchoolType('high');
+        setIsCustomSchool(false);
+        setIsEditMode(false); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
     const handleOpenEdit = (user) => {
         setFormData({ 
-            ...user, 
-            id: user.id,
-            password: user.password || '', 
-            hourlyRate: user.hourlyRate || user.hourlyWage || '', 
-            schoolName: user.schoolName || '',
-            grade: user.grade || '1학년',
-            authUid: user.authUid || '',
-            bankName: user.bankName || '',
-            accountNumber: user.accountNumber || '',
-            attendancePin: user.attendancePin || '',
-            status: user.status || 'attending',
-            linkedChildrenIds: user.linkedChildrenIds || []
+            ...user, id: user.id, password: user.password || '', hourlyRate: user.hourlyRate || user.hourlyWage || '', 
+            schoolName: user.schoolName || '', grade: user.grade || '1학년', authUid: user.authUid || '', bankName: user.bankName || '',
+            accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', linkedChildrenIds: user.linkedChildrenIds || []
         });
-        setIsEditMode(true);
-        setModalTab('basic');
-        setEnrollForm(initEnrollForm);
-        setClassSearchInput('');
-        setClassSearchQuery('');
-        setIsModalOpen(true);
+        
+        // 🚀 [CTO 패치] 학교 타입 역산 추적 로직 (드롭다운 초기화용)
+        if (user.schoolName) {
+            let foundType = 'high';
+            let isCustom = true;
+            for (const [type, arr] of Object.entries(schoolsData)) {
+                if (arr && arr.includes(user.schoolName)) { foundType = type; isCustom = false; break; }
+            }
+            if (isCustom) {
+                if (user.schoolName.includes('초')) foundType = 'elementary';
+                else if (user.schoolName.includes('중')) foundType = 'middle';
+            }
+            setSchoolType(foundType);
+            setIsCustomSchool(isCustom);
+        } else { setSchoolType('high'); setIsCustomSchool(false); }
+
+        setIsEditMode(true); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
     const handleAutoPin = (phoneVal) => {
         const cleanVal = phoneVal || '';
         const numOnly = cleanVal.replace(/[^0-9]/g, '');
-        if (numOnly.length < 4) {
-            setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' }));
-            return;
-        }
+        if (numOnly.length < 4) { setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' })); return; }
         const basePin = numOnly.slice(-4);
         const isDuplicate = users.some(u => u.role === 'student' && u.attendancePin === basePin && u.id !== formData.id);
-        if (isDuplicate) {
-            setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' }));
-        } else {
-            setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: basePin }));
-        }
+        if (isDuplicate) { setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: '' })); } 
+        else { setFormData(prev => ({ ...prev, phone: cleanVal, attendancePin: basePin })); }
     };
 
     const toggleChildLink = (childId) => {
@@ -226,11 +198,7 @@ const UserManager = ({ currentUser }) => {
         
         setLoading(true);
         try {
-            const payload = {
-                name: formData.name, userId: formData.userId, role: activeTab === 'pending' ? formData.role : activeTab,
-                phone: formData.phone || '', updatedAt: serverTimestamp()
-            };
-            
+            const payload = { name: formData.name, userId: formData.userId, role: activeTab === 'pending' ? formData.role : activeTab, phone: formData.phone || '', updatedAt: serverTimestamp() };
             const currentRole = payload.role;
 
             if (currentRole === 'student') { 
@@ -249,7 +217,6 @@ const UserManager = ({ currentUser }) => {
             if (isEditMode) {
                 if (formData.password) payload.password = formData.password;
                 if (formData.authUid) payload.authUid = formData.authUid;
-                
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload, { merge: true });
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
             } else {
@@ -291,16 +258,11 @@ const UserManager = ({ currentUser }) => {
         if (!classId) { setEnrollForm(initEnrollForm); return; }
         const cls = classes.find(c => c.id === classId);
         if (!cls) return;
-
-        const mappedSchedules = (cls.schedules || []).map(s => ({
-            dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime, room: s.room, callTime: s.startTime 
-        }));
+        const mappedSchedules = (cls.schedules || []).map(s => ({ dayOfWeek: s.dayOfWeek, startTime: s.startTime, endTime: s.endTime, room: s.room, callTime: s.startTime }));
         setEnrollForm({ classId: cls.id, className: cls.name, lecturerId: cls.lecturerId, status: 'active', schedules: mappedSchedules });
     };
 
-    const handleCallTimeChange = (index, value) => {
-        setEnrollForm(prev => { const arr = [...prev.schedules]; arr[index].callTime = value; return { ...prev, schedules: arr }; });
-    };
+    const handleCallTimeChange = (index, value) => { setEnrollForm(prev => { const arr = [...prev.schedules]; arr[index].callTime = value; return { ...prev, schedules: arr }; }); };
 
     const handleSaveEnrollment = async () => {
         if (!enrollForm.classId) return alert('배정할 반을 선택해주세요.');
@@ -327,7 +289,6 @@ const UserManager = ({ currentUser }) => {
                     else if (formData.phone) targetPhone = formData.phone;
 
                     const scheduleStr = enrollForm.schedules.map(s => `${s.dayOfWeek} ${s.startTime}~${s.endTime}`).join(', ');
-                    
                     const welcomeMsg = `[목동임페리얼학원]\n안녕하세요. 목동임페리얼학원 입학을 진심으로 환영합니다!\n${formData.name} 학생의 첫 등원 일정 및 시간표를 안내해 드립니다.\n\n[수업 정보]\n- 수강 수업 : ${enrollForm.className}\n- 수업 시간 : ${scheduleStr}\n- 첫 등원 일자 : (날짜를 입력해주세요)\n\n원활한 수업 진행을 위해 지각하지 않도록 지도 부탁드립니다.\n\n처음 등원하는 학생들을 위한 학원 이용 가이드를 아래 링크에 첨부합니다. 어색하지 않은 첫 등원이 될 수 있도록 꼭 확인 부탁드립니다.\n🔗 학원 이용 가이드: https://blog.naver.com/imperialsys01/223922116856\n\n감사합니다.`;
                     const textbookMsg = `[목동임페리얼학원]\n${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 드립니다.\n\n[교재 정보]\n- (교재명 1)\n- (교재명 2)\n\n원활한 진도 진행을 위해 첫 수업 전까지 해당 교재를 꼭 지참할 수 있도록 챙겨주시면 감사하겠습니다.`;
 
@@ -354,6 +315,13 @@ const UserManager = ({ currentUser }) => {
     const filteredUsers = activeTab === 'pending' 
         ? pendingUsers.filter(u => u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery))
         : users.filter(u => u.role === activeTab && u.status !== 'pending' && (u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery)));
+
+    // 🚀 [CTO 패치] 동적 학년 리스트 생성 헬퍼
+    const getGradeOptions = (type) => {
+        if (type === 'elementary') return ['1학년','2학년','3학년','4학년','5학년','6학년'];
+        if (type === 'middle') return ['1학년','2학년','3학년'];
+        return ['1학년','2학년','3학년','N수생'];
+    };
 
     if (loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
 
@@ -470,7 +438,6 @@ const UserManager = ({ currentUser }) => {
                                         )}
                                     </td>
                                     
-                                    {/* 🚀 [CTO 패치] 승인 및 반려 버튼을 나란히 배치 */}
                                     <td className="p-4 text-center">
                                         {activeTab === 'pending' ? (
                                             <div className="flex justify-center gap-2">
@@ -530,10 +497,42 @@ const UserManager = ({ currentUser }) => {
                             
                             {(activeTab === 'student' || (activeTab === 'pending' && formData.role === 'student')) && (
                                 <>
-                                    <div className="grid grid-cols-2 gap-4 p-4 bg-blue-50 rounded-xl border border-blue-100">
-                                        <div><label className="block text-xs font-bold text-blue-800 mb-1">학교명</label><input className="w-full border p-2 rounded-lg bg-white outline-none" placeholder="임페리얼고" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} /></div>
-                                        <div><label className="block text-xs font-bold text-blue-800 mb-1">학년</label><select className="w-full border p-2 rounded-lg bg-white outline-none" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
+                                    {/* 🚀 [CTO 패치] 학교 마스터 데이터 연동 이중 드롭다운 (편집/생성 모달) */}
+                                    <div className="grid grid-cols-1 gap-3 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                        <div>
+                                            <label className="block text-xs font-bold text-blue-800 mb-1.5">학교 정보</label>
+                                            <div className="flex gap-2">
+                                                <select className="w-1/3 border p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setFormData({...formData, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
+                                                    <option value="elementary">초등학교</option>
+                                                    <option value="middle">중학교</option>
+                                                    <option value="high">고등학교</option>
+                                                </select>
+                                                
+                                                {!isCustomSchool ? (
+                                                    <select className="w-2/3 border p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={formData.schoolName} onChange={e => {
+                                                        if (e.target.value === 'custom_input') setIsCustomSchool(true);
+                                                        else setFormData({...formData, schoolName: e.target.value});
+                                                    }}>
+                                                        <option value="" className="text-gray-400">👇 학교명 선택</option>
+                                                        {(schoolsData[schoolType] || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                                        <option value="custom_input" className="text-blue-600 font-bold bg-blue-50">➕ 목록에 없음 (직접입력)</option>
+                                                    </select>
+                                                ) : (
+                                                    <div className="w-2/3 relative">
+                                                        <input required className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />
+                                                        <button type="button" onClick={() => { setIsCustomSchool(false); setFormData({...formData, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500"><X size={16}/></button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-blue-800 mb-1.5">학년</label>
+                                            <select className="w-full border p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold" value={formData.grade} onChange={e => setFormData({...formData, grade: e.target.value})}>
+                                                {getGradeOptions(schoolType).map(g => <option key={g} value={g}>{g}</option>)}
+                                            </select>
+                                        </div>
                                     </div>
+
                                     <div className="grid grid-cols-2 gap-4">
                                         <div><label className="block text-xs font-bold text-indigo-800 mb-1">출결 PIN (4자리)</label><input type="text" maxLength={4} className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold text-indigo-600 bg-indigo-50" value={formData.attendancePin} onChange={e => setFormData({...formData, attendancePin: e.target.value.replace(/[^0-9]/g, '')})} placeholder="뒷자리 자동추출"/></div>
                                         <div><label className="block text-xs font-bold text-gray-700 mb-1">재원 상태</label><select className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}><option value="attending">재원중 (정상)</option><option value="resting">휴원 (잠시 쉼)</option><option value="dropped">퇴원 (다니지 않음)</option><option value="pending">승인 대기</option></select></div>
