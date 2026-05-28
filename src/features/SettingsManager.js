@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 재원생 명부 + 기출 아카이브 + 내신 연구소 3중 병렬 스캔 마이그레이션 엔진 탑재) */
+   (🚀 CTO 패치: integrated_exams(통합 DB)까지 포함한 완벽한 4중 병렬 학교 스캔 엔진 탑재) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, updateDoc, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -123,15 +123,16 @@ const SettingsManager = ({ currentUser }) => {
         }));
     };
 
-    // 🚀 [CTO 3중 병렬 스캔 패치] Users + ExamArchive + SchoolStrategies 동시 스캔
+    // 🚀 [CTO 패치] 통합 DB(integrated_exams)를 포함한 4중 병렬 스캔 엔진
     const runSchoolMigration = async () => {
-        if (!window.confirm("현재 시스템에 등록된 1) 재원생 명부, 2) 기출 아카이브, 3) 내신 연구소의 모든 데이터를 3중 병렬 스캔합니다.\n\n각 데이터베이스에 입력된 학교 이름들을 추출하여 마스터 데이터로 자동 분류 및 병합합니다. (중복 자동 제거)\n\n실행하시겠습니까?")) return;
+        if (!window.confirm("현재 시스템에 등록된 1) 재원생 명부, 2) 통합 기출/내신 DB, 3) 구형 레거시 DB의 모든 데이터를 병렬 스캔합니다.\n\n각 데이터베이스에 입력된 학교 이름들을 추출하여 마스터 데이터로 자동 분류 및 병합합니다. (중복 자동 제거)\n\n실행하시겠습니까?")) return;
         
         setSchoolMigrationProcessing(true);
         try {
-            // 3개의 컬렉션을 동시에 병렬로 긁어옵니다. (속도 최적화)
-            const [usersSnap, archiveSnap, strategySnap] = await Promise.all([
+            // 4개의 컬렉션을 동시에 긁어옵니다. (integrated_exams 가 핵심입니다!)
+            const [usersSnap, integratedSnap, archiveSnap, strategySnap] = await Promise.all([
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')),
+                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams')),
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive')),
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'school_strategies'))
             ]);
@@ -139,9 +140,8 @@ const SettingsManager = ({ currentUser }) => {
             const ele = new Set(schools.elementary || []);
             const mid = new Set(schools.middle || []);
             const high = new Set(schools.high || []);
-            let foundCount = 0;
+            let scannedCount = 0;
 
-            // 학교 분류 헬퍼 함수
             const processSchoolName = (rawName) => {
                 if (!rawName) return;
                 const sn = rawName.trim();
@@ -149,8 +149,8 @@ const SettingsManager = ({ currentUser }) => {
                 
                 if (sn.includes('초') || sn.includes('초등')) ele.add(sn);
                 else if (sn.includes('중') || sn.includes('중학')) mid.add(sn);
-                else high.add(sn); // 초/중이 아니면 기본 고등학교로 편입
-                foundCount++;
+                else high.add(sn); // 초/중이 아니면 기본적으로 고등학교로 편입
+                scannedCount++;
             };
 
             // 1. 재원생 명부 스캔
@@ -161,17 +161,16 @@ const SettingsManager = ({ currentUser }) => {
                 }
             });
 
-            // 2. 기출 아카이브 스캔
-            archiveSnap.forEach(docSnap => {
-                const archive = docSnap.data();
-                if (archive.schoolName) processSchoolName(archive.schoolName);
-            });
+            // 2. 통합 DB 및 레거시 DB 스캔 (schoolName과 school 필드를 모두 검사)
+            const scanExamData = (docSnap) => {
+                const data = docSnap.data();
+                const sName = data.schoolName || data.school;
+                if (sName) processSchoolName(sName);
+            };
 
-            // 3. 내신 연구소 (전략) 스캔
-            strategySnap.forEach(docSnap => {
-                const strategy = docSnap.data();
-                if (strategy.schoolName) processSchoolName(strategy.schoolName);
-            });
+            integratedSnap.forEach(scanExamData);
+            archiveSnap.forEach(scanExamData);
+            strategySnap.forEach(scanExamData);
 
             const newSchools = {
                 elementary: [...ele].sort((a,b)=>a.localeCompare(b)),
@@ -181,7 +180,7 @@ const SettingsManager = ({ currentUser }) => {
 
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools'), newSchools);
             setSchools(newSchools);
-            alert(`✅ 총 ${foundCount}건의 학교 데이터(학생+아카이브+연구소)를 스캔하여 마스터 목록으로 완벽하게 병합했습니다!`);
+            alert(`✅ 총 ${scannedCount}건의 문서(명부+통합 시험DB)를 스캔하여 학교 목록 완벽 병합을 완료했습니다!`);
         } catch (e) {
             alert('마이그레이션 실패: ' + e.message);
         } finally {
@@ -405,10 +404,10 @@ const SettingsManager = ({ currentUser }) => {
                         <div className="flex justify-between items-center mb-2">
                             <h3 className="font-bold text-lg text-emerald-900 flex items-center gap-2"><RefreshCw size={20}/> 스마트 학교명 스캔 및 병합</h3>
                         </div>
-                        <p className="text-sm text-emerald-700 mb-4">재원생 명부, 기출 아카이브, 내신 연구소에 입력된 학교명을 모두 스캔하여 초/중/고 마스터 목록으로 자동 병합합니다.</p>
+                        <p className="text-sm text-emerald-700 mb-4">재원생 명부 및 통합 기출/내신 DB(integrated_exams)에 입력된 학교명을 모두 스캔하여 초/중/고 마스터 목록으로 완벽하게 자동 병합합니다.</p>
                         <Button variant="primary" className="bg-emerald-600 hover:bg-emerald-700 font-bold" onClick={runSchoolMigration} disabled={schoolMigrationProcessing}>
                             {schoolMigrationProcessing ? <Loader className="animate-spin inline-block mr-2" size={16}/> : <Building2 size={16} className="inline mr-2"/>}
-                            모든 DB 3중 스캔 및 목록 자동 동기화
+                            모든 DB 4중 스캔 및 목록 자동 동기화
                         </Button>
                     </Card>
 
