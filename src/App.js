@@ -1,12 +1,12 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 스마트 콤보박스(즐겨찾기 상단 핀 + 실시간 키워드 자동완성 검색) 완벽 탑재 풀버전) */
+   (🚀 CTO 패치: 스마트 콤보박스 + 신규 '조교 관제 센터' 독립 메뉴 및 라우팅 추가 완료) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -14,7 +14,9 @@ import { auth, db } from './firebase';
  
 import { DataProvider, useData } from './contexts/DataContext';
 
+// 🚀 모든 모듈 정상 Import (기존 클리닉 대시보드 보존 + 신규 조교 관제 센터 추가)
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
+const ClinicTaskManager = React.lazy(() => import('./features/ClinicTaskManager')); // 신규 추가
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
@@ -42,7 +44,7 @@ const ReportWrapper = () => {
 };
 
 // ============================================================================
-// 🚀 [신규 컴포넌트] 스마트 콤보박스 (검색 + 즐겨찾기 상단 핀 고정)
+// 스마트 콤보박스 (검색 + 즐겨찾기 상단 핀 고정)
 // ============================================================================
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -413,6 +415,17 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
+                {/* 🚀 [신규 추가] 조교 관제 센터 대시보드 카드 */}
+                {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
+                    <div onClick={() => navigate('/clinic-tasks')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="bg-cyan-100 p-3 rounded-xl text-cyan-600 group-hover:bg-cyan-600 group-hover:text-white transition-colors"><ClipboardList size={32} /></div>
+                            <h2 className="text-xl font-bold text-gray-800">조교 관제 센터</h2>
+                        </div>
+                        <p className="text-gray-500 leading-relaxed">클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 실시간으로 기록 및 보고합니다.</p>
+                    </div>
+                )}
+
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -484,7 +497,7 @@ const Dashboard = ({ currentUser }) => {
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
+                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터 (예약)</h2>
                     </div>
                     <p className="text-gray-500 leading-relaxed">
                         {['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교들의 스케줄을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
@@ -543,6 +556,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // 🚀 메뉴 리스트에 기존 클리닉(예약)과 신규 조교 관제 센터 동시 배치
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
@@ -552,7 +566,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
     { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
-    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/clinic', label: '클리닉 센터 (예약)', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/clinic-tasks', label: '조교 관제 센터', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] }, // 🚀 신규 독립 메뉴
     { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
@@ -628,7 +643,13 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
+                        
+                        {/* 🚀 기존 클리닉 예약 메뉴 보존 */}
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
+                        
+                        {/* 🚀 신규 조교 관제 센터 라우트 연결 */}
+                        <Route path="/clinic-tasks" element={['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) ? <ClinicTaskManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
                         {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
