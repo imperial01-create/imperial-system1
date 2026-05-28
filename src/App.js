@@ -4,13 +4,12 @@ import {
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
  
-
 // 글로벌 데이터 엔진
 import { DataProvider, useData } from './contexts/DataContext';
 
@@ -41,44 +40,239 @@ const ReportWrapper = () => {
   return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
 };
 
+// 🚀 [새로운 기능] 커스텀 SMS 본인인증(OTP) 기반 회원가입 폼
+const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
+    const [loading, setLoading] = useState(false);
+    const [form, setForm] = useState({
+        role: 'student', userId: '', password: '', name: '', phone: '',
+        schoolName: '', grade: '1학년', childName: '', subject: ''
+    });
+
+    const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
+
+    useEffect(() => {
+        let interval = null;
+        if (smsAuth.timer > 0 && !smsAuth.verified) {
+            interval = setInterval(() => {
+                setSmsAuth(prev => ({ ...prev, timer: prev.timer - 1 }));
+            }, 1000);
+        } else if (smsAuth.timer === 0 && smsAuth.sent && !smsAuth.verified) {
+            setSmsAuth(prev => ({ ...prev, code: '', sent: false }));
+            setLoginErrorModal({ isOpen: true, msg: "인증 시간이 만료되었습니다. 다시 시도해주세요." });
+        }
+        return () => clearInterval(interval);
+    }, [smsAuth.timer, smsAuth.sent, smsAuth.verified, setLoginErrorModal]);
+
+    const handleSendAuthCode = async () => {
+        const cleanPhone = form.phone.replace(/[^0-9]/g, '');
+        if (cleanPhone.length < 10) return setLoginErrorModal({ isOpen: true, msg: '유효한 휴대폰 번호를 입력해주세요.' });
+
+        setLoading(true);
+        try {
+            const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+            const message = `[목동임페리얼학원]\n회원가입 본인인증 번호는 [${generatedCode}] 입니다. 3분 이내에 입력해주세요.`;
+
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                phoneNumber: cleanPhone,
+                message: message,
+                status: 'pending',
+                type: 'auth_code',
+                studentName: form.name || '신규가입자',
+                createdAt: serverTimestamp()
+            });
+
+            setSmsAuth({ code: generatedCode, input: '', sent: true, verified: false, timer: 180 });
+            alert('인증번호가 발송되었습니다. (휴대폰 문자를 확인하세요)');
+        } catch (error) {
+            setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + error.message });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleVerifyCode = () => {
+        if (smsAuth.input === smsAuth.code) {
+            setSmsAuth(prev => ({ ...prev, verified: true }));
+        } else {
+            setLoginErrorModal({ isOpen: true, msg: '인증번호가 일치하지 않습니다.' });
+        }
+    };
+
+    const handleSignUp = async (e) => {
+        e.preventDefault();
+        if (!smsAuth.verified) return setLoginErrorModal({ isOpen: true, msg: '먼저 휴대폰 본인 인증을 완료해주세요.' });
+        if (!form.userId || !form.password || !form.name) return setLoginErrorModal({ isOpen: true, msg: '필수 정보를 모두 입력해주세요.' });
+        if (form.password.length < 6) return setLoginErrorModal({ isOpen: true, msg: '비밀번호는 6자리 이상이어야 합니다.' });
+
+        setLoading(true);
+        try {
+            const safeId = encodeURIComponent(form.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+            const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId);
+            
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                setLoading(false);
+                return setLoginErrorModal({ isOpen: true, msg: '이미 사용 중인 아이디입니다.' });
+            }
+
+            const cleanPhone = form.phone.replace(/[^0-9]/g, '');
+            const payload = {
+                id: safeId, userId: form.userId, name: form.name, phone: cleanPhone,
+                role: form.role, password: form.password, status: 'pending', // 🚀 대기열 상태로 저장
+                createdAt: serverTimestamp()
+            };
+
+            if (form.role === 'student') {
+                payload.schoolName = form.schoolName;
+                payload.grade = form.grade;
+                payload.attendancePin = cleanPhone.slice(-4);
+            } else if (form.role === 'parent') {
+                payload.childName = form.childName;
+            } else if (['ta', 'lecturer', 'admin_assistant'].includes(form.role)) {
+                payload.subject = form.subject;
+            }
+
+            await setDoc(docRef, payload);
+
+            // 관리자에게 알림 문자 발송
+            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                phoneNumber: '01012345678', // 필요시 원장님 번호로 교체 가능
+                message: `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${form.name}\n- 역할: ${form.role}\n데스크에서 승인 처리해주세요.`,
+                status: 'pending', type: 'system_alert', studentName: '시스템', createdAt: serverTimestamp()
+            });
+
+            alert('가입 신청이 완료되었습니다. 데스크 승인 후 로그인 가능합니다.');
+            onCancel(); 
+        } catch (error) {
+            setLoginErrorModal({ isOpen: true, msg: '가입 신청 중 오류가 발생했습니다: ' + error.message });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <form onSubmit={handleSignUp} className="space-y-4 animate-in fade-in">
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-900">시스템 회원가입</h2>
+                <button type="button" onClick={onCancel} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200"><X size={20}/></button>
+            </div>
+            
+            <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">가입 유형</label>
+                <select className="w-full border rounded-xl p-3 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-bold" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
+                    <option value="student">학생</option>
+                    <option value="parent">학부모</option>
+                    <option value="ta">수업조교</option>
+                    <option value="admin_assistant">행정조교</option>
+                    <option value="lecturer">강사</option>
+                </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">이름</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" placeholder="실명 입력" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
+                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} /></div>
+            </div>
+
+            <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label><input required type="password" placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" value={form.password} onChange={e => setForm({...form, password: e.target.value})} /></div>
+
+            <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
+                <label className="block text-xs font-bold text-blue-800 flex items-center gap-1"><Phone size={14}/> 휴대폰 본인 인증</label>
+                <div className="flex gap-2">
+                    <input className="w-full border p-3 rounded-xl outline-none font-bold focus:border-blue-500 bg-white" placeholder="01012345678 (-없이)" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} disabled={smsAuth.verified} />
+                    <button type="button" onClick={handleSendAuthCode} disabled={loading || smsAuth.verified || smsAuth.timer > 0} className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold px-4 disabled:opacity-50 transition-colors">{smsAuth.timer > 0 ? '재전송' : '인증번호 받기'}</button>
+                </div>
+                {smsAuth.sent && !smsAuth.verified && (
+                    <div className="flex gap-2 animate-in slide-in-from-top-2">
+                        <div className="relative w-full">
+                            <input className="w-full border-2 border-indigo-200 p-3 rounded-xl outline-none font-black text-center tracking-widest focus:border-indigo-500 bg-white" placeholder="인증번호 6자리" value={smsAuth.input} onChange={e => setSmsAuth({...smsAuth, input: e.target.value})} />
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-rose-500 font-bold text-sm flex items-center gap-1"><Clock size={14}/> {Math.floor(smsAuth.timer / 60)}:{String(smsAuth.timer % 60).padStart(2, '0')}</div>
+                        </div>
+                        <button type="button" onClick={handleVerifyCode} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold px-4 transition-colors">확인</button>
+                    </div>
+                )}
+                {smsAuth.verified && <div className="text-sm font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={16}/> 인증이 완료되었습니다.</div>}
+            </div>
+
+            {form.role === 'student' && (
+                <div className="grid grid-cols-2 gap-3 bg-gray-50 p-3 rounded-xl border">
+                    <div><label className="block text-xs font-bold text-gray-500 mb-1">학교명</label><input required className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 임페리얼고" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} /></div>
+                    <div><label className="block text-xs font-bold text-gray-500 mb-1">학년</label><select className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
+                </div>
+            )}
+            {form.role === 'parent' && (
+                <div className="bg-gray-50 p-3 rounded-xl border">
+                    <label className="block text-xs font-bold text-gray-500 mb-1">자녀 이름 (수강생)</label>
+                    <input required className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
+                </div>
+            )}
+            {['ta', 'lecturer', 'admin_assistant'].includes(form.role) && (
+                <div className="bg-gray-50 p-3 rounded-xl border">
+                    <label className="block text-xs font-bold text-gray-500 mb-1">담당 과목 (또는 분야)</label>
+                    <input className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 수학, 국어, 행정지원" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
+                </div>
+            )}
+
+            <div className="pt-2 flex flex-col gap-3">
+                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-xl font-bold transition-all">
+                    {loading ? <Loader className="animate-spin mx-auto" /> : '가입 신청하기'}
+                </button>
+            </div>
+        </form>
+    );
+};
+
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
+  const [isSignUpMode, setIsSignUpMode] = useState(false); // 🚀 회원가입 모드 토글 상태
+
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 border border-gray-100">
-        <div className="text-center mb-8">
-          <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
-            <span className="text-2xl font-bold">I</span>
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
-          <p className="text-gray-500 mt-2">학생과 학부모를 위한 프리미엄 관리</p>
-        </div>
-        <div className="space-y-5">
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
-            <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
-            <div className="relative">
-              <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
-              <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
-                {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
-              </button>
-            </div>
-          </div>
-          <button onClick={onLogin} className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl font-bold transition-all" disabled={isLoading}>
-            {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
-          </button>
-        </div>
+        
+        {isSignUpMode ? (
+            <SignUpForm onCancel={() => setIsSignUpMode(false)} setLoginErrorModal={setLoginErrorModal} />
+        ) : (
+            <>
+                <div className="text-center mb-8">
+                <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
+                    <span className="text-2xl font-bold">I</span>
+                </div>
+                <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
+                <p className="text-gray-500 mt-2">학생과 학부모를 위한 프리미엄 관리</p>
+                </div>
+                <div className="space-y-5">
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
+                    <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
+                    <div className="relative">
+                    <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
+                    <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
+                        {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
+                    </button>
+                    </div>
+                </div>
+                <button onClick={onLogin} className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl font-bold transition-all" disabled={isLoading}>
+                    {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
+                </button>
+                <div className="pt-2 text-center border-t border-gray-100">
+                    <button type="button" onClick={() => setIsSignUpMode(true)} className="text-sm font-bold text-blue-600 hover:text-blue-800 transition-colors">새로 오셨나요? 회원가입 하기</button>
+                </div>
+                </div>
+            </>
+        )}
       </div>
+
       {loginErrorModal.isOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
             <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
                 <div className="flex flex-col items-center text-center space-y-4">
                     <div className="bg-red-50 p-4 rounded-full text-red-500"><AlertCircle size={48} /></div>
-                    <h3 className="text-xl font-bold">{loginErrorModal.msg}</h3>
+                    <h3 className="text-xl font-bold leading-relaxed whitespace-pre-wrap">{loginErrorModal.msg}</h3>
                     <button className="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold transition-colors" onClick={() => setLoginErrorModal({ isOpen: false, msg: '' })}>확인</button>
                 </div>
             </div>
@@ -419,6 +613,12 @@ const AppContent = () => {
               }
               
               if(docData) {
+                  // 🚀 [새로운 기능 결합] 가입 승인 대기(Pending) 상태 체크 로직
+                  if (docData.status === 'pending') {
+                      setLoginProcessing(false);
+                      return setLoginErrorModal({ isOpen: true, msg: '가입 승인이 대기 중인 계정입니다.\n\n학원 데스크에서 승인을 완료해야 로그인이 가능합니다.' });
+                  }
+
                   if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
 
                   const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
