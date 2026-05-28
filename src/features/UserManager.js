@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 스마트 콤보박스(검색 + 핀 고정) 모달 탑재) */
+   (🚀 CTO 패치: 스마트 콤보박스(검색 + 핀 고정) 모달 탑재 풀버전) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -15,7 +15,7 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 스마트 콤보박스
+// 🚀 [신규 컴포넌트] 스마트 콤보박스 (UserManager 내부용)
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
@@ -563,7 +563,7 @@ const UserManager = ({ currentUser }) => {
                             
                             {(activeTab === 'student' || (activeTab === 'pending' && formData.role === 'student')) && (
                                 <>
-                                    {/* 🚀 [CTO 패치] 스마트 콤보박스 연동 */}
+                                    {/* 🚀 [CTO 패치] 스마트 콤보박스 (관리자용) */}
                                     <div className="grid grid-cols-1 gap-3 bg-blue-50 p-4 rounded-xl border border-blue-100">
                                         <div>
                                             <label className="block text-xs font-bold text-blue-800 mb-1.5">학교 정보 (목록에서 검색/선택)</label>

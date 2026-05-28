@@ -1,5 +1,5 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 스마트 콤보박스(즐겨찾기 상단 핀 + 실시간 키워드 검색)가 적용된 가입 UI) */
+   (🚀 CTO 패치: 스마트 콤보박스(즐겨찾기 상단 핀 + 실시간 키워드 자동완성 검색) 완벽 탑재 풀버전) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -42,7 +42,7 @@ const ReportWrapper = () => {
 };
 
 // ============================================================================
-// 🚀 [신규 컴포넌트] 스마트 콤보박스 (검색 + 즐겨찾기 상단 핀)
+// 🚀 [신규 컴포넌트] 스마트 콤보박스 (검색 + 즐겨찾기 상단 핀 고정)
 // ============================================================================
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -51,7 +51,6 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
     const schools = schoolsData[schoolType] || [];
     const favorites = schoolsData.favorites || [];
     
-    // 검색어 필터링 및 즐겨찾기 분리
     const pinned = schools.filter(s => favorites.includes(s) && s.includes(search));
     const others = schools.filter(s => !favorites.includes(s) && s.includes(search));
 
@@ -66,7 +65,6 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
             
             {isOpen && (
                 <>
-                    {/* 바탕화면 클릭 시 닫히도록 하는 투명 백드롭 */}
                     <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
                     
                     <div className="absolute z-50 w-full mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl max-h-72 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
