@@ -1,15 +1,15 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
    학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다. 
-   (🚀 CTO 패치: 클래스 개설/수정 시 '과목' 명시적 할당 기능 추가 완료) */
+   (🚀 CTO 패치: 기존 CSV 동기화 및 유튜브 다중 링크 기능을 보존하면서, '클리닉 조교 업무 지시 연동' 기능을 신규 통합했습니다.) */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
-    FileText, Upload, Clock, Calendar, ChevronDown, AlertTriangle
+    FileText, Upload, Clock, Calendar, ChevronDown, AlertTriangle, ClipboardList
 } from 'lucide-react';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
-    query, where, onSnapshot, serverTimestamp, writeBatch 
+    query, where, onSnapshot, serverTimestamp, writeBatch, getDocs
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
@@ -134,6 +134,14 @@ const LectureManagementPanel = ({ selectedClass }) => {
     });
     const [completions, setCompletions] = useState([]);
 
+    // 🚀 [신규 기능] 클리닉 지시 상태 스태시
+    const [isClinicModalOpen, setIsClinicModalOpen] = useState(false);
+    const [clinicTargetStudent, setClinicTargetStudent] = useState('');
+    const [clinicTargetDate, setClinicTargetDate] = useState(new Date().toISOString().split('T')[0]);
+    const [clinicDayTotalCount, setClinicDayTotalCount] = useState(0);
+    const [clinicItems, setClinicItems] = useState(['']);
+    const [isClinicSaving, setIsClinicSaving] = useState(false);
+
     const studentsInClass = useMemo(() => {
         if (!selectedClass?.id) return [];
         const activeStudentIds = (enrollments || []).filter(e => e?.classId === selectedClass.id && e?.status === 'active').map(e => e.studentId);
@@ -163,6 +171,59 @@ const LectureManagementPanel = ({ selectedClass }) => {
         const unsub = onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
         return () => unsub();
     }, [selectedDate, currentLectures.length]);
+
+    // 🚀 [신규 기능] 특정 날짜에 예약된 원내 클리닉 학생 총합 실시간 조회
+    useEffect(() => {
+        if (!isClinicModalOpen) return;
+        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_tasks'), where('targetDate', '==', clinicTargetDate));
+        getDocs(q).then(snap => setClinicDayTotalCount(snap.size)).catch(err => console.error(err));
+    }, [clinicTargetDate, isClinicModalOpen]);
+
+    const handleOpenClinicModal = () => {
+        setClinicTargetStudent(studentsInClass[0]?.id || '');
+        setClinicTargetDate(new Date().toISOString().split('T')[0]);
+        setClinicItems(['']);
+        setIsClinicModalOpen(true);
+    };
+
+    const handleSaveClinicTask = async () => {
+        const filteredItems = clinicItems.filter(i => i.trim() !== '');
+        if (!clinicTargetStudent) return alert('대상 학생을 선택해주세요.');
+        if (filteredItems.length === 0) return alert('최소 1개 이상의 과제/미션을 추가해주세요.');
+
+        setIsClinicSaving(true);
+        try {
+            const studentObj = studentsInClass.find(s => s.id === clinicTargetStudent);
+            const docId = `${clinicTargetStudent}_${clinicTargetDate}_${selectedClass.id}`;
+            
+            const taskPayload = {
+                studentId: clinicTargetStudent,
+                studentName: studentObj?.name || '미지정',
+                classId: selectedClass.id,
+                className: selectedClass.name,
+                lecturerId: selectedClass.lecturerId,
+                targetDate: clinicTargetDate,
+                items: filteredItems.map(content => ({ taskContent: content, isCompleted: false, incompleteDetails: '' })),
+                callStatus: 'pending',
+                attendanceStatus: 'waiting',
+                finalComment: '',
+                updatedAt: serverTimestamp()
+            };
+
+            // 문서가 존재하면 업데이트, 없으면 신규 생성
+            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_tasks', docId), taskPayload)
+                .catch(async () => {
+                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_tasks'), { ...taskPayload, createdAt: serverTimestamp() });
+                });
+
+            alert(`${studentObj?.name} 학생에게 클리닉 임무가 배정되어 조교 관리 창으로 인수인계되었습니다.`);
+            setIsClinicModalOpen(false);
+        } catch (e) {
+            alert('클리닉 배정 실패: ' + e.message);
+        } finally {
+            setIsClinicSaving(false);
+        }
+    };
 
     const handleOpenModal = (lecture = null) => {
         if (lecture) {
@@ -215,7 +276,15 @@ const LectureManagementPanel = ({ selectedClass }) => {
                         <PenTool size={18} className="text-blue-600"/> 
                         {selectedDate.split('-')[2]}일 강의 목록
                     </h3>
-                    <Button size="sm" onClick={() => handleOpenModal()} icon={Plus}>강의 일지 작성</Button>
+                    <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={handleOpenClinicModal} icon={ClipboardList} className="border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100 hidden md:flex">개별 클리닉 지시</Button>
+                        <Button size="sm" onClick={() => handleOpenModal()} icon={Plus}>강의 일지 작성</Button>
+                    </div>
+                </div>
+
+                {/* 모바일 버전 개별 클리닉 버튼 노출 */}
+                <div className="block md:hidden">
+                     <Button size="sm" variant="outline" onClick={handleOpenClinicModal} icon={ClipboardList} className="w-full border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100">개별 클리닉 지시</Button>
                 </div>
 
                 <div className="block md:hidden space-y-3">
@@ -303,6 +372,45 @@ const LectureManagementPanel = ({ selectedClass }) => {
                 </div>
             </div>
 
+            {/* 🚀 [신규 추가] 개별 클리닉/보충 지시 모달 */}
+            <Modal isOpen={isClinicModalOpen} onClose={() => setIsClinicModalOpen(false)} title={`[${selectedClass.name}] 개별 클리닉/보충 지시`}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-gray-600 mb-1 block">대상 학생 선택</label>
+                        <select className="w-full border p-3 rounded-xl bg-white outline-none focus:ring-2 focus:ring-indigo-500 font-bold" value={clinicTargetStudent} onChange={e => setClinicTargetStudent(e.target.value)}>
+                            {studentsInClass.map(s => <option key={s.id} value={s.id}>{s.name} 학생</option>)}
+                        </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                        <div>
+                            <label className="text-xs font-bold text-gray-600 mb-1 block">보충 수행 날짜</label>
+                            <input type="date" className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold" value={clinicTargetDate} onChange={e => setClinicTargetDate(e.target.value)} />
+                        </div>
+                        <div className="bg-gray-50 border p-3 rounded-xl mt-4 flex items-center gap-2">
+                            <Users className="text-indigo-600 shrink-0" size={18} />
+                            <div>
+                                <div className="text-[10px] font-bold text-gray-400">당일 원내 총 예약</div>
+                                <div className="text-sm font-black text-gray-800"><span className="text-indigo-600">{clinicDayTotalCount}</span> 명 대기 중</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-gray-600 mb-1.5 flex justify-between">항목별 클리닉 임무 명세 <button onClick={() => setClinicItems([...clinicItems, ''])} className="text-xs text-indigo-600 font-bold">+ 할일 추가</button></label>
+                        {clinicItems.map((item, idx) => (
+                            <div key={idx} className="flex gap-2 mb-2 items-center animate-in fade-in-50">
+                                <span className="text-xs font-bold bg-gray-100 text-gray-500 w-5 h-5 rounded flex items-center justify-center shrink-0">{idx+1}</span>
+                                <input type="text" className="w-full border p-2.5 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500" value={item} onChange={e => { const copy = [...clinicItems]; copy[idx] = e.target.value; setClinicItems(copy); }} placeholder="예: 쎈 수학 p.20-25 오답 완수" />
+                                {clinicItems.length > 1 && (
+                                    <button onClick={() => setClinicItems(clinicItems.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><X size={16}/></button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                    <Button className="w-full py-3.5 text-base font-bold bg-indigo-600 hover:bg-indigo-700" onClick={handleSaveClinicTask} disabled={isClinicSaving}>{isClinicSaving ? '배정 데이터 전송 중...' : '구두 확약 완료 - 조교 인수인계'}</Button>
+                </div>
+            </Modal>
+
+            {/* 🚀 [기존 보존] 강의 일지 모달 (유튜브 멀티 링크 보존) */}
             <Modal isOpen={isLectureModalOpen} onClose={() => setIsLectureModalOpen(false)} title={editingLecture ? "강의 일지 수정" : "새 강의 일지 등록"}>
                 <div className="space-y-4">
                     <div className="flex gap-4">
@@ -356,10 +464,11 @@ export const AdminLectureManager = () => {
     const [isClassModalOpen, setIsClassModalOpen] = useState(false);
     const [editingClassId, setEditingClassId] = useState(null);
     
-    // 🚀 [CTO 패치] 새 클래스 생성 시 'subject(과목)' 항목 필수 추가
+    // 🚀 [기존 보존] 새 클래스 생성 시 'subject(과목)' 항목 필수 추가 보존
     const [newClass, setNewClass] = useState({ name: '', lecturerId: '', subject: '', schedules: [] });
     const [isSaving, setIsSaving] = useState(false);
 
+    // 🚀 [기존 보존] CSV 동기화 모달 보존
     const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -418,7 +527,7 @@ export const AdminLectureManager = () => {
         setNewClass({
             name: cls.name,
             lecturerId: cls.lecturerId || '',
-            subject: cls.subject || '', // 🚀 기존 데이터 수정 시 과목 불러오기
+            subject: cls.subject || '', 
             schedules: initialSchedules
         });
         setEditingClassId(cls.id);
@@ -459,7 +568,7 @@ export const AdminLectureManager = () => {
             const payload = { 
                 name: newClass.name.trim(),
                 lecturerId: newClass.lecturerId,
-                subject: newClass.subject, // 🚀 과목 정보 DB에 저장
+                subject: newClass.subject, 
                 schedules: newClass.schedules,
                 updatedAt: serverTimestamp() 
             };
@@ -719,7 +828,6 @@ export const AdminLectureManager = () => {
                                                     <div className="p-4 cursor-pointer" onClick={() => setSelectedClass(cls)}>
                                                         <div className="flex justify-between items-start mb-3">
                                                             <div className="flex-1 pr-2">
-                                                                {/* 🚀 매핑된 과목 표시 뱃지 */}
                                                                 {cls.subject && <span className="inline-block bg-indigo-50 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded border border-indigo-100 mb-1">{cls.subject}</span>}
                                                                 <h3 className="font-black text-lg text-gray-800 break-keep leading-tight">{cls.name}</h3>
                                                             </div>
@@ -876,6 +984,7 @@ export const AdminLectureManager = () => {
     );
 };
 
+// 🚀 [기존 보존] 강사용 대시보드 컴포넌트 보존
 export const LecturerDashboard = ({ currentUser }) => {
     const { classes: allClasses = [], users = [], loadingData } = useData();
     const [selectedClass, setSelectedClass] = useState(null);
