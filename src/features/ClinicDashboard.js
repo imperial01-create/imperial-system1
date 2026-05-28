@@ -1,5 +1,5 @@
 /* [서비스 가치] 클리닉 V2.9.5 - 발송 후 빈 화면 Crash 완벽 방어 및 클리닉 승인 시 문자 검수/편집 기능 추가 
-   (🚀 CTO 패치: 텔레그램 봇 토큰 프론트엔드 은닉 및 보안 강화형 백엔드 호출 통신 적용) */
+   (🚀 CTO 패치: 관리자 스케줄 반려 기능 추가 및 학생 캘린더 당일 하이라이트 & 7일 예약 제한 완벽 적용) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -116,10 +116,14 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const dStr = formatDate(d);
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
-            let hasEvent = false;
             
+            // 🚀 [CTO 패치] 학생은 7일 이내 스케줄만 활성화
+            const maxDateStr = getFutureDate(7);
+            const isAllowedDateForStudent = isStudent ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
+
+            let hasEvent = false;
             if (isStudent) { 
-                if (dStr >= getLocalToday()) {
+                if (isAllowedDateForStudent) {
                     hasEvent = sessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                         if (workerRole === 'admin_assistant') return false;
@@ -131,10 +135,29 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             else if (isMyScheduleView) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
+            // 🚀 [CTO 패치] 날짜 버튼의 직관적인 디자인 및 당일 하이라이트
+            let dayClass = 'text-gray-700 hover:bg-gray-100';
+            if (isStudent && !isAllowedDateForStudent) {
+                dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; // 7일 밖의 날짜는 비활성화
+            } else if (isSel) {
+                dayClass = 'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200';
+            } else if (isToday) {
+                dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-indigo-400 shadow-sm'; // 오늘 날짜 찐하게 하이라이트
+            } else if (hasEvent) {
+                dayClass = 'ring-1 ring-blue-200 hover:bg-blue-50 text-gray-800';
+            }
+
             return (
-              <button key={i} onClick={()=>onDateChange(dStr)} className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${isSel?'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200': isToday ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-gray-100 text-gray-700'} ${hasEvent && !isSel ? 'ring-1 ring-blue-100' : ''}`}>
-                <span className={`text-base md:text-lg ${isSel?'font-bold':''}`}>{d.getDate()}</span>
-                {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel?'bg-white':'bg-blue-400'}`}/>}
+              <button 
+                key={i} 
+                onClick={() => { if (!(isStudent && !isAllowedDateForStudent)) onDateChange(dStr); }} 
+                className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${dayClass}`}
+                disabled={isStudent && !isAllowedDateForStudent}
+              >
+                <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
+                {/* 오늘 날짜 우측 상단에 깜빡이는 보라색 점 추가 */}
+                {isToday && !isSel && <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
+                {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel ? 'bg-white' : 'bg-blue-400'}`}/>}
               </button>
             );
           })}
@@ -164,8 +187,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSlotPast = slotDateTime < now;
             
             if (isStudent) {
+                const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7);
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
-                if (availableSlots.length === 0) return null;
+                // 7일 밖의 상세 스케줄도 표시하지 않음
+                if (availableSlots.length === 0 || !isSelectedDateAllowed) return null;
             }
             if (isLecturer && slots.length === 0) return null;
 
@@ -489,7 +514,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
                 const today = getLocalToday();
-                const endDate = getFutureDate(21);
+                const endDate = getFutureDate(21); // 대시보드 열람을 위해 여유있게 가져오되, 렌더링은 7일로 제한
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), where('date', '<=', endDate));
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -652,11 +677,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setSelectedSession(payload); 
             setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
             setModalState({ type: 'admin_edit' });
+        
+        // 🚀 [CTO 패치] 관리자 근무 변경 요청 승인 및 반려 로직
         } else if (action === 'approve_schedule_change') { 
              if (payload.status === 'cancellation_requested') { 
                  await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
                  updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload.id]; return next; });
-                 notify('취소 요청 승인됨'); 
+                 notify('취소 요청이 승인되었습니다.', 'success'); 
              } 
              else if (payload.status === 'addition_requested') { 
                  await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); 
@@ -664,8 +691,25 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                      const current = prev[payload.id] || {};
                      return { ...prev, [payload.id]: { ...current, status: 'open' } };
                  });
-                 notify('추가 요청 승인됨'); 
+                 notify('추가 요청이 승인되었습니다.', 'success'); 
              }
+        } else if (action === 'reject_schedule_change') {
+             askConfirm("이 근무 변경 요청을 반려하시겠습니까?", async () => {
+                 if (payload.status === 'cancellation_requested') { 
+                     const revertStatus = payload.studentName ? 'confirmed' : 'open';
+                     await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: revertStatus, cancelReason: '' }); 
+                     updateLocalAndCacheState(prev => {
+                         const current = prev[payload.id] || {};
+                         return { ...prev, [payload.id]: { ...current, status: revertStatus, cancelReason: '' } };
+                     });
+                     notify('취소 요청이 반려되어 기존 상태로 복구되었습니다.', 'success'); 
+                 } 
+                 else if (payload.status === 'addition_requested') { 
+                     await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
+                     updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload.id]; return next; });
+                     notify('추가 요청이 반려 및 삭제되었습니다.', 'success'); 
+                 }
+             });
         } else if (action === 'send_feedback_msg') { 
              setSelectedSession(payload); 
              setPreviewMessage(TEMPLATES.feedbackParent(payload));
@@ -709,7 +753,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       fetchSessions(true); 
   };
 
-  // 🚀 [CTO 패치] 클리닉 신청 처리 및 백엔드를 통한 안전한 텔레그램 봇 연동
   const submitStudentApplication = async () => {
       if (isSubmittingBooking) return; 
       setIsSubmittingBooking(true);
@@ -745,9 +788,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
               return next;
           });
           
-          // ==========================================
-          // 🚀 [CTO 패치] 프론트엔드 은닉 백엔드 텔레그램 호출
-          // ==========================================
           try {
               const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목/내용: ${formattedTopic}\n📖 교재/범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 신청 슬롯: 총 ${studentSelectedSlots.length}건\n\n원장님, 시스템에서 승인을 진행해 주세요!`;
               
@@ -756,7 +796,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
           } catch (teleErr) {
               console.error("텔레그램 알림 발송 실패:", teleErr);
           }
-          // ==========================================
 
           setModalState({type:null}); 
           setStudentSelectedSlots([]); 
@@ -832,7 +871,11 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                             <div className="flex items-center gap-2 mb-1"><Badge status={req.status}/><span className="font-bold">{req.taName}</span><span className="text-sm text-gray-500">{req.date}</span></div>
                             <div className="text-sm text-gray-600">{req.startTime}~{req.endTime}{req.cancelReason && <span className="ml-2 text-red-600 font-medium"> (사유: {req.cancelReason})</span>}</div>
                         </div>
-                        <Button variant="primary" size="sm" onClick={() => handleAction('approve_schedule_change', req)}>승인</Button>
+                        {/* 🚀 [CTO 패치] 근무 변경 요청 반려 버튼 추가 */}
+                        <div className="flex gap-2 shrink-0">
+                            <Button variant="primary" size="sm" onClick={() => handleAction('approve_schedule_change', req)}>승인</Button>
+                            <Button variant="danger" size="sm" onClick={() => handleAction('reject_schedule_change', req)}>반려</Button>
+                        </div>
                       </div>
                     ))}</div>
                   )}
@@ -1059,8 +1102,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     )}
                 </Card>
                 <Card className="w-full">
-                    <div className="flex justify-between items-center mb-4">
+                    {/* 🚀 [CTO 패치] 예약 가능 기간 안내 라벨 추가 */}
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
                         <h2 className="text-xl font-bold flex items-center gap-2"><PlusCircle className="text-blue-600"/> 새로운 클리닉 예약하기</h2>
+                        {currentUser.role === 'student' && <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 w-fit">🗓️ 예약 가능 기간: 당일 ~ 7일 후</span>}
                     </div>
                     <CalendarView 
                         isInteractive={currentUser.role === 'student'} 
