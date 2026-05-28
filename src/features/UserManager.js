@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: Self-Serve 회원가입 승인 대기열(Pending) 게이트키퍼 시스템 완벽 탑재) */
+   (🚀 CTO 패치: Self-Serve 회원가입 승인 대기열(Pending) 게이트키퍼 시스템 및 반려(Reject) 버튼 완벽 탑재) */
 import React, { useState, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -85,7 +85,7 @@ const UserManager = ({ currentUser }) => {
         } finally { setLoading(false); }
     };
 
-    // 🚀 [CTO 패치] 대기열 가입자 승인 (정식 계정 편입) 로직
+    // 대기열 가입자 승인 (정식 계정 편입) 로직
     const handleApproveUser = async (user) => {
         if (!window.confirm(`[${user.name}]님의 가입을 승인하시겠습니까?\n승인 시 즉시 로그인이 가능해집니다.`)) return;
         
@@ -109,14 +109,12 @@ const UserManager = ({ currentUser }) => {
 
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
             
-            // 승인 상태로 업데이트 (pending 상태 제거)
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), {
                 authUid: authUid,
                 status: targetStatus,
                 updatedAt: serverTimestamp()
             }, { merge: true });
 
-            // 환영 문자 발송
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
@@ -129,6 +127,33 @@ const UserManager = ({ currentUser }) => {
             showToast(`${user.name}님의 가입이 승인되었습니다.`, 'success');
         } catch (error) {
             showToast('승인 처리 중 오류 발생: ' + error.message, 'error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // 🚀 [CTO 패치] 대기열 가입자 반려 (삭제) 로직 추가
+    const handleRejectUser = async (user) => {
+        if (!window.confirm(`[${user.name}]님의 가입 신청을 반려(삭제)하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+        
+        setLoading(true);
+        try {
+            // DB에서 해당 유저 문서 삭제
+            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id));
+            
+            // 반려 알림 문자 발송 (선택적)
+            if (user.phone) {
+                const cleanPhone = user.phone.replace(/[^0-9]/g, '');
+                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                    phoneNumber: cleanPhone,
+                    message: `[목동임페리얼학원]\n안녕하세요 ${user.name}님, 회원가입 신청이 반려되었습니다. 학원 데스크로 문의해주시기 바랍니다.`,
+                    status: 'pending', type: 'reject_notice', studentName: user.name, createdAt: serverTimestamp()
+                });
+            }
+
+            showToast(`${user.name}님의 가입이 반려되었습니다.`, 'success');
+        } catch (error) {
+            showToast('반려 처리 중 오류 발생: ' + error.message, 'error');
         } finally {
             setLoading(false);
         }
@@ -326,7 +351,6 @@ const UserManager = ({ currentUser }) => {
         return counts;
     }, [users]);
 
-    // 🚀 [CTO 패치] 대기열과 정식 명단을 엄격히 분리하여 렌더링
     const filteredUsers = activeTab === 'pending' 
         ? pendingUsers.filter(u => u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery))
         : users.filter(u => u.role === activeTab && u.status !== 'pending' && (u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery)));
@@ -404,7 +428,6 @@ const UserManager = ({ currentUser }) => {
                                         </div>
                                     </td>
                                     <td className="p-4 text-sm">
-                                        {/* 대기열일 때는 가입 희망 역할 표시 */}
                                         {activeTab === 'pending' ? (
                                             <div className="flex flex-col gap-1 text-gray-600 font-bold">
                                                 가입 희망: {u.role === 'student' ? '학생' : u.role === 'parent' ? '학부모' : u.role === 'ta' ? '수업조교' : u.role === 'lecturer' ? '강사' : '행정조교'}
@@ -447,11 +470,17 @@ const UserManager = ({ currentUser }) => {
                                         )}
                                     </td>
                                     
+                                    {/* 🚀 [CTO 패치] 승인 및 반려 버튼을 나란히 배치 */}
                                     <td className="p-4 text-center">
                                         {activeTab === 'pending' ? (
-                                            <Button onClick={() => handleApproveUser(u)} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-1.5 px-4 shadow-sm rounded-lg text-sm">
-                                                ✅ 가입 승인
-                                            </Button>
+                                            <div className="flex justify-center gap-2">
+                                                <Button onClick={() => handleApproveUser(u)} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-1.5 px-4 shadow-sm rounded-lg text-sm">
+                                                    ✅ 승인
+                                                </Button>
+                                                <Button onClick={() => handleRejectUser(u)} className="bg-rose-500 hover:bg-rose-600 text-white font-bold py-1.5 px-4 shadow-sm rounded-lg text-sm">
+                                                    ❌ 반려
+                                                </Button>
+                                            </div>
                                         ) : (
                                             <button onClick={() => handleForcePasswordReset(u)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-all border border-red-100">
                                                 <Key size={14} /> 비번 변경
@@ -703,54 +732,6 @@ const UserManager = ({ currentUser }) => {
                         <Button variant="danger" className="flex-1 py-3" onClick={handleDeleteUser} disabled={loading}>네, 삭제하겠습니다</Button>
                     </div>
                 </div>
-            </Modal>
-
-            <Modal isOpen={smsPreviewModal.isOpen} onClose={() => setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' })} title="첫 등원 및 교재 안내 문자를 분할 발송">
-                <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
-                    <CheckCircle size={18} className="shrink-0"/> 
-                    <div>가시성을 위해 문자가 2통으로 나누어 발송됩니다.<br/><span className="font-normal text-xs text-indigo-600">(필요 없는 문자는 창 안의 내용을 전부 지우면 발송되지 않습니다.)</span></div>
-                </div>
-                {!smsPreviewModal.targetPhone && (
-                    <div className="bg-rose-50 text-rose-600 p-3 rounded-lg mb-3 text-sm font-bold border border-rose-200">⚠️ 등록된 학부모 또는 학생 본인의 연락처가 없습니다. (발송 불가)</div>
-                )}
-                
-                <div className="space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2">
-                    <div>
-                        <label className="block text-xs font-bold text-indigo-700 mb-1.5 ml-1">1. 첫 등원 안내 문자</label>
-                        <textarea className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-64 custom-scrollbar leading-relaxed" value={smsPreviewModal.welcomeMsg} onChange={(e) => setSmsPreviewModal({...smsPreviewModal, welcomeMsg: e.target.value})} />
-                    </div>
-                    <div>
-                        <label className="block text-xs font-bold text-indigo-700 mb-1.5 ml-1">2. 수업 교재 안내 문자</label>
-                        <textarea className="w-full bg-white p-4 rounded-xl text-sm border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-40 custom-scrollbar leading-relaxed" value={smsPreviewModal.textbookMsg} onChange={(e) => setSmsPreviewModal({...smsPreviewModal, textbookMsg: e.target.value})} />
-                    </div>
-                </div>
-
-                <Button className="w-full mt-5 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" disabled={!smsPreviewModal.targetPhone || isSendingSms} onClick={async () => {
-                        setIsSendingSms(true);
-                        try {
-                            const cleanPhone = smsPreviewModal.targetPhone.replace(/[^0-9]/g, '');
-                            const batch = writeBatch(db);
-
-                            if (smsPreviewModal.welcomeMsg.trim()) {
-                                batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox')), {
-                                    phoneNumber: cleanPhone, message: smsPreviewModal.welcomeMsg.trim(), status: 'pending', type: 'welcome_notice', studentName: smsPreviewModal.studentName, createdAt: serverTimestamp()
-                                });
-                            }
-
-                            if (smsPreviewModal.textbookMsg.trim()) {
-                                batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox')), {
-                                    phoneNumber: cleanPhone, message: smsPreviewModal.textbookMsg.trim(), status: 'pending', type: 'textbook_notice', studentName: smsPreviewModal.studentName, createdAt: serverTimestamp()
-                                });
-                            }
-
-                            await batch.commit();
-                            setSmsPreviewModal({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
-                            showToast('2통의 문자가 분할되어 발송 대기열에 등록되었습니다!', 'success');
-                        } catch(e) { showToast('문자 발송 오류: ' + e.message, 'error'); } finally { setIsSendingSms(false); }
-                    }}
-                >
-                    {isSendingSms ? <Loader className="animate-spin mx-auto"/> : '안내 문자 분할 발송하기'}
-                </Button>
             </Modal>
         </div>
     );

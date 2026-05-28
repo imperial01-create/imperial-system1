@@ -1,3 +1,5 @@
+/* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
+   (🚀 CTO 패치: 비용 0원 커스텀 SMS 본인인증(OTP) 및 비밀번호 토글, 행정조교 과목 입력란 제거 완벽 적용) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -40,9 +42,9 @@ const ReportWrapper = () => {
   return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
 };
 
-// 🚀 [새로운 기능] 커스텀 SMS 본인인증(OTP) 기반 회원가입 폼
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
+    const [showPassword, setShowPassword] = useState(false); // 🚀 [CTO 패치] 비밀번호 토글 상태 추가
     const [form, setForm] = useState({
         role: 'student', userId: '', password: '', name: '', phone: '',
         schoolName: '', grade: '1학년', childName: '', subject: ''
@@ -118,7 +120,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
             const cleanPhone = form.phone.replace(/[^0-9]/g, '');
             const payload = {
                 id: safeId, userId: form.userId, name: form.name, phone: cleanPhone,
-                role: form.role, password: form.password, status: 'pending', // 🚀 대기열 상태로 저장
+                role: form.role, password: form.password, status: 'pending',
                 createdAt: serverTimestamp()
             };
 
@@ -128,15 +130,14 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 payload.attendancePin = cleanPhone.slice(-4);
             } else if (form.role === 'parent') {
                 payload.childName = form.childName;
-            } else if (['ta', 'lecturer', 'admin_assistant'].includes(form.role)) {
+            } else if (['ta', 'lecturer'].includes(form.role)) { // 행정조교 제외
                 payload.subject = form.subject;
             }
 
             await setDoc(docRef, payload);
 
-            // 관리자에게 알림 문자 발송
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: '01012345678', // 필요시 원장님 번호로 교체 가능
+                phoneNumber: '01012345678',
                 message: `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${form.name}\n- 역할: ${form.role}\n데스크에서 승인 처리해주세요.`,
                 status: 'pending', type: 'system_alert', studentName: '시스템', createdAt: serverTimestamp()
             });
@@ -173,7 +174,16 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} /></div>
             </div>
 
-            <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label><input required type="password" placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" value={form.password} onChange={e => setForm({...form, password: e.target.value})} /></div>
+            {/* 🚀 [CTO 패치] 비밀번호 토글 기능 적용 */}
+            <div>
+                <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
+                <div className="relative">
+                    <input required type={showPassword ? "text" : "password"} placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
+                    <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
+                        {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                    </button>
+                </div>
+            </div>
 
             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
                 <label className="block text-xs font-bold text-blue-800 flex items-center gap-1"><Phone size={14}/> 휴대폰 본인 인증</label>
@@ -205,10 +215,11 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                     <input required className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
                 </div>
             )}
-            {['ta', 'lecturer', 'admin_assistant'].includes(form.role) && (
+            {/* 🚀 [CTO 패치] 행정조교의 경우 과목 입력란을 숨김 처리 */}
+            {['ta', 'lecturer'].includes(form.role) && (
                 <div className="bg-gray-50 p-3 rounded-xl border">
                     <label className="block text-xs font-bold text-gray-500 mb-1">담당 과목 (또는 분야)</label>
-                    <input className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 수학, 국어, 행정지원" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
+                    <input className="w-full border p-3 rounded-xl focus:border-blue-500 outline-none bg-white" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
                 </div>
             )}
 
@@ -223,7 +234,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
 const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLoginErrorModal }) => {
   const [showPassword, setShowPassword] = useState(false);
-  const [isSignUpMode, setIsSignUpMode] = useState(false); // 🚀 회원가입 모드 토글 상태
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
 
@@ -540,6 +551,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   );
 };
 
+const Navigation = () => null;
+
 const AppContent = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -613,7 +626,6 @@ const AppContent = () => {
               }
               
               if(docData) {
-                  // 🚀 [새로운 기능 결합] 가입 승인 대기(Pending) 상태 체크 로직
                   if (docData.status === 'pending') {
                       setLoginProcessing(false);
                       return setLoginErrorModal({ isOpen: true, msg: '가입 승인이 대기 중인 계정입니다.\n\n학원 데스크에서 승인을 완료해야 로그인이 가능합니다.' });
