@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 생략 없는 100% 풀버전 - 기존 기능 완벽 유지 + 6중 스캔 + 학교 병합 툴 탑재) */
+   (🚀 CTO 패치: Search 아이콘 import 누락 오류 완벽 해결 및 100% 풀버전 유지) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, where, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -8,8 +8,8 @@ import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle, Database, School, RefreshCw, Building2, Trash2, Star
-} from 'lucide-react';
+  AlertTriangle, Database, School, RefreshCw, Building2, Trash2, Star, Search 
+} from 'lucide-react'; // 🚀 Search 아이콘 추가 완료!
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
@@ -395,9 +395,7 @@ const SettingsManager = ({ currentUser }) => {
                 </button>
             </div>
 
-            {/* ============================================================================== */}
             {/* 탭 1. 기본 인프라 관리 */}
-            {/* ============================================================================== */}
             {activeTab === 'master' && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in">
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
@@ -467,9 +465,7 @@ const SettingsManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* ============================================================================== */}
             {/* 탭 2. 학교 마스터 데이터 관리 */}
-            {/* ============================================================================== */}
             {activeTab === 'school_mdm' && (
                 <div className="space-y-6 animate-in fade-in">
                     
@@ -556,13 +552,10 @@ const SettingsManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* ============================================================================== */}
             {/* 탭 3. 시스템 고급 도구 */}
-            {/* ============================================================================== */}
             {activeTab === 'system' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
                     
-                    {/* 계정 보안 최적화 스크립트 */}
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-rose-200 space-y-6">
                         <h2 className="text-xl font-black text-rose-800 border-b border-rose-100 pb-4 flex items-center gap-2">
                             <ShieldAlert className="text-rose-600"/> 계정 보안 최적화 스크립트
@@ -584,7 +577,6 @@ const SettingsManager = ({ currentUser }) => {
                         </Button>
                     </div>
 
-                    {/* 레거시 데이터 마이그레이션 스크립트 */}
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6">
                         <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">
                             <Database className="text-indigo-600"/> 데이터 마이그레이션 툴
