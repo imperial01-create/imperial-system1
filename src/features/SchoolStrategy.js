@@ -1,7 +1,10 @@
+/* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
+   (🚀 CTO 패치: 스마트 콤보박스 연동 및 미분류(Unmatched) 데이터 필터링 기능 완벽 탑재) */
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
+import { Search, X, Star, AlertTriangle, AlertCircle } from 'lucide-react'; // 🚀 Native Icons Import
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -13,14 +16,83 @@ const IconArrowLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" h
 const IconSettings = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>;
 const IconEdit = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
-const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 const IconChevronDown = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
 const IconChevronUp = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>;
 const IconChevronLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>;
 const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>;
-const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [CTO 패치] 스마트 콤보박스
+const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchKeyword, setSearchKeyword] = useState('');
+
+    const schools = schoolsData[schoolType] || [];
+    const favorites = schoolsData.favorites || [];
+    
+    const pinned = schools.filter(s => favorites.includes(s) && s.includes(searchKeyword));
+    const others = schools.filter(s => !favorites.includes(s) && s.includes(searchKeyword));
+
+    return (
+        <div className="relative w-full" style={disabled ? { pointerEvents: 'none', opacity: 0.5 } : {}}>
+            <div 
+                className={`w-full border p-2.5 rounded-lg outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-blue-500 bg-blue-50' : 'bg-white hover:bg-gray-50'}`}
+                onClick={() => !disabled && setIsOpen(!isOpen)}
+            >
+                <span className={value ? "text-blue-900" : "text-gray-400"}>{value || '👇 학교명 검색 및 선택'}</span>
+            </div>
+            
+            {isOpen && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-blue-200 rounded-xl shadow-xl max-h-64 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-2 border-b border-gray-100 bg-gray-50">
+                            <div className="relative">
+                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input 
+                                    type="text" autoFocus 
+                                    className="w-full pl-8 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-xs" 
+                                    placeholder="학교명 검색..." 
+                                    value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="overflow-y-auto flex-1 custom-scrollbar pb-1">
+                            {pinned.length > 0 && (
+                                <div className="p-1.5 bg-yellow-50/40">
+                                    <div className="text-[10px] font-black text-yellow-600 mb-1 px-1">📌 자주 찾는 학교</div>
+                                    <div className="grid grid-cols-1 gap-0.5">
+                                        {pinned.map(s => (
+                                            <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-white rounded cursor-pointer font-bold text-xs text-gray-800">{s}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {pinned.length > 0 && <div className="h-px bg-gray-100"></div>}
+                            
+                            <div className="p-1.5">
+                                {others.length === 0 && searchKeyword && pinned.length === 0 && (
+                                    <div className="text-center py-2 text-[10px] font-bold text-gray-400">결과 없음</div>
+                                )}
+                                <div className="grid grid-cols-1 gap-0.5">
+                                    {others.map(s => (
+                                        <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-blue-50 rounded cursor-pointer font-bold text-xs text-gray-700">{s}</div>
+                                    ))}
+                                    {onCustomSelect && (
+                                        <div onClick={() => { onCustomSelect(); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer font-bold text-xs text-blue-600 mt-1 border border-dashed border-gray-300 text-center">➕ 직접 입력</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
 
 const sortReports = (reportsList) => {
     return reportsList.sort((a, b) => {
@@ -56,6 +128,14 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
+  // 🚀 [CTO 패치] 마스터 학교 데이터 연동 상태
+  const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
+  const [filterSchoolType, setFilterSchoolType] = useState('high');
+  const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false); // 미분류 데이터 필터
+
+  const [formSchoolType, setFormSchoolType] = useState('high');
+  const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
+
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
   const isAdmin = ['admin', 'admin_assistant'].includes(user.role);
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
@@ -63,6 +143,17 @@ export default function SchoolStrategy({ currentUser }) {
   const currentYear = new Date().getFullYear();
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
+
+  useEffect(() => {
+      const fetchSchools = async () => {
+          try {
+              const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
+              const docSnap = await getDoc(docRef);
+              if (docSnap.exists()) setSchoolsData(docSnap.data());
+          } catch (e) {}
+      };
+      fetchSchools();
+  }, []);
 
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
     const gradeNum = String(currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년').replace(/\D/g, '');
@@ -96,7 +187,6 @@ export default function SchoolStrategy({ currentUser }) {
               const qTrend = query(collection(db, INTEGRATED_COLLECTION), where("type", "==", "trend"));
               const snap = await getDocs(qTrend);
               const trends = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isDeleted);
-              
               setTrendReports(sortReports(trends)); 
           } else if (isStudentOrParent) {
               const rawUserSchool = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "";
@@ -105,10 +195,7 @@ export default function SchoolStrategy({ currentUser }) {
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
               
               if (!baseSchool) {
-                  setTrendReports([]);
-                  setIndividualReports([]);
-                  setLoading(false);
-                  return;
+                  setTrendReports([]); setIndividualReports([]); setLoading(false); return;
               }
 
               const schoolVariations = [...new Set([
@@ -116,11 +203,7 @@ export default function SchoolStrategy({ currentUser }) {
                   `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, rawUserSchool
               ])];
 
-              const qStudent = query(
-                  collection(db, INTEGRATED_COLLECTION), 
-                  where("schoolName", "in", schoolVariations)
-              );
-              
+              const qStudent = query(collection(db, INTEGRATED_COLLECTION), where("schoolName", "in", schoolVariations));
               const snap = await getDocs(qStudent);
               const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
 
@@ -128,7 +211,6 @@ export default function SchoolStrategy({ currentUser }) {
               
               const filtered = allDocs.filter(report => {
                   if (report.isDeleted || !report.type) return false;
-
                   const reportGrade = String(report.grade || '1학년').replace('학년','');
                   const reportSemester = String(report.semester || '1학기').replace('학기','');
                   const reportTermType = String(report.termType || report.term || '중간고사');
@@ -136,18 +218,13 @@ export default function SchoolStrategy({ currentUser }) {
                   
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
-
                   return generatedTerm === targetTerm;
               });
 
               setTrendReports(sortReports(filtered.filter(r => r.type === 'trend')));
               setIndividualReports(sortReports(filtered.filter(r => r.type !== 'trend')));
           }
-      } catch (e) {
-          console.error("Fetch Data Error:", e);
-      } finally {
-          setLoading(false);
-      }
+      } catch (e) { console.error(e); } finally { setLoading(false); }
   }, [isStaff, isStudentOrParent, user, activeTerm, getStudentTargetTerm]);
 
   useEffect(() => {
@@ -155,14 +232,12 @@ export default function SchoolStrategy({ currentUser }) {
       try {
         const docSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
         if (docSnap.exists() && docSnap.data().activeTerm) setActiveTerm(docSnap.data().activeTerm);
-      } catch (e) { console.error("설정 불러오기 실패:", e); }
+      } catch (e) {}
     };
     fetchSettings();
   }, []);
 
-  useEffect(() => {
-      fetchInitialData();
-  }, [fetchInitialData]);
+  useEffect(() => { fetchInitialData(); }, [fetchInitialData]);
 
   useEffect(() => {
       const handlePopState = (e) => {
@@ -189,20 +264,18 @@ export default function SchoolStrategy({ currentUser }) {
       setViewState(prev => ({ ...prev, selectedQuestion: q }));
   };
 
-  const handleGoBack = () => {
-      window.history.back();
-  };
+  const handleGoBack = () => { window.history.back(); };
 
+  // 🚀 [CTO 패치] 스마트 검색 엔진 및 미분류 데이터 필터 적용
   const handleSearchSubmit = async () => { 
       if (!isStaff) return;
       setLoading(true);
       setHasSearched(true);
       try {
           let q = collection(db, INTEGRATED_COLLECTION);
-          
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
           
-          if (filterInput.school.trim() !== '') {
+          if (!showUnmatchedOnly && filterInput.school.trim() !== '') {
               const searchSchoolRaw = filterInput.school.trim();
               let baseSchool = searchSchoolRaw.replace(/\s+/g, '');
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
@@ -211,12 +284,26 @@ export default function SchoolStrategy({ currentUser }) {
                   baseSchool, `${baseSchool}고`, `${baseSchool}고등학교`, `${baseSchool} 고등학교`,
                   `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, searchSchoolRaw
               ])];
-              
               q = query(q, where("schoolName", "in", searchVariations));
           }
           
           const snap = await getDocs(q);
           let results = snap.docs.map(d => ({id: d.id, ...d.data()}));
+
+          // 미분류 학교 필터링
+          if (showUnmatchedOnly) {
+              const allMasterSchools = [ ...(schoolsData.elementary || []), ...(schoolsData.middle || []), ...(schoolsData.high || []) ];
+              results = results.filter(r => r.schoolName && !allMasterSchools.includes(r.schoolName));
+          } else if (!filterInput.school) {
+              // 학교가 지정 안됐으면 학교급(schoolType)으로 필터링
+              const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[filterSchoolType] || '고등학교';
+              results = results.filter(r => {
+                  if (r.schoolType) return r.schoolType === typeKor;
+                  if (typeKor === '고등학교') return r.schoolName?.includes('고');
+                  if (typeKor === '중학교') return r.schoolName?.includes('중');
+                  return true;
+              });
+          }
 
           if (filterInput.grade !== '전체' || filterInput.exam !== '전체') {
               results = results.filter(r => {
@@ -225,13 +312,8 @@ export default function SchoolStrategy({ currentUser }) {
                   const rTermType = String(r.termType || r.term || '중간고사');
                   const rTerm = `${rGrade}-${rSemester} ${rTermType}`;
 
-                  let gradeMatch = true;
-                  let examMatch = true;
-
-                  if (filterInput.grade !== '전체') {
-                      const g = filterInput.grade.replace('학년', '');
-                      gradeMatch = rTerm.startsWith(`${g}-`); 
-                  }
+                  let gradeMatch = true; let examMatch = true;
+                  if (filterInput.grade !== '전체') { const g = filterInput.grade.replace('학년', ''); gradeMatch = rTerm.startsWith(`${g}-`); }
                   if (filterInput.exam !== '전체') {
                       let suffix = '';
                       if (filterInput.exam === '1학기 중간고사') suffix = '-1 중간고사';
@@ -248,13 +330,7 @@ export default function SchoolStrategy({ currentUser }) {
           
           setTrendReports(sortReports(results.filter(r => r.type === 'trend')));
           setIndividualReports(sortReports(results.filter(r => r.type !== 'trend')));
-
-      } catch (e) {
-          console.error(e);
-          alert("검색 중 오류가 발생했습니다.");
-      } finally {
-          setLoading(false);
-      }
+      } catch (e) { console.error(e); alert("검색 중 오류가 발생했습니다."); } finally { setLoading(false); }
   };
 
   const refreshData = () => {
@@ -265,27 +341,34 @@ export default function SchoolStrategy({ currentUser }) {
   const handleOpenForm = (existingReport = null) => {
       pushHistory('form');
       if (existingReport) {
+          const sName = existingReport.schoolName || existingReport.school || '';
+          let foundType = 'high'; let isCustom = true;
+          for (const [type, arr] of Object.entries(schoolsData)) {
+              if (type !== 'favorites' && Array.isArray(arr) && arr.includes(sName)) { foundType = type; isCustom = false; break; }
+          }
+          if (isCustom) {
+              if (sName.includes('초')) foundType = 'elementary';
+              else if (sName.includes('중')) foundType = 'middle';
+          }
+          setFormSchoolType(foundType);
+          setIsFormCustomSchool(isCustom);
+
           setFormData({ 
               type: existingReport.type || 'individual',
               year: String(existingReport.year || new Date().getFullYear()),
-              school: existingReport.schoolName || existingReport.school || '',
+              school: sName,
               term: `${String(existingReport.grade || '1학년').replace('학년','')}-${String(existingReport.semester || '1학기').replace('학기','')} ${existingReport.termType || existingReport.term || '중간고사'}`,
               subject: existingReport.subject || '',
-              teacher: existingReport.teacher || '',
-              difficulty: existingReport.difficulty || '중',
-              suppBook: existingReport.suppBook || '',
-              print: existingReport.print || '',
-              scope: existingReport.scope || '',
-              review: existingReport.review || '',
-              specialNotes: existingReport.specialNotes || '',
+              teacher: existingReport.teacher || '', difficulty: existingReport.difficulty || '중',
+              suppBook: existingReport.suppBook || '', print: existingReport.print || '', scope: existingReport.scope || '',
+              review: existingReport.review || '', specialNotes: existingReport.specialNotes || '',
               gradeCuts: existingReport.gradeCuts || { grade1: '', grade2: '', grade3: '' },
-              questions: existingReport.questions || [],
-              trendData: existingReport.trendData || [],
-              scopeChanges: existingReport.scopeChanges || [],
-              teacherStyles: existingReport.teacherStyles || [],
+              questions: existingReport.questions || [], trendData: existingReport.trendData || [],
+              scopeChanges: existingReport.scopeChanges || [], teacherStyles: existingReport.teacherStyles || [],
               isDeleted: existingReport.isDeleted || false,
           });
       } else {
+          setFormSchoolType('high'); setIsFormCustomSchool(false);
           setFormData({ 
               type: 'individual', year: new Date().getFullYear().toString(), school: '', term: '', subject: '', 
               teacher: '', difficulty: '중', suppBook: '', print: '', scope: '', review: '', specialNotes: '', 
@@ -328,8 +411,7 @@ export default function SchoolStrategy({ currentUser }) {
 
   const getAutomaticDifficulty = (questions) => {
     const totalIdi = questions?.reduce((sum, q) => sum + (q.idiTotal || 0), 0) || 0;
-    let level = '하';
-    let percent = 40;
+    let level = '하'; let percent = 40;
     if (totalIdi >= 295) { level = '최상'; percent = 100; }
     else if (totalIdi > 262 && totalIdi < 295) { level = '상'; percent = 80; }
     else if (totalIdi > 210 && totalIdi <= 262) { level = '중'; percent = 60; }
@@ -337,16 +419,13 @@ export default function SchoolStrategy({ currentUser }) {
     return { totalIdi, level, percent };
   };
 
-  // 🚀 [CTO 패치] 객체 내부에 숨어있는 undefined 값을 찾아내어 안전하게 삭제하는 클리너 함수
   const removeUndefined = (obj) => {
       if (obj === undefined) return null;
       if (obj === null || typeof obj !== 'object') return obj;
       if (obj.constructor && obj.constructor.name === 'FieldValue') return obj;
       if (Array.isArray(obj)) return obj.map(removeUndefined);
       const res = {};
-      Object.keys(obj).forEach(key => {
-          if (obj[key] !== undefined) res[key] = removeUndefined(obj[key]);
-      });
+      Object.keys(obj).forEach(key => { if (obj[key] !== undefined) res[key] = removeUndefined(obj[key]); });
       return res;
   };
 
@@ -366,29 +445,23 @@ export default function SchoolStrategy({ currentUser }) {
       let termType = "중간고사";
       if (termStr.includes("기말")) termType = "기말고사";
 
+      const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
+
       const baseData = {
+          schoolType: typeKor,
           schoolName: formData.school.trim(),
           year: String(formData.year).trim(),
-          grade: grade,
-          semester: semester,
-          termType: termType,
+          grade: grade, semester: semester, termType: termType,
           subject: formData.subject.trim()
       };
 
       const strategyPayload = {
-          type: formData.type,
-          teacher: formData.teacher,
-          difficulty: diffInfoForm.level,
+          type: formData.type, teacher: formData.teacher, difficulty: diffInfoForm.level,
           gradeCuts: formData.gradeCuts || { grade1: '', grade2: '', grade3: '' },
-          suppBook: formData.suppBook,
-          print: formData.print,
-          scope: formData.scope,
-          review: formData.review,
-          specialNotes: formData.specialNotes,
-          questions: formData.questions || [],
-          trendData: formData.trendData || [],
-          scopeChanges: formData.scopeChanges || [],
-          teacherStyles: formData.teacherStyles || [],
+          suppBook: formData.suppBook, print: formData.print, scope: formData.scope,
+          review: formData.review, specialNotes: formData.specialNotes,
+          questions: formData.questions || [], trendData: formData.trendData || [],
+          scopeChanges: formData.scopeChanges || [], teacherStyles: formData.teacherStyles || [],
           isDeleted: formData.isDeleted || false
       };
       
@@ -401,18 +474,10 @@ export default function SchoolStrategy({ currentUser }) {
           
           if (oldDocSnap.exists()) {
               const oldData = oldDocSnap.data();
-              // 🚀 찌꺼기 undefined 데이터 제거하여 안전하게 병합
-              const mergedPayload = { 
-                  ...removeUndefined(oldData), 
-                  ...removeUndefined(baseData), 
-                  ...removeUndefined(strategyPayload), 
-                  updatedAt: serverTimestamp() 
-              };
+              const mergedPayload = { ...removeUndefined(oldData), ...removeUndefined(baseData), ...removeUndefined(strategyPayload), updatedAt: serverTimestamp() };
               await setDoc(doc(db, INTEGRATED_COLLECTION, newId), mergedPayload);
               await deleteDoc(oldDocRef);
-          } else {
-              await upsertExamData(baseData, strategyPayload);
-          }
+          } else { await upsertExamData(baseData, strategyPayload); }
       } else {
           await upsertExamData(baseData, strategyPayload);
       }
@@ -420,29 +485,19 @@ export default function SchoolStrategy({ currentUser }) {
       alert('성공적으로 저장 및 통합되었습니다.');
       refreshData();
       handleGoBack(); 
-    } catch (e) { 
-      console.error(e); 
-      alert('저장에 실패했습니다.'); 
-    } finally { 
-      setLoading(false); 
-    }
+    } catch (e) { console.error(e); alert('저장에 실패했습니다.'); } finally { setLoading(false); }
   };
 
   const handleArrayChange = (field, index, key, value) => {
-    const newArray = [...formData[field]];
-    newArray[index][key] = value;
-    setFormData({ ...formData, [field]: newArray });
+    const newArray = [...formData[field]]; newArray[index][key] = value; setFormData({ ...formData, [field]: newArray });
   };
   
   const handleIdiChange = (index, key, value) => {
     let numVal = parseInt(value, 10);
     if (isNaN(numVal)) numVal = 1;
-    if (numVal < 1) numVal = 1;
-    if (numVal > 5) numVal = 5;
+    if (numVal < 1) numVal = 1; if (numVal > 5) numVal = 5;
 
-    const newArray = [...formData.questions];
-    newArray[index][key] = numVal;
-
+    const newArray = [...formData.questions]; newArray[index][key] = numVal;
     const q = newArray[index];
     const totalIdi = (q.idiSource || 1) + (q.idiLogic || 1) + (q.idiConcept || 1) + (q.idiCalc || 1) + (q.idiProg || 1);
     
@@ -451,15 +506,12 @@ export default function SchoolStrategy({ currentUser }) {
     else if (totalIdi >= 15) calculatedDiff = '상';
     else if (totalIdi >= 10) calculatedDiff = '중';
 
-    newArray[index].idiTotal = totalIdi;
-    newArray[index].diff = calculatedDiff;
+    newArray[index].idiTotal = totalIdi; newArray[index].diff = calculatedDiff;
     setFormData({ ...formData, questions: newArray });
   };
 
   const addArrayItem = (field, defaultObj) => setFormData({ ...formData, [field]: [...(formData[field] || []), defaultObj] });
-  const removeArrayItem = (field, index) => {
-    const newArray = [...formData[field]]; newArray.splice(index, 1); setFormData({ ...formData, [field]: newArray });
-  };
+  const removeArrayItem = (field, index) => { const newArray = [...formData[field]]; newArray.splice(index, 1); setFormData({ ...formData, [field]: newArray }); };
 
   const saveInternalMemo = async (id) => {
     if (!memoInputs[id]) return;
@@ -471,26 +523,20 @@ export default function SchoolStrategy({ currentUser }) {
     if (!questions || questions.length === 0) return [];
     const counts = questions.reduce((acc, q) => {
       const unit = (q.unit && q.unit.trim()) ? q.unit.trim() : '기타';
-      acc[unit] = (acc[unit] || 0) + 1;
-      return acc;
+      acc[unit] = (acc[unit] || 0) + 1; return acc;
     }, {});
     const total = questions.length;
-    return Object.entries(counts).map(([unit, count]) => ({
-        unit, count, percent: Math.round((count / total) * 100)
-    })).sort((a,b) => b.count - a.count);
+    return Object.entries(counts).map(([unit, count]) => ({ unit, count, percent: Math.round((count / total) * 100) })).sort((a,b) => b.count - a.count);
   };
 
   const getSourceDistribution = (questions) => {
     if (!questions || questions.length === 0) return [];
     const counts = questions.reduce((acc, q) => {
       const source = (q.source && q.source.trim()) ? q.source.trim() : '기타 출처';
-      acc[source] = (acc[source] || 0) + 1;
-      return acc;
+      acc[source] = (acc[source] || 0) + 1; return acc;
     }, {});
     const total = questions.length;
-    return Object.entries(counts).map(([source, count]) => ({
-        source, count, percent: Math.round((count / total) * 100)
-    })).sort((a,b) => b.count - a.count);
+    return Object.entries(counts).map(([source, count]) => ({ source, count, percent: Math.round((count / total) * 100) })).sort((a,b) => b.count - a.count);
   };
 
   if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
@@ -526,41 +572,49 @@ export default function SchoolStrategy({ currentUser }) {
         </div>
 
         {isStaff && (
-            <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row gap-3 items-end">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
-                    <div className="flex flex-col">
-                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">년도</label>
-                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.year} onChange={e => setFilterInput({...filterInput, year: e.target.value})}>
-                            <option value="전체">전체 년도</option>
-                            {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
-                        </select>
-                    </div>
-                    <div className="flex flex-col">
-                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">학교명 검색</label>
-                        <input type="text" placeholder="예: 영일고" className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.school} onChange={e => setFilterInput({...filterInput, school: e.target.value})} onKeyDown={e => e.key === 'Enter' && handleSearchSubmit()} />
-                    </div>
-                    <div className="flex flex-col">
-                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">학년</label>
-                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.grade} onChange={e => setFilterInput({...filterInput, grade: e.target.value})}>
-                            <option value="전체">전체 학년</option>
-                            <option value="1학년">1학년</option>
-                            <option value="2학년">2학년</option>
-                            <option value="3학년">3학년</option>
-                        </select>
-                    </div>
-                    <div className="flex flex-col">
-                        <label className="text-[10px] md:text-xs font-bold text-gray-500 mb-1">시험 선택</label>
-                        <select className="border p-2 rounded-lg text-sm bg-gray-50 focus:bg-white outline-none focus:ring-2 focus:ring-indigo-300" value={filterInput.exam} onChange={e => setFilterInput({...filterInput, exam: e.target.value})}>
-                            <option value="전체">전체 시험</option>
-                            <option value="1학기 중간고사">1학기 중간고사</option>
-                            <option value="1학기 기말고사">1학기 기말고사</option>
-                            <option value="2학기 중간고사">2학기 중간고사</option>
-                            <option value="2학기 기말고사">2학기 기말고사</option>
-                        </select>
-                    </div>
+            <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6">
+                <div className="flex items-center justify-between mb-3">
+                    <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
+                    <label className="flex items-center gap-1 text-xs text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg cursor-pointer border border-rose-200 font-bold transition-colors hover:bg-rose-100">
+                        <input type="checkbox" className="accent-rose-600" checked={showUnmatchedOnly} onChange={e => { setShowUnmatchedOnly(e.target.checked); setFilterInput({...filterInput, school: ''}); }}/>
+                        <AlertTriangle size={14}/> 미분류 학교만 보기
+                    </label>
                 </div>
-                <button onClick={handleSearchSubmit} className="w-full md:w-auto px-5 py-2 h-[38px] bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 flex items-center justify-center gap-1">
-                    <IconSearch /> 검색
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 w-full mb-3">
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterSchoolType} onChange={e => { setFilterSchoolType(e.target.value); setFilterInput({...filterInput, school: ''}); }} disabled={showUnmatchedOnly}>
+                        <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
+                    </select>
+                    
+                    <div className="col-span-2 lg:col-span-2">
+                        <SmartSchoolSelect 
+                            schoolType={filterSchoolType} 
+                            schoolsData={schoolsData} 
+                            value={filterInput.school} 
+                            onChange={(val) => setFilterInput({...filterInput, school: val})}
+                            disabled={showUnmatchedOnly}
+                        />
+                    </div>
+                    
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.year} onChange={e => setFilterInput({...filterInput, year: e.target.value})}>
+                        <option value="전체">전체 년도</option>
+                        {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
+                    </select>
+
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.grade} onChange={e => setFilterInput({...filterInput, grade: e.target.value})}>
+                        <option value="전체">전체 학년</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                    </select>
+                    
+                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.exam} onChange={e => setFilterInput({...filterInput, exam: e.target.value})}>
+                        <option value="전체">전체 시험</option>
+                        <option value="1학기 중간고사">1학기 중간고사</option>
+                        <option value="1학기 기말고사">1학기 기말고사</option>
+                        <option value="2학기 중간고사">2학기 중간고사</option>
+                        <option value="2학기 기말고사">2학기 기말고사</option>
+                    </select>
+                </div>
+                <button onClick={handleSearchSubmit} className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 flex items-center justify-center gap-1">
+                    <Search size={18} /> 조건 검색하기
                 </button>
             </div>
         )}
@@ -574,8 +628,8 @@ export default function SchoolStrategy({ currentUser }) {
         )}
 
         {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
-           <div className="py-12 text-center text-gray-500 text-sm bg-white rounded-xl border border-gray-100 shadow-sm">
-               검색 조건에 일치하는 리포트가 없습니다.
+           <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
+               {showUnmatchedOnly ? "미분류된 학교 데이터가 없습니다! (완벽합니다 🎉)" : "검색 조건에 일치하는 리포트가 없습니다."}
            </div>
         )}
 
@@ -678,32 +732,53 @@ export default function SchoolStrategy({ currentUser }) {
           </button>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border p-4 md:p-8 space-y-6">
+        <div className="bg-white rounded-xl shadow-sm border p-4 md:p-8 space-y-6 pb-20">
           <h2 className="text-xl md:text-2xl font-bold border-b pb-4">리포트 {viewState.selectedId ? '수정/작성' : '작성'}</h2>
           
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 bg-gray-50 p-3 md:p-4 rounded-lg">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 bg-gray-50 p-3 md:p-4 rounded-lg border border-gray-200">
             <div className="col-span-2 md:col-span-1">
-              <label className="block text-xs md:text-sm font-bold mb-1">리포트 종류</label>
-              <select className="w-full border p-2 rounded text-sm outline-none" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})}>
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">리포트 종류</label>
+              <select className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})}>
                 <option value="individual">개별 시험 과목 분석</option>
                 <option value="trend">과목 경향 분석 (설명회용)</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs md:text-sm font-bold mb-1">년도</label>
-              <input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">년도</label>
+              <input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
             </div>
-            <div>
-              <label className="block text-xs md:text-sm font-bold mb-1">학교명</label>
-              <input type="text" className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 영일고" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
+            
+            {/* 🚀 [CTO 패치] 폼 내부 스마트 콤보박스 연동 */}
+            <div className="col-span-2 md:col-span-3">
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학교명 (검색/선택)</label>
+              <div className="flex gap-2">
+                  <select className="w-1/3 border p-2.5 rounded-lg text-sm outline-none font-bold bg-white" value={formSchoolType} onChange={e => { setFormSchoolType(e.target.value); setFormData({...formData, school: ''}); setIsFormCustomSchool(false); }}>
+                      <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
+                  </select>
+                  {!isFormCustomSchool ? (
+                      <SmartSchoolSelect 
+                          schoolType={formSchoolType} 
+                          schoolsData={schoolsData} 
+                          value={formData.school} 
+                          onChange={(val) => setFormData({...formData, school: val})}
+                          onCustomSelect={() => setIsFormCustomSchool(true)}
+                      />
+                  ) : (
+                      <div className="w-2/3 relative">
+                          <input className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
+                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
+                      </div>
+                  )}
+              </div>
             </div>
+
             <div className="col-span-2 md:col-span-1">
-              <label className="block text-xs md:text-sm font-bold mb-1">학년/학기/시험</label>
-              <input type="text" className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 1-1 중간고사" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} />
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학년/학기/시험</label>
+              <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 1-1 중간고사" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} />
             </div>
             <div className="col-span-2 md:col-span-2">
-              <label className="block text-xs md:text-sm font-bold mb-1">과목</label>
-              <input type="text" className="w-full border p-2 rounded text-sm outline-none" placeholder="예: 수학(상)" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">과목</label>
+              <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 수학(상)" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
             </div>
           </div>
 
@@ -713,7 +788,7 @@ export default function SchoolStrategy({ currentUser }) {
               
               <div className="grid grid-cols-2 md:grid-cols-2 gap-3 md:gap-4 mb-4">
                 <div><label className="block text-xs font-bold mb-1">출제 선생님</label><input type="text" className="w-full border p-2 text-sm rounded outline-none" value={formData.teacher} onChange={e => setFormData({...formData, teacher: e.target.value})}/></div>
-                <div><label className="block text-xs font-bold mb-1">체감 난이도 (자동 계산)</label><input type="text" className="w-full border p-2 text-sm rounded bg-gray-100 text-gray-600 outline-none" readOnly value={`${diffInfoForm.level} (${diffInfoForm.totalIdi}점)`}/></div>
+                <div><label className="block text-xs font-bold mb-1">체감 난이도 (자동 계산)</label><input type="text" className="w-full border p-2 text-sm rounded bg-gray-100 text-gray-600 outline-none font-bold" readOnly value={`${diffInfoForm.level} (${diffInfoForm.totalIdi}점)`}/></div>
               </div>
               
               <div className="mb-4">
@@ -745,16 +820,16 @@ export default function SchoolStrategy({ currentUser }) {
                       <div><label className="text-[10px] text-gray-500 font-bold">번호 (예: 객관식1)</label><input type="text" placeholder="객관식1" className="w-full border p-1.5 text-sm rounded outline-none" value={q.qNum} onChange={e=>handleArrayChange('questions', idx, 'qNum', e.target.value)}/></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">배점</label><input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-1.5 text-sm rounded outline-none" value={q.score} onChange={e=>handleArrayChange('questions', idx, 'score', e.target.value)}/></div>
                       <div className="col-span-2"><label className="text-[10px] text-gray-500 font-bold">단원</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" value={q.unit} onChange={e=>handleArrayChange('questions', idx, 'unit', e.target.value)}/></div>
-                      <div><label className="text-[10px] text-gray-500 font-bold">난이도 (자동)</label><input type="text" className="w-full border p-1.5 text-sm bg-gray-200 text-gray-600 rounded" readOnly value={`${q.diff || '하'} (${q.idiTotal || 5})`} /></div>
+                      <div><label className="text-[10px] text-gray-500 font-bold">난이도 (자동)</label><input type="text" className="w-full border p-1.5 text-sm bg-gray-200 text-gray-600 rounded font-bold" readOnly value={`${q.diff || '하'} (${q.idiTotal || 5})`} /></div>
                       <div><label className="text-[10px] text-gray-500 font-bold">태그</label><input type="text" className="w-full border p-1.5 text-sm rounded outline-none" placeholder="킬러, 기본 등" value={q.tags} onChange={e=>handleArrayChange('questions', idx, 'tags', e.target.value)}/></div>
                     </div>
 
                     <div className="grid grid-cols-5 gap-1 md:gap-2 mb-3 bg-indigo-50 p-2 rounded-lg border border-indigo-100">
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">출처친숙도(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiSource || 1} onChange={e=>handleIdiChange(idx, 'idiSource', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">변형로직(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiLogic || 1} onChange={e=>handleIdiChange(idx, 'idiLogic', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">개념결합(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiConcept || 1} onChange={e=>handleIdiChange(idx, 'idiConcept', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">연산복잡(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiCalc || 1} onChange={e=>handleIdiChange(idx, 'idiCalc', e.target.value)}/></div>
-                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">논리전개(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none" value={q.idiProg || 1} onChange={e=>handleIdiChange(idx, 'idiProg', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">출처친숙도(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none font-bold" value={q.idiSource || 1} onChange={e=>handleIdiChange(idx, 'idiSource', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">변형로직(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none font-bold" value={q.idiLogic || 1} onChange={e=>handleIdiChange(idx, 'idiLogic', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">개념결합(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none font-bold" value={q.idiConcept || 1} onChange={e=>handleIdiChange(idx, 'idiConcept', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">연산복잡(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none font-bold" value={q.idiCalc || 1} onChange={e=>handleIdiChange(idx, 'idiCalc', e.target.value)}/></div>
+                      <div><label className="text-[9px] md:text-[10px] text-indigo-700 font-bold break-keep">논리전개(1-5)</label><input type="number" onWheel={(e) => e.target.blur()} min="1" max="5" className="w-full border p-1 text-sm rounded text-center outline-none font-bold" value={q.idiProg || 1} onChange={e=>handleIdiChange(idx, 'idiProg', e.target.value)}/></div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">

@@ -1,8 +1,10 @@
+/* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
+   (🚀 CTO 패치: 스마트 콤보박스 연동 및 미분류(Unmatched) 데이터 필터링 기능 완벽 탑재) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2
+  XCircle, Edit3, Trash2, Star, AlertTriangle
 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -22,9 +24,80 @@ const FILE_TYPES = [
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
 
+// 🚀 [CTO 패치] 스마트 콤보박스 (검색 + 핀 고정)
+const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [searchKeyword, setSearchKeyword] = useState('');
+
+    const schools = schoolsData[schoolType] || [];
+    const favorites = schoolsData.favorites || [];
+    
+    const pinned = schools.filter(s => favorites.includes(s) && s.includes(searchKeyword));
+    const others = schools.filter(s => !favorites.includes(s) && s.includes(searchKeyword));
+
+    return (
+        <div className="relative w-full" style={disabled ? { pointerEvents: 'none', opacity: 0.5 } : {}}>
+            <div 
+                className={`w-full border p-2.5 rounded-lg outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-blue-500 bg-blue-50' : 'bg-white hover:bg-gray-50'}`}
+                onClick={() => !disabled && setIsOpen(!isOpen)}
+            >
+                <span className={value ? "text-blue-900" : "text-gray-400"}>{value || '👇 학교명 검색 및 선택'}</span>
+            </div>
+            
+            {isOpen && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-blue-200 rounded-xl shadow-xl max-h-64 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-2 border-b border-gray-100 bg-gray-50">
+                            <div className="relative">
+                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input 
+                                    type="text" autoFocus 
+                                    className="w-full pl-8 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-xs" 
+                                    placeholder="학교명 검색..." 
+                                    value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="overflow-y-auto flex-1 custom-scrollbar pb-1">
+                            {pinned.length > 0 && (
+                                <div className="p-1.5 bg-yellow-50/40">
+                                    <div className="text-[10px] font-black text-yellow-600 mb-1 px-1">📌 자주 찾는 학교</div>
+                                    <div className="grid grid-cols-1 gap-0.5">
+                                        {pinned.map(s => (
+                                            <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-white rounded cursor-pointer font-bold text-xs text-gray-800">{s}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {pinned.length > 0 && <div className="h-px bg-gray-100"></div>}
+                            
+                            <div className="p-1.5">
+                                {others.length === 0 && searchKeyword && pinned.length === 0 && (
+                                    <div className="text-center py-2 text-[10px] font-bold text-gray-400">결과 없음</div>
+                                )}
+                                <div className="grid grid-cols-1 gap-0.5">
+                                    {others.map(s => (
+                                        <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-blue-50 rounded cursor-pointer font-bold text-xs text-gray-700">{s}</div>
+                                    ))}
+                                    {onCustomSelect && (
+                                        <div onClick={() => { onCustomSelect(); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer font-bold text-xs text-blue-600 mt-1 border border-dashed border-gray-300 text-center">➕ 직접 입력</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 const ExamArchive = ({ currentUser }) => {
     const [filters, setFilters] = useState({
-        schoolType: '', district: '', schoolName: '', year: '', combinedTerm: '', subject: '', grade: ''
+        schoolType: 'high', schoolName: '', year: '', combinedTerm: '', subject: '', grade: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -36,19 +109,44 @@ const ExamArchive = ({ currentUser }) => {
     const [isProcessing, setIsProcessing] = useState(false);
 
     const [showAddModal, setShowAddModal] = useState(false);
-    
     const [showEditExamModal, setShowEditExamModal] = useState(false);
     const [editExamForm, setEditExamForm] = useState(null);
     
     const [newExamForm, setNewExamForm] = useState({
-        schoolType: '고등학교', schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
+        schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
-    // 🚀 [수정점] 행정조교도 관리자처럼 모든 통제 권한 부여
+    // 🚀 [CTO 패치] 스마트 콤보박스용 상태
+    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
+    const [addSchoolType, setAddSchoolType] = useState('high');
+    const [isAddCustom, setIsAddCustom] = useState(false);
+    const [editSchoolType, setEditSchoolType] = useState('high');
+    const [isEditCustom, setIsEditCustom] = useState(false);
+
+    const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false); // 미분류 데이터 필터
+
     const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
     const isWorker = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role);
     const canAddExam = ['admin', 'ta', 'admin_assistant'].includes(currentUser.role);
+
+    useEffect(() => {
+        const fetchSchools = async () => {
+            try {
+                const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) setSchoolsData(docSnap.data());
+            } catch (e) { console.error("학교 리스트 로드 실패", e); }
+        };
+        fetchSchools();
+    }, []);
+
+    const getSchoolTypeKorean = (key) => ({'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[key] || '고등학교');
+    const getGradeOptions = (type) => {
+        if (type === 'elementary') return ['1학년','2학년','3학년','4학년','5학년','6학년'];
+        if (type === 'middle') return ['1학년','2학년','3학년'];
+        return ['1학년','2학년','3학년','N수생'];
+    };
 
     const handleSearch = async () => {
         setLoading(true);
@@ -57,28 +155,38 @@ const ExamArchive = ({ currentUser }) => {
         
         try {
             const examsRef = collection(db, INTEGRATED_COLLECTION);
-            // 🚀 [수정점] limit(50) 삭제 (모든 데이터 정상적으로 불러옴)
             let q = query(examsRef); 
 
-            Object.keys(filters).forEach(key => {
-                if (key === 'schoolType') return; // 🚀 [수정점] schoolType은 구형 데이터 호환을 위해 클라이언트(JS)에서 필터링
-                if (key === 'combinedTerm' && filters.combinedTerm) {
-                    const [sem, tm] = filters.combinedTerm.split(' ');
-                    q = query(q, where('semester', '==', String(sem)), where('termType', '==', String(tm)));
-                } else if (key !== 'combinedTerm' && filters[key] && filters[key].trim() !== '') {
-                    q = query(q, where(key, '==', String(filters[key].trim())));
-                }
-            });
+            if (filters.combinedTerm) {
+                const [sem, tm] = filters.combinedTerm.split(' ');
+                q = query(q, where('semester', '==', String(sem)), where('termType', '==', String(tm)));
+            } 
+            if (filters.year) q = query(q, where('year', '==', String(filters.year)));
+            if (filters.grade) q = query(q, where('grade', '==', String(filters.grade)));
+            
+            // 미분류 조회가 아닐 때만 이름 필터 적용
+            if (!showUnmatchedOnly && filters.schoolName && filters.schoolName.trim() !== '') {
+                q = query(q, where('schoolName', '==', String(filters.schoolName.trim())));
+            }
 
             const snapshot = await getDocs(q);
             let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // 🚀 [수정점] 구형 데이터 호환성 보장 필터링 (schoolType이 없는 과거 데이터도 이름으로 판별하여 잡아냄)
-            if (filters.schoolType) {
+            // 🚀 [CTO 패치] 미분류(Unmatched) 학교 필터링 로직
+            if (showUnmatchedOnly) {
+                const allMasterSchools = [
+                    ...(schoolsData.elementary || []),
+                    ...(schoolsData.middle || []),
+                    ...(schoolsData.high || [])
+                ];
+                results = results.filter(r => r.schoolName && !allMasterSchools.includes(r.schoolName));
+            } else if (!filters.schoolName) {
+                // 학교명이 지정되지 않았을 때는 학교급 필터링 수행
+                const targetSchoolTypeKor = getSchoolTypeKorean(filters.schoolType);
                 results = results.filter(r => {
-                    if (r.schoolType) return r.schoolType === filters.schoolType;
-                    if (filters.schoolType === '고등학교') return r.schoolName?.includes('고');
-                    if (filters.schoolType === '중학교') return r.schoolName?.includes('중');
+                    if (r.schoolType) return r.schoolType === targetSchoolTypeKor;
+                    if (targetSchoolTypeKor === '고등학교') return r.schoolName?.includes('고');
+                    if (targetSchoolTypeKor === '중학교') return r.schoolName?.includes('중');
                     return true;
                 });
             }
@@ -90,11 +198,7 @@ const ExamArchive = ({ currentUser }) => {
             );
             setExams(results);
         } catch (error) {
-            if (error.code === 'permission-denied') {
-                setErrorMsg('데이터베이스 접근 권한이 차단되었습니다. Firebase 보안 규칙을 확인해주세요.');
-            } else {
-                setErrorMsg('데이터를 불러오는 중 문제가 발생했습니다. 네트워크 상태를 확인해주세요.');
-            }
+            setErrorMsg('데이터를 불러오는 중 문제가 발생했습니다.');
         } finally {
             setLoading(false);
         }
@@ -108,7 +212,7 @@ const ExamArchive = ({ currentUser }) => {
             const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
 
             const baseData = {
-                schoolType: newExamForm.schoolType,
+                schoolType: getSchoolTypeKorean(addSchoolType),
                 schoolName: newExamForm.schoolName.trim(),
                 year: String(newExamForm.year), 
                 semester: parsedSemester,
@@ -119,18 +223,12 @@ const ExamArchive = ({ currentUser }) => {
                 district: '양천구', 
             };
 
-            const updatePayload = {
-                createdAt: serverTimestamp(), 
-                files: {} 
-            };
+            const updatePayload = { createdAt: serverTimestamp(), files: {} };
 
             FILE_TYPES.forEach(ft => {
                 if (newExamForm.urls[ft.key]?.trim()) {
                     updatePayload.files[ft.key] = {
-                        status: 'published',
-                        url: newExamForm.urls[ft.key].trim(),
-                        workerId: currentUser.id,
-                        workerName: currentUser.name
+                        status: 'published', url: newExamForm.urls[ft.key].trim(), workerId: currentUser.id, workerName: currentUser.name
                     };
                 }
             });
@@ -144,21 +242,30 @@ const ExamArchive = ({ currentUser }) => {
                 urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
             });
             
-            setExams([{ id: docId, ...baseData, ...updatePayload }, ...exams.filter(e => e.id !== docId)]);
-            setErrorMsg('');
+            if (hasSearched) handleSearch();
         } catch (error) {
-            error.code === 'permission-denied' 
-                ? alert("보안 에러: 기출문제를 등록할 권한이 없습니다.") 
-                : alert("등록 실패: " + error.message);
+            alert("등록 실패: " + error.message);
         } finally {
             setIsProcessing(false);
         }
     };
 
     const handleEditExamClick = (exam) => {
+        let foundType = 'high';
+        let isCustom = true;
+        for (const [type, arr] of Object.entries(schoolsData)) {
+            if (type !== 'favorites' && Array.isArray(arr) && arr.includes(exam.schoolName)) { foundType = type; isCustom = false; break; }
+        }
+        if (isCustom) {
+            if (exam.schoolName?.includes('초')) foundType = 'elementary';
+            else if (exam.schoolName?.includes('중')) foundType = 'middle';
+        }
+
+        setEditSchoolType(foundType);
+        setIsEditCustom(isCustom);
+
         setEditExamForm({
             id: exam.id,
-            schoolType: exam.schoolType || '고등학교',
             schoolName: exam.schoolName || '',
             year: exam.year || String(currentYear),
             combinedTerm: `${exam.semester || '1학기'} ${exam.termType || '중간고사'}`,
@@ -175,7 +282,7 @@ const ExamArchive = ({ currentUser }) => {
             const [parsedSemester, parsedTerm] = editExamForm.combinedTerm.split(' ');
             
             const updateData = {
-                schoolType: editExamForm.schoolType,
+                schoolType: getSchoolTypeKorean(editSchoolType),
                 schoolName: editExamForm.schoolName.trim(),
                 year: String(editExamForm.year),
                 semester: parsedSemester,
@@ -204,23 +311,10 @@ const ExamArchive = ({ currentUser }) => {
                 await updateDoc(doc(db, INTEGRATED_COLLECTION, oldId), updateData);
             }
 
-            setExams(prev => {
-                const filtered = prev.filter(e => e.id !== oldId);
-                const oldExam = prev.find(e => e.id === oldId) || {};
-                return [{ ...oldExam, ...updateData, id: newId }, ...filtered].sort((a, b) => 
-                    String(a.schoolName || "").localeCompare(String(b.schoolName || "")) || 
-                    String(b.year || "").localeCompare(String(a.year || "")) || 
-                    String(b.semester || "").localeCompare(String(a.semester || ""))
-                );
-            });
-            
             alert("기출자료 정보가 성공적으로 수정되었습니다.");
             setShowEditExamModal(false);
-        } catch (error) {
-            alert("수정 실패: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
+            if (hasSearched) handleSearch();
+        } catch (error) { alert("수정 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleDeleteExam = async (examId) => {
@@ -232,11 +326,7 @@ const ExamArchive = ({ currentUser }) => {
             await deleteDoc(doc(db, INTEGRATED_COLLECTION, examId));
             setExams(prev => prev.filter(e => e.id !== examId));
             alert("자료가 성공적으로 삭제되었습니다.");
-        } catch (error) {
-            alert("삭제 실패: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
+        } catch (error) { alert("삭제 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleRunMergeMigration = async () => {
@@ -253,22 +343,17 @@ const ExamArchive = ({ currentUser }) => {
             const groups = {};
             allExams.forEach(exam => {
                 const baseData = {
-                    schoolName: exam.schoolName || exam.school || '',
-                    year: String(exam.year || ''),
-                    grade: exam.grade || '1학년',
-                    semester: exam.semester || '1학기',
-                    termType: exam.termType || exam.term || '중간고사',
-                    subject: exam.subject || ''
+                    schoolName: exam.schoolName || exam.school || '', year: String(exam.year || ''),
+                    grade: exam.grade || '1학년', semester: exam.semester || '1학기',
+                    termType: exam.termType || exam.term || '중간고사', subject: exam.subject || ''
                 };
                 const logicalId = generateExamDocId(baseData);
-
                 if (!groups[logicalId]) groups[logicalId] = [];
                 groups[logicalId].push(exam);
             });
 
             for (const logicalId of Object.keys(groups)) {
                 const group = groups[logicalId];
-                
                 if (group.length > 1) {
                     let mergedData = {};
                     let mergedFiles = {};
@@ -288,11 +373,8 @@ const ExamArchive = ({ currentUser }) => {
                         if (exam.files) {
                             Object.keys(exam.files).forEach(fKey => {
                                 const fileObj = exam.files[fKey];
-                                if (fileObj && fileObj.url && fileObj.url.trim() !== '') {
-                                    mergedFiles[fKey] = fileObj; 
-                                } else if (!mergedFiles[fKey] && fileObj) {
-                                    mergedFiles[fKey] = fileObj; 
-                                }
+                                if (fileObj && fileObj.url && fileObj.url.trim() !== '') { mergedFiles[fKey] = fileObj; } 
+                                else if (!mergedFiles[fKey] && fileObj) { mergedFiles[fKey] = fileObj; }
                             });
                         }
                     });
@@ -323,12 +405,7 @@ const ExamArchive = ({ currentUser }) => {
             alert(`🎉 중복 데이터 안전 병합 완료!\n\n- ${mergedCount}개의 쪼개진 시험 데이터가 하나로 완벽히 합쳐졌습니다.\n- ${deletedCount}개의 쓸모없는 찌꺼기 문서가 정리되었습니다.\n\n다시 검색하시면 깔끔해진 목록을 보실 수 있습니다.`);
             if (hasSearched) handleSearch(); 
 
-        } catch (error) {
-            console.error("Merge Error:", error);
-            alert("병합 중 오류 발생: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
+        } catch (error) { alert("병합 중 오류 발생: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleClaimTask = async (exam, fileKey) => {
@@ -350,20 +427,13 @@ const ExamArchive = ({ currentUser }) => {
 
                 if (currentFile.status !== 'open') throw new Error(`이미 ${currentFile.workerName || '다른 사람'}님이 작업 중이거나 완료된 건입니다.`);
 
-                files[fileKey] = {
-                    ...currentFile,
-                    status: 'working',
-                    workerId: currentUser.id,
-                    workerName: currentUser.name
-                };
+                files[fileKey] = { ...currentFile, status: 'working', workerId: currentUser.id, workerName: currentUser.name };
                 updatedFilesForState = files;
                 transaction.update(examRef, { files: updatedFilesForState, updatedAt: serverTimestamp() });
             });
 
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFilesForState } : e));
-        } catch (error) { 
-            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert(error.message); 
-        } finally { setIsProcessing(false); }
+        } catch (error) { alert(error.message); } finally { setIsProcessing(false); }
     };
 
     const handleCancelTask = async (exam, fileKey) => {
@@ -379,19 +449,13 @@ const ExamArchive = ({ currentUser }) => {
 
             await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
-        } catch (error) {
-            alert("취소 실패: " + error.message);
-        } finally {
-            setIsProcessing(false);
-        }
+        } catch (error) { alert("취소 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleSubmitLink = async () => {
         const { exam, fileKey, type } = modalState;
         
-        if (type !== 'edit_link' && !uploadUrl.trim()) {
-            return alert("구글 드라이브 URL을 입력해주세요.");
-        }
+        if (type !== 'edit_link' && !uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
         
         setIsProcessing(true);
         const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
@@ -422,9 +486,7 @@ const ExamArchive = ({ currentUser }) => {
             setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
             setModalState({ type: null, exam: null, fileKey: null });
             setUploadUrl('');
-        } catch (error) { 
-            error.code === 'permission-denied' ? alert("보안 권한이 없습니다.") : alert("요청 실패: " + error.message); 
-        } finally { setIsProcessing(false); }
+        } catch (error) { alert("요청 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleApprove = async (exam, fileKey) => {
@@ -462,21 +524,15 @@ const ExamArchive = ({ currentUser }) => {
 
                 <div className="w-full flex flex-col gap-1.5 mt-auto">
                     {fileData.status === 'open' && isWorker && (
-                        <Button size="sm" variant="outline" className="w-full text-[11px] py-1 px-0 border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400" onClick={() => handleClaimTask(exam, ft.key)} disabled={isProcessing}>
-                            작업하기
-                        </Button>
+                        <Button size="sm" variant="outline" className="w-full text-[11px] py-1 px-0 border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400" onClick={() => handleClaimTask(exam, ft.key)} disabled={isProcessing}>작업하기</Button>
                     )}
                     {fileData.status === 'working' && (
                         <>
                             <div className="bg-yellow-50 text-yellow-700 text-[10px] font-bold py-1 px-2 rounded text-center truncate w-full border border-yellow-200" title={`${fileData.workerName} 작업중`}>{fileData.workerName}</div>
                             {fileData.workerId === currentUser.id && (
                                 <div className="flex gap-1 w-full">
-                                    <Button size="sm" variant="secondary" className="flex-1 text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => { setUploadUrl(''); setModalState({ type: 'upload_link', exam, fileKey: ft.key }); }}>
-                                        등록
-                                    </Button>
-                                    <Button size="sm" variant="outline" className="px-2 py-1 border-gray-300 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => handleCancelTask(exam, ft.key)} title="작업 취소">
-                                        <XCircle size={14}/>
-                                    </Button>
+                                    <Button size="sm" variant="secondary" className="flex-1 text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => { setUploadUrl(''); setModalState({ type: 'upload_link', exam, fileKey: ft.key }); }}>등록</Button>
+                                    <Button size="sm" variant="outline" className="px-2 py-1 border-gray-300 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => handleCancelTask(exam, ft.key)} title="작업 취소"><XCircle size={14}/></Button>
                                 </div>
                             )}
                         </>
@@ -484,11 +540,7 @@ const ExamArchive = ({ currentUser }) => {
                     {fileData.status === 'pending' && (
                         <>
                             <div className="bg-purple-50 text-purple-700 text-[10px] font-bold py-1 px-2 rounded text-center w-full border border-purple-200">검수 대기</div>
-                            {isAdmin && (
-                                <Button size="sm" variant="success" className="w-full text-[11px] py-1 px-0" onClick={() => handleApprove(exam, ft.key)} disabled={isProcessing}>
-                                    승인
-                                </Button>
-                            )}
+                            {isAdmin && <Button size="sm" variant="success" className="w-full text-[11px] py-1 px-0" onClick={() => handleApprove(exam, ft.key)} disabled={isProcessing}>승인</Button>}
                         </>
                     )}
                     {fileData.status === 'published' && (
@@ -496,9 +548,7 @@ const ExamArchive = ({ currentUser }) => {
                             <Button size="sm" variant="primary" className="w-full text-[11px] py-1.5 px-0 flex items-center justify-center gap-1 shadow-sm"><ExternalLink size={12}/> 보기</Button>
                         </a>
                     )}
-                    {fileData.status === 'open' && !isWorker && (
-                         <div className="text-[11px] text-gray-400 text-center py-1">미등록</div>
-                    )}
+                    {fileData.status === 'open' && !isWorker && <div className="text-[11px] text-gray-400 text-center py-1">미등록</div>}
                 </div>
             </div>
         );
@@ -525,23 +575,41 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </div>
 
+            {/* 🚀 [CTO 패치] 스마트 콤보박스가 탑재된 검색 필터 */}
             <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.schoolType} onChange={e=>setFilters({...filters, schoolType: e.target.value})}>
-                        <option value="">학교급</option><option value="중학교">중학교</option><option value="고등학교">고등학교</option>
+                <div className="flex items-center justify-between mb-3">
+                    <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
+                    <label className="flex items-center gap-1 text-xs text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg cursor-pointer border border-rose-200 font-bold transition-colors hover:bg-rose-100">
+                        <input type="checkbox" className="accent-rose-600" checked={showUnmatchedOnly} onChange={e => { setShowUnmatchedOnly(e.target.checked); setFilters({...filters, schoolName: ''}); }}/>
+                        <AlertTriangle size={14}/> 미분류 학교만 보기
+                    </label>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }} disabled={showUnmatchedOnly}>
+                        <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                     </select>
-                    <input className="border p-3 rounded-xl bg-gray-50 w-full" placeholder="학교명 (예: 목동고)" value={filters.schoolName} onChange={e=>setFilters({...filters, schoolName: e.target.value})} />
                     
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
+                    <div className="col-span-2 lg:col-span-2">
+                        <SmartSchoolSelect 
+                            schoolType={filters.schoolType} 
+                            schoolsData={schoolsData} 
+                            value={filters.schoolName} 
+                            onChange={(val) => setFilters({...filters, schoolName: val})}
+                            disabled={showUnmatchedOnly}
+                        />
+                    </div>
+                    
+                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
                         <option value="">연도 전체</option>
                         {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                     </select>
 
-                    <select className="border p-3 rounded-xl bg-gray-50 w-full" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
+                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
                     </select>
                     
-                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-3 rounded-xl bg-gray-50 w-full" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
+                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
                         <option value="">시험 전체</option>
                         <option value="1학기 중간고사">1학기 중간고사</option>
                         <option value="1학기 기말고사">1학기 기말고사</option>
@@ -563,7 +631,7 @@ const ExamArchive = ({ currentUser }) => {
                     </div>
                 ) : exams.length === 0 && !loading ? (
                     <div className="text-center py-16 text-gray-400">
-                        {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : "조건에 맞는 기출 자료가 없습니다."}
+                        {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : showUnmatchedOnly ? "미분류된 학교 데이터가 없습니다! (완벽합니다 🎉)" : "조건에 맞는 기출 자료가 없습니다."}
                     </div>
                 ) : (
                     <div className="divide-y divide-gray-100">
@@ -599,45 +667,60 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
+            {/* 🚀 [CTO 패치] 신규 등록 모달 스마트 콤보박스 적용 */}
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
-                <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
+                <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-10">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
                         <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원 (내신연구소 연동)</p>
                         <p>여기서 등록한 자료 정보는 <strong>내신 연구소에도 자동 연동</strong>됩니다.</p>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 md:gap-4">
-                        <div className="col-span-2 sm:col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학교명</label>
-                            <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" placeholder="목동고" value={newExamForm.schoolName} onChange={e => setNewExamForm({...newExamForm, schoolName: e.target.value})}/>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                        <div className="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                            <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 검색/선택)</label>
+                            <div className="flex gap-2 relative">
+                                <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={addSchoolType} onChange={e => { setAddSchoolType(e.target.value); setNewExamForm({...newExamForm, schoolName: '', grade: '1학년'}); setIsAddCustom(false); }}>
+                                    <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
+                                </select>
+                                
+                                {!isAddCustom ? (
+                                    <SmartSchoolSelect 
+                                        schoolType={addSchoolType} 
+                                        schoolsData={schoolsData} 
+                                        value={newExamForm.schoolName} 
+                                        onChange={(val) => setNewExamForm({...newExamForm, schoolName: val})}
+                                        onCustomSelect={() => setIsAddCustom(true)}
+                                    />
+                                ) : (
+                                    <div className="w-2/3 relative">
+                                        <input required className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={newExamForm.schoolName} onChange={e => setNewExamForm({...newExamForm, schoolName: e.target.value})} />
+                                        <button type="button" onClick={() => { setIsAddCustom(false); setNewExamForm({...newExamForm, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                        <div className="col-span-2 sm:col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학교급</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.schoolType} onChange={e => setNewExamForm({...newExamForm, schoolType: e.target.value})}>
-                                <option value="중학교">중학교</option><option value="고등학교">고등학교</option>
+
+                        <div className="col-span-1">
+                            <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={newExamForm.grade} onChange={e => setNewExamForm({...newExamForm, grade: e.target.value})}>
+                                {getGradeOptions(addSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                         </div>
                         <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학년</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.grade} onChange={e => setNewExamForm({...newExamForm, grade: e.target.value})}>
-                                <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-                            </select>
-                        </div>
-                        <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">과목</label>
-                            <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}/>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">과목</label>
+                            <input className="w-full border-2 p-2.5 rounded-xl focus:border-blue-400 outline-none bg-gray-50 font-bold" placeholder="예: 수학(상)" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}/>
                         </div>
                         
                         <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">연도</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
                                 {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                             </select>
                         </div>
                         
                         <div className="col-span-1">
-                            <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
-                            <select className="w-full border p-2.5 rounded-xl bg-gray-50 text-sm" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 시험</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold text-sm outline-none focus:border-blue-400" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
                                 <option value="1학기 중간고사">1학기 중간고사</option>
                                 <option value="1학기 기말고사">1학기 기말고사</option>
                                 <option value="2학기 중간고사">2학기 중간고사</option>
@@ -669,46 +752,61 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </Modal>
 
+            {/* 🚀 [CTO 패치] 정보 수정 모달 스마트 콤보박스 적용 */}
             <Modal isOpen={showEditExamModal} onClose={() => setShowEditExamModal(false)} title="기출자료 정보 수정">
                 {editExamForm && (
-                    <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-4">
+                    <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-10">
                         <div className="bg-orange-50 p-4 rounded-xl text-xs md:text-sm text-orange-800 mb-4">
                             <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 관리자 권한 수정</p>
                             <p>기본 정보(학교, 연도 등)만 수정되며 연결된 드라이브 파일과 작업 이력은 안전하게 유지됩니다.</p>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3 md:gap-4">
-                            <div className="col-span-2 sm:col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">학교명</label>
-                                <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" placeholder="목동고" value={editExamForm.schoolName} onChange={e => setEditExamForm({...editExamForm, schoolName: e.target.value})}/>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                            <div className="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
+                                <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 검색/선택)</label>
+                                <div className="flex gap-2 relative">
+                                    <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={editSchoolType} onChange={e => { setEditSchoolType(e.target.value); setEditExamForm({...editExamForm, schoolName: '', grade: '1학년'}); setIsEditCustom(false); }}>
+                                        <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
+                                    </select>
+                                    
+                                    {!isEditCustom ? (
+                                        <SmartSchoolSelect 
+                                            schoolType={editSchoolType} 
+                                            schoolsData={schoolsData} 
+                                            value={editExamForm.schoolName} 
+                                            onChange={(val) => setEditExamForm({...editExamForm, schoolName: val})}
+                                            onCustomSelect={() => setIsEditCustom(true)}
+                                        />
+                                    ) : (
+                                        <div className="w-2/3 relative">
+                                            <input required className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={editExamForm.schoolName} onChange={e => setEditExamForm({...editExamForm, schoolName: e.target.value})} />
+                                            <button type="button" onClick={() => { setIsEditCustom(false); setEditExamForm({...editExamForm, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            <div className="col-span-2 sm:col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">학교급</label>
-                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.schoolType} onChange={e => setEditExamForm({...editExamForm, schoolType: e.target.value})}>
-                                    <option value="중학교">중학교</option><option value="고등학교">고등학교</option>
+
+                            <div className="col-span-1">
+                                <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={editExamForm.grade} onChange={e => setEditExamForm({...editExamForm, grade: e.target.value})}>
+                                    {getGradeOptions(editSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
                                 </select>
                             </div>
                             <div className="col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">학년</label>
-                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.grade} onChange={e => setEditExamForm({...editExamForm, grade: e.target.value})}>
-                                    <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-                                </select>
-                            </div>
-                            <div className="col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">과목</label>
-                                <input className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})}/>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">과목</label>
+                                <input className="w-full border-2 p-2.5 rounded-xl focus:border-blue-400 outline-none bg-gray-50 font-bold" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})}/>
                             </div>
                             
                             <div className="col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">연도</label>
-                                <select className="w-full border p-2.5 rounded-xl bg-gray-50" value={editExamForm.year} onChange={e => setEditExamForm({...editExamForm, year: e.target.value})}>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">연도</label>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={editExamForm.year} onChange={e => setEditExamForm({...editExamForm, year: e.target.value})}>
                                     {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                                 </select>
                             </div>
                             
                             <div className="col-span-1">
-                                <label className="block text-sm font-bold text-gray-700 mb-1">학기 및 시험</label>
-                                <select className="w-full border p-2.5 rounded-xl bg-gray-50 text-sm" value={editExamForm.combinedTerm} onChange={e => setEditExamForm({...editExamForm, combinedTerm: e.target.value})}>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 시험</label>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold text-sm outline-none focus:border-blue-400" value={editExamForm.combinedTerm} onChange={e => setEditExamForm({...editExamForm, combinedTerm: e.target.value})}>
                                     <option value="1학기 중간고사">1학기 중간고사</option>
                                     <option value="1학기 기말고사">1학기 기말고사</option>
                                     <option value="2학기 중간고사">2학기 중간고사</option>
