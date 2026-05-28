@@ -1,6 +1,7 @@
 // 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore"); 
+// 🚀 [CTO 패치] 문서 삭제를 감지하는 onDocumentDeleted 기능 추가 로드
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -12,7 +13,7 @@ if (admin.apps.length === 0) {
 const APP_ID = 'imperial-clinic-v1';
 
 // ============================================================================
-// [기능 1] 관리자 비밀번호 강제 초기화
+// [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) {
@@ -20,21 +21,43 @@ exports.adminResetPassword = onCall(async (request) => {
   }
   const uid = request.data.uid;
   const newPassword = request.data.newPassword;
-  if (!uid || !newPassword || newPassword.length < 6) {
-    throw new HttpsError("invalid-argument", "유효한 인자 값이 아닙니다.");
+  const email = request.data.email; 
+
+  if (!newPassword || newPassword.length < 6) {
+    throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
   }
+
+  // 이메일이 전달된 경우 (인증소에서 삭제된 유령 계정 복구 시도)
+  if (email) {
+    try {
+      const userRecord = await admin.auth().getUserByEmail(email);
+      await admin.auth().updateUser(userRecord.uid, { password: newPassword });
+      return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
+    } catch (error) {
+      if (error.code === 'auth/user-not-found') {
+        const newUserRecord = await admin.auth().createUser({
+          email: email,
+          password: newPassword,
+          emailVerified: true
+        });
+        return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
+      }
+      throw new HttpsError("unknown", error.message);
+    }
+  }
+
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
-    return { success: true, message: "비밀번호가 성공적으로 변경되었습니다." };
+    return { success: true, authUid: uid };
   } catch (error) {
     if (error.code === 'auth/user-not-found') {
       try {
         const fallbackEmail = `${uid}@imperial.com`;
         const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
         await admin.auth().updateUser(userRecord.uid, { password: newPassword });
-        return { success: true };
+        return { success: true, authUid: userRecord.uid };
       } catch (fError) {
-        throw new HttpsError("not-found", "계정을 찾을 수 없습니다.");
+        throw new HttpsError("not-found", "인증 서버에서 계정을 식별할 수 없습니다. 이메일을 명시해 주세요.");
       }
     }
     throw new HttpsError("unknown", error.message);
@@ -255,7 +278,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 });
 
 // ============================================================================
-// 🚀 [기능 6] 텔레그램 봇 보안 알림 전송 (프론트엔드 은닉용)
+// [기능 6] 텔레그램 봇 보안 알림 전송 (프론트엔드 은닉용)
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
@@ -263,7 +286,6 @@ exports.sendTelegramAlert = onCall(async (request) => {
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
     
-    // 환경 변수가 없는 경우 에러를 반환하여 안전하게 처리합니다.
     if (!botToken || !chatId) {
         console.warn("서버 환경변수(TELEGRAM)가 누락되었습니다.");
         return { success: false, message: "환경변수 누락" };
@@ -284,4 +306,36 @@ exports.sendTelegramAlert = onCall(async (request) => {
         console.error("텔레그램 발송 실패:", error);
         throw new HttpsError("internal", "텔레그램 전송 중 서버 오류");
     }
+});
+
+// ============================================================================
+// 🚀 [기능 7] 데이터 연쇄 청소기 (유저 삭제 시 Auth 동반 삭제 트리거)
+// ============================================================================
+exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
+    const snap = event.data;
+    if (!snap) return null;
+    
+    // 삭제되기 직전의 문서 데이터
+    const deletedUser = snap.data();
+    const targetAuthUid = deletedUser.authUid;
+
+    try {
+        if (targetAuthUid && targetAuthUid !== 'legacy_verified_account') {
+            await admin.auth().deleteUser(targetAuthUid);
+            console.log(`✅ [Auth 청소 완료] 사용자(${deletedUser.name})의 명부 삭제 감지 -> 인증소(Auth) 동반 삭제 성공!`);
+        } else {
+            // UID가 꼬여있을 경우 이메일로 2차 타격 시도
+            const fallbackEmail = `${event.params.userId}@imperial.com`;
+            const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
+            await admin.auth().deleteUser(userRecord.uid);
+            console.log(`✅ [Auth 청소 완료] 사용자(${deletedUser.name})의 명부 삭제 감지 -> 이메일(${fallbackEmail}) 기반 동반 삭제 성공!`);
+        }
+    } catch (error) {
+        if (error.code === 'auth/user-not-found') {
+            console.log(`ℹ️ [Auth 청소 스킵] 이미 인증소에 존재하지 않는 유령 계정입니다.`);
+        } else {
+            console.error(`🔥 [Auth 청소 에러]`, error);
+        }
+    }
+    return null;
 });
