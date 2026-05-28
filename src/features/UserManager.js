@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 회원 편집 시 마스터 학교 데이터 연동 이중 드롭다운 탑재) */
+   (🚀 CTO 패치: 스마트 콤보박스(검색 + 핀 고정) 모달 탑재) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -14,6 +14,75 @@ import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [CTO 패치] 스마트 콤보박스
+const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+
+    const schools = schoolsData[schoolType] || [];
+    const favorites = schoolsData.favorites || [];
+    
+    const pinned = schools.filter(s => favorites.includes(s) && s.includes(search));
+    const others = schools.filter(s => !favorites.includes(s) && s.includes(search));
+
+    return (
+        <div className="relative w-2/3">
+            <div 
+                className={`w-full border p-2.5 rounded-lg outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-blue-500 bg-blue-50' : 'bg-white'}`}
+                onClick={() => setIsOpen(!isOpen)}
+            >
+                <span className={value ? "text-blue-900" : "text-gray-400"}>{value || '👇 학교명 검색 및 선택'}</span>
+            </div>
+            
+            {isOpen && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-blue-200 rounded-xl shadow-xl max-h-64 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-2 border-b border-gray-100 bg-gray-50">
+                            <div className="relative">
+                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input 
+                                    type="text" autoFocus 
+                                    className="w-full pl-8 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-xs" 
+                                    placeholder="학교명 검색..." 
+                                    value={search} onChange={e => setSearch(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="overflow-y-auto flex-1 custom-scrollbar pb-1">
+                            {pinned.length > 0 && (
+                                <div className="p-1.5 bg-yellow-50/40">
+                                    <div className="text-[10px] font-black text-yellow-600 mb-1 px-1">📌 자주 찾는 학교</div>
+                                    <div className="grid grid-cols-1 gap-0.5">
+                                        {pinned.map(s => (
+                                            <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearch(''); }} className="px-2 py-1.5 hover:bg-white rounded cursor-pointer font-bold text-xs text-gray-800">{s}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {pinned.length > 0 && <div className="h-px bg-gray-100"></div>}
+                            
+                            <div className="p-1.5">
+                                {others.length === 0 && search && pinned.length === 0 && (
+                                    <div className="text-center py-2 text-[10px] font-bold text-gray-400">결과 없음</div>
+                                )}
+                                <div className="grid grid-cols-1 gap-0.5">
+                                    {others.map(s => (
+                                        <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearch(''); }} className="px-2 py-1.5 hover:bg-blue-50 rounded cursor-pointer font-bold text-xs text-gray-700">{s}</div>
+                                    ))}
+                                    <div onClick={() => { onCustomSelect(); setIsOpen(false); setSearch(''); }} className="px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer font-bold text-xs text-blue-600 mt-1 border border-dashed border-gray-300 text-center">➕ 직접 입력</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
 
 const UserManager = ({ currentUser }) => {
     if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
@@ -49,8 +118,7 @@ const UserManager = ({ currentUser }) => {
     const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
     const [isSendingSms, setIsSendingSms] = useState(false);
 
-    // 🚀 [CTO 패치] 마스터 학교 데이터 연동 상태
-    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [] });
+    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false);
 
@@ -156,12 +224,11 @@ const UserManager = ({ currentUser }) => {
             accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', linkedChildrenIds: user.linkedChildrenIds || []
         });
         
-        // 🚀 [CTO 패치] 학교 타입 역산 추적 로직 (드롭다운 초기화용)
         if (user.schoolName) {
             let foundType = 'high';
             let isCustom = true;
             for (const [type, arr] of Object.entries(schoolsData)) {
-                if (arr && arr.includes(user.schoolName)) { foundType = type; isCustom = false; break; }
+                if (type !== 'favorites' && Array.isArray(arr) && arr.includes(user.schoolName)) { foundType = type; isCustom = false; break; }
             }
             if (isCustom) {
                 if (user.schoolName.includes('초')) foundType = 'elementary';
@@ -316,7 +383,6 @@ const UserManager = ({ currentUser }) => {
         ? pendingUsers.filter(u => u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery))
         : users.filter(u => u.role === activeTab && u.status !== 'pending' && (u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery)));
 
-    // 🚀 [CTO 패치] 동적 학년 리스트 생성 헬퍼
     const getGradeOptions = (type) => {
         if (type === 'elementary') return ['1학년','2학년','3학년','4학년','5학년','6학년'];
         if (type === 'middle') return ['1학년','2학년','3학년'];
@@ -497,11 +563,11 @@ const UserManager = ({ currentUser }) => {
                             
                             {(activeTab === 'student' || (activeTab === 'pending' && formData.role === 'student')) && (
                                 <>
-                                    {/* 🚀 [CTO 패치] 학교 마스터 데이터 연동 이중 드롭다운 (편집/생성 모달) */}
+                                    {/* 🚀 [CTO 패치] 스마트 콤보박스 연동 */}
                                     <div className="grid grid-cols-1 gap-3 bg-blue-50 p-4 rounded-xl border border-blue-100">
                                         <div>
-                                            <label className="block text-xs font-bold text-blue-800 mb-1.5">학교 정보</label>
-                                            <div className="flex gap-2">
+                                            <label className="block text-xs font-bold text-blue-800 mb-1.5">학교 정보 (목록에서 검색/선택)</label>
+                                            <div className="flex gap-2 relative">
                                                 <select className="w-1/3 border p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setFormData({...formData, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
                                                     <option value="elementary">초등학교</option>
                                                     <option value="middle">중학교</option>
@@ -509,18 +575,17 @@ const UserManager = ({ currentUser }) => {
                                                 </select>
                                                 
                                                 {!isCustomSchool ? (
-                                                    <select className="w-2/3 border p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={formData.schoolName} onChange={e => {
-                                                        if (e.target.value === 'custom_input') setIsCustomSchool(true);
-                                                        else setFormData({...formData, schoolName: e.target.value});
-                                                    }}>
-                                                        <option value="" className="text-gray-400">👇 학교명 선택</option>
-                                                        {(schoolsData[schoolType] || []).map(s => <option key={s} value={s}>{s}</option>)}
-                                                        <option value="custom_input" className="text-blue-600 font-bold bg-blue-50">➕ 목록에 없음 (직접입력)</option>
-                                                    </select>
+                                                    <SmartSchoolSelect 
+                                                        schoolType={schoolType} 
+                                                        schoolsData={schoolsData} 
+                                                        value={formData.schoolName} 
+                                                        onChange={(val) => setFormData({...formData, schoolName: val})}
+                                                        onCustomSelect={() => setIsCustomSchool(true)}
+                                                    />
                                                 ) : (
                                                     <div className="w-2/3 relative">
                                                         <input required className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.schoolName} onChange={e => setFormData({...formData, schoolName: e.target.value})} />
-                                                        <button type="button" onClick={() => { setIsCustomSchool(false); setFormData({...formData, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500"><X size={16}/></button>
+                                                        <button type="button" onClick={() => { setIsCustomSchool(false); setFormData({...formData, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
                                                     </div>
                                                 )}
                                             </div>

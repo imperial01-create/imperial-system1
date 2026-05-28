@@ -1,14 +1,14 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: integrated_exams(통합 DB)까지 포함한 완벽한 4중 병렬 학교 스캔 엔진 탑재) */
+   (🚀 CTO 패치: 생략 없는 100% 풀버전 - 기존 기능 완벽 유지 + 6중 스캔 + 학교 병합 툴 탑재) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, updateDoc, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, where, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle, Database, School, RefreshCw, Building2, Trash2
+  AlertTriangle, Database, School, RefreshCw, Building2, Trash2, Star
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
@@ -24,6 +24,7 @@ const SettingsManager = ({ currentUser }) => {
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
     const [schoolMigrationProcessing, setSchoolMigrationProcessing] = useState(false);
+    const [mergingSchools, setMergingSchools] = useState(false);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -36,8 +37,11 @@ const SettingsManager = ({ currentUser }) => {
     const [newClassroom, setNewClassroom] = useState('');
     const [newSubject, setNewSubject] = useState('');
 
-    const [schools, setSchools] = useState({ elementary: [], middle: [], high: [] });
+    const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [newSchool, setNewSchool] = useState({ type: 'high', name: '' });
+
+    const [mergeSource, setMergeSource] = useState('');
+    const [mergeTarget, setMergeTarget] = useState('');
 
     useEffect(() => {
         const fetchAllSettings = async () => {
@@ -56,7 +60,15 @@ const SettingsManager = ({ currentUser }) => {
                     });
                 }
                 
-                if (schoolSnap.exists()) setSchools(schoolSnap.data());
+                if (schoolSnap.exists()) {
+                    const data = schoolSnap.data();
+                    setSchools({
+                        elementary: data.elementary || [],
+                        middle: data.middle || [],
+                        high: data.high || [],
+                        favorites: data.favorites || []
+                    });
+                }
             } catch (error) {
                 console.error("환경설정 로딩 실패:", error);
                 showToast("환경설정을 불러오는 중 오류가 발생했습니다.", "error");
@@ -67,17 +79,18 @@ const SettingsManager = ({ currentUser }) => {
         fetchAllSettings();
     }, []);
 
+    // ==============================================================================
+    // 1. 기본 인프라(마스터) 관리 로직
+    // ==============================================================================
     const handleSave = async () => {
         setSaving(true);
         try {
-            await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data'), {
-                ...settings, updatedAt: serverTimestamp()
-            }, { merge: true });
+            await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data'), { ...settings, updatedAt: serverTimestamp() }, { merge: true });
             alert("✅ 학원 환경설정이 성공적으로 저장되었습니다.\n\n등록하신 강의실 및 과목 리스트는 이제 전체 시스템의 드롭다운 메뉴로 연동됩니다.");
-        } catch (error) {
-            alert("저장 중 오류가 발생했습니다: " + error.message);
-        } finally {
-            setSaving(false);
+        } catch (error) { 
+            alert("저장 중 오류가 발생했습니다: " + error.message); 
+        } finally { 
+            setSaving(false); 
         }
     };
 
@@ -91,20 +104,26 @@ const SettingsManager = ({ currentUser }) => {
 
     const removeArrayItem = (field, index) => {
         if (!window.confirm("항목을 삭제하시겠습니까?\n이미 이 항목을 사용 중인 기존 데이터에는 영향을 주지 않습니다.")) return;
-        setSettings(prev => {
-            const arr = [...prev[field]];
-            arr.splice(index, 1);
-            return { ...prev, [field]: arr };
+        setSettings(prev => { 
+            const arr = [...prev[field]]; 
+            arr.splice(index, 1); 
+            return { ...prev, [field]: arr }; 
         });
     };
 
+    // ==============================================================================
+    // 2. 학교 마스터 데이터 관리 및 6중 스캔 로직
+    // ==============================================================================
     const handleSaveSchools = async () => {
         setSavingSchools(true);
         try {
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schools'), schools);
             showToast('학교 마스터 데이터가 성공적으로 저장되었습니다.', 'success');
-        } catch (e) { showToast(e.message, 'error'); }
-        finally { setSavingSchools(false); }
+        } catch (e) { 
+            showToast(e.message, 'error'); 
+        } finally { 
+            setSavingSchools(false); 
+        }
     };
 
     const addSchool = () => {
@@ -119,22 +138,31 @@ const SettingsManager = ({ currentUser }) => {
     const removeSchool = (type, name) => {
         setSchools(prev => ({
             ...prev,
-            [type]: prev[type].filter(s => s !== name)
+            [type]: prev[type].filter(s => s !== name),
+            favorites: (prev.favorites || []).filter(s => s !== name)
         }));
     };
 
-    // 🚀 [CTO 패치] 통합 DB(integrated_exams)를 포함한 4중 병렬 스캔 엔진
+    const toggleFavorite = (name) => {
+        setSchools(prev => {
+            const favs = prev.favorites || [];
+            if (favs.includes(name)) return { ...prev, favorites: favs.filter(s => s !== name) };
+            return { ...prev, favorites: [...favs, name] };
+        });
+    };
+
     const runSchoolMigration = async () => {
-        if (!window.confirm("현재 시스템에 등록된 1) 재원생 명부, 2) 통합 기출/내신 DB, 3) 구형 레거시 DB의 모든 데이터를 병렬 스캔합니다.\n\n각 데이터베이스에 입력된 학교 이름들을 추출하여 마스터 데이터로 자동 분류 및 병합합니다. (중복 자동 제거)\n\n실행하시겠습니까?")) return;
+        if (!window.confirm("현재 시스템에 등록된 6개 핵심 DB(명부, 통합시험, 기출, 전략, 진단평가, 성적표)의 모든 데이터를 병렬 스캔합니다.\n\n각 데이터베이스에 입력된 학교 이름들을 추출하여 마스터 데이터로 자동 분류 및 병합합니다. (중복 자동 제거)\n\n실행하시겠습니까?")) return;
         
         setSchoolMigrationProcessing(true);
         try {
-            // 4개의 컬렉션을 동시에 긁어옵니다. (integrated_exams 가 핵심입니다!)
-            const [usersSnap, integratedSnap, archiveSnap, strategySnap] = await Promise.all([
+            const [usersSnap, integratedSnap, archiveSnap, strategySnap, diagSnap, gradeSnap] = await Promise.all([
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')),
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams')),
                 getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'school_strategies'))
+                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'school_strategies')),
+                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'student_exam_diagnostics')),
+                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'))
             ]);
 
             const ele = new Set(schools.elementary || []);
@@ -146,48 +174,88 @@ const SettingsManager = ({ currentUser }) => {
                 if (!rawName) return;
                 const sn = rawName.trim();
                 if (!sn) return;
-                
                 if (sn.includes('초') || sn.includes('초등')) ele.add(sn);
                 else if (sn.includes('중') || sn.includes('중학')) mid.add(sn);
-                else high.add(sn); // 초/중이 아니면 기본적으로 고등학교로 편입
+                else high.add(sn); 
                 scannedCount++;
             };
 
-            // 1. 재원생 명부 스캔
-            usersSnap.forEach(docSnap => {
-                const user = docSnap.data();
-                if ((user.role === 'student' || (user.status === 'pending' && user.role === 'student')) && user.schoolName) {
-                    processSchoolName(user.schoolName);
+            usersSnap.forEach(d => { 
+                const u = d.data(); 
+                if ((u.role === 'student' || (u.status === 'pending' && u.role === 'student')) && u.schoolName) {
+                    processSchoolName(u.schoolName);
                 }
             });
 
-            // 2. 통합 DB 및 레거시 DB 스캔 (schoolName과 school 필드를 모두 검사)
-            const scanExamData = (docSnap) => {
-                const data = docSnap.data();
-                const sName = data.schoolName || data.school;
-                if (sName) processSchoolName(sName);
+            const scanData = (d) => { 
+                const data = d.data(); 
+                const sName = data.schoolName || data.school; 
+                if (sName) processSchoolName(sName); 
             };
-
-            integratedSnap.forEach(scanExamData);
-            archiveSnap.forEach(scanExamData);
-            strategySnap.forEach(scanExamData);
+            
+            integratedSnap.forEach(scanData); 
+            archiveSnap.forEach(scanData); 
+            strategySnap.forEach(scanData);
+            diagSnap.forEach(scanData); 
+            gradeSnap.forEach(scanData);
 
             const newSchools = {
                 elementary: [...ele].sort((a,b)=>a.localeCompare(b)),
                 middle: [...mid].sort((a,b)=>a.localeCompare(b)),
-                high: [...high].sort((a,b)=>a.localeCompare(b))
+                high: [...high].sort((a,b)=>a.localeCompare(b)),
+                favorites: schools.favorites || []
             };
 
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools'), newSchools);
             setSchools(newSchools);
-            alert(`✅ 총 ${scannedCount}건의 문서(명부+통합 시험DB)를 스캔하여 학교 목록 완벽 병합을 완료했습니다!`);
-        } catch (e) {
-            alert('마이그레이션 실패: ' + e.message);
-        } finally {
-            setSchoolMigrationProcessing(false);
+            alert(`✅ 총 ${scannedCount}건의 거대 DB 데이터를 스캔하여 학교 목록 완벽 병합을 완료했습니다!`);
+        } catch (e) { 
+            alert('마이그레이션 실패: ' + e.message); 
+        } finally { 
+            setSchoolMigrationProcessing(false); 
         }
     };
 
+    const handleMergeSchoolsAction = async () => {
+        const source = mergeSource.trim();
+        const target = mergeTarget.trim();
+        if (!source || !target) return alert('변경 대상과 새 학교 이름을 모두 입력해주세요.');
+        if (!window.confirm(`전체 시스템(6개 DB)을 스캔하여\n[${source}] (으)로 입력된 모든 과거 기록을\n👉 [${target}] (으)로 영구 일괄 변경하시겠습니까?\n\n※ 이 작업은 되돌릴 수 없습니다.`)) return;
+
+        setMergingSchools(true);
+        try {
+            const collectionsToUpdate = ['users', 'integrated_exams', 'exam_archive', 'school_strategies', 'student_exam_diagnostics', 'grades'];
+            const batch = writeBatch(db);
+            let count = 0;
+
+            for (const colName of collectionsToUpdate) {
+                const q1 = query(collection(db, 'artifacts', APP_ID, 'public', 'data', colName), where('schoolName', '==', source));
+                const snap1 = await getDocs(q1);
+                snap1.forEach(d => { batch.update(d.ref, { schoolName: target, updatedAt: serverTimestamp() }); count++; });
+
+                const q2 = query(collection(db, 'artifacts', APP_ID, 'public', 'data', colName), where('school', '==', source));
+                const snap2 = await getDocs(q2);
+                snap2.forEach(d => { batch.update(d.ref, { school: target, schoolName: target, updatedAt: serverTimestamp() }); count++; });
+            }
+
+            if (count > 0) {
+                await batch.commit();
+                alert(`✅ 총 ${count}개의 과거 데이터 꼬리표가 [${target}](으)로 성공적으로 일괄 변경되었습니다!`);
+                setMergeSource(''); 
+                setMergeTarget('');
+            } else { 
+                alert('스캔 결과, 변경할 데이터가 존재하지 않습니다.'); 
+            }
+        } catch(e) { 
+            alert("병합 중 오류 발생: " + e.message); 
+        } finally { 
+            setMergingSchools(false); 
+        }
+    };
+
+    // ==============================================================================
+    // 3. 시스템 고급 도구 (기존 최적화 및 레거시 스크립트)
+    // ==============================================================================
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
         
@@ -327,7 +395,9 @@ const SettingsManager = ({ currentUser }) => {
                 </button>
             </div>
 
+            {/* ============================================================================== */}
             {/* 탭 1. 기본 인프라 관리 */}
+            {/* ============================================================================== */}
             {activeTab === 'master' && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in fade-in">
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
@@ -397,24 +467,45 @@ const SettingsManager = ({ currentUser }) => {
                 </div>
             )}
 
+            {/* ============================================================================== */}
             {/* 탭 2. 학교 마스터 데이터 관리 */}
+            {/* ============================================================================== */}
             {activeTab === 'school_mdm' && (
                 <div className="space-y-6 animate-in fade-in">
+                    
+                    <Card className="bg-rose-50 border-rose-100 shadow-sm border-2">
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="font-bold text-lg text-rose-900 flex items-center gap-2"><RefreshCw size={20}/> 과거 데이터 교정 및 병합 (Merge Tool)</h3>
+                        </div>
+                        <p className="text-sm text-rose-700 mb-4">과거에 잘못 입력된 오타 학교명이나 중복 학교명을 정식 이름으로 일괄 변경합니다. (예: 임페고 👉 임페리얼고)</p>
+                        <div className="flex flex-col md:flex-row gap-3">
+                            <input className="flex-1 border-2 border-rose-200 bg-white p-3 rounded-xl focus:border-rose-400 outline-none font-bold" placeholder="변경 대상 학교명 (오타, 구명칭)" value={mergeSource} onChange={e=>setMergeSource(e.target.value)} />
+                            <div className="flex items-center justify-center text-rose-300 font-black">➔</div>
+                            <input className="flex-1 border-2 border-emerald-200 bg-white p-3 rounded-xl focus:border-emerald-400 outline-none font-bold text-emerald-800" placeholder="새로운 정식 학교명" value={mergeTarget} onChange={e=>setMergeTarget(e.target.value)} />
+                            <Button variant="primary" className="bg-rose-600 hover:bg-rose-700 font-bold shrink-0" onClick={handleMergeSchoolsAction} disabled={mergingSchools}>
+                                {mergingSchools ? <Loader className="animate-spin" size={16}/> : '일괄 병합 실행'}
+                            </Button>
+                        </div>
+                    </Card>
+
                     <Card className="bg-emerald-50 border-emerald-100 shadow-sm">
                         <div className="flex justify-between items-center mb-2">
-                            <h3 className="font-bold text-lg text-emerald-900 flex items-center gap-2"><RefreshCw size={20}/> 스마트 학교명 스캔 및 병합</h3>
+                            <h3 className="font-bold text-lg text-emerald-900 flex items-center gap-2"><Search className="inline" size={20}/> 6대 코어 DB 스마트 스캔</h3>
                         </div>
-                        <p className="text-sm text-emerald-700 mb-4">재원생 명부 및 통합 기출/내신 DB(integrated_exams)에 입력된 학교명을 모두 스캔하여 초/중/고 마스터 목록으로 완벽하게 자동 병합합니다.</p>
+                        <p className="text-sm text-emerald-700 mb-4">재원생 명부, 통합시험, 기출, 전략, 진단평가, 성적표 DB를 스캔하여 마스터 목록을 추출합니다.</p>
                         <Button variant="primary" className="bg-emerald-600 hover:bg-emerald-700 font-bold" onClick={runSchoolMigration} disabled={schoolMigrationProcessing}>
                             {schoolMigrationProcessing ? <Loader className="animate-spin inline-block mr-2" size={16}/> : <Building2 size={16} className="inline mr-2"/>}
-                            모든 DB 4중 스캔 및 목록 자동 동기화
+                            모든 DB 6중 스캔 및 목록 자동 동기화
                         </Button>
                     </Card>
 
                     <Card className="w-full">
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="font-bold text-xl text-gray-800">초/중/고 리스트 관리</h3>
-                            <Button onClick={handleSaveSchools} disabled={savingSchools} className="font-bold shadow-md bg-gray-800 hover:bg-gray-900 text-white">
+                        <div className="flex justify-between items-center mb-6 border-b pb-4">
+                            <div>
+                                <h3 className="font-bold text-xl text-gray-800">초/중/고 리스트 관리 및 즐겨찾기(★)</h3>
+                                <p className="text-sm text-gray-500 mt-1">별(★) 아이콘을 눌러 즐겨찾기한 학교는 가입창 검색 시 최상단에 박제됩니다.</p>
+                            </div>
+                            <Button onClick={handleSaveSchools} disabled={savingSchools} className="font-bold shadow-md bg-gray-800 hover:bg-gray-900 text-white shrink-0">
                                 {savingSchools ? <Loader className="animate-spin mx-auto" size={16}/> : <><Save size={16} className="mr-2 inline"/> 학교 목록 저장</>}
                             </Button>
                         </div>
@@ -442,12 +533,19 @@ const SettingsManager = ({ currentUser }) => {
                                     <div className="p-4 flex-1 h-[400px] overflow-y-auto custom-scrollbar bg-gray-50/50">
                                         {(schools[cat.id]||[]).length === 0 ? <div className="text-center text-gray-400 font-bold mt-10">등록된 학교 없음</div> : (
                                             <div className="flex flex-col gap-2">
-                                                {(schools[cat.id]||[]).map(schoolName => (
-                                                    <div key={schoolName} className="flex justify-between items-center bg-white border p-2.5 rounded-lg hover:border-gray-300 transition-colors shadow-sm">
-                                                        <span className="font-bold text-sm text-gray-700">{schoolName}</span>
-                                                        <button onClick={() => removeSchool(cat.id, schoolName)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-md"><Trash2 size={14}/></button>
+                                                {(schools[cat.id]||[]).map(schoolName => {
+                                                    const isFav = (schools.favorites || []).includes(schoolName);
+                                                    return (
+                                                    <div key={schoolName} className={`flex justify-between items-center bg-white border p-2.5 rounded-lg hover:border-gray-300 transition-colors shadow-sm ${isFav ? 'border-yellow-300 bg-yellow-50/30' : ''}`}>
+                                                        <span className={`font-bold text-sm ${isFav ? 'text-yellow-700' : 'text-gray-700'}`}>{schoolName}</span>
+                                                        <div className="flex gap-1">
+                                                            <button onClick={() => toggleFavorite(schoolName)} className={`p-1.5 rounded-md transition-colors ${isFav ? 'text-yellow-500 hover:bg-yellow-100' : 'text-gray-300 hover:bg-gray-100 hover:text-yellow-500'}`}>
+                                                                <Star size={16} fill={isFav ? "currentColor" : "none"}/>
+                                                            </button>
+                                                            <button onClick={() => removeSchool(cat.id, schoolName)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-md"><Trash2 size={14}/></button>
+                                                        </div>
                                                     </div>
-                                                ))}
+                                                )})}
                                             </div>
                                         )}
                                     </div>
@@ -458,7 +556,9 @@ const SettingsManager = ({ currentUser }) => {
                 </div>
             )}
 
+            {/* ============================================================================== */}
             {/* 탭 3. 시스템 고급 도구 */}
+            {/* ============================================================================== */}
             {activeTab === 'system' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
                     
