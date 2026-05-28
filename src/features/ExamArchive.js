@@ -1,10 +1,10 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: 스마트 콤보박스 연동 및 미분류(Unmatched) 데이터 필터링 기능 완벽 탑재) */
+   (🚀 CTO 패치: X 아이콘 import 누락 완벽 해결 및 스마트 콤보박스 풀버전) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2, Star, AlertTriangle
+  XCircle, Edit3, Trash2, Star, AlertTriangle, X // 🚀 X 아이콘 추가 완료!
 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -24,7 +24,6 @@ const FILE_TYPES = [
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
 
-// 🚀 [CTO 패치] 스마트 콤보박스 (검색 + 핀 고정)
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchKeyword, setSearchKeyword] = useState('');
@@ -117,14 +116,13 @@ const ExamArchive = ({ currentUser }) => {
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
     });
 
-    // 🚀 [CTO 패치] 스마트 콤보박스용 상태
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [addSchoolType, setAddSchoolType] = useState('high');
     const [isAddCustom, setIsAddCustom] = useState(false);
     const [editSchoolType, setEditSchoolType] = useState('high');
     const [isEditCustom, setIsEditCustom] = useState(false);
 
-    const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false); // 미분류 데이터 필터
+    const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false);
 
     const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
     const isWorker = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role);
@@ -164,7 +162,6 @@ const ExamArchive = ({ currentUser }) => {
             if (filters.year) q = query(q, where('year', '==', String(filters.year)));
             if (filters.grade) q = query(q, where('grade', '==', String(filters.grade)));
             
-            // 미분류 조회가 아닐 때만 이름 필터 적용
             if (!showUnmatchedOnly && filters.schoolName && filters.schoolName.trim() !== '') {
                 q = query(q, where('schoolName', '==', String(filters.schoolName.trim())));
             }
@@ -172,7 +169,6 @@ const ExamArchive = ({ currentUser }) => {
             const snapshot = await getDocs(q);
             let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            // 🚀 [CTO 패치] 미분류(Unmatched) 학교 필터링 로직
             if (showUnmatchedOnly) {
                 const allMasterSchools = [
                     ...(schoolsData.elementary || []),
@@ -181,7 +177,6 @@ const ExamArchive = ({ currentUser }) => {
                 ];
                 results = results.filter(r => r.schoolName && !allMasterSchools.includes(r.schoolName));
             } else if (!filters.schoolName) {
-                // 학교명이 지정되지 않았을 때는 학교급 필터링 수행
                 const targetSchoolTypeKor = getSchoolTypeKorean(filters.schoolType);
                 results = results.filter(r => {
                     if (r.schoolType) return r.schoolType === targetSchoolTypeKor;
@@ -575,7 +570,6 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* 🚀 [CTO 패치] 스마트 콤보박스가 탑재된 검색 필터 */}
             <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
                 <div className="flex items-center justify-between mb-3">
                     <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
@@ -667,7 +661,6 @@ const ExamArchive = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 🚀 [CTO 패치] 신규 등록 모달 스마트 콤보박스 적용 */}
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-10">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
@@ -752,7 +745,6 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 🚀 [CTO 패치] 정보 수정 모달 스마트 콤보박스 적용 */}
             <Modal isOpen={showEditExamModal} onClose={() => setShowEditExamModal(false)} title="기출자료 정보 수정">
                 {editExamForm && (
                     <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-10">
