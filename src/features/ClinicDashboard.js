@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.0 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진 탑재
-   (🚀 CTO 패치: 학부모 문자 템플릿 직관화 및 2타임 이상 연속 신청 시 단일 시간(예: 오후 3:00 - 5:00)으로 UI/문자 자동 압축 처리 완료) */
+/* [서비스 가치] 클리닉 V3.1.1 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진
+   (🚀 CTO 핫픽스: 과거 찌꺼기 데이터로 인한 화면 멈춤(Blank Screen) 현상을 완벽 차단하는 런타임 방어 로직 적용 완료) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -16,10 +16,13 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 시간 포맷팅 헬퍼 (오전/오후 12시간제 변환)
+// 🚀 시간 포맷팅 헬퍼 (오전/오후 12시간제 변환) - 불량 데이터 방어
 const formatAmPm = (timeStr) => {
-    if (!timeStr) return '';
-    const [h, m] = timeStr.split(':').map(Number);
+    if (!timeStr || typeof timeStr !== 'string') return '';
+    const parts = timeStr.split(':');
+    if (parts.length < 2) return '';
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
     const isPm = h >= 12;
     const ampm = isPm ? '오후' : '오전';
     const hr12 = h % 12 === 0 ? 12 : h % 12;
@@ -29,13 +32,14 @@ const formatAmPm = (timeStr) => {
 const formatDateKo = (dateStr) => {
     if (!dateStr) return '';
     const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
     const m = d.getMonth() + 1;
     const day = d.getDate();
     const w = DAYS[d.getDay()];
     return `${m}월 ${day}일 (${w})`;
 };
 
-// 🚀 학부모 발송 문자 템플릿 (원장님 요청 양식 적용)
+// 🚀 학부모 발송 문자 템플릿 
 const TEMPLATES = {
   confirmParent: (d) => `[클리닉 안내]\n일시 : ${formatDateKo(d.date)} ${formatAmPm(d.startTime)} - ${formatAmPm(d.endTime)}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}`,
   
@@ -71,47 +75,59 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 패치] 연속 스케줄 자동 병합 엔진 (Smart Merge)
+// 🚀 [CTO 패치] 연속 스케줄 자동 병합 엔진 (Smart Merge) + 강력한 데이터 방어
 const groupSessions = (sessionList) => {
-    if (!sessionList) return [];
+    if (!sessionList || !Array.isArray(sessionList)) return [];
     
-    // 예약이 진행된(pending 이상) 슬롯들만 병합 대상
     const toGroup = sessionList.filter(s => ['pending', 'confirmed', 'completed'].includes(s.status));
     const others = sessionList.filter(s => !['pending', 'confirmed', 'completed'].includes(s.status));
 
     const sorted = [...toGroup].sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        if (a.taId !== b.taId) return a.taId.localeCompare(b.taId);
-        const aSt = a.students?.map(st=>st.id).sort().join() || a.studentId;
-        const bSt = b.students?.map(st=>st.id).sort().join() || b.studentId;
+        const aDate = a.date || ''; const bDate = b.date || '';
+        if (aDate !== bDate) return aDate.localeCompare(bDate);
+        
+        const aTa = a.taId || ''; const bTa = b.taId || '';
+        if (aTa !== bTa) return aTa.localeCompare(bTa);
+        
+        const aStList = Array.isArray(a.students) ? a.students : [];
+        const bStList = Array.isArray(b.students) ? b.students : [];
+        const aSt = aStList.map(st=>st.id).sort().join() || a.studentId || '';
+        const bSt = bStList.map(st=>st.id).sort().join() || b.studentId || '';
+        
         if (aSt !== bSt) return aSt.localeCompare(bSt);
-        if (a.status !== b.status) return a.status.localeCompare(b.status);
-        return a.startTime.localeCompare(b.startTime);
+        
+        const aStat = a.status || ''; const bStat = b.status || '';
+        if (aStat !== bStat) return aStat.localeCompare(bStat);
+        
+        const aStart = a.startTime || ''; const bStart = b.startTime || '';
+        return aStart.localeCompare(bStart);
     });
 
     const grouped = [];
     let current = null;
 
     sorted.forEach(s => {
-        const sEnd = s.endTime || `${String(parseInt(s.startTime.split(':')[0]) + 1).padStart(2,'0')}:00`;
+        const startStr = s.startTime || '00:00';
+        const sEnd = s.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`;
         
         if (!current) {
             current = { ...s, originalIds: [s.id], endTime: sEnd };
         } else {
-            const currentSt = current.students?.map(st=>st.id).sort().join() || current.studentId;
-            const sSt = s.students?.map(st=>st.id).sort().join() || s.studentId;
+            const currentStList = Array.isArray(current.students) ? current.students : [];
+            const sStList = Array.isArray(s.students) ? s.students : [];
+            const currentSt = currentStList.map(st=>st.id).sort().join() || current.studentId || '';
+            const sSt = sStList.map(st=>st.id).sort().join() || s.studentId || '';
             
-            // 앞선 스케줄의 끝나는 시간과 다음 스케줄의 시작 시간이 같으면 덩어리로 묶음
             if (current.date === s.date && current.taId === s.taId && currentSt === sSt && current.endTime === s.startTime && current.status === s.status && current.classroom === s.classroom) {
                 current.endTime = sEnd;
                 current.originalIds.push(s.id);
                 if (current.topic !== s.topic && s.topic) {
-                    const topics = current.topic.split(' / ');
-                    if (!topics.includes(s.topic)) current.topic += ' / ' + s.topic;
+                    const topics = (current.topic || '').split(' / ');
+                    if (!topics.includes(s.topic)) current.topic = (current.topic ? current.topic + ' / ' : '') + s.topic;
                 }
                 if (current.questionRange !== s.questionRange && s.questionRange) {
-                     const ranges = current.questionRange.split('\n');
-                     if (!ranges.includes(s.questionRange)) current.questionRange += '\n' + s.questionRange;
+                     const ranges = (current.questionRange || '').split('\n');
+                     if (!ranges.includes(s.questionRange)) current.questionRange = (current.questionRange ? current.questionRange + '\n' : '') + s.questionRange;
                 }
             } else {
                 grouped.push(current);
@@ -123,25 +139,26 @@ const groupSessions = (sessionList) => {
 
     others.forEach(o => { 
         o.originalIds = [o.id]; 
-        o.endTime = o.endTime || `${String(parseInt(o.startTime.split(':')[0]) + 1).padStart(2,'0')}:00`; 
+        const startStr = o.startTime || '00:00';
+        o.endTime = o.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`; 
     });
 
-    return [...grouped, ...others].sort((a,b) => a.startTime.localeCompare(b.startTime));
+    return [...grouped, ...others].sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
 };
 
-// 🚀 관리자 편집창 전용 스마트 다중 학생 검색 선택 콤보박스
 const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
 
-    const students = users.filter(u => u.role === 'student');
+    const students = Array.isArray(users) ? users.filter(u => u.role === 'student') : [];
     const filtered = search ? students.filter(s => s.name.includes(search)) : students.slice(0, 5);
+    const safeSelected = Array.isArray(selectedStudents) ? selectedStudents : [];
 
     return (
         <div className="relative w-full">
             <div className="flex flex-wrap gap-1.5 mb-2 p-2 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50 min-h-[46px]">
-                {selectedStudents.length === 0 && <span className="text-xs text-gray-400 font-bold p-1">현재 배정된 학생이 없습니다. 아래에서 검색해 추가하세요.</span>}
-                {selectedStudents.map(st => (
+                {safeSelected.length === 0 && <span className="text-xs text-gray-400 font-bold p-1">현재 배정된 학생이 없습니다. 아래에서 검색해 추가하세요.</span>}
+                {safeSelected.map(st => (
                     <div key={st.id} className="flex items-center gap-1 bg-indigo-600 text-white font-bold text-xs px-2.5 py-1 rounded-lg shadow-sm">
                         {st.name}
                         <button type="button" onClick={() => onRemove(st.id)} className="hover:text-red-200"><X size={12}/></button>
@@ -163,7 +180,7 @@ const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) =
                         <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
                         <div className="absolute z-50 w-full mt-1 bg-white border-2 border-indigo-100 rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar p-1">
                             {filtered.map(s => {
-                                const isAlreadyAdded = selectedStudents.some(st => st.id === s.id);
+                                const isAlreadyAdded = safeSelected.some(st => st.id === s.id);
                                 return (
                                     <button 
                                         key={s.id} 
@@ -188,19 +205,19 @@ const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) =
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms, myClassIds }) => {
   
   const mySessions = useMemo(() => {
+     const safeSessions = Array.isArray(sessions) ? sessions : [];
      if (isMyScheduleView) {
-        return sessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
+        return safeSessions.filter(s => (s.taId === currentUser.id || s.taName === currentUser.name) && s.date === selectedDateStr);
      }
-     return sessions.filter(s => s.date === selectedDateStr);
+     return safeSessions.filter(s => s.date === selectedDateStr);
   }, [sessions, currentUser, selectedDateStr, isMyScheduleView]);
 
-  // 🚀 [CTO 패치] 병합된 세션 때문에 달력에서 잡아먹힌(Covered) 시간대 계산
   const coveredHours = useMemo(() => {
       const set = new Set();
       mySessions.forEach(s => {
-          if (s.originalIds && s.originalIds.length > 1) {
-              const startH = parseInt(s.startTime.split(':')[0]);
-              const endH = parseInt(s.endTime.split(':')[0]);
+          if (Array.isArray(s.originalIds) && s.originalIds.length > 1) {
+              const startH = parseInt((s.startTime || '00:00').split(':')[0]);
+              const endH = parseInt((s.endTime || '00:00').split(':')[0]);
               for(let h = startH + 1; h < endH; h++) {
                   set.add(`${String(h).padStart(2,'0')}:00`);
               }
@@ -230,16 +247,17 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
-    const alreadyBooked = sessions.some(s => 
-        (s.studentId === currentUser.id || s.students?.some(st => st.id === currentUser.id)) && 
-        s.date === selectedDateStr && 
-        s.startTime === time && 
-        (s.status === 'confirmed' || s.status === 'pending')
-    );
+    const safeSessions = Array.isArray(sessions) ? sessions : [];
+    const alreadyBooked = safeSessions.some(s => {
+        const stList = Array.isArray(s.students) ? s.students : [];
+        return (s.studentId === currentUser.id || stList.some(st => st.id === currentUser.id)) && 
+               s.date === selectedDateStr && 
+               s.startTime === time && 
+               (s.status === 'confirmed' || s.status === 'pending');
+    });
     if (alreadyBooked) return true;
     
-    // 이전에 선택한 예약 목록에 이미 존재하면 막지 않고 '선택됨' 처리를 위해 false 반환
-    const selectedSessionTimes = selectedSlots.map(id => sessions.find(s => s.originalIds?.includes(id) || s.id === id)?.startTime).filter(Boolean);
+    const selectedSessionTimes = selectedSlots.map(id => safeSessions.find(s => (s.originalIds && s.originalIds.includes(id)) || s.id === id)?.startTime).filter(Boolean);
     if (selectedSessionTimes.includes(time)) return true;
     return false;
   };
@@ -270,9 +288,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isAllowedDateForStudent = isStudent ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
 
             let hasEvent = false;
+            const safeSessions = Array.isArray(sessions) ? sessions : [];
             if (isStudent) { 
                 if (isAllowedDateForStudent) {
-                    hasEvent = sessions.some(s => {
+                    hasEvent = safeSessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                         if (workerRole === 'admin_assistant') return false;
                         if (s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
@@ -280,8 +299,8 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     });
                 } 
             }
-            else if (isMyScheduleView) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
-            else { hasEvent = sessions.some(s => s.date === dStr); }
+            else if (isMyScheduleView) { hasEvent = safeSessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
+            else { hasEvent = safeSessions.some(s => s.date === dStr); }
 
             let dayClass = 'text-gray-700 hover:bg-gray-100';
             if (isStudent && !isAllowedDateForStudent) {
@@ -318,7 +337,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         </div>
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
           {generateTimeSlots().map((t, i) => {
-            // 병합된 블록에 포함된 시간은 단독 렌더링 생략 (깔끔한 UI 구현)
             if (coveredHours.has(t)) return null;
 
             let slots = mySessions.filter(s => s.startTime === t);
@@ -365,17 +383,15 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 <div className="flex-1 space-y-3 w-full">
                   {slots.map(s => {
                     const isConfirmed = s.status === 'confirmed' || s.status === 'completed';
-                    // Open 슬롯 여러개 선택 중인 경우 확인
-                    const isSelected = s.originalIds.some(id => selectedSlots.includes(id));
+                    const isSelected = Array.isArray(s.originalIds) ? s.originalIds.some(id => selectedSlots.includes(id)) : selectedSlots.includes(s.id);
                     const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
                     
                     const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                     const isAsstSlot = workerRole === 'admin_assistant'; 
                     const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
-                    const displayStudentName = s.students && s.students.length > 0 
-                        ? s.students.map(st => st.name).join(', ') 
-                        : s.studentName;
+                    const stList = Array.isArray(s.students) ? s.students : [];
+                    const displayStudentName = stList.length > 0 ? stList.map(st => st.name).join(', ') : s.studentName;
 
                     if (isStudent) {
                         if (s.status !== 'open') return null;
@@ -402,9 +418,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     }
 
                     if (isParent) {
-                        const isMyChild = (currentUser.linkedChildrenIds && s.students?.some(st => currentUser.linkedChildrenIds.includes(st.id))) || 
+                        const isMyChild = (currentUser.linkedChildrenIds && stList.some(st => currentUser.linkedChildrenIds.includes(st.id))) || 
                                           (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || 
-                                          (s.students?.some(st => st.name === currentUser.childName)) || 
+                                          (stList.some(st => st.name === currentUser.childName)) || 
                                           (s.studentName === currentUser.childName);
                         const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
                         if (isBooked && !isMyChild) {
@@ -437,7 +453,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             
                             <div className="text-sm text-gray-600 font-medium mt-1">
                                 {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-bold">대상: {s.targetClassName}</span>}
-                                {s.originalIds?.length > 1 && <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-black shadow-sm">{s.startTime} ~ {s.endTime}</span>}
+                                {Array.isArray(s.originalIds) && s.originalIds.length > 1 && <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-black shadow-sm">{formatAmPm(s.startTime)} ~ {formatAmPm(s.endTime)}</span>}
                                 {isAsstSlot ? (
                                     <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
                                 ) : (
@@ -467,7 +483,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                     >
                                       <option value="">장소 미지정</option>
                                       {masterClassrooms?.map(r => {
-                                          const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds);
+                                          const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
                                           return (
                                               <option 
                                                   key={r} 
@@ -590,6 +606,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     }, [baseSchedules, masterScheduleRequests]);
 
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom, currentSessionIds = []) => {
+        if (!dateStr || isNaN(new Date(dateStr).getTime())) return null;
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
         const normTargetRoom = (clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
 
@@ -599,14 +616,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
             
-            const startA = s.startTime; const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime; const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = s.startTime || '00:00'; 
+            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime || '00:00'; 
+            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
             return (startA < endB && endA > startB); 
         });
 
         if (isOccupiedByClass) return 'class';
 
-        // 병합된 groupedSessionsAll 을 활용하여 겹침 검사
         const groupedSessionsAll = groupSessions(sessions);
         const isOccupiedByClinic = groupedSessionsAll.some(s => {
             if (s.originalIds && s.originalIds.some(id => currentSessionIds.includes(id))) return false;
@@ -615,8 +633,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (!normS || normS !== normTargetRoom) return false;
             if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; 
             
-            const startA = s.startTime; const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime; const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = s.startTime || '00:00'; 
+            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime || '00:00'; 
+            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
             return (startA < endB && endA > startB);
         });
 
@@ -689,7 +709,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     };
 
     useEffect(() => {
-        const sorted = Object.values(sessionMap).sort((a,b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
+        const sorted = Object.values(sessionMap).sort((a,b) => (String(a.date||'')).localeCompare(String(b.date||'')) || (String(a.startTime||'')).localeCompare(String(b.startTime||'')));
         setSessions(sorted);
     }, [sessionMap]);
 
@@ -715,7 +735,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const handleAction = async (action, payload) => {
       try {
         if (action === 'toggle_slot') {
-            const s = payload; // s is a raw OPEN slot
+            const s = payload; 
             if (studentSelectedSlots.includes(s.id)) { setStudentSelectedSlots(p => p.filter(id => id !== s.id)); } 
             else {
                 if (studentSelectedSlots.length > 0) {
@@ -725,7 +745,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 setStudentSelectedSlots(p => [...p, s.id]);
             }
         } else if (action === 'add_request') {
-            const h = parseInt(payload.time.split(':')[0]);
+            const h = parseInt((payload.time || '00:00').split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
             const newSession = {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', workerRole: currentUser.role,
@@ -817,7 +837,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); 
-            const initialStudents = payload.students || (payload.studentName ? [{ id: payload.studentId || '', name: payload.studentName, phone: payload.studentPhone || '' }] : []);
+            const initialStudents = Array.isArray(payload.students) ? payload.students : (payload.studentName ? [{ id: payload.studentId || '', name: payload.studentName, phone: payload.studentPhone || '' }] : []);
             setAdminEditData({ students: initialStudents, topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
             setModalState({ type: 'admin_edit' });
         } else if (action === 'approve_schedule_change') { 
@@ -843,7 +863,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                  const ids = payload.originalIds || [payload.id];
                  const batch = writeBatch(db);
                  if (payload.status === 'cancellation_requested') { 
-                     const revertStatus = (payload.studentName || payload.students?.length > 0) ? 'confirmed' : 'open';
+                     const stList = Array.isArray(payload.students) ? payload.students : [];
+                     const revertStatus = (payload.studentName || stList.length > 0) ? 'confirmed' : 'open';
                      ids.forEach(id => batch.update(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id), { status: revertStatus, cancelReason: '' }));
                      await batch.commit();
                      updateLocalAndCacheState(prev => {
@@ -874,7 +895,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       for (let d = new Date(batchDateRange.start); d <= new Date(batchDateRange.end); d.setDate(d.getDate() + 1)) {
         const dStr = formatDate(d); const dayName = DAYS[d.getDay()]; const sched = defaultSchedule[dayName];
         if (sched && sched.active) {
-          const sH = parseInt(sched.start.split(':')[0]), eH = parseInt(sched.end.split(':')[0]);
+          const sH = parseInt((sched.start||'00:00').split(':')[0]), eH = parseInt((sched.end||'00:00').split(':')[0]);
           for (let h = sH; h < eH; h++) {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
@@ -965,7 +986,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
   
     const studentMyClinics = useMemo(() => {
         return groupedSessionsAll.filter(s => {
-            const hasStudentMatch = s.students?.some(st => {
+            const stList = Array.isArray(s.students) ? s.students : [];
+            const hasStudentMatch = stList.some(st => {
                 if (currentUser.role === 'parent') {
                     return (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(st.id)) || (st.name === currentUser.childName);
                 }
@@ -976,7 +998,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 ) : (s.studentId === currentUser.id || s.studentName === currentUser.name)
             );
             return hasStudentMatch && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
-        }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); 
+        }).sort((a, b) => (String(a.date||'')).localeCompare(String(b.date||'')) || (String(a.startTime||'')).localeCompare(String(b.startTime||''))); 
     }, [groupedSessionsAll, currentUser]);
 
     if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
@@ -1000,7 +1022,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                       <div key={req.id} className="bg-white border p-4 rounded-xl flex justify-between items-center shadow-sm">
                         <div>
                             <div className="flex items-center gap-2 mb-1"><Badge status={req.status}/><span className="font-bold">{req.taName}</span><span className="text-sm text-gray-500">{req.date}</span></div>
-                            <div className="text-sm text-gray-600">{req.startTime}~{req.endTime}{req.cancelReason && <span className="ml-2 text-red-600 font-medium"> (사유: {req.cancelReason})</span>}</div>
+                            <div className="text-sm text-gray-600">{formatAmPm(req.startTime)} ~ {formatAmPm(req.endTime)}{req.cancelReason && <span className="ml-2 text-red-600 font-medium"> (사유: {req.cancelReason})</span>}</div>
                         </div>
                         <div className="flex gap-2 shrink-0">
                             <Button variant="primary" size="sm" onClick={() => handleAction('approve_schedule_change', req)}>승인</Button>
@@ -1066,11 +1088,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><CheckCircle className="text-green-600"/> 퀵-예약 승인 대기</h2>
                     {pendingBookings.length === 0 ? <div className="text-center py-10 bg-gray-50 rounded-xl text-gray-400">대기 중인 예약 없음</div> :
-                        <div className="space-y-3">{pendingBookings.map(s => (
+                        <div className="space-y-3">{pendingBookings.map(s => {
+                            const stList = Array.isArray(s.students) ? s.students : [];
+                            const displayStudentName = stList.length > 0 ? stList.map(st=>st.name).join(', ') : s.studentName;
+                            return (
                             <div key={s.id} className="border border-green-100 bg-green-50/30 p-4 rounded-xl flex justify-between items-center shadow-sm">
                                 <div className="flex-1 pr-3">
-                                    <div className="font-bold text-gray-900 text-lg">{s.studentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone})</span></div>
-                                    <div className="text-sm font-bold text-gray-600 mt-1">{s.date} <span className="text-blue-600">{s.startTime} ~ {s.endTime}</span> ({s.taName})</div>
+                                    <div className="font-bold text-gray-900 text-lg">{displayStudentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone || '연락처 연동됨'})</span></div>
+                                    <div className="text-sm font-bold text-gray-600 mt-1">{formatDateKo(s.date)} <span className="text-blue-600">{formatAmPm(s.startTime)} - {formatAmPm(s.endTime)}</span> ({s.taName})</div>
                                     
                                     <div className="text-sm text-gray-600 mt-2 p-2 bg-white rounded-lg border border-green-100">
                                         <div className="font-bold text-xs text-green-700 mb-0.5">신청 상세</div>
@@ -1085,7 +1110,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
                                             {masterData?.classrooms?.map(r => {
-                                                const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds);
+                                                const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
                                                 return (
                                                     <option 
                                                         key={r} 
@@ -1105,17 +1130,20 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <Button variant="danger" className="text-xs" icon={RefreshCw} onClick={()=>handleAction('cancel_booking_admin', s)}>취소</Button>
                                 </div>
                             </div>
-                        ))}</div>
+                        )})}</div>
                     }
                 </Card>
                 <Card>
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><MessageSquare className="text-blue-600"/> 학부모 발송 대기 (피드백)</h2>
                     {pendingFeedbacks.length === 0 ? <div className="text-center py-10 bg-gray-50 rounded-xl text-gray-400">발송 대기 중인 피드백 없음</div> :
-                        <div className="space-y-3">{pendingFeedbacks.map(s => (
+                        <div className="space-y-3">{pendingFeedbacks.map(s => {
+                            const stList = Array.isArray(s.students) ? s.students : [];
+                            const displayStudentName = stList.length > 0 ? stList.map(st=>st.name).join(', ') : s.studentName;
+                            return (
                             <div key={s.id} className="border border-gray-200 p-4 rounded-xl flex justify-between items-center hover:bg-gray-50 transition-all shadow-sm">
                                 <div className="overflow-hidden mr-2 flex-1">
                                     <div className="font-bold text-gray-900 flex items-center gap-2">
-                                        {s.students && s.students.length > 0 ? s.students.map(st=>st.name).join(', ') : s.studentName} 학생 
+                                        {displayStudentName} 학생 
                                         <span className="text-yellow-500 text-xs">{'★'.repeat(s.rating||5)}</span>
                                     </div>
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
@@ -1126,7 +1154,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     <Button variant="danger" size="sm" icon={XCircle} onClick={(e)=>{ e.stopPropagation(); handleAction('skip_feedback_msg', s); }}>발송 생략</Button>
                                 </div>
                             </div>
-                        ))}</div>
+                        )})}</div>
                     }
                 </Card>
               </div>
@@ -1191,17 +1219,18 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400 font-bold bg-white rounded-xl border border-dashed border-gray-200">예약 내역이 없습니다.</div> : (
                         <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
                             {studentMyClinics.map(s => {
-                                const currentDisplayStudentName = s.students && s.students.length > 0 ? s.students.map(st=>st.name).join(', ') : s.studentName;
+                                const stList = Array.isArray(s.students) ? s.students : [];
+                                const currentDisplayStudentName = stList.length > 0 ? stList.map(st=>st.name).join(', ') : s.studentName;
                                 return (
                                 <div key={s.id} className="bg-white p-5 rounded-xl border-2 border-blue-100 shadow-sm relative overflow-hidden transition-all hover:border-blue-300">
-                                    {(currentUser.role === 'parent' || s.students?.length > 1) && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{currentDisplayStudentName}</div>}
+                                    {(currentUser.role === 'parent' || stList.length > 1) && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{currentDisplayStudentName}</div>}
                                     <div className="flex justify-between mb-2 pr-12">
-                                        <span className="font-bold text-gray-900 text-lg tracking-tight">{s.date}</span>
+                                        <span className="font-bold text-gray-900 text-lg tracking-tight">{formatDateKo(s.date)}</span>
                                         <Badge status={s.status}/>
                                     </div>
                                     <div className="flex items-center gap-2 text-gray-700 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-100 w-fit">
                                         <Clock size={16} className="text-blue-600"/>
-                                        <span className="font-black text-blue-900">{s.startTime} ~ {s.endTime}</span>
+                                        <span className="font-black text-blue-900">{formatAmPm(s.startTime)} ~ {formatAmPm(s.endTime)}</span>
                                         <span className="text-gray-300">|</span>
                                         <span className="text-sm font-bold">{s.taName} 선생님</span>
                                     </div>
@@ -1392,7 +1421,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       <Modal isOpen={modalState.type==='admin_stats'} onClose={()=>setModalState({type:null})} title="근무 통계">
         <div className="space-y-6">
             <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl"><span className="font-bold text-gray-700 text-lg">{currentDate.getFullYear()}년 {currentDate.getMonth()+1}월 근무 현황</span><div className="text-sm text-gray-500">확정(수행) / 전체(오픈)</div></div>
-            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=s.date.split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
+            <div className="overflow-x-auto"><table className="w-full text-base text-left border-collapse"><thead><tr className="bg-gray-100 border-b"><th className="p-3 whitespace-nowrap">조교명</th>{[1,2,3,4,5].map(w=><th key={w} className="p-3 text-center whitespace-nowrap">{w}주</th>)}<th className="p-3 text-center font-bold whitespace-nowrap">합계</th></tr></thead><tbody>{users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(ta=>{let tConf=0,tSched=0;return(<tr key={ta.id} className="border-b"><td className="p-3 font-medium whitespace-nowrap">{ta.name}</td>{[1,2,3,4,5].map(w=>{const weekSessions=sessions.filter(s=>{const [sy,sm,sd]=String(s.date||'').split('-').map(Number);const sDate=new Date(sy,sm-1,sd);return (s.taId===ta.id || s.taName===ta.name)&&sy===currentDate.getFullYear()&&(sm-1)===currentDate.getMonth()&&getWeekOfMonth(sDate)===w});const conf=weekSessions.filter(s=>s.status==='confirmed'||s.status==='completed').length;const sched=weekSessions.filter(s=>s.status==='open'||s.status==='confirmed'||s.status==='completed').length;tConf+=conf;tSched+=sched;return<td key={w} className="p-3 text-center text-sm">{sched>0?<span className={conf>0?'text-blue-600 font-bold':'text-gray-400'}>{conf}/{sched}</span>:'-'}</td>})}<td className="p-3 text-center font-bold bg-blue-50 text-blue-800">{tConf}/{tSched}</td></tr>)})}</tbody></table></div>
         </div>
       </Modal>
       
@@ -1407,8 +1436,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                const targetStudents = selectedSession.students && selectedSession.students.length > 0 
-                    ? selectedSession.students 
+                const stList = Array.isArray(selectedSession.students) ? selectedSession.students : [];
+                const targetStudents = stList.length > 0 
+                    ? stList 
                     : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
 
                 let textSentCount = 0;
@@ -1416,7 +1446,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 for (const st of targetStudents) {
                     let targetPhone = st.phone || '';
                     if (!targetPhone && st.id) {
-                        const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(st.id));
+                        const parentUser = users.find(u => u.role === 'parent' && Array.isArray(u.linkedChildrenIds) && u.linkedChildrenIds.includes(st.id));
                         if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
                         else {
                             const studentUser = users.find(u => u.id === st.id);
@@ -1426,7 +1456,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
                     if (targetPhone) {
                         const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName, 'g'), st.name);
+                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName || st.name, 'g'), st.name);
                         
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                             phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: st.name, createdAt: serverTimestamp()
@@ -1466,8 +1496,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                const targetStudents = selectedSession.students && selectedSession.students.length > 0 
-                    ? selectedSession.students 
+                const stList = Array.isArray(selectedSession.students) ? selectedSession.students : [];
+                const targetStudents = stList.length > 0 
+                    ? stList 
                     : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
 
                 let textSentCount = 0;
@@ -1475,7 +1506,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 for (const st of targetStudents) {
                     let targetPhone = '';
                     if (st.id) {
-                        const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(st.id));
+                        const parentUser = users.find(u => u.role === 'parent' && Array.isArray(u.linkedChildrenIds) && u.linkedChildrenIds.includes(st.id));
                         if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
                         else {
                             const studentUser = users.find(u => u.id === st.id);
@@ -1485,7 +1516,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
                     if (targetPhone) {
                         const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName, 'g'), st.name);
+                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName || st.name, 'g'), st.name);
                         
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                             phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_feedback', studentName: st.name, createdAt: serverTimestamp()
