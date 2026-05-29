@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: Gemini Vision AI 기반 10초 원샷(One-Shot) 시험지 스캐너 도입. 내신 DB 구축 속도 10배 폭증) */
+   (🚀 CTO 패치: 파이어베이스 10MB 전송 제한 차단 방어 로직 및 스마트 이미지 압축 엔진 탑재 완료) */
 import React, { useState, useEffect, useCallback } from 'react';
 import { db, functions } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
@@ -129,7 +129,7 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  // 🚀 [CTO 패치] AI 스캐너 관련 상태
+  // 🚀 AI 스캐너 관련 상태
   const [isScanning, setIsScanning] = useState(false);
 
   const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -374,26 +374,66 @@ export default function SchoolStrategy({ currentUser }) {
       setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
   };
 
-  // 🚀 [CTO 패치] 파일 업로드 및 Gemini API 스캔 
+  // 🚀 [CTO 패치] 파일 업로드 및 Gemini API 스캔 (용량 최적화 및 10MB 방어 로직)
   const handleAIFileUpload = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
       if (!formData.year || !formData.term || !formData.subject) {
           alert('AI가 교육과정을 정확하게 판단할 수 있도록 연도, 학년/학기, 과목을 먼저 입력해주세요!');
+          e.target.value = null;
+          return;
+      }
+
+      // 🚀 [파이어베이스 10MB 차단 방어]
+      if (file.type === 'application/pdf' && file.size > 6 * 1024 * 1024) {
+          alert('🚨 파일 용량 초과!\n\n시험지 PDF 파일이 6MB를 초과하여 파이어베이스 서버 전송 제한에 걸립니다.\n\n[해결방법]\n1. iLovePDF 같은 사이트에서 PDF 용량을 압축해주세요.\n2. 또는 시험지를 스마트폰으로 찍어 이미지(JPG)로 올려주세요.');
+          e.target.value = null;
           return;
       }
 
       setIsScanning(true);
       try {
-          const base64Data = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.readAsDataURL(file);
-              reader.onload = () => resolve(reader.result.split(',')[1]);
-              reader.onerror = error => reject(error);
-          });
+          let base64Data = '';
+          let finalMimeType = file.type;
 
-          // Extract grade from term string (e.g., "1-1 중간고사" -> "1학년")
+          // 📸 이미지인 경우 브라우저 단에서 Canvas를 이용해 자동 압축 (토큰 비용 절약 및 10MB 우회)
+          if (file.type.startsWith('image/')) {
+              base64Data = await new Promise((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = (event) => {
+                      const img = new Image();
+                      img.onload = () => {
+                          const canvas = document.createElement('canvas');
+                          const MAX_WIDTH = 1200; 
+                          let scaleSize = 1;
+                          if (img.width > MAX_WIDTH) {
+                              scaleSize = MAX_WIDTH / img.width;
+                          }
+                          canvas.width = img.width * scaleSize;
+                          canvas.height = img.height * scaleSize;
+                          
+                          const ctx = canvas.getContext('2d');
+                          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                          
+                          const dataUrl = canvas.toDataURL('image/jpeg', 0.7); // 품질 70% 압축
+                          resolve(dataUrl.split(',')[1]);
+                      };
+                      img.src = event.target.result;
+                  };
+                  reader.readAsDataURL(file);
+              });
+              finalMimeType = 'image/jpeg';
+          } else {
+              // 📄 PDF인 경우 (6MB 이하)
+              base64Data = await new Promise((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.readAsDataURL(file);
+                  reader.onload = () => resolve(reader.result.split(',')[1]);
+                  reader.onerror = error => reject(error);
+              });
+          }
+
           const termStr = String(formData.term || ""); 
           const gradeMatch = termStr.match(/^(\d)/);
           const gradeStr = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
@@ -401,7 +441,7 @@ export default function SchoolStrategy({ currentUser }) {
           const analyzeExam = httpsCallable(functions, 'analyzeExamPaper');
           const response = await analyzeExam({
               fileBase64: base64Data,
-              mimeType: file.type,
+              mimeType: finalMimeType,
               year: formData.year,
               grade: gradeStr,
               subject: formData.subject
@@ -409,7 +449,6 @@ export default function SchoolStrategy({ currentUser }) {
 
           const aiData = response.data;
 
-          // AI가 내려준 데이터를 기존 폼에 병합하면서 IDI 점수를 기반으로 난이도 자동 세팅
           const processedQuestions = (aiData.questions || []).map(q => {
               const totalIdi = (Number(q.idiSource) || 1) + (Number(q.idiLogic) || 1) + (Number(q.idiConcept) || 1) + (Number(q.idiCalc) || 1) + (Number(q.idiProg) || 1);
               let calculatedDiff = '하';
@@ -433,10 +472,10 @@ export default function SchoolStrategy({ currentUser }) {
           alert('🎉 AI 스캔 완료! 문항과 총평이 자동으로 입력되었습니다. 내용을 검수해 주세요.');
       } catch (error) {
           console.error("AI Scan Error:", error);
-          alert(`AI 분석에 실패했습니다.\n사유: ${error.message || '서버 응답 지연 또는 인식 불가 파일'}`);
+          alert(`AI 분석에 실패했습니다.\n사유: ${error.message || '서버 응답 지연'}`);
       } finally {
           setIsScanning(false);
-          e.target.value = null; // Input 초기화
+          e.target.value = null; 
       }
   };
 
@@ -838,7 +877,7 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
           </div>
 
-          {/* 🚀 [CTO 패치] Gemini Vision AI 시험지 자동 스캐너 블록 */}
+          {/* 🚀 [CTO 패치] Gemini Vision AI 시험지 자동 스캐너 (10MB 방어 엔진 탑재) */}
           {formData.type === 'individual' && (
              <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 md:p-6 rounded-2xl border border-indigo-100 shadow-sm animate-in fade-in relative overflow-hidden">
                 {isScanning && (
@@ -853,7 +892,7 @@ export default function SchoolStrategy({ currentUser }) {
                     <Sparkles className="text-indigo-600" size={18}/> AI 시험지 원샷 스캐너
                 </h3>
                 <p className="text-xs text-indigo-700 mb-4 break-keep">
-                    위에서 입력한 연도, 학년, 과목을 바탕으로 교육과정(2015/2022)을 자동 판단하여 단원과 난이도 폼을 10초만에 완성합니다. 시험지 파일(PDF 또는 이미지)을 업로드해주세요.
+                    위에서 입력한 연도, 학년, 과목을 바탕으로 교육과정(2015/2022)을 자동 판단하여 단원과 난이도 폼을 10초만에 완성합니다. (6MB 이하의 PDF 또는 이미지 권장)
                 </p>
                 <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-indigo-300 border-dashed rounded-xl cursor-pointer bg-white hover:bg-indigo-50 transition-colors">
                     <div className="flex flex-col items-center justify-center pt-5 pb-6">

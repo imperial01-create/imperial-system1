@@ -3,8 +3,6 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
-
-// 🚀 파일 매니저 의존성 완전히 제거 (다이렉트 InlineData 방식 적용)
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 if (admin.apps.length === 0) {
@@ -12,6 +10,15 @@ if (admin.apps.length === 0) {
 }
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [CTO 패치] 확실한 API 키 로드 (여기에 원장님의 실제 키를 꼭 넣어주세요!)
+const getGeminiKey = () => {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+        throw new Error("서버에 Gemini API Key가 입력되지 않았습니다. .env 파일을 확인해주세요.");
+    }
+    return key.trim().replace(/['"]/g, '');
+};
 
 // ============================================================================
 // [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
@@ -59,33 +66,27 @@ exports.adminResetPassword = onCall(async (request) => {
 // ============================================================================
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
-    
     const rawText = request.data.rawText;
     if (!rawText) throw new HttpsError("invalid-argument", "정제할 텍스트가 없습니다.");
     
     try {
-        const rawKey = process.env.GEMINI_API_KEY || "";
-        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
-        if (!apiKey) throw new Error("서버 API 키가 설정되지 않았습니다.");
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        const genAI = new GoogleGenerativeAI(getGeminiKey());
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
             당신은 대한민국 최고 수준의 프리미엄 학원의 교육 전문가이자 원장님입니다. 
             학원 조교가 작성한 아래의 날것의 클리닉 피드백을 학부모님께 바로 발송할 수 있도록, 
             매우 정중하고 전문적이며 신뢰감을 주는 어투로 다듬어주세요. 
             단, 원본의 사실(문제점 등)은 절대 왜곡하거나 과장하지 마세요. 불필요한 인사말 없이 정제된 본문만 출력하세요.
-
-            원본 피드백:
-            "${rawText}"
+            원본 피드백: "${rawText}"
         `;
 
         const result = await model.generateContent(prompt);
         return { refinedText: result.response.text().trim() };
     } catch (error) {
-        console.error("🔥 [Gemini API 에러 로그]:", error);
-        throw new HttpsError("internal", `AI 정제 오류 발생: ${error.message}`);
+        console.error("🔥 Gemini API Error:", error);
+        // 'internal' 대신 'failed-precondition'을 써야 프론트엔드에 진짜 에러 메시지가 뜹니다.
+        throw new HttpsError("failed-precondition", `AI 정제 오류: ${error.message}`);
     }
 });
 
@@ -187,13 +188,9 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
     if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
 
     try {
-        const rawKey = process.env.GEMINI_API_KEY || "";
-        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
-        if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
-
-        const genAI = new GoogleGenerativeAI(apiKey);
+        const genAI = new GoogleGenerativeAI(getGeminiKey());
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash-latest",
+            model: "gemini-1.5-flash",
             generationConfig: { responseMimeType: "application/json" }
         });
 
@@ -213,7 +210,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         return JSON.parse(result.response.text());
     } catch (error) {
         console.error("🔥 OCR 파싱 실패:", error);
-        throw new HttpsError("internal", `성적표 분석 중 오류 발생: ${error.message}`);
+        throw new HttpsError("failed-precondition", `성적표 분석 오류: ${error.message}`);
     }
 });
 
@@ -263,21 +260,19 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (Bypass 404 Error)
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
-    // 교육과정 분기 로직 (2026년 기준)
     const numYear = parseInt(year);
     const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
     let is2022 = false;
     if (numYear >= 2026 && numGrade <= 2) is2022 = true;
     else if (numYear >= 2027) is2022 = true;
 
-    // 2022 vs 2015 중단원 맵핑 가이드레일
     const taxonomyGuide = is2022 ? 
         `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
         (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
@@ -288,7 +283,6 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         (수학I): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
         (수학II): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용`;
 
-    // 🚀 One-Shot 메가 프롬프트
     const prompt = `
     당신은 대한민국 대치동 최고 수준의 고등학교 수학 입시 분석가입니다.
     첨부된 시험지(이미지/PDF)를 분석하여 아래의 JSON 구조로만 정확하게 답변하세요. 마크다운(\`\`\`json) 없이 순수 JSON 객체만 출력해야 합니다.
@@ -321,15 +315,9 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
     }`;
 
     try {
-        const rawKey = process.env.GEMINI_API_KEY || "";
-        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
-        if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        // 🚀 가장 범용적이고 안정적인 -latest 에일리어스 적용
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" }); 
+        const genAI = new GoogleGenerativeAI(getGeminiKey());
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
         
-        // 🚀 PDF와 이미지를 동일하게 InlineData로 다이렉트 전송 (File API 우회)
         const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
         
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -339,7 +327,8 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         return JSON.parse(cleanJsonString);
 
     } catch (error) {
-        console.error("Gemini API Error:", error);
-        throw new HttpsError('internal', `AI 분석 실패 (API 호출 오류): ${error.message}`);
+        console.error("🔥 Gemini API Error:", error);
+        // 'internal' 대신 'failed-precondition'을 써야 프론트엔드에 진짜 에러 메시지가 뜹니다.
+        throw new HttpsError('failed-precondition', `AI 분석 중단됨: ${error.message}`);
     }
 });
