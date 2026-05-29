@@ -36,6 +36,6 @@ export const auth = getAuth(app); // 학부모/학생 등 일반 로그인용
 export const secondaryAuth = getAuth(secondaryApp); // 관리자의 사용자 계정 발급 전용
 
 // 🚀 4. [신규 추가] 비밀번호 강제 변경 등 백엔드 기능용 Functions 인스턴스 추출
-export const functions = getFunctions(app);
+export const functions = getFunctions(app, 'asia-northeast3');
 
 export default app;
