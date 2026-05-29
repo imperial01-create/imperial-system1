@@ -4,12 +4,8 @@ const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 
-// 🚀 [수정] PDF 처리를 위한 구글 파일 매니저 및 Node.js 내장 모듈 추가 로드
+// 🚀 파일 매니저 의존성 완전히 제거 (다이렉트 InlineData 방식 적용)
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { GoogleAIFileManager } = require("@google/generative-ai/server");
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -21,18 +17,11 @@ const APP_ID = 'imperial-clinic-v1';
 // [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
-  if (!request.auth) {
-    throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
-  }
-  const uid = request.data.uid;
-  const newPassword = request.data.newPassword;
-  const email = request.data.email; 
+  if (!request.auth) throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
+  const { uid, newPassword, email } = request.data; 
 
-  if (!newPassword || newPassword.length < 6) {
-    throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
-  }
+  if (!newPassword || newPassword.length < 6) throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
 
-  // 이메일이 전달된 경우 (인증소에서 삭제된 유령 계정 복구 시도)
   if (email) {
     try {
       const userRecord = await admin.auth().getUserByEmail(email);
@@ -40,11 +29,7 @@ exports.adminResetPassword = onCall(async (request) => {
       return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
     } catch (error) {
       if (error.code === 'auth/user-not-found') {
-        const newUserRecord = await admin.auth().createUser({
-          email: email,
-          password: newPassword,
-          emailVerified: true
-        });
+        const newUserRecord = await admin.auth().createUser({ email: email, password: newPassword, emailVerified: true });
         return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
       }
       throw new HttpsError("unknown", error.message);
@@ -81,11 +66,10 @@ exports.refineFeedback = onCall(async (request) => {
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
-        
         if (!apiKey) throw new Error("서버 API 키가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
         const prompt = `
             당신은 대한민국 최고 수준의 프리미엄 학원의 교육 전문가이자 원장님입니다. 
@@ -97,19 +81,11 @@ exports.refineFeedback = onCall(async (request) => {
             "${rawText}"
         `;
 
-        let result;
-        try {
-            result = await model.generateContent(prompt);
-        } catch (fallbackError) {
-            console.warn("🔥 1.5-flash 모델 호출 실패. 1.5 Pro 모델로 우회합니다.", fallbackError);
-            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-            result = await fallbackModel.generateContent(prompt);
-        }
-
+        const result = await model.generateContent(prompt);
         return { refinedText: result.response.text().trim() };
     } catch (error) {
-        console.error("🔥 [Gemini API 정밀 에러 로그]:", error);
-        throw new HttpsError("internal", `AI API 오류 발생: ${error.message}`);
+        console.error("🔥 [Gemini API 에러 로그]:", error);
+        throw new HttpsError("internal", `AI 정제 오류 발생: ${error.message}`);
     }
 });
 
@@ -119,7 +95,6 @@ exports.refineFeedback = onCall(async (request) => {
 exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/sms_outbox/{docId}`, async (event) => {
     const snapshot = event.data;
     if (!snapshot) return null;
-    
     const smsData = snapshot.data();
 
     if (smsData.status === "pending") {
@@ -127,7 +102,6 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
             data: { action: "TRIGGER_SMS_SEND", docId: event.params.docId },
             topic: "imperial_sms_gateway" 
         };
-
         try {
             await admin.messaging().send(pushMessage);
         } catch (error) {
@@ -148,7 +122,6 @@ exports.clinicReminderCron = onSchedule({
 }, async (event) => {
     try {
         const db = admin.firestore();
-
         const now = new Date();
         const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
         const kstTime = new Date(utcNow + (9 * 3600000));
@@ -156,11 +129,7 @@ exports.clinicReminderCron = onSchedule({
         
         const tomorrowStr = `${kstTime.getFullYear()}-${String(kstTime.getMonth() + 1).padStart(2, '0')}-${String(kstTime.getDate()).padStart(2, '0')}`;
         
-        const sessionsSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/sessions`)
-            .where('date', '==', tomorrowStr)
-            .where('status', '==', 'confirmed')
-            .get();
-
+        const sessionsSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/sessions`).where('date', '==', tomorrowStr).where('status', '==', 'confirmed').get();
         if (sessionsSnapshot.empty) return null;
 
         const usersSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/users`).get();
@@ -171,7 +140,6 @@ exports.clinicReminderCron = onSchedule({
 
         sessionsSnapshot.forEach(docSnap => {
             const session = docSnap.data();
-            
             let targetPhone = '';
             let targetStudentId = session.studentId;
 
@@ -188,31 +156,22 @@ exports.clinicReminderCron = onSchedule({
                     if (studentUser && studentUser.phone) targetPhone = studentUser.phone;
                 }
             }
-            if (!targetPhone && session.studentPhone) {
-                targetPhone = session.studentPhone;
-            }
+            if (!targetPhone && session.studentPhone) targetPhone = session.studentPhone;
 
             if (targetPhone) {
                 const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
                 const endTime = session.endTime || String(parseInt((session.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00';
-                
                 const message = `[목동임페리얼학원]\n${session.studentName || '학생'} 학생, 내일은 클리닉이 있는 날입니다! ⏰\n\n[내일 클리닉 안내]\n- 일시 : 내일(${session.date}) ${session.startTime}~${endTime}\n- 장소 : 본관 ${session.classroom || '미정'}\n- 내용 : ${session.topic || '개별 클리닉'}\n\n담당 선생님께서 ${session.studentName || '학생'} 학생을 위해 비워두신 시간입니다. 늦거나 무단결석 시 페널티가 부여될 수 있으니 꼭 시간 맞춰 등원해 주세요. 내일 만나요! 😊`;
 
                 const outboxRef = db.collection(`artifacts/${APP_ID}/public/data/sms_outbox`).doc();
                 batch.set(outboxRef, {
-                    phoneNumber: cleanPhone,
-                    message: message,
-                    status: 'pending',
-                    type: 'clinic_reminder',
-                    studentName: session.studentName || '알수없음',
-                    createdAt: admin.firestore.FieldValue.serverTimestamp()
+                    phoneNumber: cleanPhone, message: message, status: 'pending', type: 'clinic_reminder', studentName: session.studentName || '알수없음', createdAt: admin.firestore.FieldValue.serverTimestamp()
                 });
                 count++;
             }
         });
 
         if (count > 0) await batch.commit();
-
     } catch (error) {
         console.error("🔥 예약 발송(Cron) 에러:", error);
     }
@@ -224,7 +183,6 @@ exports.clinicReminderCron = onSchedule({
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    
     const { fileData, type } = request.data; 
     if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
 
@@ -235,7 +193,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-1.5-flash-latest",
             generationConfig: { responseMimeType: "application/json" }
         });
 
@@ -252,7 +210,6 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         `;
 
         const result = await model.generateContent([ prompt, { inlineData: { data: base64String, mimeType: mimeType } } ]);
-
         return JSON.parse(result.response.text());
     } catch (error) {
         console.error("🔥 OCR 파싱 실패:", error);
@@ -265,20 +222,16 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
     
     if (!botToken || !chatId) return { success: false, message: "환경변수 누락" };
-
     const text = request.data.text;
     if (!text) throw new HttpsError("invalid-argument", "메시지가 없습니다.");
 
     try {
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: text })
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text: text })
         });
         const data = await response.json();
         return { success: true, data };
@@ -294,7 +247,6 @@ exports.sendTelegramAlert = onCall(async (request) => {
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
     const snap = event.data;
     if (!snap) return null;
-    
     const deletedUser = snap.data();
     const targetAuthUid = deletedUser.authUid;
 
@@ -306,23 +258,19 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
             const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
             await admin.auth().deleteUser(userRecord.uid);
         }
-    } catch (error) {
-        // 이미 없는 계정이면 무시
-    }
+    } catch (error) { /* 무시 */ }
     return null;
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (PDF 완벽 지원 패치)
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (Bypass 404 Error)
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
-    if (!request.auth) {
-        throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
-    }
+    if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
-    // 🚀 교육과정 분기 로직 (2026년 기준)
+    // 교육과정 분기 로직 (2026년 기준)
     const numYear = parseInt(year);
     const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
     let is2022 = false;
@@ -372,43 +320,17 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
       ]
     }`;
 
-    let tempFilePath = null;
-
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
+        // 🚀 가장 범용적이고 안정적인 -latest 에일리어스 적용
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" }); 
         
-        let imageParts = [];
-
-        // 🚀 PDF 파일인 경우: File API를 통해 구글 서버에 먼저 업로드
-        if (mimeType.includes('pdf')) {
-            const fileManager = new GoogleAIFileManager(apiKey);
-            const fileName = `exam_${Date.now()}_${Math.floor(Math.random() * 1000)}.pdf`;
-            tempFilePath = path.join(os.tmpdir(), fileName);
-            
-            // Base64를 임시 파일로 생성
-            fs.writeFileSync(tempFilePath, Buffer.from(fileBase64, 'base64'));
-
-            // File API 업로드
-            const uploadResponse = await fileManager.uploadFile(tempFilePath, {
-                mimeType: 'application/pdf',
-                displayName: fileName,
-            });
-
-            imageParts = [{
-                fileData: {
-                    mimeType: uploadResponse.file.mimeType,
-                    fileUri: uploadResponse.file.uri
-                }
-            }];
-        } else {
-            // 이미지인 경우: 기존 방식대로 InlineData 전송
-            imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
-        }
+        // 🚀 PDF와 이미지를 동일하게 InlineData로 다이렉트 전송 (File API 우회)
+        const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
         
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
@@ -418,15 +340,6 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
 
     } catch (error) {
         console.error("Gemini API Error:", error);
-        throw new HttpsError('internal', `AI 분석 실패: ${error.message}`);
-    } finally {
-        // 서버 용량 낭비를 막기 위해 임시 생성한 PDF 파일 반드시 삭제
-        if (tempFilePath && fs.existsSync(tempFilePath)) {
-            try {
-                fs.unlinkSync(tempFilePath);
-            } catch (e) {
-                console.error("임시 파일 삭제 실패:", e);
-            }
-        }
+        throw new HttpsError('internal', `AI 분석 실패 (API 호출 오류): ${error.message}`);
     }
 });
