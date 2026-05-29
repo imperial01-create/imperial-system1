@@ -1,6 +1,5 @@
 // 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-// 🚀 [CTO 패치] 문서 삭제를 감지하는 onDocumentDeleted 기능 추가 로드
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
@@ -81,12 +80,13 @@ exports.refineFeedback = onCall(async (request) => {
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         
         if (!apiKey) {
-            console.error("🔥 서버 환경변수(GEMINI_API_KEY)가 비어있습니다. .env 파일을 확인하세요.");
+            console.error("🔥 서버 환경변수(GEMINI_API_KEY)가 비어있습니다.");
             throw new Error("서버 API 키가 설정되지 않았습니다.");
         }
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+        // 🚀 [수정] 실제 구글 API 서버가 인식하는 플래시 모델명으로 원복
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
             당신은 대한민국 최고 수준의 프리미엄 학원의 교육 전문가이자 원장님입니다. 
@@ -102,8 +102,8 @@ exports.refineFeedback = onCall(async (request) => {
         try {
             result = await model.generateContent(prompt);
         } catch (fallbackError) {
-            console.warn("🔥 3.5-flash 모델 호출 실패. 3.1 Pro 모델로 자동 우회합니다.", fallbackError);
-            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-3.1-pro" });
+            console.warn("🔥 1.5-flash 모델 호출 실패. 1.5 Pro 모델로 우회합니다.", fallbackError);
+            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
             result = await fallbackModel.generateContent(prompt);
         }
 
@@ -125,10 +125,7 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
 
     if (smsData.status === "pending") {
         const pushMessage = {
-            data: {
-                action: "TRIGGER_SMS_SEND",
-                docId: event.params.docId 
-            },
+            data: { action: "TRIGGER_SMS_SEND", docId: event.params.docId },
             topic: "imperial_sms_gateway" 
         };
 
@@ -166,9 +163,7 @@ exports.clinicReminderCron = onSchedule({
             .where('status', '==', 'confirmed')
             .get();
 
-        if (sessionsSnapshot.empty) {
-            return null;
-        }
+        if (sessionsSnapshot.empty) return null;
 
         const usersSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/users`).get();
         const users = usersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -201,7 +196,6 @@ exports.clinicReminderCron = onSchedule({
 
             if (targetPhone) {
                 const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                
                 const endTime = session.endTime || String(parseInt((session.startTime||'00:00').split(':')[0])+1).padStart(2,'0')+':00';
                 
                 const message = `[목동임페리얼학원]\n${session.studentName || '학생'} 학생, 내일은 클리닉이 있는 날입니다! ⏰\n\n[내일 클리닉 안내]\n- 일시 : 내일(${session.date}) ${session.startTime}~${endTime}\n- 장소 : 본관 ${session.classroom || '미정'}\n- 내용 : ${session.topic || '개별 클리닉'}\n\n담당 선생님께서 ${session.studentName || '학생'} 학생을 위해 비워두신 시간입니다. 늦거나 무단결석 시 페널티가 부여될 수 있으니 꼭 시간 맞춰 등원해 주세요. 내일 만나요! 😊`;
@@ -219,9 +213,7 @@ exports.clinicReminderCron = onSchedule({
             }
         });
 
-        if (count > 0) {
-            await batch.commit();
-        }
+        if (count > 0) await batch.commit();
 
     } catch (error) {
         console.error("🔥 예약 발송(Cron) 에러:", error);
@@ -233,14 +225,10 @@ exports.clinicReminderCron = onSchedule({
 // [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
-    if (!request.auth) {
-        throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    }
+    if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     
     const { fileData, type } = request.data; 
-    if (!fileData) {
-        throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
-    }
+    if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
 
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
@@ -248,8 +236,9 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
+        // 🚀 [수정] 성적표 인식용 최신 플래시 모델 명칭 원복
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-3.5-flash",
+            model: "gemini-1.5-flash",
             generationConfig: { responseMimeType: "application/json" }
         });
 
@@ -265,10 +254,7 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         4. rank는 석차, total은 수강자수를 의미합니다.
         `;
 
-        const result = await model.generateContent([
-            prompt,
-            { inlineData: { data: base64String, mimeType: mimeType } }
-        ]);
+        const result = await model.generateContent([ prompt, { inlineData: { data: base64String, mimeType: mimeType } } ]);
 
         return JSON.parse(result.response.text());
     } catch (error) {
@@ -330,7 +316,7 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
         }
     } catch (error) {
         if (error.code === 'auth/user-not-found') {
-            console.log(`ℹ️ [Auth 청소 스킵] 이미 인증소에 존재하지 않는 유령 계정입니다.`);
+            console.log(`ℹ️ [Auth 청소 스킵] 이미 인증소에 존재하지 않는 계정입니다.`);
         } else {
             console.error(`🔥 [Auth 청소 에러]`, error);
         }
@@ -339,7 +325,7 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (Gemini 3.5 Pro)
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
     if (!request.auth) {
@@ -348,14 +334,12 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
-    // 🚀 교육과정 분기 로직 (2026년 기준)
     const numYear = parseInt(year);
     const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
     let is2022 = false;
     if (numYear >= 2026 && numGrade <= 2) is2022 = true;
     else if (numYear >= 2027) is2022 = true;
 
-    // 원장님이 피드백해주신 2022 vs 2015 완벽 중단원 맵핑 가이드레일
     const taxonomyGuide = is2022 ? 
         `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
         (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
@@ -366,7 +350,6 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         (수학I): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
         (수학II): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용`;
 
-    // 🚀 One-Shot 메가 프롬프트
     const prompt = `
     당신은 대한민국 대치동 최고 수준의 고등학교 수학 입시 분석가입니다.
     첨부된 시험지(이미지/PDF)를 분석하여 아래의 JSON 구조로만 정확하게 답변하세요. 마크다운(\`\`\`json) 없이 순수 JSON 객체만 출력해야 합니다.
@@ -403,8 +386,8 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
-        // 🚀 2026년 기준 최고 성능 멀티모달 모델 탑재
         const genAI = new GoogleGenerativeAI(apiKey);
+        // 🚀 [수정] 실제 구글 API 서버가 인식하는 Pro 모델명으로 원복
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
         
         const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
