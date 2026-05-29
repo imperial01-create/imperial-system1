@@ -1,20 +1,19 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 파이어베이스 10MB 전송 제한 차단 방어 로직 및 스마트 이미지 압축 엔진 탑재 완료) */
+   (🚀 CTO 패치: 과목별 필터 탭 적용 및 수강 중인 과목만 노출, 활성 학기 드롭다운 적용) */
 import React, { useState, useEffect, useCallback } from 'react';
-import { db, functions } from '../firebase'; 
+import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
-import { httpsCallable } from 'firebase/functions';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X, Sparkles, UploadCloud, Loader, CheckCircle } from 'lucide-react'; 
+import { Search, X, CheckCircle, BookOpen, PenTool } from 'lucide-react'; 
 
-// --- [아이콘 컴포넌트 생략 (기존 유지)] ---
+// --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
 const IconTrash = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2 2v2"/></svg>;
 const IconRefresh = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>;
 const IconArrowLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>;
-const IconSettings = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>;
+const IconSettings = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>;
 const IconEdit = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const IconPlus = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>;
 const IconChevronDown = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>;
@@ -24,6 +23,9 @@ const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24
 const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
+
+import { useData } from '../contexts/DataContext';
+import { Button, Card, Modal } from '../components/UI';
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -111,15 +113,19 @@ const sortReports = (reportsList) => {
 
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
+  const { enrollments = [], classes = [] } = useData(); // 🚀 [CTO 패치] 수강 과목 필터링용 데이터 호출
   
   const [trendReports, setTrendReports] = useState([]);
   const [individualReports, setIndividualReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hasSearched, setHasSearched] = useState(false);
   
-  const [activeTerm, setActiveTerm] = useState("-1 중간고사");
+  const [activeTerm, setActiveTerm] = useState("1학기 중간고사");
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [tempActiveTerm, setTempActiveTerm] = useState("");
+  const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
+
+  // 🚀 [CTO 패치] 과목별 필터 탭 (관리자 난해함 해소)
+  const [activeSubjectTab, setActiveSubjectTab] = useState('전체');
 
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
@@ -128,9 +134,6 @@ export default function SchoolStrategy({ currentUser }) {
   const [showDetails, setShowDetails] = useState(false);
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
-
-  // 🚀 AI 스캐너 관련 상태
-  const [isScanning, setIsScanning] = useState(false);
 
   const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
   const [filterSchoolType, setFilterSchoolType] = useState('high');
@@ -158,28 +161,17 @@ export default function SchoolStrategy({ currentUser }) {
   }, []);
 
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
+    if (baseTerm === '해당사항 없음') return '해당사항 없음';
     const gradeNum = String(currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년').replace(/\D/g, '');
-    let sem = "1";
-    if (baseTerm.includes("-2") || baseTerm.includes("2학기")) sem = "2";
-    let type = "중간고사";
-    if (baseTerm.includes("기말")) type = "기말고사";
-    return `${gradeNum}학년 ${sem}학기 ${type}`;
+    // ex) "1학기 중간고사" -> "1학년 1학기 중간고사"
+    return `${gradeNum}학년 ${baseTerm}`;
   }, []);
 
   const getStudentTargetTerm = useCallback((baseTerm, currentUserObj) => {
-    if (!baseTerm) return "";
-    const base = baseTerm.trim();
-    let gradeNum = "";
-    if (currentUserObj) {
-      const gradeStr = currentUserObj.childSnapshot?.grade || currentUserObj.childGrade || currentUserObj.grade;
-      if (gradeStr) {
-        const gradeMatch = String(gradeStr).match(/\d+/);
-        if (gradeMatch) gradeNum = gradeMatch[0];
-      }
-    }
-    if (!gradeNum) return base; 
-    if (base.startsWith('-')) return gradeNum + base; 
-    return base.replace(/^\d+/, gradeNum);
+    if (!baseTerm || baseTerm === '해당사항 없음') return "해당사항 없음";
+    const gradeStr = currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년';
+    const gradeNum = String(gradeStr).replace(/\D/g, '');
+    return `${gradeNum}학년 ${baseTerm}`; // 매칭용 문자열 예: "1학년 1학기 중간고사"
   }, []);
 
   const fetchInitialData = useCallback(async () => {
@@ -191,8 +183,12 @@ export default function SchoolStrategy({ currentUser }) {
               const trends = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isDeleted);
               setTrendReports(sortReports(trends)); 
           } else if (isStudentOrParent) {
+              // 🚀 [CTO 패치] '해당사항 없음' 처리 - 즉시 블라인드
+              if (activeTerm === '해당사항 없음') {
+                  setTrendReports([]); setIndividualReports([]); setLoading(false); return;
+              }
+
               const rawUserSchool = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "";
-              
               let baseSchool = rawUserSchool.replace(/\s+/g, '');
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
               
@@ -211,29 +207,54 @@ export default function SchoolStrategy({ currentUser }) {
 
               const targetTerm = getStudentTargetTerm(activeTerm, user);
               
+              // 🚀 [CTO 패치] 수강 과목 필터링 로직
+              const targetStudentIds = user.role === 'student' ? [user.id] : (user.linkedChildrenIds || []);
+              const myActiveEnrollments = enrollments.filter(e => targetStudentIds.includes(e.studentId) && e.status === 'active');
+              const myActiveClasses = classes.filter(c => myActiveEnrollments.map(e => e.classId).includes(c.id));
+
               const filtered = allDocs.filter(report => {
                   if (report.isDeleted || !report.type) return false;
-                  const reportGrade = String(report.grade || '1학년').replace('학년','');
-                  const reportSemester = String(report.semester || '1학기').replace('학기','');
-                  const reportTermType = String(report.termType || report.term || '중간고사');
-                  const generatedTerm = `${reportGrade}-${reportSemester} ${reportTermType}`;
+
+                  const reportGrade = String(report.grade || '1학년'); // "1학년"
+                  const reportSemester = String(report.semester || '1학기'); // "1학기"
+                  const reportTermType = String(report.termType || report.term || '중간고사'); // "중간고사"
+                  const generatedTerm = `${reportGrade} ${reportSemester} ${reportTermType}`;
                   
+                  if (generatedTerm !== targetTerm) return false;
+
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
-                  return generatedTerm === targetTerm;
+
+                  // 수강 과목만 노출 (강력한 필터)
+                  const rSubj = report.subject || '';
+                  if (!rSubj) return true; // 과목명이 없으면 기본 노출 (공통 공지 등)
+                  
+                  // 클래스 이름이나 클래스에 지정된 과목명과 리포트 과목명이 일치하는지 확인
+                  const hasMatchingSubject = myActiveClasses.some(c => {
+                      const cName = c.name || '';
+                      const cSubj = c.subject || '';
+                      return cName.includes(rSubj) || cSubj.includes(rSubj) || rSubj.includes(cSubj) || rSubj.includes(cName);
+                  });
+
+                  if (!hasMatchingSubject) return false; // 수강하지 않는 과목 블라인드 처리
+
+                  return true;
               });
 
               setTrendReports(sortReports(filtered.filter(r => r.type === 'trend')));
               setIndividualReports(sortReports(filtered.filter(r => r.type !== 'trend')));
           }
       } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [isStaff, isStudentOrParent, user, activeTerm, getStudentTargetTerm]);
+  }, [isStaff, isStudentOrParent, user, activeTerm, getStudentTargetTerm, enrollments, classes]);
 
   useEffect(() => {
     const fetchSettings = async () => {
       try {
         const docSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
-        if (docSnap.exists() && docSnap.data().activeTerm) setActiveTerm(docSnap.data().activeTerm);
+        if (docSnap.exists() && docSnap.data().activeTerm) {
+            setActiveTerm(docSnap.data().activeTerm);
+            setTempActiveTerm(docSnap.data().activeTerm);
+        }
       } catch (e) {}
     };
     fetchSettings();
@@ -272,6 +293,7 @@ export default function SchoolStrategy({ currentUser }) {
       if (!isStaff) return;
       setLoading(true);
       setHasSearched(true);
+      setActiveSubjectTab('전체'); // 검색 시 과목 탭 초기화
       try {
           let q = collection(db, INTEGRATED_COLLECTION);
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
@@ -303,21 +325,14 @@ export default function SchoolStrategy({ currentUser }) {
 
           if (filterInput.grade !== '전체' || filterInput.exam !== '전체') {
               results = results.filter(r => {
-                  const rGrade = String(r.grade || '1학년').replace('학년', '');
-                  const rSemester = String(r.semester || '1학기').replace('학기', '');
+                  const rGrade = String(r.grade || '1학년');
+                  const rSemester = String(r.semester || '1학기');
                   const rTermType = String(r.termType || r.term || '중간고사');
-                  const rTerm = `${rGrade}-${rSemester} ${rTermType}`;
+                  const rTerm = `${rGrade} ${rSemester} ${rTermType}`;
 
                   let gradeMatch = true; let examMatch = true;
-                  if (filterInput.grade !== '전체') { const g = filterInput.grade.replace('학년', ''); gradeMatch = rTerm.startsWith(`${g}-`); }
-                  if (filterInput.exam !== '전체') {
-                      let suffix = '';
-                      if (filterInput.exam === '1학기 중간고사') suffix = '-1 중간고사';
-                      if (filterInput.exam === '1학기 기말고사') suffix = '-1 기말고사';
-                      if (filterInput.exam === '2학기 중간고사') suffix = '-2 중간고사';
-                      if (filterInput.exam === '2학기 기말고사') suffix = '-2 기말고사';
-                      examMatch = rTerm.includes(suffix);
-                  }
+                  if (filterInput.grade !== '전체') { gradeMatch = rTerm.startsWith(filterInput.grade); }
+                  if (filterInput.exam !== '전체') { examMatch = rTerm.includes(filterInput.exam); }
                   return gradeMatch && examMatch;
               });
           }
@@ -353,7 +368,7 @@ export default function SchoolStrategy({ currentUser }) {
               type: existingReport.type || 'individual',
               year: String(existingReport.year || new Date().getFullYear()),
               school: sName,
-              term: `${String(existingReport.grade || '1학년').replace('학년','')}-${String(existingReport.semester || '1학기').replace('학기','')} ${existingReport.termType || existingReport.term || '중간고사'}`,
+              term: `${String(existingReport.grade || '1학년')} ${String(existingReport.semester || '1학기')} ${existingReport.termType || existingReport.term || '중간고사'}`,
               subject: existingReport.subject || '',
               teacher: existingReport.teacher || '', difficulty: existingReport.difficulty || '중',
               suppBook: existingReport.suppBook || '', print: existingReport.print || '', scope: existingReport.scope || '',
@@ -366,117 +381,12 @@ export default function SchoolStrategy({ currentUser }) {
       } else {
           setFormSchoolType('high'); setIsFormCustomSchool(false);
           setFormData({ 
-              type: 'individual', year: new Date().getFullYear().toString(), school: '', term: '', subject: '', 
+              type: 'individual', year: new Date().getFullYear().toString(), school: '', term: '1학년 1학기 중간고사', subject: '', 
               teacher: '', difficulty: '중', suppBook: '', print: '', scope: '', review: '', specialNotes: '', 
               gradeCuts: { grade1: '', grade2: '', grade3: '' }, questions: [], trendData: [], scopeChanges: [], teacherStyles: [], isDeleted: false 
           });
       }
       setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
-  };
-
-  // 🚀 [CTO 패치] 파일 업로드 및 Gemini API 스캔 (용량 최적화 및 10MB 방어 로직)
-  const handleAIFileUpload = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      if (!formData.year || !formData.term || !formData.subject) {
-          alert('AI가 교육과정을 정확하게 판단할 수 있도록 연도, 학년/학기, 과목을 먼저 입력해주세요!');
-          e.target.value = null;
-          return;
-      }
-
-      // 🚀 [파이어베이스 10MB 차단 방어]
-      if (file.type === 'application/pdf' && file.size > 6 * 1024 * 1024) {
-          alert('🚨 파일 용량 초과!\n\n시험지 PDF 파일이 6MB를 초과하여 파이어베이스 서버 전송 제한에 걸립니다.\n\n[해결방법]\n1. iLovePDF 같은 사이트에서 PDF 용량을 압축해주세요.\n2. 또는 시험지를 스마트폰으로 찍어 이미지(JPG)로 올려주세요.');
-          e.target.value = null;
-          return;
-      }
-
-      setIsScanning(true);
-      try {
-          let base64Data = '';
-          let finalMimeType = file.type;
-
-          // 📸 이미지인 경우 브라우저 단에서 Canvas를 이용해 자동 압축 (토큰 비용 절약 및 10MB 우회)
-          if (file.type.startsWith('image/')) {
-              base64Data = await new Promise((resolve) => {
-                  const reader = new FileReader();
-                  reader.onload = (event) => {
-                      const img = new Image();
-                      img.onload = () => {
-                          const canvas = document.createElement('canvas');
-                          const MAX_WIDTH = 1200; 
-                          let scaleSize = 1;
-                          if (img.width > MAX_WIDTH) {
-                              scaleSize = MAX_WIDTH / img.width;
-                          }
-                          canvas.width = img.width * scaleSize;
-                          canvas.height = img.height * scaleSize;
-                          
-                          const ctx = canvas.getContext('2d');
-                          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                          
-                          const dataUrl = canvas.toDataURL('image/jpeg', 0.7); // 품질 70% 압축
-                          resolve(dataUrl.split(',')[1]);
-                      };
-                      img.src = event.target.result;
-                  };
-                  reader.readAsDataURL(file);
-              });
-              finalMimeType = 'image/jpeg';
-          } else {
-              // 📄 PDF인 경우 (6MB 이하)
-              base64Data = await new Promise((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.readAsDataURL(file);
-                  reader.onload = () => resolve(reader.result.split(',')[1]);
-                  reader.onerror = error => reject(error);
-              });
-          }
-
-          const termStr = String(formData.term || ""); 
-          const gradeMatch = termStr.match(/^(\d)/);
-          const gradeStr = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
-
-          const analyzeExam = httpsCallable(functions, 'analyzeExamPaper');
-          const response = await analyzeExam({
-              fileBase64: base64Data,
-              mimeType: finalMimeType,
-              year: formData.year,
-              grade: gradeStr,
-              subject: formData.subject
-          });
-
-          const aiData = response.data;
-
-          const processedQuestions = (aiData.questions || []).map(q => {
-              const totalIdi = (Number(q.idiSource) || 1) + (Number(q.idiLogic) || 1) + (Number(q.idiConcept) || 1) + (Number(q.idiCalc) || 1) + (Number(q.idiProg) || 1);
-              let calculatedDiff = '하';
-              if (totalIdi >= 20) calculatedDiff = '최상';
-              else if (totalIdi >= 15) calculatedDiff = '상';
-              else if (totalIdi >= 10) calculatedDiff = '중';
-              return { ...q, idiTotal: totalIdi, diff: calculatedDiff };
-          });
-
-          setFormData(prev => ({
-              ...prev,
-              review: aiData.review || prev.review,
-              gradeCuts: {
-                  grade1: aiData.gradeCuts?.grade1 || prev.gradeCuts?.grade1 || '',
-                  grade2: aiData.gradeCuts?.grade2 || prev.gradeCuts?.grade2 || '',
-                  grade3: aiData.gradeCuts?.grade3 || prev.gradeCuts?.grade3 || '',
-              },
-              questions: processedQuestions
-          }));
-
-          alert('🎉 AI 스캔 완료! 문항과 총평이 자동으로 입력되었습니다. 내용을 검수해 주세요.');
-      } catch (error) {
-          console.error("AI Scan Error:", error);
-          alert(`AI 분석에 실패했습니다.\n사유: ${error.message || '서버 응답 지연'}`);
-      } finally {
-          setIsScanning(false);
-          e.target.value = null; 
-      }
   };
 
   const handleSaveActiveTerm = async () => {
@@ -532,19 +442,16 @@ export default function SchoolStrategy({ currentUser }) {
 
   const handleSaveReport = async () => {
     if(!formData.school || !formData.subject || !formData.year) return alert("년도, 학교명, 과목은 필수 입력입니다.");
-    if(!formData.term) return alert("시험 학기(예: 1-1 중간고사)를 정확히 입력해주세요.");
+    if(!formData.term) return alert("학년 및 시험 학기를 정확히 선택해주세요.");
     
     setLoading(true);
     try {
       const diffInfoForm = getAutomaticDifficulty(formData.questions);
       
-      const termStr = String(formData.term || ""); 
-      const gradeMatch = termStr.match(/^(\d)/);
-      const grade = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
-      let semester = "1학기";
-      if (termStr.includes("-2") || termStr.includes("2학기")) semester = "2학기";
-      let termType = "중간고사";
-      if (termStr.includes("기말")) termType = "기말고사";
+      const termParts = formData.term.split(' ');
+      const grade = termParts[0] || '1학년';
+      const semester = termParts[1] || '1학기';
+      const termType = termParts[2] || '중간고사';
 
       const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
 
@@ -640,6 +547,23 @@ export default function SchoolStrategy({ currentUser }) {
     return Object.entries(counts).map(([source, count]) => ({ source, count, percent: Math.round((count / total) * 100) })).sort((a,b) => b.count - a.count);
   };
 
+  // 🚀 [CTO 패치] 과목별 필터 렌더링 리스트 산출
+  const availableSubjects = useMemo(() => {
+      const allSubjects = [...trendReports, ...individualReports].map(r => r.subject).filter(Boolean);
+      return ['전체', ...new Set(allSubjects)].sort();
+  }, [trendReports, individualReports]);
+
+  const filteredTrendReports = useMemo(() => {
+      if (activeSubjectTab === '전체') return trendReports;
+      return trendReports.filter(r => r.subject === activeSubjectTab);
+  }, [trendReports, activeSubjectTab]);
+
+  const filteredIndividualReports = useMemo(() => {
+      if (activeSubjectTab === '전체') return individualReports;
+      return individualReports.filter(r => r.subject === activeSubjectTab);
+  }, [individualReports, activeSubjectTab]);
+
+
   if (loading) return <div className="flex justify-center items-center h-64 text-gray-500">데이터를 처리하는 중입니다...</div>;
 
   const targetDisplayTerm = isStudentOrParent ? getStudentDisplayTerm(activeTerm, user) : activeTerm;
@@ -715,40 +639,63 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
         )}
 
-        {isStudentOrParent && trendReports.length === 0 && individualReports.length === 0 && (
+        {/* 🚀 [CTO 패치] 과목별 필터 탭 (데이터가 있을 때만 노출) */}
+        {(trendReports.length > 0 || individualReports.length > 0) && (
+            <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2 pt-2 border-b border-gray-200">
+                {availableSubjects.map(subj => (
+                    <button
+                        key={subj}
+                        onClick={() => setActiveSubjectTab(subj)}
+                        className={`px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap transition-colors shadow-sm ${activeSubjectTab === subj ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 border hover:bg-indigo-50 hover:text-indigo-600'}`}
+                    >
+                        {subj === '전체' ? '🌐 전체 과목보기' : `📚 ${subj}`}
+                    </button>
+                ))}
+            </div>
+        )}
+
+        {isStudentOrParent && activeTerm === '해당사항 없음' && (
+           <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
+             <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
+             <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">현재 활성화된 내신 분석 기간이 아닙니다.</h3>
+             <p className="text-sm md:text-base text-gray-500">열람 기간이 되면 학원에서 안내해 드립니다.</p>
+           </div>
+        )}
+
+        {isStudentOrParent && activeTerm !== '해당사항 없음' && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
              <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
              <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">아직 {userSchoolName} 내신 분석 리포트가 준비되지 않았습니다.</h3>
-             <p className="text-sm md:text-base text-gray-500">현재 {targetDisplayTerm} 시험 분석 자료를 준비 중입니다.</p>
+             <p className="text-sm md:text-base text-gray-500">현재 수강 중인 과목에 대한 {targetDisplayTerm} 시험 분석 자료를 준비 중입니다.</p>
            </div>
         )}
 
         {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
-               조건에 맞는 기출 자료가 없습니다.
+               검색 조건에 일치하는 리포트가 없습니다.
            </div>
         )}
 
-        {trendReports.length > 0 && (
+        {filteredTrendReports.length > 0 && (
           <section>
-            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2"><IconChart /> 과목 경향 분석</h2>
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-4"><IconChart /> 과목 경향 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-              {trendReports.map(report => (
+              {filteredTrendReports.map(report => (
                 <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
                   {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                   <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
-                  <p className="text-xs md:text-sm text-gray-600 mt-2">과목: {report.subject}</p>
+                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {report.subject}</p>
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        {((isStaff && hasSearched && individualReports.length > 0) || (isStudentOrParent && individualReports.length > 0)) && (
+        {((isStaff && hasSearched && filteredIndividualReports.length > 0) || (isStudentOrParent && filteredIndividualReports.length > 0)) && (
           <section>
-            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석</h2>
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
-              {individualReports.map(report => {
+              {filteredIndividualReports.map(report => {
                 const diffInfo = getAutomaticDifficulty(report.questions);
                 const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
 
@@ -756,7 +703,8 @@ export default function SchoolStrategy({ currentUser }) {
                   <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => handleOpenDetail(report.id)}>
                     {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                     <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
-                        [{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {report.subject} 분석
+                        <span className="text-blue-600 text-sm block mb-1">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'}</span>
+                        {report.subject} 정밀 분석
                     </h3>
                     
                     <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
@@ -798,11 +746,24 @@ export default function SchoolStrategy({ currentUser }) {
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white p-6 rounded-xl max-w-sm w-full shadow-2xl">
               <h3 className="text-lg font-bold mb-4">학생 공개 활성 학기 설정</h3>
-              <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 학기 정보를 입력하세요.<br/>(예: -1 중간고사, -2 기말고사)<br/><br/>* 앞에 '-'를 붙여 입력하면, 접속한 학생의 학년에 맞게 자동 변환되어 노출됩니다.</p>
-              <input type="text" value={tempActiveTerm} onChange={e => setTempActiveTerm(e.target.value)} className="w-full border p-3 rounded mb-4 focus:ring-2 focus:ring-indigo-300 outline-none" placeholder="예: -1 중간고사"/>
+              <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 현재 진행 중인 내신 학기를 선택하세요.<br/><br/>* '해당사항 없음'을 선택하면 학생들에게 어떠한 리포트도 보이지 않습니다.</p>
+              
+              {/* 🚀 [CTO 패치] 오타 방지용 드롭다운 UI로 교체 */}
+              <select 
+                  value={tempActiveTerm} 
+                  onChange={e => setTempActiveTerm(e.target.value)} 
+                  className="w-full border-2 border-indigo-200 p-3 rounded-lg mb-4 font-bold text-indigo-900 bg-indigo-50 focus:ring-2 focus:ring-indigo-400 outline-none"
+              >
+                  <option value="1학기 중간고사">1학기 중간고사</option>
+                  <option value="1학기 기말고사">1학기 기말고사</option>
+                  <option value="2학기 중간고사">2학기 중간고사</option>
+                  <option value="2학기 기말고사">2학기 기말고사</option>
+                  <option value="해당사항 없음">🚫 해당사항 없음 (숨김)</option>
+              </select>
+              
               <div className="flex justify-end gap-2">
-                <button onClick={() => setIsSettingsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded font-bold text-gray-700">취소</button>
-                <button onClick={handleSaveActiveTerm} className="px-4 py-2 bg-indigo-600 text-white rounded font-bold">저장</button>
+                <button onClick={() => setIsSettingsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">취소</button>
+                <button onClick={handleSaveActiveTerm} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition-colors shadow-md">설정 저장</button>
               </div>
             </div>
           </div>
@@ -861,48 +822,27 @@ export default function SchoolStrategy({ currentUser }) {
                   ) : (
                       <div className="w-2/3 relative">
                           <input className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
-                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><IconX/></button>
+                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
                       </div>
                   )}
               </div>
             </div>
 
             <div className="col-span-2 md:col-span-1">
-              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학년/학기/시험</label>
-              <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 1-1 중간고사" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})} />
+              <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학년 및 시험</label>
+              <select className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" value={formData.term} onChange={e => setFormData({...formData, term: e.target.value})}>
+                  {['1학년', '2학년', '3학년'].flatMap(g => 
+                      ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'].map(t => 
+                          <option key={`${g} ${t}`} value={`${g} ${t}`}>{`${g} ${t}`}</option>
+                      )
+                  )}
+              </select>
             </div>
             <div className="col-span-2 md:col-span-2">
               <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">과목</label>
-              <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 수학(상)" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
+              <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 수학(상), 문학, 물리" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
             </div>
           </div>
-
-          {/* 🚀 [CTO 패치] Gemini Vision AI 시험지 자동 스캐너 (10MB 방어 엔진 탑재) */}
-          {formData.type === 'individual' && (
-             <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 md:p-6 rounded-2xl border border-indigo-100 shadow-sm animate-in fade-in relative overflow-hidden">
-                {isScanning && (
-                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
-                        <Loader className="animate-spin text-indigo-600 mb-2" size={32}/>
-                        <p className="font-bold text-indigo-900 text-sm">Gemini AI가 문항의 개념과 난이도를 해체하고 있습니다...</p>
-                        <p className="text-xs text-indigo-500 mt-1">최대 15초 정도 소요될 수 있습니다.</p>
-                    </div>
-                )}
-                
-                <h3 className="text-sm font-black text-indigo-900 flex items-center gap-1.5 mb-2">
-                    <Sparkles className="text-indigo-600" size={18}/> AI 시험지 원샷 스캐너
-                </h3>
-                <p className="text-xs text-indigo-700 mb-4 break-keep">
-                    위에서 입력한 연도, 학년, 과목을 바탕으로 교육과정(2015/2022)을 자동 판단하여 단원과 난이도 폼을 10초만에 완성합니다. (6MB 이하의 PDF 또는 이미지 권장)
-                </p>
-                <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-indigo-300 border-dashed rounded-xl cursor-pointer bg-white hover:bg-indigo-50 transition-colors">
-                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                        <UploadCloud className="text-indigo-400 mb-2" size={24}/>
-                        <p className="text-sm font-bold text-gray-600">클릭하여 파일 업로드 (PDF, JPG, PNG)</p>
-                    </div>
-                    <input type="file" className="hidden" accept=".pdf,image/*" onChange={handleAIFileUpload} disabled={isScanning} />
-                </label>
-             </div>
-          )}
 
           {formData.type === 'individual' && (
             <div className="space-y-6">
@@ -1085,7 +1025,7 @@ export default function SchoolStrategy({ currentUser }) {
           <div className="p-4 md:p-8">
             {!report.type || (!report.review && (!report.questions || report.questions.length === 0)) ? (
                 <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-xl border border-dashed border-gray-300">
-                    <span className="text-gray-500 font-bold mb-2">현재 PDF만 업로드되었으며, 분석 데이터가 작성되지 않았습니다.</span>
+                    <span className="text-gray-500 font-bold mb-2">분석 데이터가 아직 작성되지 않았습니다.</span>
                     {isStaff && (
                         <button onClick={() => handleOpenForm(report)} className="px-5 py-2 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 text-sm">
                             내신 분석 작성하기
@@ -1277,10 +1217,10 @@ export default function SchoolStrategy({ currentUser }) {
                   <div className="mb-4 p-3 bg-white border border-yellow-300 rounded-lg flex flex-col gap-2 shadow-sm">
                     <span className="text-[11px] md:text-xs font-bold text-yellow-800 flex items-center gap-1">🔗 아카이브 연동 자료 (클릭 시 새 탭에서 원본 확인)</span>
                     <div className="flex flex-wrap gap-2">
-                    {['studentWork', 'examPaper', 'quickAnswer', 'solution', 'analysis'].map(key => {
+                    {['studentWork', 'examPaper', 'quickAnswer', 'solution'].map(key => { // analysis 제외
                       const fileData = report.files[key];
                       if (!fileData || !fileData.url) return null;
-                      const labels = { studentWork: '학생풀이(원본)', examPaper: '시험지', quickAnswer: '빠른답지', solution: '해설', analysis: '시험분석' };
+                      const labels = { studentWork: '학생풀이(원본)', examPaper: '시험지', quickAnswer: '빠른답지', solution: '해설' };
                       return (
                         <a key={key} href={fileData.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-2.5 py-1.5 bg-yellow-50 border border-yellow-400 text-yellow-900 rounded-md text-[10px] md:text-[11px] font-bold hover:bg-yellow-100 transition-colors">
                           <IconFile /> {labels[key]}

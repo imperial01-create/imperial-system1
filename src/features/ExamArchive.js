@@ -1,9 +1,9 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: 불필요해진 중복 시험 병합 및 미분류 필터를 삭제하여 UI를 쾌적하게 개선했습니다.) */
+   (🚀 CTO 패치: '시험분석' 항목을 내신연구소로 이관하여 제거하고, UI를 쾌적하게 개선했습니다.) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
-  FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
+  FileQuestion, BookOpen, ExternalLink, Plus, ServerCrash, 
   XCircle, Edit3, Trash2, X 
 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
@@ -13,12 +13,12 @@ import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../uti
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 'analysis(시험분석)' 항목 제거
 const FILE_TYPES = [
     { key: 'studentWork', label: '학생풀이(원본)', icon: FileQuestion },
     { key: 'examPaper', label: '시험지', icon: FileText },
     { key: 'quickAnswer', label: '빠른답지', icon: CheckCircle },
-    { key: 'solution', label: '해설', icon: BookOpen },
-    { key: 'analysis', label: '시험분석', icon: PenTool }
+    { key: 'solution', label: '해설', icon: BookOpen }
 ];
 
 const currentYear = new Date().getFullYear();
@@ -113,7 +113,7 @@ const ExamArchive = ({ currentUser }) => {
     
     const [newExamForm, setNewExamForm] = useState({
         schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
-        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' }
+        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } // analysis 제거
     });
 
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -225,7 +225,7 @@ const ExamArchive = ({ currentUser }) => {
             setShowAddModal(false);
             setNewExamForm({ 
                 ...newExamForm, schoolName: '', 
-                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '', analysis: '' } 
+                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
             });
             
             if (hasSearched) handleSearch();
@@ -554,7 +554,7 @@ const ExamArchive = ({ currentUser }) => {
                                     </div>
                                 </div>
                                 
-                                <div className="w-full lg:w-3/4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 md:gap-3">
+                                <div className="w-full lg:w-3/4 grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
                                     {FILE_TYPES.map(ft => renderFileBlock(exam, ft))}
                                 </div>
                             </div>
