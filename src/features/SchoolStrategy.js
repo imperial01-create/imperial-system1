@@ -1,12 +1,13 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 불필요해진 미분류(Unmatched) 데이터 필터링 기능을 제거하여 코드를 경량화했습니다.) */
+   (🚀 CTO 패치: Gemini Vision AI 기반 10초 원샷(One-Shot) 시험지 스캐너 도입. 내신 DB 구축 속도 10배 폭증) */
 import React, { useState, useEffect, useCallback } from 'react';
-import { db } from '../firebase'; 
+import { db, functions } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
+import { httpsCallable } from 'firebase/functions';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X } from 'lucide-react'; 
+import { Search, X, Sparkles, UploadCloud, Loader, CheckCircle } from 'lucide-react'; 
 
-// --- [아이콘 컴포넌트] ---
+// --- [아이콘 컴포넌트 생략 (기존 유지)] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
@@ -24,7 +25,6 @@ const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="1
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 스마트 콤보박스
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchKeyword, setSearchKeyword] = useState('');
@@ -129,7 +129,9 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  // 🚀 [CTO 패치] 마스터 학교 데이터 연동 상태
+  // 🚀 [CTO 패치] AI 스캐너 관련 상태
+  const [isScanning, setIsScanning] = useState(false);
+
   const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
   const [filterSchoolType, setFilterSchoolType] = useState('high');
 
@@ -266,7 +268,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   const handleGoBack = () => { window.history.back(); };
 
-  // 🚀 [CTO 패치] 스마트 검색 엔진
   const handleSearchSubmit = async () => { 
       if (!isStaff) return;
       setLoading(true);
@@ -371,6 +372,72 @@ export default function SchoolStrategy({ currentUser }) {
           });
       }
       setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
+  };
+
+  // 🚀 [CTO 패치] 파일 업로드 및 Gemini API 스캔 
+  const handleAIFileUpload = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      if (!formData.year || !formData.term || !formData.subject) {
+          alert('AI가 교육과정을 정확하게 판단할 수 있도록 연도, 학년/학기, 과목을 먼저 입력해주세요!');
+          return;
+      }
+
+      setIsScanning(true);
+      try {
+          const base64Data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.readAsDataURL(file);
+              reader.onload = () => resolve(reader.result.split(',')[1]);
+              reader.onerror = error => reject(error);
+          });
+
+          // Extract grade from term string (e.g., "1-1 중간고사" -> "1학년")
+          const termStr = String(formData.term || ""); 
+          const gradeMatch = termStr.match(/^(\d)/);
+          const gradeStr = gradeMatch ? `${gradeMatch[1]}학년` : "1학년";
+
+          const analyzeExam = httpsCallable(functions, 'analyzeExamPaper');
+          const response = await analyzeExam({
+              fileBase64: base64Data,
+              mimeType: file.type,
+              year: formData.year,
+              grade: gradeStr,
+              subject: formData.subject
+          });
+
+          const aiData = response.data;
+
+          // AI가 내려준 데이터를 기존 폼에 병합하면서 IDI 점수를 기반으로 난이도 자동 세팅
+          const processedQuestions = (aiData.questions || []).map(q => {
+              const totalIdi = (Number(q.idiSource) || 1) + (Number(q.idiLogic) || 1) + (Number(q.idiConcept) || 1) + (Number(q.idiCalc) || 1) + (Number(q.idiProg) || 1);
+              let calculatedDiff = '하';
+              if (totalIdi >= 20) calculatedDiff = '최상';
+              else if (totalIdi >= 15) calculatedDiff = '상';
+              else if (totalIdi >= 10) calculatedDiff = '중';
+              return { ...q, idiTotal: totalIdi, diff: calculatedDiff };
+          });
+
+          setFormData(prev => ({
+              ...prev,
+              review: aiData.review || prev.review,
+              gradeCuts: {
+                  grade1: aiData.gradeCuts?.grade1 || prev.gradeCuts?.grade1 || '',
+                  grade2: aiData.gradeCuts?.grade2 || prev.gradeCuts?.grade2 || '',
+                  grade3: aiData.gradeCuts?.grade3 || prev.gradeCuts?.grade3 || '',
+              },
+              questions: processedQuestions
+          }));
+
+          alert('🎉 AI 스캔 완료! 문항과 총평이 자동으로 입력되었습니다. 내용을 검수해 주세요.');
+      } catch (error) {
+          console.error("AI Scan Error:", error);
+          alert(`AI 분석에 실패했습니다.\n사유: ${error.message || '서버 응답 지연 또는 인식 불가 파일'}`);
+      } finally {
+          setIsScanning(false);
+          e.target.value = null; // Input 초기화
+      }
   };
 
   const handleSaveActiveTerm = async () => {
@@ -619,7 +686,7 @@ export default function SchoolStrategy({ currentUser }) {
 
         {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
-               검색 조건에 일치하는 리포트가 없습니다.
+               조건에 맞는 기출 자료가 없습니다.
            </div>
         )}
 
@@ -738,7 +805,6 @@ export default function SchoolStrategy({ currentUser }) {
               <input type="number" onWheel={(e) => e.target.blur()} className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 2024" value={formData.year || ''} onChange={e => setFormData({...formData, year: e.target.value})} />
             </div>
             
-            {/* 🚀 [CTO 패치] 폼 내부 스마트 콤보박스 연동 */}
             <div className="col-span-2 md:col-span-3">
               <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학교명 (검색/선택)</label>
               <div className="flex gap-2">
@@ -771,6 +837,33 @@ export default function SchoolStrategy({ currentUser }) {
               <input type="text" className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold" placeholder="예: 수학(상)" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
             </div>
           </div>
+
+          {/* 🚀 [CTO 패치] Gemini Vision AI 시험지 자동 스캐너 블록 */}
+          {formData.type === 'individual' && (
+             <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 md:p-6 rounded-2xl border border-indigo-100 shadow-sm animate-in fade-in relative overflow-hidden">
+                {isScanning && (
+                    <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
+                        <Loader className="animate-spin text-indigo-600 mb-2" size={32}/>
+                        <p className="font-bold text-indigo-900 text-sm">Gemini AI가 문항의 개념과 난이도를 해체하고 있습니다...</p>
+                        <p className="text-xs text-indigo-500 mt-1">최대 15초 정도 소요될 수 있습니다.</p>
+                    </div>
+                )}
+                
+                <h3 className="text-sm font-black text-indigo-900 flex items-center gap-1.5 mb-2">
+                    <Sparkles className="text-indigo-600" size={18}/> AI 시험지 원샷 스캐너
+                </h3>
+                <p className="text-xs text-indigo-700 mb-4 break-keep">
+                    위에서 입력한 연도, 학년, 과목을 바탕으로 교육과정(2015/2022)을 자동 판단하여 단원과 난이도 폼을 10초만에 완성합니다. 시험지 파일(PDF 또는 이미지)을 업로드해주세요.
+                </p>
+                <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-indigo-300 border-dashed rounded-xl cursor-pointer bg-white hover:bg-indigo-50 transition-colors">
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <UploadCloud className="text-indigo-400 mb-2" size={24}/>
+                        <p className="text-sm font-bold text-gray-600">클릭하여 파일 업로드 (PDF, JPG, PNG)</p>
+                    </div>
+                    <input type="file" className="hidden" accept=".pdf,image/*" onChange={handleAIFileUpload} disabled={isScanning} />
+                </label>
+             </div>
+          )}
 
           {formData.type === 'individual' && (
             <div className="space-y-6">

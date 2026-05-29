@@ -339,3 +339,83 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
     }
     return null;
 });
+
+const functions = require('firebase-functions');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+// 🚀 원장님의 Gemini API 키를 환경변수나 여기에 입력하세요.
+const API_KEY = process.env.GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE"; 
+const genAI = new GoogleGenerativeAI(API_KEY);
+
+exports.analyzeExamPaper = functions.region('asia-northeast3').https.onCall(async (data, context) => {
+    if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+    }
+
+    const { fileBase64, mimeType, year, grade, subject } = data;
+
+    // 🚀 교육과정 분기 로직 (2026년 기준)
+    const numYear = parseInt(year);
+    const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
+    let is2022 = false;
+    if (numYear >= 2026 && numGrade <= 2) is2022 = true;
+    else if (numYear >= 2027) is2022 = true;
+
+    // 2022 vs 2015 중단원 맵핑 기준
+    const taxonomyGuide = is2022 ? 
+        `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
+        (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
+        (미적분I): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용
+        (기하): 이차곡선, 이차곡선의 접선, 평면벡터, 공간도형, 공간좌표, 공간벡터` 
+        : 
+        `[2015 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함:
+        (수학I): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
+        (수학II): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용`;
+
+    // 🚀 One-Shot 메가 프롬프트
+    const prompt = `
+    당신은 대한민국 대치동 최고 수준의 고등학교 수학 입시 분석가입니다.
+    첨부된 시험지(이미지/PDF)를 분석하여 아래의 JSON 구조로만 정확하게 답변하세요. 마크다운(\`\`\`json) 없이 순수 JSON 객체만 출력해야 합니다.
+    
+    학생 타겟: ${year}년도 ${grade} ${subject} 시험
+    ${taxonomyGuide}
+    
+    [IDI: Imperial Difficulty Index 5대 지표 세부 측정 기준] (각 1~5점 부여)
+    1) 출처 친숙도 (idiSource): 1(교과서)~5(특이 사설/신유형)
+    2) 변형 로직 (idiLogic): 1(단순 숫자 변형)~5(킬러 하이브리드)
+    3) 개념 결합도 (idiConcept): 1(단일 개념)~5(추상적 추론)
+    4) 연산 복잡도 (idiCalc): 1(암산 3줄 이내)~5(극악 연산/케이스 분류)
+    5) 논리 전개 (idiProg): 1(단방향)~5(발견적 추론)
+
+    [출력 JSON 구조]
+    {
+      "review": "시험의 전반적인 난이도와 출제 경향을 3~4문장으로 요약 (출제자 노림수, 학생 심리 포함)",
+      "gradeCuts": { "grade1": "1등급 예상(예: 88)", "grade2": "2등급 예상(예: 76)", "grade3": "3등급 예상(예: 62)" },
+      "questions": [
+        {
+          "qNum": "문제번호 (예: 객관식1)",
+          "score": "배점 (숫자만, 모르면 4.0)",
+          "unit": "위 가이드라인에 맞는 단원명",
+          "tags": "기본, 킬러 등 태그",
+          "idiSource": 정수(1~5), "idiLogic": 정수, "idiConcept": 정수, "idiCalc": 정수, "idiProg": 정수,
+          "source": "출처 예상",
+          "analysis": "핵심 발상 분석 (1~2문장)"
+        }
+      ]
+    }`;
+
+    try {
+        // 🚀 [수정 완료] 2026년 기준 최강 모델 Gemini 3.5 Pro 호출
+        const model = genAI.getGenerativeModel({ model: "gemini-3.5-pro" }); 
+        const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
+        
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const responseText = result.response.text();
+        
+        const cleanJsonString = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        return JSON.parse(cleanJsonString);
+    } catch (error) {
+        console.error("Gemini API Error:", error);
+        throw new functions.https.HttpsError('internal', 'AI 분석 실패. 이미지가 크거나 응답이 지연되었습니다.');
+    }
+});
