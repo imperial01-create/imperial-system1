@@ -3,7 +3,13 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
+
+// 🚀 [수정] PDF 처리를 위한 구글 파일 매니저 및 Node.js 내장 모듈 추가 로드
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleAIFileManager } = require("@google/generative-ai/server");
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -67,25 +73,18 @@ exports.adminResetPassword = onCall(async (request) => {
 // [기능 2] Gemini AI 기반 학부모 피드백 문장 자동 정제 엔진 
 // ============================================================================
 exports.refineFeedback = onCall(async (request) => {
-    if (!request.auth) {
-        throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
-    }
+    if (!request.auth) throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
+    
     const rawText = request.data.rawText;
-    if (!rawText) {
-        throw new HttpsError("invalid-argument", "정제할 텍스트가 없습니다.");
-    }
+    if (!rawText) throw new HttpsError("invalid-argument", "정제할 텍스트가 없습니다.");
     
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         
-        if (!apiKey) {
-            console.error("🔥 서버 환경변수(GEMINI_API_KEY)가 비어있습니다.");
-            throw new Error("서버 API 키가 설정되지 않았습니다.");
-        }
+        if (!apiKey) throw new Error("서버 API 키가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        // 🚀 [수정] 실제 구글 API 서버가 인식하는 플래시 모델명으로 원복
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const prompt = `
@@ -131,7 +130,6 @@ exports.onSmsOutboxCreated = onDocumentCreated(`artifacts/${APP_ID}/public/data/
 
         try {
             await admin.messaging().send(pushMessage);
-            console.log(`[통합메시지] 문서번호 ${event.params.docId}에 대한 학원폰 깨우기 신호 전송 성공!`);
         } catch (error) {
             console.error("🔥 FCM 백그라운드 무전 송신 실패:", error);
         }
@@ -236,7 +234,6 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
         if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        // 🚀 [수정] 성적표 인식용 최신 플래시 모델 명칭 원복
         const model = genAI.getGenerativeModel({ 
             model: "gemini-1.5-flash",
             generationConfig: { responseMimeType: "application/json" }
@@ -272,10 +269,7 @@ exports.sendTelegramAlert = onCall(async (request) => {
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
     
-    if (!botToken || !chatId) {
-        console.warn("서버 환경변수(TELEGRAM)가 누락되었습니다.");
-        return { success: false, message: "환경변수 누락" };
-    }
+    if (!botToken || !chatId) return { success: false, message: "환경변수 누락" };
 
     const text = request.data.text;
     if (!text) throw new HttpsError("invalid-argument", "메시지가 없습니다.");
@@ -307,25 +301,19 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
     try {
         if (targetAuthUid && targetAuthUid !== 'legacy_verified_account') {
             await admin.auth().deleteUser(targetAuthUid);
-            console.log(`✅ [Auth 청소 완료] 사용자(${deletedUser.name})의 명부 삭제 감지 -> 인증소(Auth) 동반 삭제 성공!`);
         } else {
             const fallbackEmail = `${event.params.userId}@imperial.com`;
             const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
             await admin.auth().deleteUser(userRecord.uid);
-            console.log(`✅ [Auth 청소 완료] 사용자(${deletedUser.name})의 명부 삭제 감지 -> 이메일(${fallbackEmail}) 기반 동반 삭제 성공!`);
         }
     } catch (error) {
-        if (error.code === 'auth/user-not-found') {
-            console.log(`ℹ️ [Auth 청소 스킵] 이미 인증소에 존재하지 않는 계정입니다.`);
-        } else {
-            console.error(`🔥 [Auth 청소 에러]`, error);
-        }
+        // 이미 없는 계정이면 무시
     }
     return null;
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (PDF 완벽 지원 패치)
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
     if (!request.auth) {
@@ -334,12 +322,14 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
+    // 🚀 교육과정 분기 로직 (2026년 기준)
     const numYear = parseInt(year);
     const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
     let is2022 = false;
     if (numYear >= 2026 && numGrade <= 2) is2022 = true;
     else if (numYear >= 2027) is2022 = true;
 
+    // 2022 vs 2015 중단원 맵핑 가이드레일
     const taxonomyGuide = is2022 ? 
         `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
         (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
@@ -350,6 +340,7 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         (수학I): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
         (수학II): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용`;
 
+    // 🚀 One-Shot 메가 프롬프트
     const prompt = `
     당신은 대한민국 대치동 최고 수준의 고등학교 수학 입시 분석가입니다.
     첨부된 시험지(이미지/PDF)를 분석하여 아래의 JSON 구조로만 정확하게 답변하세요. 마크다운(\`\`\`json) 없이 순수 JSON 객체만 출력해야 합니다.
@@ -381,24 +372,61 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
       ]
     }`;
 
+    let tempFilePath = null;
+
     try {
         const rawKey = process.env.GEMINI_API_KEY || "";
         const apiKey = rawKey.trim().replace(/['"]/g, ''); 
         if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
 
         const genAI = new GoogleGenerativeAI(apiKey);
-        // 🚀 [수정] 실제 구글 API 서버가 인식하는 Pro 모델명으로 원복
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
         
-        const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
+        let imageParts = [];
+
+        // 🚀 PDF 파일인 경우: File API를 통해 구글 서버에 먼저 업로드
+        if (mimeType.includes('pdf')) {
+            const fileManager = new GoogleAIFileManager(apiKey);
+            const fileName = `exam_${Date.now()}_${Math.floor(Math.random() * 1000)}.pdf`;
+            tempFilePath = path.join(os.tmpdir(), fileName);
+            
+            // Base64를 임시 파일로 생성
+            fs.writeFileSync(tempFilePath, Buffer.from(fileBase64, 'base64'));
+
+            // File API 업로드
+            const uploadResponse = await fileManager.uploadFile(tempFilePath, {
+                mimeType: 'application/pdf',
+                displayName: fileName,
+            });
+
+            imageParts = [{
+                fileData: {
+                    mimeType: uploadResponse.file.mimeType,
+                    fileUri: uploadResponse.file.uri
+                }
+            }];
+        } else {
+            // 이미지인 경우: 기존 방식대로 InlineData 전송
+            imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
+        }
         
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
         
         const cleanJsonString = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
         return JSON.parse(cleanJsonString);
+
     } catch (error) {
         console.error("Gemini API Error:", error);
-        throw new HttpsError('internal', 'AI 분석 실패. 이미지가 크거나 응답이 지연되었습니다.');
+        throw new HttpsError('internal', `AI 분석 실패: ${error.message}`);
+    } finally {
+        // 서버 용량 낭비를 막기 위해 임시 생성한 PDF 파일 반드시 삭제
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+            try {
+                fs.unlinkSync(tempFilePath);
+            } catch (e) {
+                console.error("임시 파일 삭제 실패:", e);
+            }
+        }
     }
 });
