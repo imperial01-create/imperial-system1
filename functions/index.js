@@ -405,7 +405,7 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
 
         // 🚀 2026년 기준 최고 성능 멀티모달 모델 탑재
         const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-3.5-pro" }); 
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
         
         const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
         
