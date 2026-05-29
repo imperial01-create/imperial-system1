@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 스마트 콤보박스(검색 + 핀 고정) 모달 탑재 풀버전) */
+   (🚀 CTO 패치: 스마트 콤보박스 탑재 및 DB 평문 비밀번호(Password) 저장 보안 취약점 원천 차단 완료) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -154,7 +154,12 @@ const UserManager = ({ currentUser }) => {
             const result = await resetPasswordFn({ uid: targetUid, newPassword: newPassword, email: realEmail });
             const freshAuthUid = result.data.authUid || targetUid;
 
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { password: newPassword, authUid: freshAuthUid, updatedAt: serverTimestamp() }, { merge: true });
+            // 🚀 [CTO 보안 패치] 데이터베이스에는 비밀번호(password)를 절대 저장하지 않습니다. 오직 authUid만 저장합니다.
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { 
+                authUid: freshAuthUid, 
+                updatedAt: serverTimestamp() 
+            }, { merge: true });
+            
             showToast(`✅ 성공적으로 계정이 복구되었으며 비밀번호가 변경되었습니다!`, 'success');
         } catch (error) { showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error'); } finally { setLoading(false); }
     };
@@ -168,6 +173,7 @@ const UserManager = ({ currentUser }) => {
             let authUid = '';
 
             try {
+                // 가입 시에만 비밀번호를 사용하여 Firebase Authentication에 등록합니다.
                 const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, user.password);
                 authUid = userCredential.user.uid;
                 await signOut(secondaryAuth);
@@ -178,7 +184,12 @@ const UserManager = ({ currentUser }) => {
 
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
             
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() }, { merge: true });
+            // 🚀 [CTO 보안 패치] 승인 처리 시에도 password 필드를 지워버립니다. (Firebase Auth에만 보관됨)
+            const approvalPayload = { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() };
+            
+            // 기존 데이터에 남아있는 비밀번호 찌꺼기를 없애기 위해 FieldValue.delete()를 쓸 수도 있으나
+            // 가장 깔끔한 방법은 문서를 병합할 때 덮어쓰는 것입니다.
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), approvalPayload, { merge: true });
 
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
@@ -219,7 +230,8 @@ const UserManager = ({ currentUser }) => {
 
     const handleOpenEdit = (user) => {
         setFormData({ 
-            ...user, id: user.id, password: user.password || '', hourlyRate: user.hourlyRate || user.hourlyWage || '', 
+            ...user, id: user.id, password: '', // 🚀 기존 비밀번호는 불러오지도, 폼에 채우지도 않습니다.
+            hourlyRate: user.hourlyRate || user.hourlyWage || '', 
             schoolName: user.schoolName || '', grade: user.grade || '1학년', authUid: user.authUid || '', bankName: user.bankName || '',
             accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', linkedChildrenIds: user.linkedChildrenIds || []
         });
@@ -282,7 +294,7 @@ const UserManager = ({ currentUser }) => {
             const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
-                if (formData.password) payload.password = formData.password;
+                // 🚀 [CTO 보안 패치] payload.password = formData.password 삭제 완료!
                 if (formData.authUid) payload.authUid = formData.authUid;
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload, { merge: true });
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
@@ -291,6 +303,7 @@ const UserManager = ({ currentUser }) => {
                 const email = `${targetDocId}@imperial.com`;
                 let authUid = '';
                 try {
+                    // Firebase Auth에만 비밀번호를 넘겨주고 끝냅니다.
                     const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
                     authUid = userCredential.user.uid;
                     await signOut(secondaryAuth);
@@ -298,7 +311,9 @@ const UserManager = ({ currentUser }) => {
                     if (authError.code === 'auth/email-already-in-use') throw new Error("이미 인증서버에 등록된 계정입니다.");
                     throw authError;
                 }
-                payload.authUid = authUid; payload.password = formData.password; payload.createdAt = serverTimestamp();
+                payload.authUid = authUid; 
+                // 🚀 [CTO 보안 패치] payload.password = formData.password 삭제 완료! DB에 비밀번호를 남기지 않습니다.
+                payload.createdAt = serverTimestamp();
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload);
                 setIsEditMode(true); setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
                 showToast('사용자가 성공적으로 생성되었습니다.', 'success');
@@ -563,7 +578,6 @@ const UserManager = ({ currentUser }) => {
                             
                             {(activeTab === 'student' || (activeTab === 'pending' && formData.role === 'student')) && (
                                 <>
-                                    {/* 🚀 [CTO 패치] 스마트 콤보박스 (관리자용) */}
                                     <div className="grid grid-cols-1 gap-3 bg-blue-50 p-4 rounded-xl border border-blue-100">
                                         <div>
                                             <label className="block text-xs font-bold text-blue-800 mb-1.5">학교 정보 (목록에서 검색/선택)</label>

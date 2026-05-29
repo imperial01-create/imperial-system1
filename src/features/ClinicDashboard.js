@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.1 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진
-   (🚀 CTO 핫픽스: 과거 찌꺼기 데이터로 인한 화면 멈춤(Blank Screen) 현상을 완벽 차단하는 런타임 방어 로직 적용 완료) */
+/* [서비스 가치] 클리닉 V3.1.2 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진
+   (🚀 CTO 패치: 데이터베이스 직관적 네이밍 룰 적용 [날짜_시간_조교명_난수] - 관리자 편의성 및 데이터 증발 완벽 차단) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -7,7 +7,8 @@ import {
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
   AlertTriangle, BookOpen, Star, Sparkles, X
 } from 'lucide-react';
-import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp } from 'firebase/firestore';
+// 🚀 [수정] setDoc 라이브러리 추가
+import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
@@ -16,7 +17,15 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 시간 포맷팅 헬퍼 (오전/오후 12시간제 변환) - 불량 데이터 방어
+// 🚀 [CTO 패치] 데이터베이스 문서 ID 직관적 네이밍 엔진 (날짜_시간_조교명_난수)
+const generateSessionId = (dateStr, timeStr, taName) => {
+    const d = (dateStr || '').replace(/-/g, ''); 
+    const t = (timeStr || '').replace(/:/g, '');  
+    const name = (taName || '미상').replace(/\s+/g, '');
+    const randomStr = Math.random().toString(36).substring(2, 6);
+    return `${d}_${t}_${name}_${randomStr}`;
+};
+
 const formatAmPm = (timeStr) => {
     if (!timeStr || typeof timeStr !== 'string') return '';
     const parts = timeStr.split(':');
@@ -39,7 +48,6 @@ const formatDateKo = (dateStr) => {
     return `${m}월 ${day}일 (${w})`;
 };
 
-// 🚀 학부모 발송 문자 템플릿 
 const TEMPLATES = {
   confirmParent: (d) => `[클리닉 안내]\n일시 : ${formatDateKo(d.date)} ${formatAmPm(d.startTime)} - ${formatAmPm(d.endTime)}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}`,
   
@@ -75,7 +83,6 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 패치] 연속 스케줄 자동 병합 엔진 (Smart Merge) + 강력한 데이터 방어
 const groupSessions = (sessionList) => {
     if (!sessionList || !Array.isArray(sessionList)) return [];
     
@@ -752,8 +759,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
                 status: 'addition_requested', source: 'system', classroom: ''
             };
-            const ref = await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), newSession);
-            updateLocalAndCacheState(prev => ({ ...prev, [ref.id]: { id: ref.id, ...newSession } }));
+            // 🚀 [CTO 패치] 직관적 ID 부여
+            const docId = generateSessionId(selectedDateStr, payload.time, currentUser.name);
+            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', docId), newSession);
+            updateLocalAndCacheState(prev => ({ ...prev, [docId]: { id: docId, ...newSession } }));
             notify('근무 신청 완료');
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
@@ -900,7 +909,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
-              batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
+              // 🚀 [CTO 패치] 직관적 ID 부여 적용
+              const docId = generateSessionId(dStr, sT, targetTa.name);
+              batch.set(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', docId), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
                 date: dStr, startTime: sT, endTime: eT, status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', students: [], classroom: batchClassroom || ''
               });
@@ -977,7 +988,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } catch (e) { notify('수정 권한이 거부되었습니다.', 'error'); }
     };
 
-    // 🚀 [CTO 패치] 글로벌 세션 맵을 기반으로 병합된 UI용 세션 배열 생성
     const groupedSessionsAll = useMemo(() => groupSessions(sessions), [sessions]);
 
     const pendingBookings = groupedSessionsAll.filter(s => s.status === 'pending');
