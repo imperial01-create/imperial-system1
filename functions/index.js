@@ -309,13 +309,12 @@ exports.sendTelegramAlert = onCall(async (request) => {
 });
 
 // ============================================================================
-// 🚀 [기능 7] 데이터 연쇄 청소기 (유저 삭제 시 Auth 동반 삭제 트리거)
+// [기능 7] 데이터 연쇄 청소기 (유저 삭제 시 Auth 동반 삭제 트리거)
 // ============================================================================
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
     const snap = event.data;
     if (!snap) return null;
     
-    // 삭제되기 직전의 문서 데이터
     const deletedUser = snap.data();
     const targetAuthUid = deletedUser.authUid;
 
@@ -324,7 +323,6 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
             await admin.auth().deleteUser(targetAuthUid);
             console.log(`✅ [Auth 청소 완료] 사용자(${deletedUser.name})의 명부 삭제 감지 -> 인증소(Auth) 동반 삭제 성공!`);
         } else {
-            // UID가 꼬여있을 경우 이메일로 2차 타격 시도
             const fallbackEmail = `${event.params.userId}@imperial.com`;
             const userRecord = await admin.auth().getUserByEmail(fallbackEmail);
             await admin.auth().deleteUser(userRecord.uid);
@@ -340,19 +338,15 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
     return null;
 });
 
-const functions = require('firebase-functions');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-
-// 🚀 원장님의 Gemini API 키를 환경변수나 여기에 입력하세요.
-const API_KEY = process.env.GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE"; 
-const genAI = new GoogleGenerativeAI(API_KEY);
-
-exports.analyzeExamPaper = functions.region('asia-northeast3').https.onCall(async (data, context) => {
-    if (!context.auth) {
-        throw new functions.https.HttpsError('unauthenticated', '로그인이 필요합니다.');
+// ============================================================================
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너 (Gemini 3.5 Pro)
+// ============================================================================
+exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
     }
 
-    const { fileBase64, mimeType, year, grade, subject } = data;
+    const { fileBase64, mimeType, year, grade, subject } = request.data;
 
     // 🚀 교육과정 분기 로직 (2026년 기준)
     const numYear = parseInt(year);
@@ -361,7 +355,7 @@ exports.analyzeExamPaper = functions.region('asia-northeast3').https.onCall(asyn
     if (numYear >= 2026 && numGrade <= 2) is2022 = true;
     else if (numYear >= 2027) is2022 = true;
 
-    // 2022 vs 2015 중단원 맵핑 기준
+    // 원장님이 피드백해주신 2022 vs 2015 완벽 중단원 맵핑 가이드레일
     const taxonomyGuide = is2022 ? 
         `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
         (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
@@ -405,8 +399,14 @@ exports.analyzeExamPaper = functions.region('asia-northeast3').https.onCall(asyn
     }`;
 
     try {
-        // 🚀 [수정 완료] 2026년 기준 최강 모델 Gemini 3.5 Pro 호출
+        const rawKey = process.env.GEMINI_API_KEY || "";
+        const apiKey = rawKey.trim().replace(/['"]/g, ''); 
+        if (!apiKey) throw new Error("GEMINI_API_KEY가 설정되지 않았습니다.");
+
+        // 🚀 2026년 기준 최고 성능 멀티모달 모델 탑재
+        const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-3.5-pro" }); 
+        
         const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
         
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -416,6 +416,6 @@ exports.analyzeExamPaper = functions.region('asia-northeast3').https.onCall(asyn
         return JSON.parse(cleanJsonString);
     } catch (error) {
         console.error("Gemini API Error:", error);
-        throw new functions.https.HttpsError('internal', 'AI 분석 실패. 이미지가 크거나 응답이 지연되었습니다.');
+        throw new HttpsError('internal', 'AI 분석 실패. 이미지가 크거나 응답이 지연되었습니다.');
     }
 });
