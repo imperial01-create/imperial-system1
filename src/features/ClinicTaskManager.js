@@ -1,11 +1,12 @@
 /* [서비스 가치] 행정 및 클리닉 조교들의 수동 작업 피로도를 최소화하고 강사와의 비동기식 
   인수인계 루프를 정밀화하여 '구멍 없는 밀착 관리 학원 시스템'을 완성하는 조교 종합 관제 센터입니다.
-  (🚀 CTO 패치: 정량적 체크박스 기반 이행율 트래킹 및 미완료 사유 필수 입력 인프라 탑재) */
+  (🚀 CTO 핫픽스: 빈 화면 렌더링 에러의 원인이었던 누락 아이콘 Calendar, Loader 완벽 추가) */
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Card, Badge } from '../components/UI';
-import { Phone, CheckCircle, Clock, AlertTriangle, MessageSquare, UserCheck, Search, FileText } from 'lucide-react';
+// 🚨 에러 원인 해결: Calendar, Loader 아이콘 import 추가
+import { Phone, CheckCircle, Clock, AlertTriangle, MessageSquare, UserCheck, Search, FileText, Calendar, Loader } from 'lucide-react';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -211,7 +212,7 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                     </label>
                                                 </div>
 
-                                                {/* 🚀 [CTO 패치] 미완료 체크 시 사유 및 진도 입력 인풋창 필수 로출 */}
+                                                {/* 🚀 [CTO 패치] 미완료 체크 시 사유 및 진도 입력 인풋창 필수 노출 */}
                                                 {!item.isCompleted && (
                                                     <div className="pl-8 animate-in slide-in-from-top-2 duration-200">
                                                         <div className="flex gap-1 items-center text-[11px] font-black text-amber-600 mb-1">
