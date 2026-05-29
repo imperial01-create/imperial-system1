@@ -1,17 +1,16 @@
-/* [서비스 가치] 클리닉 V2.9.5 - 발송 후 빈 화면 Crash 완벽 방어 및 클리닉 승인 시 문자 검수/편집 기능 추가 
-   (🚀 CTO 패치: 관리자 스케줄 반려 기능 추가 및 학생 캘린더 당일 하이라이트 & 7일 예약 제한 완벽 적용) */
+/* [서비스 가치] 클리닉 V3.0.0 - 1:N 다대일 그룹 클리닉 배정 및 스마트 다중 학생 검색 엔진 탑재
+   (🚀 CTO 패치: 관리자 임의 입력 시 발생하던 문자 누수 및 화면 미노출 버그를 배열 구조 및 매핑 루프로 완전 해결 완료) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
-  Settings, Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
+  Edit2, XCircle, PlusCircle, ClipboardList, BarChart2, CheckSquare, 
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
-  AlertTriangle, BookOpen, Star, Sparkles
+  AlertTriangle, BookOpen, Star, Sparkles, X
 } from 'lucide-react';
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
-
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -52,6 +51,62 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
+// 🚀 [CTO 패치] 관리자 편집창 전용 스마트 다중 학생 검색 선택 콤보박스
+const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) => {
+    const [search, setSearch] = useState('');
+    const [isOpen, setIsOpen] = useState(false);
+
+    const students = users.filter(u => u.role === 'student');
+    const filtered = search ? students.filter(s => s.name.includes(search)) : students.slice(0, 5);
+
+    return (
+        <div className="relative w-full">
+            <div className="flex flex-wrap gap-1.5 mb-2 p-2 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50 min-h-[46px]">
+                {selectedStudents.length === 0 && <span className="text-xs text-gray-400 font-bold p-1">현재 배정된 학생이 없습니다. 아래에서 검색해 추가하세요.</span>}
+                {selectedStudents.map(st => (
+                    <div key={st.id} className="flex items-center gap-1 bg-indigo-600 text-white font-bold text-xs px-2.5 py-1 rounded-lg shadow-sm">
+                        {st.name}
+                        <button type="button" onClick={() => onRemove(st.id)} className="hover:text-red-200"><X size={12}/></button>
+                    </div>
+                ))}
+            </div>
+            
+            <div className="relative">
+                <input 
+                    type="text" 
+                    placeholder="🔍 배정할 학생 이름을 입력하세요..." 
+                    className="w-full border-2 p-2.5 rounded-xl outline-none font-bold text-sm focus:border-indigo-500 bg-white"
+                    value={search}
+                    onChange={e => { setSearch(e.target.value); setIsOpen(true); }}
+                    onFocus={() => setIsOpen(true)}
+                />
+                {isOpen && (
+                    <>
+                        <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                        <div className="absolute z-50 w-full mt-1 bg-white border-2 border-indigo-100 rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar p-1">
+                            {filtered.map(s => {
+                                const isAlreadyAdded = selectedStudents.some(st => st.id === s.id);
+                                return (
+                                    <button 
+                                        key={s.id} 
+                                        type="button"
+                                        disabled={isAlreadyAdded}
+                                        onClick={() => { onAdd({ id: s.id, name: s.name, phone: s.phone || '' }); setSearch(''); setIsOpen(false); }}
+                                        className={`w-full text-left px-3 py-2 text-xs font-bold rounded-lg transition-colors flex justify-between items-center ${isAlreadyAdded ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'hover:bg-indigo-50 text-gray-700'}`}
+                                    >
+                                        <span>{s.name} <span className="text-gray-400 font-normal">({s.schoolName || '학교미상'})</span></span>
+                                        {isAlreadyAdded && <span className="text-indigo-600 text-[10px]">이미 배정됨</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms, myClassIds }) => {
   
   const mySessions = useMemo(() => {
@@ -82,8 +137,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
   const isTimeSlotBlockedForStudent = (time) => {
     if (!isStudent) return false;
+    // 🚀 [CTO 패치] 다중 배열 구조(students)와 레거시 필드를 동시 방어 검색
     const alreadyBooked = sessions.some(s => 
-        s.studentId === currentUser.id && 
+        (s.studentId === currentUser.id || s.students?.some(st => st.id === currentUser.id)) && 
         s.date === selectedDateStr && 
         s.startTime === time && 
         (s.status === 'confirmed' || s.status === 'pending')
@@ -117,7 +173,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
             
-            // 🚀 [CTO 패치] 학생은 7일 이내 스케줄만 활성화
             const maxDateStr = getFutureDate(7);
             const isAllowedDateForStudent = isStudent ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
 
@@ -135,14 +190,13 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             else if (isMyScheduleView) { hasEvent = sessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = sessions.some(s => s.date === dStr); }
 
-            // 🚀 [CTO 패치] 날짜 버튼의 직관적인 디자인 및 당일 하이라이트
             let dayClass = 'text-gray-700 hover:bg-gray-100';
             if (isStudent && !isAllowedDateForStudent) {
-                dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; // 7일 밖의 날짜는 비활성화
+                dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; 
             } else if (isSel) {
                 dayClass = 'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200';
             } else if (isToday) {
-                dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-indigo-400 shadow-sm'; // 오늘 날짜 찐하게 하이라이트
+                dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-indigo-400 shadow-sm'; 
             } else if (hasEvent) {
                 dayClass = 'ring-1 ring-blue-200 hover:bg-blue-50 text-gray-800';
             }
@@ -155,7 +209,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 disabled={isStudent && !isAllowedDateForStudent}
               >
                 <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
-                {/* 오늘 날짜 우측 상단에 깜빡이는 보라색 점 추가 */}
                 {isToday && !isSel && <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel ? 'bg-white' : 'bg-blue-400'}`}/>}
               </button>
@@ -189,7 +242,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             if (isStudent) {
                 const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7);
                 const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
-                // 7일 밖의 상세 스케줄도 표시하지 않음
                 if (availableSlots.length === 0 || !isSelectedDateAllowed) return null;
             }
             if (isLecturer && slots.length === 0) return null;
@@ -224,32 +276,40 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     const isAsstSlot = workerRole === 'admin_assistant'; 
                     const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
+                    // 🚀 [CTO 패치] 다중 학생 정보 가시성 확보용 변수 조율
+                    const displayStudentName = s.students && s.students.length > 0 
+                        ? s.students.map(st => st.name).join(', ') 
+                        : s.studentName;
+
                     if (isStudent) {
                         if (s.status !== 'open') return null;
                         if (new Date(`${s.date}T${s.startTime}`) < now) return null;
                         
                         return (
-                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : isBlocked ? 'bg-gray-50 border-gray-100 opacity-50 cursor-not-allowed' : 'bg-white border-gray-200 hover:shadow-md'}`}>
+                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'border-gray-200 hover:shadow-md'}`}>
                                 <div className="flex-1 flex flex-col justify-center">
-                                    <div className={`font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center ${isBlocked ? 'text-gray-400' : 'text-gray-800'}`}>
+                                    <div className="font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center text-gray-800">
                                         {s.taName} 선생님
                                         {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded font-black border border-indigo-200">{s.targetClassName} 전용</span>}
                                     </div>
-                                    <div className={`text-xs md:text-sm mt-1 font-bold ${isBlocked ? 'text-gray-400' : 'text-blue-600'}`}>
+                                    <div className="text-xs md:text-sm mt-1 font-bold text-blue-600">
                                         {taSubject} {s.classroom ? `· ${s.classroom}` : ''}
                                     </div>
                                 </div>
                                 <div className="ml-3 shrink-0">
-                                  <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); !isBlocked && onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus} disabled={isBlocked}>
-                                      {isSelected ? '선택됨' : isBlocked ? '불가' : '선택'}
+                                  <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus}>
+                                      {isSelected ? '선택됨' : '선택'}
                                   </Button>
-                                </div>
+                               </div>
                             </div>
                         );
                     }
 
                     if (isParent) {
-                        const isMyChild = (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || (s.studentName === currentUser.childName);
+                        const isMyChild = (currentUser.linkedChildrenIds && s.students?.some(st => currentUser.linkedChildrenIds.includes(st.id))) || 
+                                          (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || 
+                                          (s.students?.some(st => st.name === currentUser.childName)) || 
+                                          (s.studentName === currentUser.childName);
                         const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
                         if (isBooked && !isMyChild) {
                             return (
@@ -274,7 +334,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                         <div className="flex justify-between items-start w-full">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                <span className="font-bold text-lg text-gray-900">{s.studentName || s.taName}</span>
+                                <span className="font-bold text-lg text-gray-900">{displayStudentName || s.taName}</span>
                                 <Badge status={s.status}/>
                                 {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
                             </div>
@@ -291,7 +351,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 )}
                             </div>
 
-                            {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && s.studentName && (
+                            {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && displayStudentName && (
                               <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
                                 {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
                                 {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
@@ -308,7 +368,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                         value={s.classroom || ''} 
                                         onChange={(e) => onAction('update_classroom', { id: s.id, val: e.target.value })}
                                     >
-                                      <option value="">장소 미지정</option>
+                                      <option value="">장소 미정</option>
                                       {masterClassrooms?.map(r => {
                                           const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.id);
                                           return (
@@ -385,13 +445,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const [selectedSession, setSelectedSession] = useState(null);
     const [confirmConfig, setConfirmConfig] = useState(null);
-    const [adminEditData, setAdminEditData] = useState({ studentName: '', topic: '', questionRange: '' });
+    
+    // 🚀 [CTO 패치] 관리자용 수정 폼 상태객체 변경 (단일에서 배열 구조 지원)
+    const [adminEditData, setAdminEditData] = useState({ students: [], topic: '', questionRange: '' });
     
     const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
     const [isRefining, setIsRefining] = useState(false); 
     
     const [previewMessage, setPreviewMessage] = useState("");
-
     const [requestData, setRequestData] = useState({});
     const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
 
@@ -434,7 +495,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom, currentSessionId = null) => {
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
-        
         const normTargetRoom = (clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
 
         const isOccupiedByClass = activeSchedules.some(s => {
@@ -443,10 +503,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
             
-            const startA = s.startTime;
-            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime;
-            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = s.startTime; const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime; const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
             return (startA < endB && endA > startB); 
         });
 
@@ -455,26 +513,21 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         const isOccupiedByClinic = sessions.some(s => {
             if (currentSessionId && s.id === currentSessionId) return false; 
             if (s.date !== dateStr) return false;
-            
             const normS = (s.classroom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
             if (!normS || normS !== normTargetRoom) return false;
             if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; 
             
-            const startA = s.startTime;
-            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime;
-            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = s.startTime; const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startB = startTime; const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
             return (startA < endB && endA > startB);
         });
 
         if (isOccupiedByClinic) return 'clinic';
-
         return null;
     }, [activeSchedules, sessions]);
 
     const taSubjectMap = useMemo(() => {
-        const mapById = {};
-        const mapByName = {};
+        const mapById = {}; const mapByName = {};
         if (users && users.length > 0) {
             users.forEach(u => {
                 if (u.role === 'ta' || u.role === 'admin_assistant') {
@@ -488,8 +541,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const fetchSessions = useCallback(async (forceRefresh = false) => {
         setAppLoading(true);
-        const year = currentDate.getFullYear();
-        const month = currentDate.getMonth() + 1;
+        const year = currentDate.getFullYear(); const month = currentDate.getMonth() + 1;
         const cacheKey = `imperial_sessions_${year}-${month}`;
 
         try {
@@ -500,9 +552,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         const parsed = JSON.parse(cached);
                         const cacheTTL = currentUser.role === 'admin' ? 60000 : 3600000; 
                         if (Date.now() - parsed.timestamp < cacheTTL) { 
-                            setSessionMap(parsed.data);
-                            setAppLoading(false);
-                            return; 
+                            setSessionMap(parsed.data); setAppLoading(false); return; 
                         }
                     } catch (e) { localStorage.removeItem(cacheKey); }
                 }
@@ -513,8 +563,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             let sessionQuery;
 
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
-                const today = getLocalToday();
-                const endDate = getFutureDate(21); // 대시보드 열람을 위해 여유있게 가져오되, 렌더링은 7일로 제한
+                const today = getLocalToday(); const endDate = getFutureDate(21);
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), where('date', '<=', endDate));
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -526,26 +575,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
             setSessionMap(fetchedData);
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
-
         } catch (e) { console.error(e); } finally { setAppLoading(false); }
     }, [currentDate, currentUser]);
 
     useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
-    useEffect(() => {
-        if (['ta', 'admin_assistant'].includes(currentUser.role) && sessions.length > 0) {
-            const staleSessions = sessions.filter(s => s.taName === currentUser.name && s.taId !== currentUser.id);
-            if (staleSessions.length > 0) {
-                staleSessions.forEach(s => { updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', s.id), { taId: currentUser.id }).catch(()=>{}); });
-            }
-        }
-    }, [sessions, currentUser]);
-
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
-            const year = currentDate.getFullYear();
-            const month = currentDate.getMonth() + 1;
+            const year = currentDate.getFullYear(); const month = currentDate.getMonth() + 1;
             const cacheKey = `imperial_sessions_${year}-${month}`;
             localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newState }));
             return newState;
@@ -558,33 +596,22 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     }, [sessionMap]);
 
     const notify = (msg, type = 'success') => {
-        const id = Date.now();
-        setNotifications(prev => [...prev, { id, msg, type }]);
+        const id = Date.now(); setNotifications(prev => [...prev, { id, msg, type }]);
         setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 3000);
     };
 
     const askConfirm = (message, onConfirm) => setConfirmConfig({ message, onConfirm });
-
     const handleDateChange = (dStr) => { setSelectedDateStr(dStr); setStudentSelectedSlots([]); };
 
     const handleAiRefine = async () => {
         if (!feedbackData.clinicDetails) return notify('피드백 내용을 먼저 입력해주세요.', 'error');
-        
         setIsRefining(true);
         try {
             const refineFeedbackFunction = httpsCallable(functions, 'refineFeedback');
             const response = await refineFeedbackFunction({ rawText: feedbackData.clinicDetails });
-            setFeedbackData(prev => ({ 
-                ...prev, 
-                clinicDetails: response.data.refinedText 
-            }));
+            setFeedbackData(prev => ({ ...prev, clinicDetails: response.data.refinedText }));
             notify('✨ AI가 학부모님 전용 문장으로 깔끔하게 정제했습니다.', 'success');
-        } catch (error) {
-            console.error("AI Error:", error);
-            notify(`AI 정제 실패: ${error.message}`, 'error');
-        } finally {
-            setIsRefining(false);
-        }
+        } catch (error) { notify(`AI 정제 실패: ${error.message}`, 'error'); } finally { setIsRefining(false); }
     };
 
     const handleAction = async (action, payload) => {
@@ -613,12 +640,11 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            if(payload) askConfirm("정말 이 클리닉 기록 전체를 삭제하시겠습니까?\n데이터가 완전히 사라집니다.", async () => {
+            if(payload) askConfirm("정말 이 클리닉 기록 전체를 삭제하시겠습니까?", async () => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
                 notify('기록 삭제 완료', 'success');
             });
-        
         } else if (action === 'skip_feedback_msg') {
             askConfirm("학부모님께 문자를 발송하지 않고,\n내부 기록용으로만 보관(발송 생략)하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { feedbackStatus: 'sent' });
@@ -628,7 +654,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 });
                 notify('문자 발송이 생략되고 내부 기록으로 보관되었습니다.', 'success');
             });
-        
         } else if (action === 'withdraw_cancel') {
             askConfirm("철회하시겠습니까?", async () => {
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open', cancelReason: '' });
@@ -642,15 +667,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload));
                 updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload]; return next; });
             });
-        
         } else if (action === 'approve_booking') {
             setSelectedSession(payload); 
             setPreviewMessage(TEMPLATES.confirmParent(payload));
             setModalState({ type: 'preview_confirm' });
-
         } else if (action === 'cancel_booking_admin') { 
             askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
-                const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
+                const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', students: [], topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
                 await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), resetData);
                 updateLocalAndCacheState(prev => {
                     const current = prev[payload.id] || {};
@@ -667,25 +690,23 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); 
             setFeedbackData({
-                rating: payload.rating || 5,
-                tags: payload.tags || '',
+                rating: payload.rating || 5, tags: '',
                 clinicDetails: payload.clinicDetails || payload.clinicContent || '',
                 nextAction: payload.nextAction || payload.improvement || ''
             }); 
             setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); 
-            setAdminEditData({ studentName: payload.studentName||'', topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
+            // 🚀 [CTO 패치] 열람 시 기존 레거시 단일 필드와 신규 배열 필드를 병합하여 폼 데이터 스태싱
+            const initialStudents = payload.students || (payload.studentName ? [{ id: payload.studentId || '', name: payload.studentName, phone: payload.studentPhone || '' }] : []);
+            setAdminEditData({ students: initialStudents, topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
             setModalState({ type: 'admin_edit' });
-        
-        // 🚀 [CTO 패치] 관리자 근무 변경 요청 승인 및 반려 로직
         } else if (action === 'approve_schedule_change') { 
              if (payload.status === 'cancellation_requested') { 
                  await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
                  updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload.id]; return next; });
                  notify('취소 요청이 승인되었습니다.', 'success'); 
-             } 
-             else if (payload.status === 'addition_requested') { 
+             } else if (payload.status === 'addition_requested') { 
                  await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: 'open' }); 
                  updateLocalAndCacheState(prev => {
                      const current = prev[payload.id] || {};
@@ -696,15 +717,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'reject_schedule_change') {
              askConfirm("이 근무 변경 요청을 반려하시겠습니까?", async () => {
                  if (payload.status === 'cancellation_requested') { 
-                     const revertStatus = payload.studentName ? 'confirmed' : 'open';
+                     const revertStatus = (payload.studentName || payload.students?.length > 0) ? 'confirmed' : 'open';
                      await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id), { status: revertStatus, cancelReason: '' }); 
                      updateLocalAndCacheState(prev => {
                          const current = prev[payload.id] || {};
                          return { ...prev, [payload.id]: { ...current, status: revertStatus, cancelReason: '' } };
                      });
                      notify('취소 요청이 반려되어 기존 상태로 복구되었습니다.', 'success'); 
-                 } 
-                 else if (payload.status === 'addition_requested') { 
+                 } else if (payload.status === 'addition_requested') { 
                      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', payload.id)); 
                      updateLocalAndCacheState(prev => { const next = { ...prev }; delete next[payload.id]; return next; });
                      notify('추가 요청이 반려 및 삭제되었습니다.', 'success'); 
@@ -716,139 +736,116 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
              setModalState({ type: 'message_preview_feedback' });
         }
       } catch (e) { notify('오류: ' + e.message, 'error'); }
-  };
+    };
 
-  const handleSaveDefaultSchedule = async () => {
+    const handleSaveDefaultSchedule = async () => {
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
-      
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
-
-      const batch = writeBatch(db);
-      let count = 0;
+      const batch = writeBatch(db); let count = 0;
       for (let d = new Date(batchDateRange.start); d <= new Date(batchDateRange.end); d.setDate(d.getDate() + 1)) {
-        const dStr = formatDate(d);
-        const dayName = DAYS[d.getDay()];
-        const sched = defaultSchedule[dayName];
-        
+        const dStr = formatDate(d); const dayName = DAYS[d.getDay()]; const sched = defaultSchedule[dayName];
         if (sched && sched.active) {
           const sH = parseInt(sched.start.split(':')[0]), eH = parseInt(sched.end.split(':')[0]);
           for (let h = sH; h < eH; h++) {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
-            
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
               batch.set(doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions')), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
-                date: dStr, startTime: sT, endTime: eT, 
-                status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', 
-                classroom: batchClassroom || ''
+                date: dStr, startTime: sT, endTime: eT, status: 'open', source: 'system', studentName: '', topic: '', questionRange: '', students: [], classroom: batchClassroom || ''
               });
               count++;
             }
           }
         }
       }
-      await batch.commit(); 
-      notify(`${count}개의 스케줄이 일괄 생성되었습니다!`);
-      fetchSessions(true); 
-  };
+      await batch.commit(); notify(`${count}개의 스케줄이 일괄 생성되었습니다!`); fetchSessions(true); 
+    };
 
-  const submitStudentApplication = async () => {
-      if (isSubmittingBooking) return; 
-      setIsSubmittingBooking(true);
-      
+    const submitStudentApplication = async () => {
+      if (isSubmittingBooking) return; setIsSubmittingBooking(true);
       try {
           const validItems = applicationItems.filter(i => i.subject || i.workbook || i.range);
           const formattedTopic = validItems.length > 0 ? validItems.map(i => i.subject).join(', ') : '개별 Q&A';
           const formattedRange = validItems.length > 0 ? validItems.map(i => `${i.workbook} (${i.range})`).join('\n') : '현장 지참';
-          
-          const batch = writeBatch(db);
-          const updates = {};
+          const batch = writeBatch(db); const updates = {};
           
           studentSelectedSlots.forEach(id => {
               const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
+              const studentPayload = [{ id: currentUser?.id, name: currentUser?.name, phone: currentUser?.phone || '' }];
               const updateData = { 
-                  status: 'pending', 
-                  studentId: currentUser?.id || 'unknown_student',
-                  studentName: currentUser?.name || '알수없음', 
-                  studentPhone: currentUser?.phone || '', 
-                  topic: formattedTopic, 
-                  questionRange: formattedRange, 
-                  source: 'app' 
+                  status: 'pending', studentId: currentUser?.id || 'unknown_student', studentName: currentUser?.name || '알수없음', studentPhone: currentUser?.phone || '', 
+                  students: studentPayload, topic: formattedTopic, questionRange: formattedRange, source: 'app' 
               };
-              batch.update(ref, updateData);
-              updates[id] = { id, ...updateData }; 
+              batch.update(ref, updateData); updates[id] = { id, ...updateData }; 
           });
-
-          await batch.commit(); 
-          
+          await batch.commit();
           updateLocalAndCacheState(prev => {
-              const next = { ...prev };
-              Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; });
-              return next;
+              const next = { ...prev }; Object.keys(updates).forEach(id => { next[id] = { ...next[id], ...updates[id] }; }); return next;
           });
           
           try {
-              const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목/내용: ${formattedTopic}\n📖 교재/범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 신청 슬롯: 총 ${studentSelectedSlots.length}건\n\n원장님, 시스템에서 승인을 진행해 주세요!`;
-              
-              const sendTelegram = httpsCallable(functions, 'sendTelegramAlert');
-              await sendTelegram({ text: telegramMsg });
-          } catch (teleErr) {
-              console.error("텔레그램 알림 발송 실패:", teleErr);
-          }
+              const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목: ${formattedTopic}\n📖 범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 슬롯: 총 ${studentSelectedSlots.length}건\n\n승인을 진행해 주세요!`;
+              await httpsCallable(functions, 'sendTelegramAlert')({ text: telegramMsg });
+          } catch (teleErr) {}
+          setModalState({type:null}); setStudentSelectedSlots([]); notify('신청이 완료되었습니다!', 'success');
+      } catch(e) { notify(`예약 실패: ${e.message}`, 'error'); } finally { setIsSubmittingBooking(false); }
+    };
 
-          setModalState({type:null}); 
-          setStudentSelectedSlots([]); 
-          notify('신청이 성공적으로 완료되었습니다!', 'success');
-      } catch(e) { 
-          notify(`예약 실패: ${e.message || '네트워크 오류가 발생했습니다.'}`, 'error'); 
-      } finally {
-          setIsSubmittingBooking(false); 
-      }
-  };
+    // 🚀 [CTO 패치] 다중 검색 결과 최종 저장 엔진 (1:N 분반 기틀 마련)
+    const handleAdminEditSubmit = async () => {
+        const isAsst = selectedSession.workerRole === 'admin_assistant';
+        let updateData = {};
 
-  const handleAdminEditSubmit = async () => {
-    const isAsst = selectedSession.workerRole === 'admin_assistant';
-    
-    let newStatus = selectedSession.status;
-    let updateData = {};
-
-    if (isAsst) {
-        newStatus = (selectedSession.status === 'open' && adminEditData.topic) ? 'confirmed' : selectedSession.status;
-        updateData = { topic: adminEditData.topic, status: newStatus };
-    } else {
-        newStatus = adminEditData.studentName ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
-        updateData = { studentName: adminEditData.studentName, topic: adminEditData.topic, questionRange: adminEditData.questionRange, status: newStatus };
-    }
-    
-    try {
-        await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
-        updateLocalAndCacheState(prev => {
-            const current = prev[selectedSession.id] || {};
-            return { ...prev, [selectedSession.id]: { ...current, ...updateData } };
-        });
-        setModalState({type:null}); notify('수정완료', 'success'); 
-    } catch (e) { notify('수정 권한이 거부되었습니다.', 'error'); }
-  };
-
-  const pendingBookings = sessions.filter(s => s.status === 'pending');
-  const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
-  const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
-  
-  const studentMyClinics = useMemo(() => {
-    return sessions.filter(s => {
-        if (currentUser.role === 'parent') {
-            const isMatchedByArray = currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId);
-            const isMatchedByName = s.studentName === currentUser.childName; 
-            return (isMatchedByArray || isMatchedByName) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
+        if (isAsst) {
+            const newStatus = (selectedSession.status === 'open' && adminEditData.topic) ? 'confirmed' : selectedSession.status;
+            updateData = { topic: adminEditData.topic, status: newStatus };
+        } else {
+            const fallbackName = adminEditData.students.map(st => st.name).join(', ');
+            const newStatus = adminEditData.students.length > 0 ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
+            
+            updateData = {
+                students: adminEditData.students,
+                studentName: fallbackName, // 기존 디스플레이 화면들과의 호환성 하드방어용
+                topic: adminEditData.topic,
+                questionRange: adminEditData.questionRange,
+                status: newStatus
+            };
         }
-        return (s.studentId === currentUser.id || s.studentName === currentUser.name) && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
-    }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); 
-  }, [sessions, currentUser]);
+        
+        try {
+            await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id), updateData); 
+            updateLocalAndCacheState(prev => {
+                const current = prev[selectedSession.id] || {};
+                return { ...prev, [selectedSession.id]: { ...current, ...updateData } };
+            });
+            setModalState({type:null}); notify('그룹 배정이 성공적으로 처리되었습니다.', 'success'); 
+        } catch (e) { notify('수정 권한이 거부되었습니다.', 'error'); }
+    };
 
-  if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    const pendingBookings = sessions.filter(s => s.status === 'pending');
+    const scheduleRequests = sessions.filter(s => s.status === 'cancellation_requested' || s.status === 'addition_requested');
+    const pendingFeedbacks = sessions.filter(s => s.feedbackStatus === 'submitted');
+  
+    const studentMyClinics = useMemo(() => {
+        return sessions.filter(s => {
+            const hasStudentMatch = s.students?.some(st => {
+                if (currentUser.role === 'parent') {
+                    return (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(st.id)) || (st.name === currentUser.childName);
+                }
+                return st.id === currentUser.id || st.name === currentUser.name;
+            }) || (
+                currentUser.role === 'parent' ? (
+                    (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || (s.studentName === currentUser.childName)
+                ) : (s.studentId === currentUser.id || s.studentName === currentUser.name)
+            );
+            return hasStudentMatch && (s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed');
+        }).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '')); 
+    }, [sessions, currentUser]);
 
-  return (
+    if (appLoading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+
+    return (
     <div className="space-y-6 w-full animate-in fade-in">
        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] w-full max-w-md px-4 space-y-2 pointer-events-none">
           {notifications.map(n=><div key={n.id} className={`backdrop-blur text-white px-4 py-3 rounded-lg shadow-xl ${n.type==='error'?'bg-red-600/90':'bg-gray-900/90'}`}>{n.msg}</div>)}
@@ -858,9 +855,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
            <div className="space-y-8 w-full">
               <div className="flex justify-between items-center">
                   <h2 className="text-2xl font-bold text-gray-900">클리닉/업무 관리자 대시보드</h2>
-                  <div className="flex gap-2">
-                      <Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'admin_stats'})}>통계</Button>
-                  </div>
+                  <div className="flex gap-2"><Button variant="secondary" size="sm" icon={BarChart2} onClick={()=>setModalState({type:'admin_stats'})}>통계</Button></div>
               </div>
               <Card className="border-purple-200 bg-purple-50/30 w-full">
                   <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><ClipboardList className="text-purple-600"/> 근무 변경 요청 {scheduleRequests.length > 0 && <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{scheduleRequests.length}</span>}</h2>
@@ -871,7 +866,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                             <div className="flex items-center gap-2 mb-1"><Badge status={req.status}/><span className="font-bold">{req.taName}</span><span className="text-sm text-gray-500">{req.date}</span></div>
                             <div className="text-sm text-gray-600">{req.startTime}~{req.endTime}{req.cancelReason && <span className="ml-2 text-red-600 font-medium"> (사유: {req.cancelReason})</span>}</div>
                         </div>
-                        {/* 🚀 [CTO 패치] 근무 변경 요청 반려 버튼 추가 */}
                         <div className="flex gap-2 shrink-0">
                             <Button variant="primary" size="sm" onClick={() => handleAction('approve_schedule_change', req)}>승인</Button>
                             <Button variant="danger" size="sm" onClick={() => handleAction('reject_schedule_change', req)}>반려</Button>
@@ -882,10 +876,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
               </Card>
 
               <Card className="bg-blue-50/50 border-blue-100 w-full">
-                  <div className="flex justify-between items-center mb-4">
-                      <h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 스케줄 일괄 오픈 (마스터 권한)</h3>
-                  </div>
-                  
+                  <div className="flex justify-between items-center mb-4"><h3 className="font-bold flex items-center gap-2 text-lg text-blue-900"><Clock size={20}/> 스케줄 일괄 오픈 (마스터 권한)</h3></div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                       <select className="border rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-300 font-bold" value={selectedTaIdForSchedule} onChange={e=>setSelectedTaIdForSchedule(e.target.value)}>
                           <option value="">1. 담당 조교 선택 (필수)</option>
@@ -896,7 +887,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                           {masterData?.classrooms?.map(r=><option key={r} value={r}>{r}</option>)}
                       </select>
                   </div>
-
                   <div className="flex gap-2 mb-4">
                       <input type="date" className="border rounded-lg p-2 flex-1 text-sm focus:ring-2 focus:ring-blue-300 font-bold text-gray-700" value={batchDateRange.start} onChange={e=>setBatchDateRange({...batchDateRange, start:e.target.value})}/>
                       <span className="self-center font-bold text-gray-400">~</span>
@@ -930,10 +920,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                   currentDate={currentDate} setCurrentDate={setCurrentDate} 
                   selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
                   onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
-                  onRefresh={() => fetchSessions(true)}
-                  isAdminView={true} isMyScheduleView={false} 
-                  checkRoomAvailability={checkRoomAvailability}
-                  masterClassrooms={masterData?.classrooms} 
+                  onRefresh={() => fetchSessions(true)} isAdminView={true} isMyScheduleView={false} 
+                  checkRoomAvailability={checkRoomAvailability} masterClassrooms={masterData?.classrooms} 
               />
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
@@ -945,12 +933,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                 <div className="flex-1 pr-3">
                                     <div className="font-bold text-gray-900 text-lg">{s.studentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone})</span></div>
                                     <div className="text-sm font-bold text-gray-600 mt-1">{s.date} <span className="text-blue-600">{s.startTime}</span> ({s.taName})</div>
-                                    
                                     <div className="text-sm text-gray-600 mt-2 p-2 bg-white rounded-lg border border-green-100">
                                         <div className="font-bold text-xs text-green-700 mb-0.5">신청 상세</div>
                                         <div className="whitespace-pre-wrap">{s.topic} / {s.questionRange}</div>
                                     </div>
-                                    
                                     <div className="mt-2">
                                         <select 
                                             className={`text-sm border rounded-lg p-2 font-bold focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-800 shadow-inner'}`} 
@@ -961,12 +947,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                             {masterData?.classrooms?.map(r => {
                                                 const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.id);
                                                 return (
-                                                    <option 
-                                                        key={r} 
-                                                        value={r} 
-                                                        className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
-                                                        disabled={occupiedStatus === 'clinic'}
-                                                    >
+                                                    <option key={r} value={r} className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''} disabled={occupiedStatus === 'clinic'}>
                                                         {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
                                                     </option>
                                                 );
@@ -989,7 +970,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                             <div key={s.id} className="border border-gray-200 p-4 rounded-xl flex justify-between items-center hover:bg-gray-50 transition-all shadow-sm">
                                 <div className="overflow-hidden mr-2 flex-1">
                                     <div className="font-bold text-gray-900 flex items-center gap-2">
-                                        {s.studentName} 학생 
+                                        {s.students && s.students.length > 0 ? s.students.map(st=>st.name).join(', ') : s.studentName} 학생 
                                         <span className="text-yellow-500 text-xs">{'★'.repeat(s.rating||5)}</span>
                                     </div>
                                     <div className="text-sm text-gray-500 truncate mt-1 bg-white border px-2 py-1 rounded">{s.clinicDetails || s.feedback || '내용 없음'}</div>
@@ -1019,30 +1000,20 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     </div>
                 </Card>
                 <CalendarView 
-                    isInteractive={true} sessions={sessions} currentUser={currentUser} 
-                    currentDate={currentDate} setCurrentDate={setCurrentDate} 
-                    selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
-                    onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
-                    onRefresh={() => fetchSessions(true)}
-                    isAdminView={false} isMyScheduleView={true}
-                    masterClassrooms={masterData?.classrooms}
+                    isInteractive={true} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                    selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} users={users} taSubjectMap={taSubjectMap} 
+                    onRefresh={() => fetchSessions(true)} isAdminView={false} isMyScheduleView={true} masterClassrooms={masterData?.classrooms}
                 />
             </>
         )}
 
        {currentUser.role === 'lecturer' && (
            <div className="space-y-8 w-full">
-              <div className="bg-white border-b pb-4 mb-4">
-                <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 직원 통합 스케줄 (열람 전용)</h2>
-              </div>
+              <div className="bg-white border-b pb-4 mb-4"><h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><Eye className="text-blue-600" /> 전체 직원 통합 스케줄 (열람 전용)</h2></div>
               <CalendarView 
-                  isInteractive={false} sessions={sessions} currentUser={currentUser} 
-                  currentDate={currentDate} setCurrentDate={setCurrentDate} 
-                  selectedDateStr={selectedDateStr} onDateChange={handleDateChange} 
-                  onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} 
-                  onRefresh={() => fetchSessions(true)}
-                  isAdminView={false} isMyScheduleView={false}
-                  masterClassrooms={masterData?.classrooms}
+                  isInteractive={false} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                  selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={()=>{}} users={users} taSubjectMap={taSubjectMap} 
+                  onRefresh={() => fetchSessions(true)} isAdminView={false} isMyScheduleView={false} masterClassrooms={masterData?.classrooms}
               />
            </div>
        )}
@@ -1051,9 +1022,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             <div className="flex flex-col gap-6 w-full">
                 <Card className="bg-blue-50 border-blue-100 w-full shadow-sm">
                     <div className="flex flex-col md:flex-row justify-between md:items-center mb-4 gap-3">
-                        <h2 className="text-lg font-black text-blue-900 flex items-center gap-2">
-                            <CheckCircle size={22}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 확정 예약 현황'}
-                        </h2>
+                        <h2 className="text-lg font-black text-blue-900 flex items-center gap-2"><CheckCircle size={22}/> {currentUser.role === 'parent' ? '내 자녀들의 예약 현황' : '나의 확정 예약 현황'}</h2>
                         {currentUser.role === 'student' && (
                             <div className="bg-rose-50 border border-rose-200 text-rose-600 text-xs font-bold px-3 py-2 rounded-lg flex items-start gap-1.5 shadow-sm">
                                 <AlertTriangle size={14} className="shrink-0 mt-0.5" />
@@ -1061,27 +1030,19 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                             </div>
                         )}
                     </div>
-                    
                     {studentMyClinics.length === 0 ? <div className="text-center py-8 text-gray-400 font-bold bg-white rounded-xl border border-dashed border-gray-200">예약 내역이 없습니다.</div> : (
                         <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar">
-                            {studentMyClinics.map(s => (
+                            {studentMyClinics.map(s => {
+                                const currentDisplayStudentName = s.students && s.students.length > 0 ? s.students.map(st=>st.name).join(', ') : s.studentName;
+                                return (
                                 <div key={s.id} className="bg-white p-5 rounded-xl border-2 border-blue-100 shadow-sm relative overflow-hidden transition-all hover:border-blue-300">
-                                    {currentUser.role === 'parent' && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{s.studentName}</div>}
-                                    <div className="flex justify-between mb-2 pr-12">
-                                        <span className="font-bold text-gray-900 text-lg tracking-tight">{s.date}</span>
-                                        <Badge status={s.status}/>
-                                    </div>
-                                    <div className="flex items-center gap-2 text-gray-700 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-100 w-fit">
-                                        <Clock size={16} className="text-blue-600"/>
-                                        <span className="font-black text-blue-900">{s.startTime} ~ {s.endTime}</span>
-                                        <span className="text-gray-300">|</span>
-                                        <span className="text-sm font-bold">{s.taName} 선생님</span>
-                                    </div>
+                                    {(currentUser.role === 'parent' || s.students?.length > 1) && <div className="absolute top-0 right-0 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-bl-xl">{currentDisplayStudentName}</div>}
+                                    <div className="flex justify-between mb-2 pr-12"><span className="font-bold text-gray-900 text-lg tracking-tight">{s.date}</span><Badge status={s.status}/></div>
+                                    <div className="flex items-center gap-2 text-gray-700 mb-3 bg-gray-50 p-2 rounded-lg border border-gray-100 w-fit"><Clock size={16} className="text-blue-600"/><span className="font-black text-blue-900">{s.startTime} ~ {s.endTime}</span><span className="text-gray-300">|</span><span className="text-sm font-bold">{s.taName} 선생님</span></div>
                                     <div className="bg-indigo-50/50 p-3 rounded-lg text-sm text-gray-600 border border-indigo-50">
                                         <div className="flex gap-2 mb-1.5"><span className="font-black text-indigo-400 w-8 shrink-0">과목</span> <span className="font-bold text-indigo-900">{s.topic}</span></div>
                                         <div className="flex gap-2"><span className="font-black text-indigo-400 w-8 shrink-0">범위</span> <span className="whitespace-pre-wrap font-medium text-gray-700">{s.questionRange}</span></div>
                                     </div>
-                                    
                                     {(currentUser.role !== 'student') && (s.status === 'completed' && (s.clinicDetails || s.nextAction || s.clinicContent)) && (
                                         <div className="mt-4 bg-white p-4 rounded-xl text-sm text-gray-700 border-2 border-green-400 shadow-sm">
                                             <div className="font-black text-green-800 mb-3 flex items-center justify-between border-b border-green-200 pb-2">
@@ -1089,50 +1050,31 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                                 <span className="text-yellow-500 text-lg tracking-widest drop-shadow-sm">{'★'.repeat(Number(s.rating||5))}{'☆'.repeat(Math.max(0, 5 - Number(s.rating||5)))}</span>
                                             </div>
                                             {s.tags && <div className="mb-3"><span className="text-xs font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg">{s.tags}</span></div>}
-                                            
                                             {(s.clinicDetails || s.clinicContent) && <div className="whitespace-pre-wrap leading-relaxed mb-3"><span className="font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border mr-1 text-[10px]">진행 내용</span> {s.clinicDetails || s.clinicContent}</div>}
                                             {s.feedback && <div className="whitespace-pre-wrap leading-relaxed mb-3"><span className="font-bold text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border mr-1 text-[10px]">문제점</span> {s.feedback}</div>}
-                                            
                                             {(s.nextAction || s.improvement) && <div className="whitespace-pre-wrap mt-3 bg-emerald-50/50 p-2 rounded-lg leading-relaxed"><span className="font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200 mr-1 text-[10px]">다음 과제</span> <span className="font-bold">{s.nextAction || s.improvement}</span></div>}
                                         </div>
                                     )}
                                 </div>
-                            ))}
+                            )})}
                         </div>
                     )}
                 </Card>
                 <Card className="w-full">
-                    {/* 🚀 [CTO 패치] 예약 가능 기간 안내 라벨 추가 */}
                     <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
                         <h2 className="text-xl font-bold flex items-center gap-2"><PlusCircle className="text-blue-600"/> 새로운 클리닉 예약하기</h2>
                         {currentUser.role === 'student' && <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 w-fit">🗓️ 예약 가능 기간: 당일 ~ 7일 후</span>}
                     </div>
                     <CalendarView 
-                        isInteractive={currentUser.role === 'student'} 
-                        sessions={sessions} 
-                        currentUser={currentUser} 
-                        currentDate={currentDate} 
-                        setCurrentDate={setCurrentDate} 
-                        selectedDateStr={selectedDateStr} 
-                        onDateChange={handleDateChange} 
-                        onAction={handleAction} 
-                        selectedSlots={studentSelectedSlots} 
-                        users={users}
-                        taSubjectMap={taSubjectMap}
-                        onRefresh={() => fetchSessions(true)}
-                        isAdminView={false} isMyScheduleView={false}
-                        myClassIds={myClassIds}
+                        isInteractive={currentUser.role === 'student'} sessions={sessions} currentUser={currentUser} currentDate={currentDate} setCurrentDate={setCurrentDate} 
+                        selectedDateStr={selectedDateStr} onDateChange={handleDateChange} onAction={handleAction} selectedSlots={studentSelectedSlots} users={users} taSubjectMap={taSubjectMap} onRefresh={() => fetchSessions(true)} isAdminView={false} isMyScheduleView={false} myClassIds={myClassIds}
                     />
                 </Card>
                 {studentSelectedSlots.length > 0 && currentUser.role === 'student' && (
                     <div className="fixed bottom-6 left-0 right-0 p-4 z-50 flex justify-center animate-in slide-in-from-bottom-4">
-                        <Button 
-                            className="w-full max-w-md shadow-2xl bg-blue-600 hover:bg-blue-700 text-white border-none py-4 text-xl rounded-2xl flex items-center justify-center gap-3 ring-4 ring-blue-200"
-                            onClick={()=>setModalState({type:'student_apply'})}
-                        >
+                        <Button className="w-full max-w-md shadow-2xl bg-blue-600 hover:bg-blue-700 text-white border-none py-4 text-xl rounded-2xl flex items-center justify-center gap-3 ring-4 ring-blue-200" onClick={()=>setModalState({type:'student_apply'})}>
                             <span className="bg-white text-blue-600 px-3 py-1 rounded-lg text-base font-black shadow-inner">{studentSelectedSlots.length}건</span>
-                            <span className="font-bold">선택한 시간 예약 진행하기</span>
-                            <ArrowRight size={24} />
+                            <span className="font-bold">선택한 시간 예약 진행하기</span><ArrowRight size={24} />
                         </Button>
                     </div>
                 )}
@@ -1141,16 +1083,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
       {/* --- Modals --- */}
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 변경/취소 요청">
-        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="사유를 입력해 주세요 (예: 개인 사정으로 출근 불가)" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
+        <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="사유를 입력해 주세요" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
         <Button onClick={async()=>{ 
             if(!requestData.reason) return notify('사유입력','error'); 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'cancellation_requested', cancelReason:requestData.reason}); 
             updateLocalAndCacheState(prev => {
-                const current = prev[selectedSession.id] || {};
-                return { ...prev, [selectedSession.id]: { ...current, status: 'cancellation_requested', cancelReason: requestData.reason } };
+                const current = prev[selectedSession.id] || {}; return { ...prev, [selectedSession.id]: { ...current, status: 'cancellation_requested', cancelReason: requestData.reason } };
             });
-            setModalState({type:null}); 
-            notify('요청 완료 (관리자에게 전달되었습니다)'); 
+            setModalState({type:null}); notify('요청 완료'); 
         }} className="w-full py-4 text-lg">요청 전송</Button>
       </Modal>
       
@@ -1167,13 +1107,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         <input placeholder="예시 : 마플시너지" className="w-full border-2 rounded-lg p-3 text-base focus:ring-2 outline-none focus:ring-blue-300" value={item.workbook} onChange={e=>{const n=[...applicationItems];n[i].workbook=e.target.value;setApplicationItems(n)}}/>
                     </div>
                     <div className="flex-1">
-                        <label className="block text-sm font-bold text-gray-600 mb-1.5">질문 범위 (페이지/번호)</label>
+                        <label className="block text-sm font-bold text-gray-600 mb-1.5">질문 범위</label>
                         <input placeholder="p.23-25 #61..." className="w-full border-2 rounded-lg p-3 text-base focus:ring-2 outline-none focus:ring-blue-300" value={item.range} onChange={e=>{const n=[...applicationItems];n[i].range=e.target.value;setApplicationItems(n)}}/>
                     </div>
                 </div>
             </div>
         ))}
-        <Button variant="secondary" className="w-full mb-4 py-3 font-bold border-2 border-dashed border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 bg-white" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/> 과목 추가</Button>
+        <Button variant="secondary" className="w-full mb-4 py-3 font-bold border-2 border-dashed border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 bg-white" onClick={()=>setApplicationItems([...applicationItems,{subject:'',workbook:'',range:''}])}><Plus size={20}/></Button>
         <Button className="w-full py-4 text-xl font-black shadow-lg" onClick={submitStudentApplication} disabled={isSubmittingBooking}>
             {isSubmittingBooking ? <Loader className="animate-spin inline-block text-white" size={24}/> : '최종 예약 접수하기'}
         </Button>
@@ -1188,12 +1128,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 ))}
             </div>
         </div>
-        
         <div className="mb-4">
-            <label className="block text-sm font-bold text-gray-700 mb-2">핵심 태그 <span className="font-normal text-xs text-gray-400">(쉼표로 구분)</span></label>
-            <input className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-300 font-bold" placeholder="예: #개념보충, #서술형교정, #오답노트" value={feedbackData.tags} onChange={e=>setFeedbackData({...feedbackData, tags:e.target.value})}/>
+            <label className="block text-sm font-bold text-gray-700 mb-2">핵심 태그</label>
+            <input className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-300 font-bold" placeholder="예: #개념보충, #서술형교정" value={feedbackData.tags} onChange={e=>setFeedbackData({...feedbackData, tags:e.target.value})}/>
         </div>
-
         <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
                 <label className="block text-sm font-bold text-gray-700">진행 내용 및 특이사항</label>
@@ -1203,45 +1141,45 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     </Button>
                 )}
             </div>
-            <textarea 
-                className="w-full border-2 border-gray-200 rounded-xl p-4 h-28 text-base outline-none focus:ring-2 focus:ring-blue-300 transition-colors" 
-                placeholder={['admin', 'admin_assistant'].includes(currentUser.role) ? "진행 내용과 학생의 취약점을 편하게 작성하세요. AI가 학부모님용으로 다듬어 드립니다." : "진행 내용과 학생의 취약점을 상세히 작성해 주세요."} 
-                value={feedbackData.clinicDetails} 
-                onChange={e=>setFeedbackData({...feedbackData, clinicDetails:e.target.value})}
-            />
+            <textarea className="w-full border-2 border-gray-200 rounded-xl p-4 h-28 text-base outline-none focus:ring-2 focus:ring-blue-300 transition-colors" placeholder="진행 내용을 상세히 작성해 주세요." value={feedbackData.clinicDetails} onChange={e=>setFeedbackData({...feedbackData, clinicDetails:e.target.value})}/>
         </div>
-
         <div className="mb-4">
             <label className="block text-sm font-bold text-emerald-700 mb-2">다음 과제 (Next Action)</label>
-            <textarea className="w-full border-2 border-emerald-200 bg-emerald-50 rounded-xl p-4 h-20 text-base outline-none focus:ring-2 focus:ring-emerald-400" placeholder="다음 클리닉 전까지 해와야 할 미션을 명확하게 적어주세요." value={feedbackData.nextAction} onChange={e=>setFeedbackData({...feedbackData, nextAction:e.target.value})}/>
+            <textarea className="w-full border-2 border-emerald-200 bg-emerald-50 rounded-xl p-4 h-20 text-base outline-none focus:ring-2 focus:ring-emerald-400" placeholder="다음 클리닉 미션을 적어주세요." value={feedbackData.nextAction} onChange={e=>setFeedbackData({...feedbackData, nextAction:e.target.value})}/>
         </div>
-
         <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{ 
             await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{...feedbackData,status:'completed',feedbackStatus:'submitted'}); 
             updateLocalAndCacheState(prev => {
-                const current = prev[selectedSession.id] || {};
-                return { ...prev, [selectedSession.id]: { ...current, ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } };
+                const current = prev[selectedSession.id] || {}; return { ...prev, [selectedSession.id]: { ...current, ...feedbackData, status: 'completed', feedbackStatus: 'submitted' } };
             }); 
-            setModalState({type:null}); 
-            notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
+            setModalState({type:null}); notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
         }}>저장 및 검수 요청하기</Button>
       </Modal>
       
+      {/* 🚀 [CTO 패치] 1:N 맞춤형 다중 학생 배정 모달 고도화 */}
       <Modal isOpen={modalState.type==='admin_edit'} onClose={()=>setModalState({type:null})} title={selectedSession?.workerRole === 'admin_assistant' ? "행정 업무 지시" : "예약/클리닉 수정"}>
         <div className="space-y-4">
             {selectedSession?.workerRole === 'admin_assistant' ? (
                 <div>
-                    <label className="block text-sm font-bold text-gray-600 mb-1">오늘의 주요 업무 (예: 교재 복사, 결제 확인 등)</label>
+                    <label className="block text-sm font-bold text-gray-600 mb-1">오늘의 주요 업무</label>
                     <input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="업무 내용을 입력하세요"/>
                 </div>
             ) : (
                 <>
-                    <div><label className="block text-sm font-bold text-gray-600 mb-1">학생 이름 (직접 입력 시 예약 처리됨)</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.studentName} onChange={e=>setAdminEditData({...adminEditData, studentName:e.target.value})} placeholder="학생 이름"/></div>
+                    <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5">클리닉 배정 학생단 (다중 선택 검색)</label>
+                        <AdminStudentMultiSelect 
+                            users={users} 
+                            selectedStudents={adminEditData.students} 
+                            onAdd={(st) => setAdminEditData({ ...adminEditData, students: [...adminEditData.students, st] })}
+                            onRemove={(id) => setAdminEditData({ ...adminEditData, students: adminEditData.students.filter(st => st.id !== id) })}
+                        />
+                    </div>
                     <div><label className="block text-sm font-bold text-gray-600 mb-1">과목</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.topic} onChange={e=>setAdminEditData({...adminEditData, topic:e.target.value})} placeholder="과목"/></div>
                     <div><label className="block text-sm font-bold text-gray-600 mb-1">교재 및 범위</label><input className="w-full border-2 rounded-lg p-3 text-lg focus:ring-2 focus:ring-blue-300 outline-none" value={adminEditData.questionRange} onChange={e=>setAdminEditData({...adminEditData, questionRange:e.target.value})} placeholder="범위"/></div>
                 </>
             )}
-            <Button className="w-full py-4 text-lg font-bold" onClick={handleAdminEditSubmit}>저장하기</Button>
+            <Button className="w-full py-4 text-lg font-bold" onClick={handleAdminEditSubmit}>그룹 배정 내용 저장</Button>
         </div>
       </Modal>
       
@@ -1252,9 +1190,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
       </Modal>
       
+      {/* 🚀 [CTO 패치] 다중 배정 학생 각각에게 분기 발송되는 안심 문자 확인 팝업 */}
       <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="클리닉 예약 승인 및 학부모 안내문자 발송">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
-            <CheckCircle size={18}/> 아래 내용을 확인하신 후 승인하시면 학부모님께 문자가 즉시 발송됩니다. (수정 가능)
+            <CheckCircle size={18}/> 승인 시 배정된 모든 학생의 학부모에게 개별 맞춤 문자 분할 발송이 요청됩니다.
         </div>
         <textarea 
             className="w-full bg-white p-5 rounded-xl text-base border-2 border-indigo-200 outline-none focus:ring-2 focus:ring-indigo-400 h-64 custom-scrollbar leading-relaxed" 
@@ -1263,55 +1202,48 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                let targetPhone = '';
-                let targetStudentId = selectedSession.studentId;
+                // 🚀 다중 학생 루프 처리 
+                const targetStudents = selectedSession.students && selectedSession.students.length > 0 
+                    ? selectedSession.students 
+                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
 
-                if (!targetStudentId && selectedSession.studentName) {
-                    const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
-                    if (foundStudent) targetStudentId = foundStudent.id;
-                }
-                
-                if (targetStudentId) {
-                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
-                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
-                    else {
-                        const studentUser = users.find(u => u.id === targetStudentId);
-                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                let textSentCount = 0;
+
+                for (const st of targetStudents) {
+                    let targetPhone = st.phone || '';
+                    if (!targetPhone && st.id) {
+                        const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(st.id));
+                        if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
+                        else {
+                            const studentUser = users.find(u => u.id === st.id);
+                            if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                        }
                     }
-                }
-                if (!targetPhone && selectedSession.studentPhone) {
-                    targetPhone = selectedSession.studentPhone;
-                }
 
-                if (!targetPhone) {
-                    notify('연락처가 없어 문자를 발송할 수 없습니다. 예약만 승인됩니다.', 'error');
-                } else {
-                    const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                        phoneNumber: cleanPhone, 
-                        message: previewMessage,
-                        status: 'pending',
-                        type: 'clinic_approval',
-                        studentName: selectedSession.studentName,
-                        createdAt: serverTimestamp()
-                    });
+                    if (targetPhone) {
+                        const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
+                        // 문자 메시지 본문 안의 대표 학생 이름을 실제 타겟 학생 이름으로 개별 동적 치환
+                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName, 'g'), st.name);
+                        
+                        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: st.name, createdAt: serverTimestamp()
+                        });
+                        textSentCount++;
+                    }
                 }
 
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{status:'confirmed'}); 
                 updateLocalAndCacheState(prev => {
-                    const current = prev[selectedSession.id] || {};
-                    return { ...prev, [selectedSession.id]: { ...current, status: 'confirmed' } };
+                    const current = prev[selectedSession.id] || {}; return { ...prev, [selectedSession.id]: { ...current, status: 'confirmed' } };
                 }); 
                 
                 setModalState({type:null}); 
-                notify(targetPhone ? '승인 완료 및 안내문자 발송 요청됨!' : '승인 완료!', 'success'); 
-            } catch (error) {
-                console.error("승인 오류:", error);
-                notify(`오류: ${error.message}`, 'error');
-            }
-        }}>예약 승인 및 문자 발송하기</Button>
+                notify(`그룹 승인 완료! (안내문자 ${textSentCount}명 발송 대기열 적재 완료)`, 'success'); 
+            } catch (error) { notify(`오류: ${error.message}`, 'error'); }
+        }}>그룹 예약 승인 및 개별 문자 발송하기</Button>
       </Modal>
       
+      {/* 🚀 [CTO 패치] 다중 배정 학생 각각에게 전송되는 피드백 문자 검수 팝업 */}
       <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="학부모 발송용 피드백 검수">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 수정이 필요하면 아래 텍스트 창에서 바로 편집하세요.
@@ -1323,56 +1255,42 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         />
         <Button className="w-full mt-4 py-4 text-lg font-black shadow-lg bg-indigo-600 hover:bg-indigo-700" onClick={async ()=>{ 
             try {
-                let targetPhone = '';
-                let targetStudentId = selectedSession.studentId;
+                const targetStudents = selectedSession.students && selectedSession.students.length > 0 
+                    ? selectedSession.students 
+                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
 
-                if (!targetStudentId && selectedSession.studentName) {
-                    const foundStudent = users.find(u => u.role === 'student' && u.name === selectedSession.studentName);
-                    if (foundStudent) targetStudentId = foundStudent.id;
-                }
-                
-                if (targetStudentId) {
-                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(targetStudentId));
-                    if (parentUser && parentUser.phone) {
-                        targetPhone = parentUser.phone;
-                    } else {
-                        const studentUser = users.find(u => u.id === targetStudentId);
-                        if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                let textSentCount = 0;
+
+                for (const st of targetStudents) {
+                    let targetPhone = '';
+                    if (st.id) {
+                        const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(st.id));
+                        if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
+                        else {
+                            const studentUser = users.find(u => u.id === st.id);
+                            if (studentUser && studentUser.phone) targetPhone = studentUser.phone; 
+                        }
+                    }
+
+                    if (targetPhone) {
+                        const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
+                        // 개별 학생 이름 치환 로직 작동
+                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName, 'g'), st.name);
+                        
+                        await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
+                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_feedback', studentName: st.name, createdAt: serverTimestamp()
+                        });
+                        textSentCount++;
                     }
                 }
 
-                if (!targetPhone && selectedSession.studentPhone) {
-                    targetPhone = selectedSession.studentPhone;
-                }
-
-                if (!targetPhone) {
-                    notify('이 학생과 연결된 학부모 연락처나 학생 본인의 연락처가 시스템에 없습니다.', 'error');
-                    return;
-                }
-
-                const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-
                 await updateDoc(doc(db,'artifacts',APP_ID,'public','data','sessions',selectedSession.id),{feedbackStatus:'sent'}); 
-                
-                await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                    phoneNumber: cleanPhone, 
-                    message: previewMessage,
-                    status: 'pending',
-                    type: 'clinic_feedback',
-                    studentName: selectedSession.studentName,
-                    createdAt: serverTimestamp()
-                });
-
                 updateLocalAndCacheState(prev => {
-                    const current = prev[selectedSession.id] || {};
-                    return { ...prev, [selectedSession.id]: { ...current, feedbackStatus: 'sent' } };
+                    const current = prev[selectedSession.id] || {}; return { ...prev, [selectedSession.id]: { ...current, feedbackStatus: 'sent' } };
                 }); 
                 setModalState({type:null}); 
-                notify('학원 폰으로 자동 발송이 요청되었습니다!', 'success'); 
-            } catch (error) {
-                console.error("문자 발송 큐 적재 실패:", error);
-                notify(`발송 요청 실패: ${error.message}`, 'error');
-            }
+                notify(`그룹 피드백 ${textSentCount}건 발송 요청 완료!`, 'success'); 
+            } catch (error) { notify(`발송 요청 실패: ${error.message}`, 'error'); }
         }}>최종 검수 완료 및 안드로이드 앱으로 발송하기</Button>
       </Modal>
       
