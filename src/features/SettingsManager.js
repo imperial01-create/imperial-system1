@@ -1,15 +1,15 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: Search 아이콘 import 누락 오류 완벽 해결 및 100% 풀버전 유지) */
+   (🚀 CTO 패치: 불필요해진 과거 데이터 병합/스캔 기능을 제거하여 코드를 경량화했습니다.) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, where, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle, Database, School, RefreshCw, Building2, Trash2, Star, Search 
-} from 'lucide-react'; // 🚀 Search 아이콘 추가 완료!
+  AlertTriangle, Database, School, Trash2, Star, Search 
+} from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
@@ -23,8 +23,6 @@ const SettingsManager = ({ currentUser }) => {
     const [savingSchools, setSavingSchools] = useState(false);
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
-    const [schoolMigrationProcessing, setSchoolMigrationProcessing] = useState(false);
-    const [mergingSchools, setMergingSchools] = useState(false);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -39,9 +37,6 @@ const SettingsManager = ({ currentUser }) => {
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [newSchool, setNewSchool] = useState({ type: 'high', name: '' });
-
-    const [mergeSource, setMergeSource] = useState('');
-    const [mergeTarget, setMergeTarget] = useState('');
 
     useEffect(() => {
         const fetchAllSettings = async () => {
@@ -112,7 +107,7 @@ const SettingsManager = ({ currentUser }) => {
     };
 
     // ==============================================================================
-    // 2. 학교 마스터 데이터 관리 및 6중 스캔 로직
+    // 2. 학교 마스터 데이터 관리 로직
     // ==============================================================================
     const handleSaveSchools = async () => {
         setSavingSchools(true);
@@ -151,110 +146,8 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    const runSchoolMigration = async () => {
-        if (!window.confirm("현재 시스템에 등록된 6개 핵심 DB(명부, 통합시험, 기출, 전략, 진단평가, 성적표)의 모든 데이터를 병렬 스캔합니다.\n\n각 데이터베이스에 입력된 학교 이름들을 추출하여 마스터 데이터로 자동 분류 및 병합합니다. (중복 자동 제거)\n\n실행하시겠습니까?")) return;
-        
-        setSchoolMigrationProcessing(true);
-        try {
-            const [usersSnap, integratedSnap, archiveSnap, strategySnap, diagSnap, gradeSnap] = await Promise.all([
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'exam_archive')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'school_strategies')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'student_exam_diagnostics')),
-                getDocs(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'))
-            ]);
-
-            const ele = new Set(schools.elementary || []);
-            const mid = new Set(schools.middle || []);
-            const high = new Set(schools.high || []);
-            let scannedCount = 0;
-
-            const processSchoolName = (rawName) => {
-                if (!rawName) return;
-                const sn = rawName.trim();
-                if (!sn) return;
-                if (sn.includes('초') || sn.includes('초등')) ele.add(sn);
-                else if (sn.includes('중') || sn.includes('중학')) mid.add(sn);
-                else high.add(sn); 
-                scannedCount++;
-            };
-
-            usersSnap.forEach(d => { 
-                const u = d.data(); 
-                if ((u.role === 'student' || (u.status === 'pending' && u.role === 'student')) && u.schoolName) {
-                    processSchoolName(u.schoolName);
-                }
-            });
-
-            const scanData = (d) => { 
-                const data = d.data(); 
-                const sName = data.schoolName || data.school; 
-                if (sName) processSchoolName(sName); 
-            };
-            
-            integratedSnap.forEach(scanData); 
-            archiveSnap.forEach(scanData); 
-            strategySnap.forEach(scanData);
-            diagSnap.forEach(scanData); 
-            gradeSnap.forEach(scanData);
-
-            const newSchools = {
-                elementary: [...ele].sort((a,b)=>a.localeCompare(b)),
-                middle: [...mid].sort((a,b)=>a.localeCompare(b)),
-                high: [...high].sort((a,b)=>a.localeCompare(b)),
-                favorites: schools.favorites || []
-            };
-
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools'), newSchools);
-            setSchools(newSchools);
-            alert(`✅ 총 ${scannedCount}건의 거대 DB 데이터를 스캔하여 학교 목록 완벽 병합을 완료했습니다!`);
-        } catch (e) { 
-            alert('마이그레이션 실패: ' + e.message); 
-        } finally { 
-            setSchoolMigrationProcessing(false); 
-        }
-    };
-
-    const handleMergeSchoolsAction = async () => {
-        const source = mergeSource.trim();
-        const target = mergeTarget.trim();
-        if (!source || !target) return alert('변경 대상과 새 학교 이름을 모두 입력해주세요.');
-        if (!window.confirm(`전체 시스템(6개 DB)을 스캔하여\n[${source}] (으)로 입력된 모든 과거 기록을\n👉 [${target}] (으)로 영구 일괄 변경하시겠습니까?\n\n※ 이 작업은 되돌릴 수 없습니다.`)) return;
-
-        setMergingSchools(true);
-        try {
-            const collectionsToUpdate = ['users', 'integrated_exams', 'exam_archive', 'school_strategies', 'student_exam_diagnostics', 'grades'];
-            const batch = writeBatch(db);
-            let count = 0;
-
-            for (const colName of collectionsToUpdate) {
-                const q1 = query(collection(db, 'artifacts', APP_ID, 'public', 'data', colName), where('schoolName', '==', source));
-                const snap1 = await getDocs(q1);
-                snap1.forEach(d => { batch.update(d.ref, { schoolName: target, updatedAt: serverTimestamp() }); count++; });
-
-                const q2 = query(collection(db, 'artifacts', APP_ID, 'public', 'data', colName), where('school', '==', source));
-                const snap2 = await getDocs(q2);
-                snap2.forEach(d => { batch.update(d.ref, { school: target, schoolName: target, updatedAt: serverTimestamp() }); count++; });
-            }
-
-            if (count > 0) {
-                await batch.commit();
-                alert(`✅ 총 ${count}개의 과거 데이터 꼬리표가 [${target}](으)로 성공적으로 일괄 변경되었습니다!`);
-                setMergeSource(''); 
-                setMergeTarget('');
-            } else { 
-                alert('스캔 결과, 변경할 데이터가 존재하지 않습니다.'); 
-            }
-        } catch(e) { 
-            alert("병합 중 오류 발생: " + e.message); 
-        } finally { 
-            setMergingSchools(false); 
-        }
-    };
-
     // ==============================================================================
-    // 3. 시스템 고급 도구 (기존 최적화 및 레거시 스크립트)
+    // 3. 시스템 고급 도구 
     // ==============================================================================
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
@@ -468,33 +361,6 @@ const SettingsManager = ({ currentUser }) => {
             {/* 탭 2. 학교 마스터 데이터 관리 */}
             {activeTab === 'school_mdm' && (
                 <div className="space-y-6 animate-in fade-in">
-                    
-                    <Card className="bg-rose-50 border-rose-100 shadow-sm border-2">
-                        <div className="flex justify-between items-center mb-2">
-                            <h3 className="font-bold text-lg text-rose-900 flex items-center gap-2"><RefreshCw size={20}/> 과거 데이터 교정 및 병합 (Merge Tool)</h3>
-                        </div>
-                        <p className="text-sm text-rose-700 mb-4">과거에 잘못 입력된 오타 학교명이나 중복 학교명을 정식 이름으로 일괄 변경합니다. (예: 임페고 👉 임페리얼고)</p>
-                        <div className="flex flex-col md:flex-row gap-3">
-                            <input className="flex-1 border-2 border-rose-200 bg-white p-3 rounded-xl focus:border-rose-400 outline-none font-bold" placeholder="변경 대상 학교명 (오타, 구명칭)" value={mergeSource} onChange={e=>setMergeSource(e.target.value)} />
-                            <div className="flex items-center justify-center text-rose-300 font-black">➔</div>
-                            <input className="flex-1 border-2 border-emerald-200 bg-white p-3 rounded-xl focus:border-emerald-400 outline-none font-bold text-emerald-800" placeholder="새로운 정식 학교명" value={mergeTarget} onChange={e=>setMergeTarget(e.target.value)} />
-                            <Button variant="primary" className="bg-rose-600 hover:bg-rose-700 font-bold shrink-0" onClick={handleMergeSchoolsAction} disabled={mergingSchools}>
-                                {mergingSchools ? <Loader className="animate-spin" size={16}/> : '일괄 병합 실행'}
-                            </Button>
-                        </div>
-                    </Card>
-
-                    <Card className="bg-emerald-50 border-emerald-100 shadow-sm">
-                        <div className="flex justify-between items-center mb-2">
-                            <h3 className="font-bold text-lg text-emerald-900 flex items-center gap-2"><Search className="inline" size={20}/> 6대 코어 DB 스마트 스캔</h3>
-                        </div>
-                        <p className="text-sm text-emerald-700 mb-4">재원생 명부, 통합시험, 기출, 전략, 진단평가, 성적표 DB를 스캔하여 마스터 목록을 추출합니다.</p>
-                        <Button variant="primary" className="bg-emerald-600 hover:bg-emerald-700 font-bold" onClick={runSchoolMigration} disabled={schoolMigrationProcessing}>
-                            {schoolMigrationProcessing ? <Loader className="animate-spin inline-block mr-2" size={16}/> : <Building2 size={16} className="inline mr-2"/>}
-                            모든 DB 6중 스캔 및 목록 자동 동기화
-                        </Button>
-                    </Card>
-
                     <Card className="w-full">
                         <div className="flex justify-between items-center mb-6 border-b pb-4">
                             <div>

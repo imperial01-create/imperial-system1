@@ -1,10 +1,10 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: X 아이콘 import 누락 완벽 해결 및 스마트 콤보박스 풀버전) */
+   (🚀 CTO 패치: 불필요해진 중복 시험 병합 및 미분류 필터를 삭제하여 UI를 쾌적하게 개선했습니다.) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
   FileQuestion, BookOpen, PenTool, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2, Star, AlertTriangle, X // 🚀 X 아이콘 추가 완료!
+  XCircle, Edit3, Trash2, X 
 } from 'lucide-react';
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -122,8 +122,6 @@ const ExamArchive = ({ currentUser }) => {
     const [editSchoolType, setEditSchoolType] = useState('high');
     const [isEditCustom, setIsEditCustom] = useState(false);
 
-    const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false);
-
     const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
     const isWorker = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role);
     const canAddExam = ['admin', 'ta', 'admin_assistant'].includes(currentUser.role);
@@ -162,21 +160,14 @@ const ExamArchive = ({ currentUser }) => {
             if (filters.year) q = query(q, where('year', '==', String(filters.year)));
             if (filters.grade) q = query(q, where('grade', '==', String(filters.grade)));
             
-            if (!showUnmatchedOnly && filters.schoolName && filters.schoolName.trim() !== '') {
+            if (filters.schoolName && filters.schoolName.trim() !== '') {
                 q = query(q, where('schoolName', '==', String(filters.schoolName.trim())));
             }
 
             const snapshot = await getDocs(q);
             let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
-            if (showUnmatchedOnly) {
-                const allMasterSchools = [
-                    ...(schoolsData.elementary || []),
-                    ...(schoolsData.middle || []),
-                    ...(schoolsData.high || [])
-                ];
-                results = results.filter(r => r.schoolName && !allMasterSchools.includes(r.schoolName));
-            } else if (!filters.schoolName) {
+            if (!filters.schoolName) {
                 const targetSchoolTypeKor = getSchoolTypeKorean(filters.schoolType);
                 results = results.filter(r => {
                     if (r.schoolType) return r.schoolType === targetSchoolTypeKor;
@@ -322,85 +313,6 @@ const ExamArchive = ({ currentUser }) => {
             setExams(prev => prev.filter(e => e.id !== examId));
             alert("자료가 성공적으로 삭제되었습니다.");
         } catch (error) { alert("삭제 실패: " + error.message); } finally { setIsProcessing(false); }
-    };
-
-    const handleRunMergeMigration = async () => {
-        if (!window.confirm("⚠️ [중복 데이터 안전 병합]\n\n같은 시험인데 문서가 2개로 쪼개진 경우, \n'PDF 파일 링크'와 '내신 분석 데이터'를 하나로 완벽하게 합친 후 빈 껍데기 문서를 삭제합니다.\n(데이터 유실 없음)\n\n진행하시겠습니까?")) return;
-
-        setIsProcessing(true);
-        let mergedCount = 0;
-        let deletedCount = 0;
-
-        try {
-            const snapshot = await getDocs(collection(db, INTEGRATED_COLLECTION));
-            const allExams = snapshot.docs.map(doc => ({ _id: doc.id, ...doc.data() }));
-
-            const groups = {};
-            allExams.forEach(exam => {
-                const baseData = {
-                    schoolName: exam.schoolName || exam.school || '', year: String(exam.year || ''),
-                    grade: exam.grade || '1학년', semester: exam.semester || '1학기',
-                    termType: exam.termType || exam.term || '중간고사', subject: exam.subject || ''
-                };
-                const logicalId = generateExamDocId(baseData);
-                if (!groups[logicalId]) groups[logicalId] = [];
-                groups[logicalId].push(exam);
-            });
-
-            for (const logicalId of Object.keys(groups)) {
-                const group = groups[logicalId];
-                if (group.length > 1) {
-                    let mergedData = {};
-                    let mergedFiles = {};
-
-                    group.forEach(exam => {
-                        Object.keys(exam).forEach(key => {
-                            if (key !== 'files' && key !== '_id') {
-                                if (exam[key] !== null && exam[key] !== undefined && exam[key] !== '') {
-                                    if (Array.isArray(exam[key]) && exam[key].length === 0) return; 
-                                    if (typeof exam[key] === 'object' && Object.keys(exam[key]).length === 0) return; 
-                                    if (key === 'questions' && mergedData.questions && mergedData.questions.length > exam.questions.length) return;
-                                    mergedData[key] = exam[key];
-                                }
-                            }
-                        });
-
-                        if (exam.files) {
-                            Object.keys(exam.files).forEach(fKey => {
-                                const fileObj = exam.files[fKey];
-                                if (fileObj && fileObj.url && fileObj.url.trim() !== '') { mergedFiles[fKey] = fileObj; } 
-                                else if (!mergedFiles[fKey] && fileObj) { mergedFiles[fKey] = fileObj; }
-                            });
-                        }
-                    });
-
-                    mergedData.files = mergedFiles;
-                    mergedData.updatedAt = serverTimestamp(); 
-
-                    await setDoc(doc(db, INTEGRATED_COLLECTION, logicalId), mergedData, { merge: true });
-                    mergedCount++;
-
-                    for (const exam of group) {
-                        if (exam._id !== logicalId) {
-                            await deleteDoc(doc(db, INTEGRATED_COLLECTION, exam._id));
-                            deletedCount++;
-                        }
-                    }
-                } else if (group.length === 1 && group[0]._id !== logicalId) {
-                     const exam = group[0];
-                     const examData = { ...exam };
-                     delete examData._id;
-
-                     await setDoc(doc(db, INTEGRATED_COLLECTION, logicalId), examData, { merge: true });
-                     await deleteDoc(doc(db, INTEGRATED_COLLECTION, exam._id));
-                     deletedCount++;
-                }
-            }
-
-            alert(`🎉 중복 데이터 안전 병합 완료!\n\n- ${mergedCount}개의 쪼개진 시험 데이터가 하나로 완벽히 합쳐졌습니다.\n- ${deletedCount}개의 쓸모없는 찌꺼기 문서가 정리되었습니다.\n\n다시 검색하시면 깔끔해진 목록을 보실 수 있습니다.`);
-            if (hasSearched) handleSearch(); 
-
-        } catch (error) { alert("병합 중 오류 발생: " + error.message); } finally { setIsProcessing(false); }
     };
 
     const handleClaimTask = async (exam, fileKey) => {
@@ -557,11 +469,6 @@ const ExamArchive = ({ currentUser }) => {
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리 (학부모 접근 불가)</span>
                 </div>
                 <div className="flex gap-2">
-                    {isAdmin && (
-                        <Button onClick={handleRunMergeMigration} variant="secondary" className="border-orange-500 text-orange-600 hover:bg-orange-50" icon={isProcessing ? Loader : LinkIcon} disabled={isProcessing}>
-                            <span className="hidden sm:inline">중복 시험 병합</span><span className="sm:hidden">병합</span>
-                        </Button>
-                    )}
                     {canAddExam && (
                         <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
                             <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
@@ -573,14 +480,10 @@ const ExamArchive = ({ currentUser }) => {
             <Card className="bg-white border border-gray-200 shadow-sm p-4 md:p-5">
                 <div className="flex items-center justify-between mb-3">
                     <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
-                    <label className="flex items-center gap-1 text-xs text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg cursor-pointer border border-rose-200 font-bold transition-colors hover:bg-rose-100">
-                        <input type="checkbox" className="accent-rose-600" checked={showUnmatchedOnly} onChange={e => { setShowUnmatchedOnly(e.target.checked); setFilters({...filters, schoolName: ''}); }}/>
-                        <AlertTriangle size={14}/> 미분류 학교만 보기
-                    </label>
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }} disabled={showUnmatchedOnly}>
+                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }}>
                         <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                     </select>
                     
@@ -590,7 +493,6 @@ const ExamArchive = ({ currentUser }) => {
                             schoolsData={schoolsData} 
                             value={filters.schoolName} 
                             onChange={(val) => setFilters({...filters, schoolName: val})}
-                            disabled={showUnmatchedOnly}
                         />
                     </div>
                     
@@ -625,7 +527,7 @@ const ExamArchive = ({ currentUser }) => {
                     </div>
                 ) : exams.length === 0 && !loading ? (
                     <div className="text-center py-16 text-gray-400">
-                        {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : showUnmatchedOnly ? "미분류된 학교 데이터가 없습니다! (완벽합니다 🎉)" : "조건에 맞는 기출 자료가 없습니다."}
+                        {!hasSearched ? "검색 조건을 설정하고 검색하기 버튼을 눌러주세요." : "조건에 맞는 기출 자료가 없습니다."}
                     </div>
                 ) : (
                     <div className="divide-y divide-gray-100">

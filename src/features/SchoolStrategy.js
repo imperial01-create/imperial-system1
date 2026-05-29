@@ -1,10 +1,10 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 스마트 콤보박스 연동 및 미분류(Unmatched) 데이터 필터링 기능 완벽 탑재) */
+   (🚀 CTO 패치: 불필요해진 미분류(Unmatched) 데이터 필터링 기능을 제거하여 코드를 경량화했습니다.) */
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X, Star, AlertTriangle, AlertCircle } from 'lucide-react'; // 🚀 Native Icons Import
+import { Search, X } from 'lucide-react'; 
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -20,6 +20,7 @@ const IconChevronDown = () => <svg xmlns="http://www.w3.org/2000/svg" width="20"
 const IconChevronUp = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>;
 const IconChevronLeft = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>;
 const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>;
+const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -131,7 +132,6 @@ export default function SchoolStrategy({ currentUser }) {
   // 🚀 [CTO 패치] 마스터 학교 데이터 연동 상태
   const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
   const [filterSchoolType, setFilterSchoolType] = useState('high');
-  const [showUnmatchedOnly, setShowUnmatchedOnly] = useState(false); // 미분류 데이터 필터
 
   const [formSchoolType, setFormSchoolType] = useState('high');
   const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
@@ -266,7 +266,7 @@ export default function SchoolStrategy({ currentUser }) {
 
   const handleGoBack = () => { window.history.back(); };
 
-  // 🚀 [CTO 패치] 스마트 검색 엔진 및 미분류 데이터 필터 적용
+  // 🚀 [CTO 패치] 스마트 검색 엔진
   const handleSearchSubmit = async () => { 
       if (!isStaff) return;
       setLoading(true);
@@ -275,7 +275,7 @@ export default function SchoolStrategy({ currentUser }) {
           let q = collection(db, INTEGRATED_COLLECTION);
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
           
-          if (!showUnmatchedOnly && filterInput.school.trim() !== '') {
+          if (filterInput.school.trim() !== '') {
               const searchSchoolRaw = filterInput.school.trim();
               let baseSchool = searchSchoolRaw.replace(/\s+/g, '');
               baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
@@ -290,12 +290,7 @@ export default function SchoolStrategy({ currentUser }) {
           const snap = await getDocs(q);
           let results = snap.docs.map(d => ({id: d.id, ...d.data()}));
 
-          // 미분류 학교 필터링
-          if (showUnmatchedOnly) {
-              const allMasterSchools = [ ...(schoolsData.elementary || []), ...(schoolsData.middle || []), ...(schoolsData.high || []) ];
-              results = results.filter(r => r.schoolName && !allMasterSchools.includes(r.schoolName));
-          } else if (!filterInput.school) {
-              // 학교가 지정 안됐으면 학교급(schoolType)으로 필터링
+          if (!filterInput.school) {
               const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[filterSchoolType] || '고등학교';
               results = results.filter(r => {
                   if (r.schoolType) return r.schoolType === typeKor;
@@ -575,14 +570,10 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6">
                 <div className="flex items-center justify-between mb-3">
                     <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
-                    <label className="flex items-center gap-1 text-xs text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg cursor-pointer border border-rose-200 font-bold transition-colors hover:bg-rose-100">
-                        <input type="checkbox" className="accent-rose-600" checked={showUnmatchedOnly} onChange={e => { setShowUnmatchedOnly(e.target.checked); setFilterInput({...filterInput, school: ''}); }}/>
-                        <AlertTriangle size={14}/> 미분류 학교만 보기
-                    </label>
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 w-full mb-3">
-                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterSchoolType} onChange={e => { setFilterSchoolType(e.target.value); setFilterInput({...filterInput, school: ''}); }} disabled={showUnmatchedOnly}>
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterSchoolType} onChange={e => { setFilterSchoolType(e.target.value); setFilterInput({...filterInput, school: ''}); }}>
                         <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                     </select>
                     
@@ -592,7 +583,6 @@ export default function SchoolStrategy({ currentUser }) {
                             schoolsData={schoolsData} 
                             value={filterInput.school} 
                             onChange={(val) => setFilterInput({...filterInput, school: val})}
-                            disabled={showUnmatchedOnly}
                         />
                     </div>
                     
@@ -629,7 +619,7 @@ export default function SchoolStrategy({ currentUser }) {
 
         {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
            <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
-               {showUnmatchedOnly ? "미분류된 학교 데이터가 없습니다! (완벽합니다 🎉)" : "검색 조건에 일치하는 리포트가 없습니다."}
+               검색 조건에 일치하는 리포트가 없습니다.
            </div>
         )}
 
@@ -766,7 +756,7 @@ export default function SchoolStrategy({ currentUser }) {
                   ) : (
                       <div className="w-2/3 relative">
                           <input className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
-                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
+                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><IconX/></button>
                       </div>
                   )}
               </div>

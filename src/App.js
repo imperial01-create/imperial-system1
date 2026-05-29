@@ -1,5 +1,5 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 스마트 콤보박스 + 신규 '조교 관제 센터' 독립 메뉴 및 라우팅 추가 완료) */
+   (🚀 CTO 패치: 스마트 콤보박스 + 신규 '오늘의 할 일' 독립 메뉴 분리 및 라우팅 하이라이트 버그 수정 완료) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -14,9 +14,8 @@ import { auth, db } from './firebase';
  
 import { DataProvider, useData } from './contexts/DataContext';
 
-// 🚀 모든 모듈 정상 Import (기존 클리닉 대시보드 보존 + 신규 조교 관제 센터 추가)
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
-const ClinicTaskManager = React.lazy(() => import('./features/ClinicTaskManager')); // 신규 추가
+const ClinicTaskManager = React.lazy(() => import('./features/ClinicTaskManager'));
 const AdminLectureManager = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.AdminLectureManager })));
 const LecturerDashboard = React.lazy(() => import('./features/LectureManager').then(module => ({ default: module.LecturerDashboard })));
 const StudentClassroom = React.lazy(() => import('./features/StudentClassroom'));
@@ -415,12 +414,12 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 [신규 추가] 조교 관제 센터 대시보드 카드 */}
+                {/* 🚀 메뉴명 변경 반영 */}
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/clinic-tasks')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
                             <div className="bg-cyan-100 p-3 rounded-xl text-cyan-600 group-hover:bg-cyan-600 group-hover:text-white transition-colors"><ClipboardList size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">조교 관제 센터</h2>
+                            <h2 className="text-xl font-bold text-gray-800">오늘의 할 일</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 실시간으로 기록 및 보고합니다.</p>
                     </div>
@@ -494,10 +493,11 @@ const Dashboard = ({ currentUser }) => {
                     <p className="text-gray-500 leading-relaxed">학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.</p>
                 </div>
 
+                {/* 🚀 메뉴명 변경 반영 */}
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터 (예약)</h2>
+                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
                     </div>
                     <p className="text-gray-500 leading-relaxed">
                         {['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교들의 스케줄을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
@@ -556,7 +556,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 메뉴 리스트에 기존 클리닉(예약)과 신규 조교 관제 센터 동시 배치
+  // 🚀 메뉴 리스트 및 이름 변경 적용 완료
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
@@ -566,8 +566,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
     { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
-    { path: '/clinic', label: '클리닉 센터 (예약)', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { path: '/clinic-tasks', label: '조교 관제 센터', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] }, // 🚀 신규 독립 메뉴
+    { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
     { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
@@ -591,11 +591,15 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
-           {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => (
-              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname.startsWith(item.path) ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
+           {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => {
+              // 🚀 하이라이트 매칭 버그 해결 (정확히 일치하거나 서브 경로일 때만)
+              const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+              return (
+              <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${isActive ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
                 <item.icon size={20} /> {item.label}
               </button>
-           ))}
+              );
+           })}
         </nav>
         
         <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
@@ -644,10 +648,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
                         
-                        {/* 🚀 기존 클리닉 예약 메뉴 보존 */}
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
-                        
-                        {/* 🚀 신규 조교 관제 센터 라우트 연결 */}
                         <Route path="/clinic-tasks" element={['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) ? <ClinicTaskManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
                         {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
