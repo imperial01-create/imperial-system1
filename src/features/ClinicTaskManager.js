@@ -1,20 +1,79 @@
-/* [서비스 가치] 강사, 데스크, 조교가 서로를 부르거나 카톡을 남길 필요 없이, 
-  비동기적으로 업무를 예약하고 결과를 보고받는 '무결성 업무 관제 센터(Daily Task Hub)'입니다.
-  (🚀 CTO 패치: 클리닉 지시 외에 [일반 업무 요청] 기능이 통합되었으며, 직군별 진척도 UI가 탑재되었습니다.) */
+/* [서비스 가치] 학원의 모든 오퍼레이션을 한눈에 지휘하는 Task Hub.
+  (🚀 CTO 패치: 스마트 학생 검색 콤보박스 탑재 및 수업 10분 전/지각생 자동 스폰(Auto-Spawn) 콜 시스템 적용 완료) */
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, deleteDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Badge, Modal } from '../components/UI';
 import { 
     Phone, CheckCircle, Clock, AlertTriangle, MessageSquare, UserCheck, 
-    Search, FileText, Calendar, Loader, Plus, Trash2, ListTodo, Send
+    Search, FileText, Calendar, Loader, Plus, Trash2, ListTodo, Send, X, PhoneCall
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 [최적화] 대용량 학생 렌더링 방지용 스마트 검색 콤보박스
+const SmartStudentSelect = ({ users, value, onChange }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+
+    const students = users.filter(u => u.role === 'student');
+    const filtered = search ? students.filter(s => s.name.includes(search)) : students.slice(0, 5); // 검색어 없을 땐 5명만 프리뷰 렌더링
+
+    const selectedStudent = students.find(s => s.id === value);
+
+    return (
+        <div className="relative w-full">
+            <div 
+                className={`w-full border-2 p-3.5 rounded-xl outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-indigo-500 bg-indigo-50' : 'bg-white hover:bg-gray-50'}`}
+                onClick={() => setIsOpen(!isOpen)}
+            >
+                <span className={value ? "text-indigo-900" : "text-gray-400"}>
+                    {selectedStudent ? `${selectedStudent.name} 학생` : '👇 학생 이름 검색 및 선택 (선택사항)'}
+                </span>
+                {value && (
+                    <button type="button" onClick={(e) => { e.stopPropagation(); onChange(''); }} className="text-gray-400 hover:text-red-500"><X size={16}/></button>
+                )}
+            </div>
+            
+            {isOpen && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                    <div className="absolute z-50 w-full mt-2 bg-white border-2 border-indigo-200 rounded-2xl shadow-xl max-h-64 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-3 border-b border-gray-100 bg-gray-50">
+                            <div className="relative">
+                                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input 
+                                    type="text" autoFocus 
+                                    className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 font-bold text-sm transition-all" 
+                                    placeholder="학생 이름 검색..." 
+                                    value={search} onChange={e => setSearch(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        <div className="overflow-y-auto flex-1 custom-scrollbar p-2">
+                            {filtered.length === 0 ? (
+                                <div className="text-center py-4 text-xs font-bold text-gray-400">검색 결과가 없습니다.</div>
+                            ) : (
+                                <div className="flex flex-col gap-1">
+                                    <div onClick={() => { onChange(''); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-gray-100 rounded-lg cursor-pointer font-bold text-sm text-gray-500">선택 해제 (일반 행정 업무)</div>
+                                    {filtered.map(s => (
+                                        <div key={s.id} onClick={() => { onChange(s.id); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-indigo-50 rounded-lg cursor-pointer font-bold text-sm text-gray-800 transition-colors">
+                                            {s.name} <span className="text-xs text-gray-400 ml-1">({s.schoolName || '학교미상'})</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+};
+
 const ClinicTaskManager = ({ currentUser }) => {
-    const { users } = useData();
+    const { users, enrollments } = useData();
 
     // --- State: View & Date ---
     const [currentTab, setCurrentTab] = useState(
@@ -25,23 +84,26 @@ const ClinicTaskManager = ({ currentUser }) => {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedTask, setSelectedTask] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [currentTime, setCurrentTime] = useState(new Date());
 
     // --- State: Data ---
     const [clinicTasks, setClinicTasks] = useState([]);
     const [dailyRequests, setDailyRequests] = useState([]);
+    const [attendances, setAttendances] = useState([]);
+    const [callLogs, setCallLogs] = useState([]);
 
-    // --- State: Modal (새 업무 요청) ---
+    // --- State: Modal ---
     const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [reqForm, setReqForm] = useState({
-        targetDate: new Date().toISOString().split('T')[0],
-        assignedRole: 'desk', // 'desk' 또는 'ta'
-        studentId: '',
-        title: '',
-        content: ''
-    });
+    const [reqForm, setReqForm] = useState({ targetDate: '', assignedRole: 'desk', studentId: '', title: '', content: '' });
 
-    // 🚀 [CTO 패치] 클리닉 태스크와 일반 업무 태스크 동시 실시간 구독
+    // 실시간 타이머 (1분 단위로 갱신하여 10분 전 콜 생성 트리거)
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // 데이터 구독
     useEffect(() => {
         setIsLoading(true);
 
@@ -56,40 +118,94 @@ const ClinicTaskManager = ({ currentUser }) => {
             setDailyRequests(snapshot.docs.map(d => ({ id: d.id, _collection: 'request', ...d.data() })));
         });
 
-        return () => { unsubClinic(); unsubDaily(); };
+        // 🚀 출결 및 콜로그는 날짜 복합 인덱스 에러 방지를 위해 클라이언트 필터링
+        const unsubAtt = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`)), s => {
+            setAttendances(s.docs.map(d => d.data()).filter(a => a.date === targetDate));
+        });
+
+        const unsubCall = onSnapshot(query(collection(db, `artifacts/${APP_ID}/public/data/call_logs`)), s => {
+            setCallLogs(s.docs.map(d => d.data()).filter(c => c.date === targetDate));
+        });
+
+        return () => { unsubClinic(); unsubDaily(); unsubAtt(); unsubCall(); };
     }, [targetDate]);
 
-    // 🚀 [선택된 문서 동기화 유지]
     useEffect(() => {
         if (selectedTask) {
             let updated = null;
             if (selectedTask._collection === 'clinic') updated = clinicTasks.find(t => t.id === selectedTask.id);
             else if (selectedTask._collection === 'request') updated = dailyRequests.find(t => t.id === selectedTask.id);
+            else updated = selectedTask; // dynamic_call 은 로컬 state 이므로 그냥 유지
             
             if (updated) setSelectedTask(updated);
             else setSelectedTask(null);
         }
     }, [clinicTasks, dailyRequests]);
 
-    // --- 업무 분류 엔진 (부서별 필터링 병합) ---
+    // 🚀 [CTO 패치] 실시간 10분전/지각생 콜 자동 생성 엔진
+    const dynamicCallTasks = useMemo(() => {
+        const tasks = [];
+        const isToday = targetDate === new Date().toISOString().split('T')[0];
+        if (!isToday) return tasks;
+
+        const todayStr = ['일', '월', '화', '수', '목', '금', '토'][currentTime.getDay()];
+        const currentHHMM = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
+        
+        const getMinutes = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+        const currMins = getMinutes(currentHHMM);
+
+        (enrollments || []).forEach(enroll => {
+            if (enroll.status !== 'active') return;
+            const todaySch = enroll.schedules?.find(s => s.dayOfWeek === todayStr);
+            if (!todaySch) return;
+
+            const hasAttended = attendances.some(a => a.studentId === enroll.studentId);
+            if (hasAttended) return; // 등원완료
+
+            const hasCalled = callLogs.some(c => c.studentId === enroll.studentId && c.classId === enroll.classId);
+            if (hasCalled) return; // 오늘 이미 통화함
+
+            const callMins = getMinutes(todaySch.callTime);
+            const diffMins = callMins - currMins;
+
+            // 10분 이내 임박했거나 이미 지각한 경우 스폰(Spawn)
+            if (diffMins <= 10) {
+                const sObj = users.find(u => u.id === enroll.studentId);
+                tasks.push({
+                    id: `dyn_${enroll.id}`,
+                    _collection: 'dynamic_call',
+                    studentId: enroll.studentId,
+                    studentName: sObj?.name || '알수없음',
+                    classId: enroll.classId,
+                    className: enroll.className,
+                    callTime: todaySch.callTime,
+                    diffMins: diffMins,
+                    phone: sObj?.phone || ''
+                });
+            }
+        });
+        
+        return tasks.sort((a,b) => a.diffMins - b.diffMins);
+    }, [enrollments, users, targetDate, currentTime, attendances, callLogs]);
+
+
+    // --- 업무 분류 (부서별 필터링 병합) ---
     const tasksByTab = useMemo(() => {
         const deskTasks = [
-            ...clinicTasks, // 데스크는 클리닉의 '전화업무'를 담당
-            ...dailyRequests.filter(r => r.assignedRole === 'desk')
+            ...dynamicCallTasks, // 1순위: 실시간 콜
+            ...dailyRequests.filter(r => r.assignedRole === 'desk'),
+            ...clinicTasks
         ];
-        
         const taTasks = [
-            ...clinicTasks, // 조교는 클리닉의 '학습지도'를 담당
-            ...dailyRequests.filter(r => r.assignedRole === 'ta')
+            ...dailyRequests.filter(r => r.assignedRole === 'ta'),
+            ...clinicTasks
         ];
-
         const myRequests = [
-            ...clinicTasks.filter(c => c.lecturerId === currentUser.id),
-            ...dailyRequests.filter(r => r.requesterId === currentUser.id)
+            ...dailyRequests.filter(r => r.requesterId === currentUser.id),
+            ...clinicTasks.filter(c => c.lecturerId === currentUser.id)
         ];
-
         return { desk: deskTasks, ta: taTasks, my_requests: myRequests };
-    }, [clinicTasks, dailyRequests, currentUser.id]);
+    }, [dynamicCallTasks, clinicTasks, dailyRequests, currentUser.id]);
 
     const activeList = tasksByTab[currentTab] || [];
     const filteredTasks = activeList.filter(t => 
@@ -98,11 +214,9 @@ const ClinicTaskManager = ({ currentUser }) => {
         (t.title && t.title.includes(searchQuery))
     );
 
-    // --- 진척도 계산 엔진 ---
     const progressStats = useMemo(() => {
         const deskTotal = tasksByTab.desk.length;
         const deskDone = tasksByTab.desk.filter(t => t._collection === 'clinic' ? t.callStatus === 'confirmed' : t.status === 'completed').length;
-        
         const taTotal = tasksByTab.ta.length;
         const taDone = tasksByTab.ta.filter(t => t._collection === 'clinic' ? t.attendanceStatus === 'completed' : t.status === 'completed').length;
 
@@ -112,10 +226,24 @@ const ClinicTaskManager = ({ currentUser }) => {
         };
     }, [tasksByTab]);
 
+    // =====================================================================
+    // 🛠 액션 컨트롤러
+    // =====================================================================
+    const handleCompleteDynamicCall = async () => {
+        try {
+            await setDoc(doc(collection(db, `artifacts/${APP_ID}/public/data/call_logs`)), {
+                date: targetDate,
+                studentId: selectedTask.studentId,
+                classId: selectedTask.classId,
+                status: 'contacted',
+                workerId: currentUser.id,
+                workerName: currentUser.name,
+                timestamp: serverTimestamp()
+            });
+            setSelectedTask(null);
+        } catch (e) { alert(e.message); }
+    };
 
-    // =====================================================================
-    // 🛠 액션 컨트롤러 (클리닉 및 일반 업무 업데이트)
-    // =====================================================================
     const handleUpdateCallStatus = async (taskId, status) => {
         try { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_tasks', taskId), { callStatus: status, updatedAt: serverTimestamp() }); } 
         catch (e) { alert('상태 변경 실패: ' + e.message); }
@@ -149,18 +277,15 @@ const ClinicTaskManager = ({ currentUser }) => {
     const handleCompleteGeneralRequest = async () => {
         if (!selectedTask || selectedTask._collection !== 'request') return;
         if (!window.confirm("이 요청 업무를 '완료' 처리하시겠습니까?")) return;
-        try {
-            await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'daily_requests', selectedTask.id), { status: 'completed', completedAt: serverTimestamp(), completedBy: currentUser.name });
-        } catch (e) { alert('완료 처리 실패: ' + e.message); }
+        try { await updateDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'daily_requests', selectedTask.id), { status: 'completed', completedAt: serverTimestamp(), completedBy: currentUser.name }); } 
+        catch (e) { alert('완료 처리 실패: ' + e.message); }
     };
 
     const handleDeleteGeneralRequest = async () => {
         if (!selectedTask || selectedTask._collection !== 'request') return;
         if (!window.confirm("이 요청을 삭제하시겠습니까?")) return;
-        try {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'daily_requests', selectedTask.id));
-            setSelectedTask(null);
-        } catch (e) { alert('삭제 실패: ' + e.message); }
+        try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'daily_requests', selectedTask.id)); setSelectedTask(null); } 
+        catch (e) { alert('삭제 실패: ' + e.message); }
     };
 
     const handleSubmitNewRequest = async () => {
@@ -169,7 +294,7 @@ const ClinicTaskManager = ({ currentUser }) => {
         
         setIsSubmitting(true);
         try {
-            let sName = '일반 (학생 무관)';
+            let sName = '일반 행정 (학생 무관)';
             if (reqForm.studentId) {
                 const sObj = users.find(u => u.id === reqForm.studentId);
                 if (sObj) sName = sObj.name;
@@ -194,9 +319,6 @@ const ClinicTaskManager = ({ currentUser }) => {
         } catch (error) { alert("요청 실패: " + error.message); } finally { setIsSubmitting(false); }
     };
 
-    // =====================================================================
-    // 🎨 UI 렌더링
-    // =====================================================================
     return (
         <div className="space-y-6 w-full animate-in fade-in max-w-7xl mx-auto pb-20">
             
@@ -207,12 +329,11 @@ const ClinicTaskManager = ({ currentUser }) => {
                         <ListTodo className="text-indigo-600"/> 오늘의 할 일 (Task Hub)
                     </h1>
                     <p className="text-sm text-gray-500 font-medium break-keep">
-                        지정된 날짜에 해야 할 클리닉 감독, 확인 전화, 개별 업무 요청을 부서별로 완벽하게 관리합니다.
+                        지정된 날짜에 해야 할 등원 전 전화, 클리닉 감독, 개별 업무를 부서별로 완벽하게 관리합니다.
                     </p>
                 </div>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
-                    {/* 날짜 선택기 */}
                     <div className="flex items-center gap-2 bg-gray-50 px-4 py-2.5 rounded-2xl border border-gray-100 w-full sm:w-auto shrink-0">
                         <Calendar size={18} className="text-indigo-600" />
                         <input type="date" className="bg-transparent outline-none text-sm font-black text-gray-800" value={targetDate} onChange={e => { setTargetDate(e.target.value); setSelectedTask(null); }} />
@@ -224,12 +345,10 @@ const ClinicTaskManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* 메인 워크스페이스 구조 */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 
                 {/* 좌측 리스트 보드 */}
                 <div className="lg:col-span-1 bg-white border border-gray-200 rounded-3xl shadow-sm flex flex-col h-[700px] overflow-hidden">
-                    {/* 탭 컨트롤러 */}
                     <div className="flex border-b border-gray-100 bg-gray-50/50 shrink-0">
                         <button onClick={() => { setCurrentTab('desk'); setSelectedTask(null); }} className={`flex-1 py-3 text-xs font-black transition-colors border-b-2 flex flex-col items-center gap-1 ${currentTab === 'desk' ? 'border-indigo-600 text-indigo-700 bg-white' : 'border-transparent text-gray-500 hover:bg-gray-100'}`}>
                             📞 데스크 업무
@@ -258,9 +377,11 @@ const ClinicTaskManager = ({ currentUser }) => {
                             filteredTasks.map(task => {
                                 const isCurrent = selectedTask?.id === task.id;
                                 
-                                // 태스크 상태 뱃지 계산 로직
                                 let statusText = ''; let statusColor = '';
-                                if (task._collection === 'clinic') {
+                                if (task._collection === 'dynamic_call') {
+                                    if (task.diffMins < 0) { statusText = '지각 콜'; statusColor = 'bg-rose-500 text-white animate-pulse'; }
+                                    else { statusText = '10분 전 콜'; statusColor = 'bg-amber-400 text-white animate-pulse'; }
+                                } else if (task._collection === 'clinic') {
                                     if (currentTab === 'desk') {
                                         if (task.callStatus === 'confirmed') { statusText = '통화완료'; statusColor = 'bg-green-100 text-green-700'; }
                                         else if (task.callStatus === 'no_answer') { statusText = '부재중'; statusColor = 'bg-amber-100 text-amber-700'; }
@@ -279,11 +400,13 @@ const ClinicTaskManager = ({ currentUser }) => {
                                     <button key={task.id} onClick={() => setSelectedTask(task)} className={`w-full text-left p-3.5 rounded-2xl border transition-all flex flex-col gap-2 relative overflow-hidden ${isCurrent ? 'bg-white border-indigo-400 shadow-md ring-1 ring-indigo-400' : 'border-gray-200 bg-white hover:border-indigo-300 shadow-sm hover:shadow'}`}>
                                         {task._collection === 'request' && <div className="absolute top-0 left-0 w-1 h-full bg-rose-400"></div>}
                                         {task._collection === 'clinic' && <div className="absolute top-0 left-0 w-1 h-full bg-indigo-400"></div>}
+                                        {task._collection === 'dynamic_call' && <div className="absolute top-0 left-0 w-1 h-full bg-amber-400"></div>}
                                         
                                         <div className="flex justify-between items-start w-full pl-1">
                                             <div className="flex-1 pr-2">
                                                 <span className="font-black text-sm text-gray-900 leading-tight">
-                                                    {task._collection === 'clinic' ? `${task.studentName} 학생 클리닉` : task.title}
+                                                    {task._collection === 'dynamic_call' ? `${task.studentName} 학생 등원 확인` :
+                                                     task._collection === 'clinic' ? `${task.studentName} 학생 클리닉` : task.title}
                                                 </span>
                                             </div>
                                             <span className={`text-[10px] px-2 py-0.5 rounded font-black shrink-0 ${statusColor}`}>
@@ -291,7 +414,7 @@ const ClinicTaskManager = ({ currentUser }) => {
                                             </span>
                                         </div>
                                         <div className="text-[11px] font-bold text-gray-500 pl-1 flex justify-between">
-                                            <span className="truncate">{task._collection === 'clinic' ? `반: ${task.className}` : `대상: ${task.studentName}`}</span>
+                                            <span className="truncate">{['dynamic_call', 'clinic'].includes(task._collection) ? `반: ${task.className}` : `대상: ${task.studentName}`}</span>
                                             {task._collection === 'request' && <span className="text-rose-500 shrink-0">From. {task.requesterName}</span>}
                                         </div>
                                     </button>
@@ -308,7 +431,6 @@ const ClinicTaskManager = ({ currentUser }) => {
                             <ListTodo size={48} className="opacity-20" />
                             <p className="font-bold text-sm">좌측 목록에서 업무 카드를 선택해 주세요.</p>
                             
-                            {/* 데일리 진척도 게이지 */}
                             <div className="mt-8 w-64 bg-white p-4 rounded-2xl border shadow-sm">
                                 <p className="text-xs font-black text-gray-600 mb-2 flex justify-between">데스크 전화 업무 <span className="text-indigo-600">{progressStats.desk}% 완료</span></p>
                                 <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden mb-4"><div className="h-full bg-indigo-500 transition-all duration-1000" style={{width: `${progressStats.desk}%`}}></div></div>
@@ -323,15 +445,16 @@ const ClinicTaskManager = ({ currentUser }) => {
                             <div className="border-b border-gray-100 pb-5 flex justify-between items-start">
                                 <div>
                                     <div className="flex items-center gap-2 mb-2">
-                                        <Badge variant="outline" className={`font-black px-2 py-0.5 border ${selectedTask._collection === 'clinic' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
-                                            {selectedTask._collection === 'clinic' ? '정규 클리닉/보충' : '일반 업무 요청'}
+                                        <Badge variant="outline" className={`font-black px-2 py-0.5 border ${selectedTask._collection === 'dynamic_call' ? 'bg-amber-50 text-amber-700 border-amber-200' : selectedTask._collection === 'clinic' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                                            {selectedTask._collection === 'dynamic_call' ? '실시간 등원 확인 콜' : selectedTask._collection === 'clinic' ? '정규 클리닉/보충' : '일반 업무 요청'}
                                         </Badge>
-                                        <span className="text-xs font-bold text-gray-400">{selectedTask.targetDate}</span>
+                                        {selectedTask._collection !== 'dynamic_call' && <span className="text-xs font-bold text-gray-400">{selectedTask.targetDate}</span>}
                                     </div>
                                     <h2 className="text-2xl font-black text-gray-900 leading-tight">
-                                        {selectedTask._collection === 'clinic' ? `${selectedTask.studentName} 학생 클리닉 파일` : selectedTask.title}
+                                        {selectedTask._collection === 'dynamic_call' ? `${selectedTask.studentName} 학생 등원 확인` : 
+                                         selectedTask._collection === 'clinic' ? `${selectedTask.studentName} 학생 클리닉 파일` : selectedTask.title}
                                     </h2>
-                                    {selectedTask._collection === 'clinic' && <p className="text-sm text-indigo-600 font-bold mt-2">배정 코스: {selectedTask.className}</p>}
+                                    {['dynamic_call', 'clinic'].includes(selectedTask._collection) && <p className="text-sm text-indigo-600 font-bold mt-2">배정 코스: {selectedTask.className}</p>}
                                     {selectedTask._collection === 'request' && <p className="text-sm text-rose-600 font-bold mt-2">관련 학생: {selectedTask.studentName}</p>}
                                 </div>
 
@@ -342,12 +465,30 @@ const ClinicTaskManager = ({ currentUser }) => {
                                 )}
                             </div>
 
-                            {/* ==========================================
-                                1. [클리닉 업무 렌더링 블록]
-                            =========================================== */}
+                            {/* 🚀 0. [실시간 10분전/지각 콜 렌더링 블록] */}
+                            {selectedTask._collection === 'dynamic_call' && (
+                                <div className="space-y-6 flex-1 flex flex-col animate-in fade-in-50">
+                                    <div className="bg-amber-50/30 border border-amber-100 rounded-2xl p-5 md:p-6 shadow-sm">
+                                        <h3 className="font-bold text-xs text-amber-600 mb-2">상황 브리핑</h3>
+                                        <p className="text-sm md:text-base font-bold text-gray-800 leading-relaxed">
+                                            {selectedTask.studentName} 학생의 콜타임({selectedTask.callTime})이 {selectedTask.diffMins < 0 ? '지났습니다 (지각)!' : '10분 이내로 임박했습니다.'}<br/>
+                                            오고 있는지 학부모나 학생에게 전화를 걸어 확인해 주세요.
+                                        </p>
+                                        <div className="mt-4 p-3 bg-white rounded-xl border flex items-center justify-between">
+                                            <span className="font-mono font-bold text-lg">{selectedTask.phone}</span>
+                                            <a href={`tel:${selectedTask.phone}`} className="p-2 bg-green-100 text-green-600 rounded-full"><PhoneCall size={18}/></a>
+                                        </div>
+                                    </div>
+                                    <div className="flex-1"></div>
+                                    <button onClick={handleCompleteDynamicCall} className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-4 rounded-2xl text-base shadow-lg transition-colors flex justify-center items-center gap-2">
+                                        <CheckCircle size={20}/> 통화 완료 처리
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* 1. [클리닉 업무 렌더링 블록] */}
                             {selectedTask._collection === 'clinic' && (
                                 <>
-                                    {/* 데스크용 전화 모듈 */}
                                     {(currentTab === 'desk' || currentTab === 'my_requests') && (
                                         <div className="space-y-4 bg-indigo-50/30 p-5 rounded-2xl border border-indigo-100 animate-in fade-in-50">
                                             <div className="flex items-center gap-2 mb-2">
@@ -362,10 +503,8 @@ const ClinicTaskManager = ({ currentUser }) => {
                                         </div>
                                     )}
 
-                                    {/* 조교용 미션 체크 모듈 */}
                                     {(currentTab === 'ta' || currentTab === 'my_requests') && (
                                         <div className="space-y-5 flex-1 animate-in fade-in-50">
-                                            
                                             <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center border-b border-gray-100 pb-4">
                                                 <span className="text-sm font-black text-gray-800 bg-gray-100 px-3 py-1.5 rounded-lg flex items-center gap-2"><Clock size={16}/> 2단계: 현장 입실 상태</span>
                                                 <div className="flex gap-2 w-full sm:w-auto">
@@ -387,7 +526,6 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                                 {item.taskContent}
                                                             </label>
                                                         </div>
-
                                                         {!item.isCompleted && (
                                                             <div className="pl-8 animate-in slide-in-from-top-2 duration-200">
                                                                 <div className="flex gap-1 items-center text-[11px] font-black text-rose-500 mb-1.5"><AlertTriangle size={14}/> 미완료 시 사유/진도 기입 필수</div>
@@ -411,9 +549,7 @@ const ClinicTaskManager = ({ currentUser }) => {
                                 </>
                             )}
 
-                            {/* ==========================================
-                                2. [일반 업무 요청 렌더링 블록]
-                            =========================================== */}
+                            {/* 2. [일반 업무 요청 렌더링 블록] */}
                             {selectedTask._collection === 'request' && (
                                 <div className="space-y-6 flex-1 flex flex-col animate-in fade-in-50">
                                     <div className="bg-rose-50/30 border border-rose-100 rounded-2xl p-5 md:p-6 shadow-sm">
@@ -431,7 +567,6 @@ const ClinicTaskManager = ({ currentUser }) => {
 
                                     <div className="flex-1"></div>
 
-                                    {/* 처리 액션 바 */}
                                     {selectedTask.status === 'completed' ? (
                                         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 text-center flex flex-col items-center justify-center">
                                             <CheckCircle size={32} className="text-blue-500 mb-2"/>
@@ -447,16 +582,14 @@ const ClinicTaskManager = ({ currentUser }) => {
                                     )}
                                 </div>
                             )}
-
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* 🚀 신규 업무 요청 모달 */}
+            {/* 신규 업무 요청 모달 */}
             <Modal isOpen={isRequestModalOpen} onClose={() => setIsRequestModalOpen(false)} title="새로운 업무 요청 작성">
                 <div className="space-y-5 p-1 pb-4">
-                    
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="text-xs font-bold text-gray-600 mb-1.5 block">수행 날짜</label>
@@ -472,13 +605,14 @@ const ClinicTaskManager = ({ currentUser }) => {
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-gray-600 mb-1.5 block flex justify-between">
+                        <label className="text-xs font-bold text-gray-600 mb-1.5 flex justify-between items-end">
                             관련 학생 지정 <span className="text-indigo-400 font-normal">(선택사항)</span>
                         </label>
-                        <select className="w-full border-2 p-3.5 rounded-xl font-bold bg-white outline-none focus:border-indigo-500" value={reqForm.studentId} onChange={e => setReqForm({...reqForm, studentId: e.target.value})}>
-                            <option value="">일반 행정 업무 (특정 학생 없음)</option>
-                            {users.filter(u=>u.role==='student').map(s => <option key={s.id} value={s.id}>{s.name} 학생</option>)}
-                        </select>
+                        <SmartStudentSelect 
+                            users={users} 
+                            value={reqForm.studentId} 
+                            onChange={(id) => setReqForm({...reqForm, studentId: id})} 
+                        />
                     </div>
 
                     <div>
@@ -494,7 +628,6 @@ const ClinicTaskManager = ({ currentUser }) => {
                     <button onClick={handleSubmitNewRequest} disabled={isSubmitting} className="w-full py-4 text-base font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl shadow-lg flex justify-center items-center gap-2">
                         {isSubmitting ? <Loader className="animate-spin" size={20}/> : <><Send size={18}/> 업무 지시서 전송</>}
                     </button>
-
                 </div>
             </Modal>
         </div>
