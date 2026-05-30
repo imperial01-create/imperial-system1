@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 시공간 과목 분류기 탑재, 예외 수동 처리 기능, 과거 데이터 안전 마이그레이션 모달 적용) */
+   (🚀 CTO 패치: 렌더링 충돌(White Screen) 에러 완벽 해결 및 동적 과목 드롭다운 적용) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
@@ -7,7 +7,7 @@ import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../uti
 import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database } from 'lucide-react'; 
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
-import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 시공간 엔진 로드
+import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -124,7 +124,6 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
-  // 🚀 데이터 마이그레이션 모달 상태
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
 
@@ -143,13 +142,13 @@ export default function SchoolStrategy({ currentUser }) {
   const [formSchoolType, setFormSchoolType] = useState('high');
   const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
 
-  // 🚀 수동 예외 입력 토글 상태
   const [isManualSubject, setIsManualSubject] = useState(false);
 
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
   const isAdmin = ['admin', 'admin_assistant'].includes(user.role);
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
+  // 🚀 변수명 통일 (YEARS -> yearOptions)
   const currentYear = new Date().getFullYear();
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
@@ -214,7 +213,6 @@ export default function SchoolStrategy({ currentUser }) {
               const myActiveEnrollments = enrollments.filter(e => targetStudentIds.includes(e.studentId) && e.status === 'active');
               const myActiveClasses = classes.filter(c => myActiveEnrollments.map(e => e.classId).includes(c.id));
 
-              // 🚀 [핵심] 학생 열람 시, 내 클래스의 과목 표준 코드와 일치하는 기출만 긁어옵니다.
               const myStandardCodes = myActiveClasses.map(c => c.standardCode || getStandardSubjectCode('고등학교', c.subject || c.name));
 
               const filtered = allDocs.filter(report => {
@@ -230,11 +228,9 @@ export default function SchoolStrategy({ currentUser }) {
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
 
-                  // 🚀 시공간 분류기 기반 필터링
                   if (report.standardCode && myStandardCodes.length > 0) {
                       if (!myStandardCodes.includes(report.standardCode)) return false;
                   } else {
-                      // 표준 코드가 없는 레거시 데이터는 기존 방식(텍스트 매칭)으로 처리
                       const rSubj = report.subject || '';
                       if (!rSubj) return true; 
                       const hasMatchingSubject = myActiveClasses.some(c => {
@@ -267,7 +263,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   useEffect(() => { fetchInitialData(); }, [fetchInitialData]);
 
-  // 뒤로가기 제어
   useEffect(() => {
       const handlePopState = (e) => {
           setViewState(prev => {
@@ -355,14 +350,12 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
-  // 🚀 마이그레이션 모달 오픈 및 데이터 스캔
   const handleOpenMigration = async () => {
       setIsSettingsModalOpen(false);
       setLoading(true);
       try {
           const snap = await getDocs(collection(db, INTEGRATED_COLLECTION));
           const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
-          // 표준 코드가 없거나, 구 버전으로 잘못 입력된 데이터 추출
           const targets = allDocs.filter(d => !d.standardCode || d.standardCode === 'UNKNOWN');
           
           const predictedTargets = targets.map(t => {
@@ -375,7 +368,6 @@ export default function SchoolStrategy({ currentUser }) {
       } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
   };
 
-  // 🚀 마이그레이션 일괄 저장 (Batch)
   const handleRunMigration = async () => {
       if(!window.confirm(`총 ${migrationTargets.length}개의 과거 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
       setLoading(true);
@@ -407,7 +399,6 @@ export default function SchoolStrategy({ currentUser }) {
           setFormSchoolType(foundType);
           setIsFormCustomSchool(isCustom);
           
-          // 기존에 특수 과목(매핑 안된 과목)이었다면 수동 모드 ON
           const isManual = existingReport.standardCode?.startsWith('CUSTOM_') || false;
           setIsManualSubject(isManual);
 
@@ -417,7 +408,7 @@ export default function SchoolStrategy({ currentUser }) {
               school: sName,
               term: `${String(existingReport.grade || '1학년')} ${String(existingReport.semester || '1학기')} ${existingReport.termType || existingReport.term || '중간고사'}`,
               subject: existingReport.subject || '',
-              standardCode: existingReport.standardCode || '', // 🚀 코드 보존
+              standardCode: existingReport.standardCode || '',
               teacher: existingReport.teacher || '', difficulty: existingReport.difficulty || '중',
               suppBook: existingReport.suppBook || '', print: existingReport.print || '', scope: existingReport.scope || '',
               review: existingReport.review || '', specialNotes: existingReport.specialNotes || '',
@@ -429,9 +420,8 @@ export default function SchoolStrategy({ currentUser }) {
       } else {
           setFormSchoolType('high'); setIsFormCustomSchool(false); setIsManualSubject(false);
           
-          // 기본값 세팅 시 동적 드롭다운 첫 번째 값으로 세팅
           const defaultYear = new Date().getFullYear().toString();
-          const defaultSubjects = getAvailableSubjects('고등학교', defaultYear, '1학년');
+          const defaultSubjects = getAvailableSubjects('고등학교', defaultYear, '1학년') || [];
           const initSubject = defaultSubjects.length > 0 ? defaultSubjects[0] : '';
           
           setFormData({ 
@@ -502,14 +492,13 @@ export default function SchoolStrategy({ currentUser }) {
     try {
       const diffInfoForm = getAutomaticDifficulty(formData.questions);
       
-      const termParts = formData.term.split(' ');
+      const termParts = (formData.term || '1학년 1학기 중간고사').split(' ');
       const grade = termParts[0] || '1학년';
       const semester = termParts[1] || '1학기';
       const termType = termParts[2] || '중간고사';
 
       const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
 
-      // 🚀 백엔드 시공간 분류기: 저장할 때 자동으로 표준 코드를 심어줍니다. (수동 모드면 사용자가 고른 코드 유지)
       const finalCode = isManualSubject 
         ? (formData.standardCode || `CUSTOM_${formData.subject.replace(/\s+/g,'').toUpperCase()}`)
         : getStandardSubjectCode(typeKor, formData.subject);
@@ -520,7 +509,7 @@ export default function SchoolStrategy({ currentUser }) {
           year: String(formData.year).trim(),
           grade: grade, semester: semester, termType: termType,
           subject: formData.subject.trim(),
-          standardCode: finalCode // 🚀 핵심
+          standardCode: finalCode
       };
 
       const strategyPayload = {
@@ -628,12 +617,11 @@ export default function SchoolStrategy({ currentUser }) {
   const targetDisplayTerm = isStudentOrParent ? getStudentDisplayTerm(activeTerm, user) : activeTerm;
   const userSchoolName = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "소속 학교";
 
-  // 🚀 시공간 엔진에서 동적 과목 목록 추출
   let dynamicSubjects = [];
   if (formData && viewState.view === 'form') {
       const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
       const gradeStr = formData.term ? formData.term.split(' ')[0] : '1학년';
-      dynamicSubjects = getAvailableSubjects(typeKor, formData.year, gradeStr);
+      dynamicSubjects = getAvailableSubjects(typeKor, formData.year, gradeStr) || [];
   }
 
   // ======================================================================
@@ -904,11 +892,13 @@ export default function SchoolStrategy({ currentUser }) {
             <div>
               <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">년도 (시공간 축)</label>
               <select className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold focus:ring-2 focus:ring-blue-200" value={formData.year} onChange={e => {
-                  const newY = e.target.value; const gr = formData.term.split(' ')[0] || '1학년'; const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
-                  const newSubjs = getAvailableSubjects(typeK, newY, gr);
+                  const newY = e.target.value; 
+                  const gr = (formData.term || '').split(' ')[0] || '1학년'; 
+                  const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
+                  const newSubjs = getAvailableSubjects(typeK, newY, gr) || [];
                   setFormData({...formData, year: newY, subject: newSubjs[0]||''});
               }}>
-                  {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
+                  {(yearOptions || []).map(y => <option key={y} value={y}>{y}년</option>)}
               </select>
             </div>
             
@@ -917,8 +907,8 @@ export default function SchoolStrategy({ currentUser }) {
               <div className="flex gap-2">
                   <select className="w-1/3 border p-2.5 rounded-lg text-sm outline-none font-bold bg-white" value={formSchoolType} onChange={e => { 
                       const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[e.target.value] || '고등학교';
-                      const gr = formData.term.split(' ')[0] || '1학년';
-                      const newSubjs = getAvailableSubjects(typeK, formData.year, gr);
+                      const gr = (formData.term || '').split(' ')[0] || '1학년';
+                      const newSubjs = getAvailableSubjects(typeK, formData.year, gr) || [];
                       setFormSchoolType(e.target.value); 
                       setFormData({...formData, school: '', subject: newSubjs[0]||''}); 
                       setIsFormCustomSchool(false); 
@@ -945,8 +935,10 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="col-span-2 md:col-span-1">
               <label className="block text-xs md:text-sm font-bold mb-1.5 text-gray-600">학년 및 시험 (시공간 축)</label>
               <select className="w-full border p-2.5 rounded-lg text-sm outline-none font-bold focus:ring-2 focus:ring-blue-200" value={formData.term} onChange={e => {
-                  const newT = e.target.value; const gr = newT.split(' ')[0] || '1학년'; const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
-                  const newSubjs = getAvailableSubjects(typeK, formData.year, gr);
+                  const newT = e.target.value; 
+                  const gr = (newT || '').split(' ')[0] || '1학년'; 
+                  const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
+                  const newSubjs = getAvailableSubjects(typeK, formData.year, gr) || [];
                   setFormData({...formData, term: newT, subject: newSubjs[0]||''});
               }}>
                   {['1학년', '2학년', '3학년'].flatMap(g => 
@@ -968,16 +960,16 @@ export default function SchoolStrategy({ currentUser }) {
               {/* 🚀 시공간 엔진 연동 동적 드롭다운 or 수동 입력 */}
               {!isManualSubject ? (
                   <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})}>
-                      {dynamicSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+                      {(dynamicSubjects || []).map(s => <option key={s} value={s}>{s}</option>)}
                       <option disabled>──────────</option>
                       <option value="기타(수동입력)">기타 (체크박스 활성화 요망)</option>
                   </select>
               ) : (
                   <div className="flex gap-2">
                       <input type="text" className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold focus:ring-2 focus:ring-red-300" placeholder="과목명 직접 입력" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})} />
-                      <select className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold bg-red-50 text-red-900" value={formData.standardCode} onChange={e => setFormData({...formData, standardCode: e.target.value})}>
+                      <select className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold bg-red-50 text-red-900" value={formData.standardCode || ''} onChange={e => setFormData({...formData, standardCode: e.target.value})}>
                           <option value="">표준 코드 선택 (필수)</option>
-                          {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                          {(STANDARD_CODES || []).map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
                       </select>
                   </div>
               )}
