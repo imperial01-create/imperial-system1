@@ -433,7 +433,8 @@ export default function SchoolStrategy({ currentUser }) {
           reader.onload = async () => {
               try {
                   const base64Data = reader.result.split(',')[1];
-                  const analyzeFn = httpsCallable(functions, 'analyzeExamPaper');
+                  // 🚀 [CTO 패치] 브라우저의 대기 시간을 서버와 동일하게 5분(300,000ms)으로 연장
+                  const analyzeFn = httpsCallable(functions, 'analyzeExamPaper', { timeout: 300000 });
                   
                   const result = await analyzeFn({
                       fileBase64: base64Data,
