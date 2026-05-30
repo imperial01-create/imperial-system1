@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 스마트 마이그레이션 센터 내 '다중 선택 및 일괄 변경(Bulk Update)' 기능 탑재 완료) */
+   (🚀 CTO 패치: 내신 연구소 상단 탭 및 카드에 '세부 과목(표준 코드명)' 자동 번역 적용) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
@@ -26,6 +26,12 @@ const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24
 const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [CTO 패치] 표준 코드 번역 헬퍼 함수
+const getSubjectLabel = (code, fallback) => {
+    const found = STANDARD_CODES.find(c => c.code === code);
+    return found ? found.label : (fallback || '미지정');
+};
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -126,13 +132,11 @@ export default function SchoolStrategy({ currentUser }) {
 
   const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
 
-  // 🚀 마이그레이션 모달 관련 상태
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
   const [migFilterGrade, setMigFilterGrade] = useState('전체');
   const [migFilterTerm, setMigFilterTerm] = useState('전체');
   
-  // 🚀 [CTO 패치] 다중 선택 및 일괄 적용 상태
   const [selectedMigrationIds, setSelectedMigrationIds] = useState([]);
   const [bulkManualCode, setBulkManualCode] = useState('');
 
@@ -150,7 +154,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   const [formSchoolType, setFormSchoolType] = useState('high');
   const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
-
   const [isManualSubject, setIsManualSubject] = useState(false);
 
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
@@ -354,7 +357,6 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
-  // 🚀 스마트 마이그레이션 센터 스캔 엔진
   const handleOpenMigration = async () => {
       setIsSettingsModalOpen(false);
       setLoading(true);
@@ -375,8 +377,8 @@ export default function SchoolStrategy({ currentUser }) {
           setMigrationTargets(predictedTargets);
           setMigFilterGrade('전체');
           setMigFilterTerm('전체');
-          setSelectedMigrationIds([]); // 체크박스 초기화
-          setBulkManualCode(''); // 일괄변경 폼 초기화
+          setSelectedMigrationIds([]); 
+          setBulkManualCode(''); 
           setIsMigrationModalOpen(true);
       } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
   };
@@ -385,7 +387,6 @@ export default function SchoolStrategy({ currentUser }) {
       setMigrationTargets(prev => prev.map(t => t.id === id ? { ...t, selectedManualCode: code } : t));
   };
 
-  // 🚀 화면에 보이는(필터링된) 타겟들만 산출
   const filteredMigrationTargets = useMemo(() => {
       return migrationTargets.filter(t => {
           let match = true;
@@ -395,12 +396,10 @@ export default function SchoolStrategy({ currentUser }) {
       });
   }, [migrationTargets, migFilterGrade, migFilterTerm]);
 
-  // 🚀 필터가 바뀌면 선택 영역 초기화 방지
   useEffect(() => {
       setSelectedMigrationIds([]);
   }, [migFilterGrade, migFilterTerm]);
 
-  // 🚀 [신규] 다중 선택 핸들러
   const handleSelectAllMigration = (e) => {
       if (e.target.checked) {
           setSelectedMigrationIds(filteredMigrationTargets.map(t => t.id));
@@ -413,14 +412,12 @@ export default function SchoolStrategy({ currentUser }) {
       setSelectedMigrationIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
-  // 🚀 [신규] 일괄 변경 적용 핸들러
   const handleApplyBulkCode = () => {
       if (selectedMigrationIds.length === 0) return alert('먼저 변경할 항목을 체크박스로 선택해주세요.');
       if (!bulkManualCode) return alert('일괄 적용할 표준 코드를 우측 드롭다운에서 선택해주세요.');
 
       setMigrationTargets(prev => prev.map(t => {
           if (selectedMigrationIds.includes(t.id)) {
-              // 선택된 애들은 isAutoMatch를 끄고 수동 선택 모드로 덮어씌움
               return { ...t, isAutoMatch: false, selectedManualCode: bulkManualCode };
           }
           return t;
@@ -431,7 +428,6 @@ export default function SchoolStrategy({ currentUser }) {
       alert('선택한 항목들이 일괄 변경되었습니다. (최종 적용 버튼을 눌러야 DB에 저장됩니다)');
   };
 
-  // 🚀 필터링/선택된 애들 DB 마이그레이션 일괄 실행
   const handleRunMigration = async () => {
       if(filteredMigrationTargets.length === 0) return alert('현재 필터 조건에 해당하는 항목이 없습니다.');
       if(!window.confirm(`화면에 보이는 총 ${filteredMigrationTargets.length}개의 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
@@ -680,19 +676,20 @@ export default function SchoolStrategy({ currentUser }) {
     return Object.entries(counts).map(([source, count]) => ({ source, count, percent: Math.round((count / total) * 100) })).sort((a,b) => b.count - a.count);
   };
 
+  // 🚀 [CTO 패치] 과목별 필터 탭 이름 번역 표시
   const availableSubjects = useMemo(() => {
-      const allSubjects = [...trendReports, ...individualReports].map(r => r.subject).filter(Boolean);
+      const allSubjects = [...trendReports, ...individualReports].map(r => getSubjectLabel(r.standardCode, r.subject)).filter(Boolean);
       return ['전체', ...new Set(allSubjects)].sort();
   }, [trendReports, individualReports]);
 
   const filteredTrendReports = useMemo(() => {
       if (activeSubjectTab === '전체') return trendReports;
-      return trendReports.filter(r => r.subject === activeSubjectTab);
+      return trendReports.filter(r => getSubjectLabel(r.standardCode, r.subject) === activeSubjectTab);
   }, [trendReports, activeSubjectTab]);
 
   const filteredIndividualReports = useMemo(() => {
       if (activeSubjectTab === '전체') return individualReports;
-      return individualReports.filter(r => r.subject === activeSubjectTab);
+      return individualReports.filter(r => getSubjectLabel(r.standardCode, r.subject) === activeSubjectTab);
   }, [individualReports, activeSubjectTab]);
 
 
@@ -822,7 +819,8 @@ export default function SchoolStrategy({ currentUser }) {
                 <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
                   {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                   <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
-                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {report.subject}</p>
+                  {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
+                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {getSubjectLabel(report.standardCode, report.subject)}</p>
                 </div>
               ))}
             </div>
@@ -842,7 +840,8 @@ export default function SchoolStrategy({ currentUser }) {
                     {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                     <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
                         <span className="text-blue-600 text-sm block mb-1">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'}</span>
-                        {report.subject} 정밀 분석
+                        {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
+                        {getSubjectLabel(report.standardCode, report.subject)} 정밀 분석
                     </h3>
                     
                     <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
@@ -1315,7 +1314,8 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="inline-block px-2 md:px-3 py-1 bg-indigo-800 rounded-full text-[10px] md:text-xs font-semibold mb-2 md:mb-3 tracking-wider">
               {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
             </div>
-            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {report.subject} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
+            {/* 🚀 [CTO 패치] 세부 과목명 번역 헤더 */}
+            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {getSubjectLabel(report.standardCode, report.subject)} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
           </div>
 
           <div className="p-4 md:p-8">

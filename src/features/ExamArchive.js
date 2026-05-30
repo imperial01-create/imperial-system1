@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: 기출 아카이브에도 '시공간 과목 엔진(동적 드롭다운)'을 적용하여 휴먼 에러를 원천 차단했습니다.) */
+   (🚀 CTO 패치: 기출 아카이브 검색 필터에 '세부 과목 드롭다운' 추가 및 목록에 세부 과목명 표시 적용) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
@@ -10,7 +10,7 @@ import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setD
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
-import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 시공간 엔진 로드
+import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -23,6 +23,12 @@ const FILE_TYPES = [
 
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
+
+// 🚀 [CTO 패치] 표준 코드 번역 헬퍼 함수
+const getSubjectLabel = (code, fallback) => {
+    const found = STANDARD_CODES.find(c => c.code === code);
+    return found ? found.label : (fallback || '미지정');
+};
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -95,8 +101,9 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 };
 
 const ExamArchive = ({ currentUser }) => {
+    // 🚀 [CTO 패치] subjectCode 필터 추가
     const [filters, setFilters] = useState({
-        schoolType: 'high', schoolName: '', year: '', combinedTerm: '', subject: '', grade: ''
+        schoolType: 'high', schoolName: '', year: '', combinedTerm: '', subjectCode: '', grade: ''
     });
     const [exams, setExams] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -111,12 +118,11 @@ const ExamArchive = ({ currentUser }) => {
     const [showEditExamModal, setShowEditExamModal] = useState(false);
     
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
-    // 🚀 부서 마스터 (엔진용)
     const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
 
     const [addSchoolType, setAddSchoolType] = useState('high');
     const [isAddCustom, setIsAddCustom] = useState(false);
-    const [isAddManualSubject, setIsAddManualSubject] = useState(false); // 🚀 예외 과목
+    const [isAddManualSubject, setIsAddManualSubject] = useState(false); 
     const [newExamForm, setNewExamForm] = useState({
         schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', standardCode: '', grade: '1학년', 
         urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
@@ -124,7 +130,7 @@ const ExamArchive = ({ currentUser }) => {
 
     const [editSchoolType, setEditSchoolType] = useState('high');
     const [isEditCustom, setIsEditCustom] = useState(false);
-    const [isEditManualSubject, setIsEditManualSubject] = useState(false); // 🚀 예외 과목
+    const [isEditManualSubject, setIsEditManualSubject] = useState(false); 
     const [editExamForm, setEditExamForm] = useState(null);
 
     const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
@@ -168,6 +174,11 @@ const ExamArchive = ({ currentUser }) => {
             if (filters.year) q = query(q, where('year', '==', String(filters.year)));
             if (filters.grade) q = query(q, where('grade', '==', String(filters.grade)));
             
+            // 🚀 [CTO 패치] 세부 과목(표준 코드) 조건 추가
+            if (filters.subjectCode) {
+                q = query(q, where('standardCode', '==', String(filters.subjectCode)));
+            }
+
             if (filters.schoolName && filters.schoolName.trim() !== '') {
                 q = query(q, where('schoolName', '==', String(filters.schoolName.trim())));
             }
@@ -206,7 +217,6 @@ const ExamArchive = ({ currentUser }) => {
             const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
             const typeKor = getSchoolTypeKorean(addSchoolType);
 
-            // 🚀 시공간 엔진에서 표준 코드 발급
             const finalCode = isAddManualSubject 
                 ? (newExamForm.standardCode || `CUSTOM_${newExamForm.subject.replace(/\s+/g,'').toUpperCase()}`)
                 : getStandardSubjectCode(typeKor, newExamForm.subject);
@@ -218,7 +228,7 @@ const ExamArchive = ({ currentUser }) => {
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: newExamForm.subject,
-                standardCode: finalCode, // 🚀 꼬리표 부착
+                standardCode: finalCode,
                 grade: newExamForm.grade,
                 region: '서울',   
                 district: '양천구', 
@@ -239,7 +249,6 @@ const ExamArchive = ({ currentUser }) => {
             alert("신규 기출자료가 성공적으로 등록/병합되었습니다.");
             setShowAddModal(false);
             
-            // 폼 초기화
             const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
             setNewExamForm({ 
                 schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: defaultSubjs[0]||'', standardCode: '', grade: '1학년',
@@ -291,7 +300,6 @@ const ExamArchive = ({ currentUser }) => {
             const [parsedSemester, parsedTerm] = editExamForm.combinedTerm.split(' ');
             const typeKor = getSchoolTypeKorean(editSchoolType);
 
-            // 🚀 수정 시에도 코드 갱신
             const finalCode = isEditManualSubject 
                 ? (editExamForm.standardCode || `CUSTOM_${editExamForm.subject.replace(/\s+/g,'').toUpperCase()}`)
                 : getStandardSubjectCode(typeKor, editExamForm.subject);
@@ -303,7 +311,7 @@ const ExamArchive = ({ currentUser }) => {
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: editExamForm.subject,
-                standardCode: finalCode, // 🚀 갱신
+                standardCode: finalCode,
                 grade: editExamForm.grade,
                 updatedAt: serverTimestamp()
             };
@@ -391,7 +399,6 @@ const ExamArchive = ({ currentUser }) => {
 
     const handleSubmitLink = async () => {
         const { exam, fileKey, type } = modalState;
-        
         if (type !== 'edit_link' && !uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
         
         setIsProcessing(true);
@@ -406,7 +413,6 @@ const ExamArchive = ({ currentUser }) => {
                     delete updatedFiles[fileKey].workerName;
                     delete updatedFiles[fileKey].url;
                     updatedFiles[fileKey].status = 'open';
-                    
                     await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
                     alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
                 } else {
@@ -491,7 +497,6 @@ const ExamArchive = ({ currentUser }) => {
         );
     };
 
-    // 🚀 동적 드롭다운 렌더링용 과목 리스트 추출
     const dynamicAddSubjects = getAvailableSubjects(getSchoolTypeKorean(addSchoolType), newExamForm.year, newExamForm.grade, activeDepartments) || [];
     const dynamicEditSubjects = editExamForm ? (getAvailableSubjects(getSchoolTypeKorean(editSchoolType), editExamForm.year, editExamForm.grade, activeDepartments) || []) : [];
 
@@ -524,12 +529,13 @@ const ExamArchive = ({ currentUser }) => {
                     <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
                 </div>
                 
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }}>
+                {/* 🚀 [CTO 패치] 과목 필터 드롭다운 추가로 7칸 그리드 구성 */}
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
+                    <select className="col-span-1 border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold outline-none" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }}>
                         <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                     </select>
                     
-                    <div className="col-span-2 lg:col-span-2">
+                    <div className="col-span-1 md:col-span-2 lg:col-span-2">
                         <SmartSchoolSelect 
                             schoolType={filters.schoolType} 
                             schoolsData={schoolsData} 
@@ -538,21 +544,26 @@ const ExamArchive = ({ currentUser }) => {
                         />
                     </div>
                     
-                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
+                    <select className="col-span-1 border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold outline-none" value={filters.year} onChange={e=>setFilters({...filters, year: e.target.value})}>
                         <option value="">연도 전체</option>
                         {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                     </select>
 
-                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
+                    <select className="col-span-1 border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold outline-none" value={filters.grade} onChange={e=>setFilters({...filters, grade: e.target.value})}>
                         <option value="">학년 전체</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
                     </select>
                     
-                    <select className="border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
+                    <select className="col-span-1 border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold outline-none" value={filters.combinedTerm} onChange={e=>setFilters({...filters, combinedTerm: e.target.value})}>
                         <option value="">시험 전체</option>
                         <option value="1학기 중간고사">1학기 중간고사</option>
                         <option value="1학기 기말고사">1학기 기말고사</option>
                         <option value="2학기 중간고사">2학기 중간고사</option>
                         <option value="2학기 기말고사">2학기 기말고사</option>
+                    </select>
+
+                    <select className="col-span-2 md:col-span-2 lg:col-span-1 border p-2.5 rounded-lg bg-gray-50 text-indigo-700 w-full text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300" value={filters.subjectCode} onChange={e=>setFilters({...filters, subjectCode: e.target.value})}>
+                        <option value="">과목 전체</option>
+                        {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
                     </select>
                 </div>
                 <Button className="w-full py-3 md:py-4 text-base md:text-lg shadow-md" icon={Search} onClick={handleSearch} disabled={loading}>
@@ -591,7 +602,8 @@ const ExamArchive = ({ currentUser }) => {
                                     </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
                                         <div className="font-bold text-gray-700 text-sm">
-                                            {exam.year} {String(exam.grade || '1학년').replace('학년', '')}-{String(exam.semester || '1학기').replace('학기', '')} {exam.termType || exam.term || '고사'} {exam.subject}
+                                            {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
+                                            {exam.year} {String(exam.grade || '1학년').replace('학년', '')}-{String(exam.semester || '1학기').replace('학기', '')} {exam.termType || exam.term || '고사'} <span className="text-indigo-700 ml-1">{getSubjectLabel(exam.standardCode, exam.subject)}</span>
                                         </div>
                                     </div>
                                 </div>
