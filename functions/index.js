@@ -1,3 +1,4 @@
+// functions/index.js
 // 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
@@ -85,7 +86,6 @@ exports.refineFeedback = onCall(async (request) => {
         return { refinedText: result.response.text().trim() };
     } catch (error) {
         console.error("🔥 Gemini API Error:", error);
-        // 'internal' 대신 'failed-precondition'을 써야 프론트엔드에 진짜 에러 메시지가 뜹니다.
         throw new HttpsError("failed-precondition", `AI 정제 오류: ${error.message}`);
     }
 });
@@ -121,6 +121,7 @@ exports.clinicReminderCron = onSchedule({
     timeoutSeconds: 300,
     memory: "512MiB"
 }, async (event) => {
+    // ... 기존 로직 보존 ...
     try {
         const db = admin.firestore();
         const now = new Date();
@@ -180,9 +181,10 @@ exports.clinicReminderCron = onSchedule({
 });
 
 // ============================================================================
-// [기능 5] 입시 내비게이터용 성적표 파싱 (과목명 괄호 삭제 및 합계 점수 추출)
+// [기능 5] 입시 내비게이터용 성적표 파싱
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
+    // ... 기존 로직 보존 ...
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     const { fileData, type } = request.data; 
     if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
@@ -215,9 +217,10 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 });
 
 // ============================================================================
-// [기능 6] 텔레그램 봇 보안 알림 전송 (프론트엔드 은닉용)
+// [기능 6] 텔레그램 봇 보안 알림 전송
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
+    // ... 기존 로직 보존 ...
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -239,9 +242,10 @@ exports.sendTelegramAlert = onCall(async (request) => {
 });
 
 // ============================================================================
-// [기능 7] 데이터 연쇄 청소기 (유저 삭제 시 Auth 동반 삭제 트리거)
+// [기능 7] 데이터 연쇄 청소기
 // ============================================================================
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
+    // ... 기존 로직 보존 ...
     const snap = event.data;
     if (!snap) return null;
     const deletedUser = snap.data();
@@ -260,75 +264,68 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 자동 스캐너
+// 🚀 [기능 8] Gemini Vision AI 기반 시험지 정밀 분석기 (원장님 기획안 적용 완료)
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
-    const numYear = parseInt(year);
-    const numGrade = parseInt(grade.replace(/[^0-9]/g, '')) || 1;
-    let is2022 = false;
-    if (numYear >= 2026 && numGrade <= 2) is2022 = true;
-    else if (numYear >= 2027) is2022 = true;
-
-    const taxonomyGuide = is2022 ? 
-        `[2022 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함: 
-        (대수): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
-        (미적분I): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용
-        (기하): 이차곡선, 이차곡선의 접선, 평면벡터, 공간도형, 공간좌표, 공간벡터` 
-        : 
-        `[2015 개정 교육과정 적용] 단원명은 반드시 다음 중 하나여야 함:
-        (수학I): 지수와 로그, 지수함수와 로그함수, 지수함수와 로그함수의 활용, 삼각함수, 삼각함수의 그래프, 삼각함수의 활용, 등차수열과 등비수열, 수열의 합, 수학적 귀납법
-        (수학II): 함수의 극한, 함수의 연속, 미분계수와 도함수, 도함수의 활용, 부정적분, 정적분, 정적분의 활용`;
-
+    // 프롬프트: 원장님의 <IDI 5대 지표> 및 <등급컷 예상> 완벽 반영
     const prompt = `
-    당신은 대한민국 대치동 최고 수준의 고등학교 수학 입시 분석가입니다.
-    첨부된 시험지(이미지/PDF)를 분석하여 아래의 JSON 구조로만 정확하게 답변하세요. 마크다운(\`\`\`json) 없이 순수 JSON 객체만 출력해야 합니다.
+    당신은 한국 고등학교 수학 교육과정에 정통한 '베테랑 수학 교사'이자 '시험 난이도 및 등급컷 분석 전문가'입니다.
+    첨부된 고등학교 수학 시험지(PDF/이미지)를 바탕으로, 다음 단계를 엄격히 따라 분석해 주세요.
+    타겟 학생: ${year || '2024'}년도 ${grade || '고등학교'} ${subject || '수학'} 시험 응시생
     
-    학생 타겟: ${year}년도 ${grade} ${subject} 시험
-    ${taxonomyGuide}
-    
-    [IDI: Imperial Difficulty Index 5대 지표 세부 측정 기준] (각 1~5점 부여)
-    1) 출처 친숙도 (idiSource): 1(교과서)~5(특이 사설/신유형)
-    2) 변형 로직 (idiLogic): 1(단순 숫자 변형)~5(킬러 하이브리드)
-    3) 개념 결합도 (idiConcept): 1(단일 개념)~5(추상적 추론)
-    4) 연산 복잡도 (idiCalc): 1(암산 3줄 이내)~5(극악 연산/케이스 분류)
-    5) 논리 전개 (idiProg): 1(단방향)~5(발견적 추론)
+    [IDI 5대 지표 평가 기준 (각 1점~5점)]
+    1) 출처 친숙도 (Source Familiarity): 1(교과서)~5(신유형/강남 자사고 특이기출)
+    2) 변형 로직 (Transformation Logic): 1(단순 숫자 변형)~5(킬러 문항 하이브리드)
+    3) 개념 결합도 (Conceptual Integration): 1(단일 개념)~5(추상적 추론)
+    4) 연산 복잡도 (Calculation Complexity): 1(암산 3줄 이내)~5(극악의 연산/케이스 재분류)
+    5) 케이스 분류 및 논리 전개 (Logical Depth): 1(단방향 전개)~5(발견적 추론)
 
-    [출력 JSON 구조]
+    [출력 JSON 구조] 
+    반드시 마크다운 없이 순수 JSON 객체만 반환하세요. (런타임 에러 방지)
     {
-      "review": "시험의 전반적인 난이도와 출제 경향을 3~4문장으로 요약 (출제자 노림수, 학생 심리 포함)",
-      "gradeCuts": { "grade1": "1등급 예상(예: 88)", "grade2": "2등급 예상(예: 76)", "grade3": "3등급 예상(예: 62)" },
+      "overallReview": "시험의 전반적인 난이도와 특징(출제 경향, 시간 부족 여부 등)을 요약한 종합 총평",
+      "cutoffs": { 
+         "top10": "상위 10%(약 2등급 중반) 예상 커트라인 점수 (예: 88)", 
+         "top34": "상위 34%(약 4등급 중반) 예상 커트라인 점수 (예: 72)", 
+         "top66": "상위 66%(약 6등급 중반) 예상 커트라인 점수 (예: 54)" 
+      },
+      "cutoffReasoning": "점수 예측 근거: 각 상위 퍼센트의 학생들이 주로 어떤 문항에서 오답을 냈을 것으로 가정했는지 논리적 설명",
       "questions": [
         {
-          "qNum": "문제번호 (예: 객관식1)",
-          "score": "배점 (숫자만, 모르면 4.0)",
-          "unit": "위 가이드라인에 맞는 단원명",
-          "tags": "기본, 킬러 등 태그",
-          "idiSource": 정수(1~5), "idiLogic": 정수, "idiConcept": 정수, "idiCalc": 정수, "idiProg": 정수,
-          "source": "출처 예상",
-          "analysis": "핵심 발상 분석 (1~2문장)"
+          "number": 1,
+          "score": 4.5,
+          "unit": "수열의 극한 (소단원 수준으로 상세히)",
+          "idi": {
+            "sourceFamiliarity": 3,
+            "transformationLogic": 2,
+            "conceptualIntegration": 1,
+            "calculationComplexity": 2,
+            "logicalDepth": 1
+          },
+          "comment": "출제자의 노림수와 학생 심리 분석을 반영한 분석 코멘트"
         }
       ]
     }`;
 
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" }); 
+        // JSON 강제 모드 적용으로 안정성 확보
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-pro",
+            generationConfig: { responseMimeType: "application/json" }
+        }); 
         
         const imageParts = [{ inlineData: { data: fileBase64, mimeType: mimeType } }];
         
         const result = await model.generateContent([prompt, ...imageParts]);
-        const responseText = result.response.text();
-        
-        const cleanJsonString = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-        return JSON.parse(cleanJsonString);
+        return JSON.parse(result.response.text());
 
     } catch (error) {
         console.error("🔥 Gemini API Error:", error);
-        // 'internal' 대신 'failed-precondition'을 써야 프론트엔드에 진짜 에러 메시지가 뜹니다.
         throw new HttpsError('failed-precondition', `AI 분석 중단됨: ${error.message}`);
     }
 });

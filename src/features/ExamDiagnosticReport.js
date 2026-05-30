@@ -1,8 +1,11 @@
+/* [서비스 가치] 학생과 학부모가 확인하는 스마트 진단 & 성장 리포트 뷰어
+   (🚀 CTO 패치: 리포트 상단 타이틀에 '다이내믹 번역기'를 적용하여 깔끔한 세부 과목 노출) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Target, TrendingUp, AlertTriangle, BookOpen, Award, ArrowLeft } from 'lucide-react';
+import { getDynamicSubjectLabel } from '../utils/subjectMapper'; // 🚀 번역기 로드
 
 export default function ExamDiagnosticReport({ diagnosticId }) {
   const [data, setData] = useState({ diagnostic: null, exam: null });
@@ -37,7 +40,6 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
   }, [diagnosticId]);
 
   const calculateAnalysis = (diag, exam) => {
-    // 1. [수정완료] 등급컷 산출 시 명시적 숫자(Number) 형변환 추가
     let predicted = '4등급'; 
     if (exam.gradeCuts) {
       const studentScore = Number(diag.score || 0);
@@ -54,24 +56,22 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
       }
     }
 
-    // 2. [수정완료] 오답 문항 스마트 매칭 로직 (정규표현식 사용)
     const wrongQs = [];
     if (exam.questions && diag.wrongQuestionNumbers) {
       diag.wrongQuestionNumbers.forEach(num => {
-        const targetNumStr = String(num).trim(); // 강사가 입력한 번호 (예: "1")
+        const targetNumStr = String(num).trim(); 
         
-        // 일치하는 문항 찾기 (1차: 정확히 일치, 2차: 문자열에서 숫자만 추출해서 비교)
-        let qInfo = exam.questions.find(q => String(q.number) === targetNumStr);
+        let qInfo = exam.questions.find(q => String(q.number || q.qNum) === targetNumStr);
         if (!qInfo) {
-          qInfo = exam.questions.find(q => String(q.number).replace(/[^0-9]/g, '') === targetNumStr);
+          qInfo = exam.questions.find(q => String(q.number || q.qNum).replace(/[^0-9]/g, '') === targetNumStr);
         }
 
         if (qInfo) {
           wrongQs.push({
-            originalNumber: qInfo.number, // "객관식1" 원본 유지
-            sortNumber: Number(targetNumStr), // 정렬용
+            originalNumber: qInfo.number || qInfo.qNum, 
+            sortNumber: Number(targetNumStr), 
             concept: qInfo.concept || qInfo.unit || '개념 정보 없음',
-            difficulty: qInfo.difficulty || (qInfo.idi ? `IDI ${qInfo.idi}` : '-') // IDI 정보가 있으면 표시
+            difficulty: qInfo.difficulty || qInfo.diff || (qInfo.idiTotal ? `IDI ${qInfo.idiTotal}` : '-') 
           });
         } else {
           wrongQs.push({ 
@@ -82,15 +82,18 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
       });
     }
 
-    // 문항 번호순 정렬
     wrongQs.sort((a, b) => a.sortNumber - b.sortNumber);
-
     setAnalysis({ predictedGrade: predicted, wrongQuestionsInfo: wrongQs });
   };
 
   if (loading) return <div className="p-10 text-center text-gray-500 animate-pulse">리포트를 생성 중입니다...</div>;
   if (error) return <div className="p-10 text-center text-red-500 font-bold">{error}</div>;
-  if (!data.diagnostic) return null;
+  if (!data.diagnostic || !data.exam) return null;
+
+  // 🚀 시공간 번역기를 통해 타이틀용 예쁜 이름 생성
+  const { year, schoolName, grade, semester, termType, term, subject, standardCode, schoolType } = data.exam;
+  const prettySubject = getDynamicSubjectLabel(standardCode, schoolType, year, grade, subject);
+  const reportTitle = `[${year}] ${schoolName} ${grade} ${semester} ${termType || term || '고사'} ${prettySubject}`;
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 bg-slate-50 min-h-screen">
@@ -104,7 +107,8 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
       <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
         <div className="bg-indigo-900 p-6 text-white text-center">
           <h1 className="text-2xl md:text-3xl font-extrabold mb-2 tracking-tight">스마트 진단 & 성장 리포트</h1>
-          <p className="text-indigo-200">{data.diagnostic.examDocId.replace(/_/g, ' ')}</p>
+          {/* 🚀 다이내믹 번역기 타이틀 출력 */}
+          <p className="text-indigo-200">{reportTitle}</p>
         </div>
 
         <div className="p-6 md:p-8 space-y-8">
