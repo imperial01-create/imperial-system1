@@ -1,10 +1,12 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 과목별 필터 탭 적용 및 수강 중인 과목만 노출, 활성 학기 드롭다운 적용) */
-import React, { useState, useEffect, useCallback } from 'react';
+   (🚀 CTO 패치: 과목별 필터 탭 적용 및 수강 중인 과목만 노출, 활성 학기 드롭다운 적용, Import 에러 완벽 해결) */
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X, CheckCircle, BookOpen, PenTool } from 'lucide-react'; 
+import { Search, X, CheckCircle, BookOpen } from 'lucide-react'; 
+import { useData } from '../contexts/DataContext';
+import { Button, Card, Modal } from '../components/UI';
 
 // --- [아이콘 컴포넌트] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -23,9 +25,6 @@ const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24
 const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
-
-import { useData } from '../contexts/DataContext';
-import { Button, Card, Modal } from '../components/UI';
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -113,7 +112,7 @@ const sortReports = (reportsList) => {
 
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
-  const { enrollments = [], classes = [] } = useData(); // 🚀 [CTO 패치] 수강 과목 필터링용 데이터 호출
+  const { enrollments = [], classes = [] } = useData(); 
   
   const [trendReports, setTrendReports] = useState([]);
   const [individualReports, setIndividualReports] = useState([]);
@@ -124,7 +123,7 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
-  // 🚀 [CTO 패치] 과목별 필터 탭 (관리자 난해함 해소)
+  // 과목별 필터 탭 (관리자 난해함 해소)
   const [activeSubjectTab, setActiveSubjectTab] = useState('전체');
 
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
@@ -163,7 +162,6 @@ export default function SchoolStrategy({ currentUser }) {
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
     if (baseTerm === '해당사항 없음') return '해당사항 없음';
     const gradeNum = String(currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년').replace(/\D/g, '');
-    // ex) "1학기 중간고사" -> "1학년 1학기 중간고사"
     return `${gradeNum}학년 ${baseTerm}`;
   }, []);
 
@@ -171,7 +169,7 @@ export default function SchoolStrategy({ currentUser }) {
     if (!baseTerm || baseTerm === '해당사항 없음') return "해당사항 없음";
     const gradeStr = currentUserObj?.childSnapshot?.grade || currentUserObj?.childGrade || currentUserObj?.grade || '1학년';
     const gradeNum = String(gradeStr).replace(/\D/g, '');
-    return `${gradeNum}학년 ${baseTerm}`; // 매칭용 문자열 예: "1학년 1학기 중간고사"
+    return `${gradeNum}학년 ${baseTerm}`; 
   }, []);
 
   const fetchInitialData = useCallback(async () => {
@@ -183,7 +181,6 @@ export default function SchoolStrategy({ currentUser }) {
               const trends = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(r => !r.isDeleted);
               setTrendReports(sortReports(trends)); 
           } else if (isStudentOrParent) {
-              // 🚀 [CTO 패치] '해당사항 없음' 처리 - 즉시 블라인드
               if (activeTerm === '해당사항 없음') {
                   setTrendReports([]); setIndividualReports([]); setLoading(false); return;
               }
@@ -207,7 +204,6 @@ export default function SchoolStrategy({ currentUser }) {
 
               const targetTerm = getStudentTargetTerm(activeTerm, user);
               
-              // 🚀 [CTO 패치] 수강 과목 필터링 로직
               const targetStudentIds = user.role === 'student' ? [user.id] : (user.linkedChildrenIds || []);
               const myActiveEnrollments = enrollments.filter(e => targetStudentIds.includes(e.studentId) && e.status === 'active');
               const myActiveClasses = classes.filter(c => myActiveEnrollments.map(e => e.classId).includes(c.id));
@@ -215,9 +211,9 @@ export default function SchoolStrategy({ currentUser }) {
               const filtered = allDocs.filter(report => {
                   if (report.isDeleted || !report.type) return false;
 
-                  const reportGrade = String(report.grade || '1학년'); // "1학년"
-                  const reportSemester = String(report.semester || '1학기'); // "1학기"
-                  const reportTermType = String(report.termType || report.term || '중간고사'); // "중간고사"
+                  const reportGrade = String(report.grade || '1학년'); 
+                  const reportSemester = String(report.semester || '1학기'); 
+                  const reportTermType = String(report.termType || report.term || '중간고사'); 
                   const generatedTerm = `${reportGrade} ${reportSemester} ${reportTermType}`;
                   
                   if (generatedTerm !== targetTerm) return false;
@@ -225,18 +221,16 @@ export default function SchoolStrategy({ currentUser }) {
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
 
-                  // 수강 과목만 노출 (강력한 필터)
                   const rSubj = report.subject || '';
-                  if (!rSubj) return true; // 과목명이 없으면 기본 노출 (공통 공지 등)
+                  if (!rSubj) return true; 
                   
-                  // 클래스 이름이나 클래스에 지정된 과목명과 리포트 과목명이 일치하는지 확인
                   const hasMatchingSubject = myActiveClasses.some(c => {
                       const cName = c.name || '';
                       const cSubj = c.subject || '';
                       return cName.includes(rSubj) || cSubj.includes(rSubj) || rSubj.includes(cSubj) || rSubj.includes(cName);
                   });
 
-                  if (!hasMatchingSubject) return false; // 수강하지 않는 과목 블라인드 처리
+                  if (!hasMatchingSubject) return false; 
 
                   return true;
               });
@@ -293,7 +287,7 @@ export default function SchoolStrategy({ currentUser }) {
       if (!isStaff) return;
       setLoading(true);
       setHasSearched(true);
-      setActiveSubjectTab('전체'); // 검색 시 과목 탭 초기화
+      setActiveSubjectTab('전체'); 
       try {
           let q = collection(db, INTEGRATED_COLLECTION);
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
@@ -547,7 +541,6 @@ export default function SchoolStrategy({ currentUser }) {
     return Object.entries(counts).map(([source, count]) => ({ source, count, percent: Math.round((count / total) * 100) })).sort((a,b) => b.count - a.count);
   };
 
-  // 🚀 [CTO 패치] 과목별 필터 렌더링 리스트 산출
   const availableSubjects = useMemo(() => {
       const allSubjects = [...trendReports, ...individualReports].map(r => r.subject).filter(Boolean);
       return ['전체', ...new Set(allSubjects)].sort();
@@ -639,7 +632,6 @@ export default function SchoolStrategy({ currentUser }) {
             </div>
         )}
 
-        {/* 🚀 [CTO 패치] 과목별 필터 탭 (데이터가 있을 때만 노출) */}
         {(trendReports.length > 0 || individualReports.length > 0) && (
             <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2 pt-2 border-b border-gray-200">
                 {availableSubjects.map(subj => (
@@ -748,7 +740,6 @@ export default function SchoolStrategy({ currentUser }) {
               <h3 className="text-lg font-bold mb-4">학생 공개 활성 학기 설정</h3>
               <p className="text-sm text-gray-500 mb-4">학생과 학부모에게 보여질 현재 진행 중인 내신 학기를 선택하세요.<br/><br/>* '해당사항 없음'을 선택하면 학생들에게 어떠한 리포트도 보이지 않습니다.</p>
               
-              {/* 🚀 [CTO 패치] 오타 방지용 드롭다운 UI로 교체 */}
               <select 
                   value={tempActiveTerm} 
                   onChange={e => setTempActiveTerm(e.target.value)} 
@@ -822,7 +813,7 @@ export default function SchoolStrategy({ currentUser }) {
                   ) : (
                       <div className="w-2/3 relative">
                           <input className="w-full border-2 border-blue-300 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={formData.school} onChange={e => setFormData({...formData, school: e.target.value})} />
-                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><X size={14}/></button>
+                          <button type="button" onClick={() => { setIsFormCustomSchool(false); setFormData({...formData, school: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-gray-100 rounded-full p-0.5"><IconX/></button>
                       </div>
                   )}
               </div>
