@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 환경설정 부서 연동, 스마트 마이그레이션 센터(자동/수동 분리) 탑재) */
+   (🚀 CTO 패치: 스마트 마이그레이션 센터 내 일괄 작업용 학년/학기 필터 장착 완료) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
@@ -9,7 +9,7 @@ import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
 
-// --- [아이콘 컴포넌트] ---
+// --- [아이콘 컴포넌트 생략 (기존과 동일)] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
@@ -124,13 +124,13 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
-  // 🚀 설정에서 활성화된 부서 마스터 목록
-  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
-
-  // 🚀 마이그레이션 센터 상태
+  // 🚀 마이그레이션 관련 상태
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
+  const [migFilterGrade, setMigFilterGrade] = useState('전체');
+  const [migFilterTerm, setMigFilterTerm] = useState('전체');
 
+  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
   const [activeSubjectTab, setActiveSubjectTab] = useState('전체');
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
@@ -145,7 +145,6 @@ export default function SchoolStrategy({ currentUser }) {
 
   const [formSchoolType, setFormSchoolType] = useState('high');
   const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
-
   const [isManualSubject, setIsManualSubject] = useState(false);
 
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
@@ -159,11 +158,10 @@ export default function SchoolStrategy({ currentUser }) {
   useEffect(() => {
       const fetchSettings = async () => {
           try {
-              const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schools');
+              const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
               const docSnap = await getDoc(docRef);
               if (docSnap.exists()) setSchoolsData(docSnap.data());
 
-              // 🚀 부서 마스터 불러오기
               const deptSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments'));
               if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
 
@@ -350,7 +348,7 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
-  // 🚀 스마트 마이그레이션 센터 스캔 엔진
+  // 🚀 마이그레이션 스캔
   const handleOpenMigration = async () => {
       setIsSettingsModalOpen(false);
       setLoading(true);
@@ -367,10 +365,10 @@ export default function SchoolStrategy({ currentUser }) {
               return { ...t, predictedCode, isAutoMatch, selectedManualCode: '' };
           });
 
-          // 자동과 수동을 분리 정렬 (자동이 위로)
           predictedTargets.sort((a, b) => b.isAutoMatch - a.isAutoMatch);
-
           setMigrationTargets(predictedTargets);
+          setMigFilterGrade('전체');
+          setMigFilterTerm('전체');
           setIsMigrationModalOpen(true);
       } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
   };
@@ -379,33 +377,50 @@ export default function SchoolStrategy({ currentUser }) {
       setMigrationTargets(prev => prev.map(t => t.id === id ? { ...t, selectedManualCode: code } : t));
   };
 
+  // 🚀 화면에 보이는(필터링된) 타겟들만 산출
+  const filteredMigrationTargets = useMemo(() => {
+      return migrationTargets.filter(t => {
+          let match = true;
+          if (migFilterGrade !== '전체' && t.grade !== migFilterGrade) match = false;
+          if (migFilterTerm !== '전체' && `${t.semester} ${t.termType || t.term}` !== migFilterTerm) match = false;
+          return match;
+      });
+  }, [migrationTargets, migFilterGrade, migFilterTerm]);
+
+  // 🚀 필터링된 애들만 마이그레이션 일괄 실행
   const handleRunMigration = async () => {
-      if(!window.confirm(`선택된 데이터들을 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
+      if(filteredMigrationTargets.length === 0) return alert('현재 필터 조건에 해당하는 항목이 없습니다.');
+      if(!window.confirm(`화면에 보이는 총 ${filteredMigrationTargets.length}개의 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
+      
       setLoading(true);
       try {
           const batch = writeBatch(db);
           let count = 0;
+          const processedIds = [];
 
-          migrationTargets.forEach(t => {
+          filteredMigrationTargets.forEach(t => {
               const ref = doc(db, INTEGRATED_COLLECTION, t.id);
               if (t.isAutoMatch) {
                   batch.update(ref, { standardCode: t.predictedCode });
                   count++;
+                  processedIds.push(t.id);
               } else if (t.selectedManualCode) {
                   batch.update(ref, { standardCode: t.selectedManualCode });
                   count++;
+                  processedIds.push(t.id);
               }
           });
           
           if (count === 0) {
-              alert("업데이트할 항목이 없습니다. (수동 항목은 코드를 선택해야 반영됩니다)");
+              alert("적용할 항목이 없습니다. (수동 항목은 코드를 선택해야 반영됩니다)");
               setLoading(false); return;
           }
 
           await batch.commit();
-          alert(`과거 데이터 마이그레이션이 완벽하게 완료되었습니다! (총 ${count}건 업데이트)`);
-          setIsMigrationModalOpen(false);
-          refreshData();
+          alert(`과거 데이터 마이그레이션이 성공적으로 처리되었습니다! (총 ${count}건 업데이트)`);
+          
+          // 처리된 애들을 목록에서 뺌
+          setMigrationTargets(prev => prev.filter(t => !processedIds.includes(t.id)));
       } catch(e) { alert("마이그레이션 실패: " + e.message); } finally { setLoading(false); }
   };
 
@@ -860,22 +875,44 @@ export default function SchoolStrategy({ currentUser }) {
         {/* 🚀 스마트 마이그레이션 검수 모달 */}
         <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-4xl w-full">
             <div className="bg-indigo-50 text-indigo-800 p-4 rounded-xl text-sm mb-4 border border-indigo-200">
-                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 시공간 엔진이 자동 판별한 항목(초록색)과 수동 지정이 필요한 항목(주황색)을 확인 후 일괄 적용하세요.
+                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 학년과 학기를 선택하여 안전하게 분할 마이그레이션을 진행할 수 있습니다.
             </div>
+
+            {/* 🚀 학년 및 학기 필터 */}
+            <div className="flex gap-2 mb-4 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                <select value={migFilterGrade} onChange={e => setMigFilterGrade(e.target.value)} className="flex-1 border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="전체">전체 학년</option>
+                    <option value="1학년">1학년</option>
+                    <option value="2학년">2학년</option>
+                    <option value="3학년">3학년</option>
+                </select>
+                <select value={migFilterTerm} onChange={e => setMigFilterTerm(e.target.value)} className="flex-1 border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="전체">전체 학기/고사</option>
+                    <option value="1학기 중간고사">1학기 중간고사</option>
+                    <option value="1학기 기말고사">1학기 기말고사</option>
+                    <option value="2학기 중간고사">2학기 중간고사</option>
+                    <option value="2학기 기말고사">2학기 기말고사</option>
+                </select>
+            </div>
+
+            <div className="flex justify-between items-center mb-2 px-1">
+                <span className="text-sm font-bold text-gray-600">필터링된 대상: <span className="text-indigo-600">{filteredMigrationTargets.length}</span>건</span>
+            </div>
+
             <div className="max-h-96 overflow-y-auto custom-scrollbar border rounded-lg bg-gray-50 p-2 mb-4">
-                {migrationTargets.length === 0 ? <div className="text-center py-10 font-bold text-gray-400">업데이트가 필요한 과거 데이터가 없습니다.</div> : (
+                {filteredMigrationTargets.length === 0 ? <div className="text-center py-10 font-bold text-gray-400">선택한 조건에 업데이트가 필요한 데이터가 없습니다.</div> : (
                     <table className="w-full text-xs text-left">
                         <thead className="bg-gray-100 border-b"><tr className="text-gray-600">
-                            <th className="p-2">분류</th><th className="p-2">연도</th><th className="p-2">학교/학년</th><th className="p-2">과거 과목명</th><th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
+                            <th className="p-2">분류</th><th className="p-2">연도/학기</th><th className="p-2">학교(학년)</th><th className="p-2">과거 과목명</th><th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
                         </tr></thead>
                         <tbody>
-                            {migrationTargets.map(t => (
+                            {filteredMigrationTargets.map(t => (
                                 <tr key={t.id} className="border-b bg-white">
                                     <td className="p-2 text-center">
                                         {t.isAutoMatch ? <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-black">자동</span> : <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded font-black">수동</span>}
                                     </td>
-                                    <td className="p-2">{t.year}</td>
-                                    <td className="p-2">{t.schoolName} ({t.grade})</td>
+                                    <td className="p-2">{t.year}<br/><span className="text-gray-500 text-[10px]">{t.semester} {t.termType || t.term}</span></td>
+                                    <td className="p-2">{t.schoolName}<br/><span className="text-gray-500 text-[10px]">({t.grade})</span></td>
                                     <td className="p-2 font-bold">{t.subject}</td>
                                     <td className="p-2">
                                         {t.isAutoMatch ? (
@@ -897,8 +934,8 @@ export default function SchoolStrategy({ currentUser }) {
                     </table>
                 )}
             </div>
-            <Button className="w-full py-4 text-lg shadow-lg" onClick={handleRunMigration} disabled={migrationTargets.length === 0 || loading}>
-                {loading ? <Loader className="animate-spin mx-auto"/> : '안전하게 일괄 마이그레이션 적용하기'}
+            <Button className="w-full py-4 text-lg shadow-lg" onClick={handleRunMigration} disabled={filteredMigrationTargets.length === 0 || loading}>
+                {loading ? <Loader className="animate-spin mx-auto"/> : `화면에 보이는 ${filteredMigrationTargets.length}건 마이그레이션 적용하기`}
             </Button>
         </Modal>
       </div>

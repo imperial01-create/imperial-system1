@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 대분류(부서) 토글 시 포함된 세부 과목 리스트를 직관적으로 노출하는 UI 적용) */
+   (🚀 CTO 패치: 국/영/과 대통합에 따른 UI 텍스트 간소화 반영) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -8,7 +8,7 @@ import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle, Database, School, Trash2, Star,
+  AlertTriangle, Database, School, Trash2, Star, Search,
   ToggleRight, ToggleLeft, Layers
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
@@ -16,15 +16,15 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [대분류 및 포함 세부 과목 안내용 데이터]
+// 🚀 [대분류 및 포함 세부 과목 안내용 데이터 (통합 버전)]
 const DEPT_INFO = [
     { 
         id: 'DEPT_KOR', label: '국어과', color: 'rose',
-        subjects: ['공통국어(1·2)', '문학', '독서', '화법과 작문', '언어와 매체', '독서와 작문', '화법과 언어'] 
+        subjects: ['국어 (모든 국어 과목 통합)'] 
     },
     { 
         id: 'DEPT_ENG', label: '영어과', color: 'orange',
-        subjects: ['공통영어(1·2)', '영어 I', '영어 II', '영어 독해와 작문'] 
+        subjects: ['영어 (모든 영어 과목 통합)'] 
     },
     { 
         id: 'DEPT_MATH', label: '수학과', color: 'blue',
@@ -32,7 +32,7 @@ const DEPT_INFO = [
     },
     { 
         id: 'DEPT_SCI', label: '과학과', color: 'emerald',
-        subjects: ['통합과학(1·2)', '물리학 I·II', '화학 I·II', '생명과학 I·II', '지구과학 I·II'] 
+        subjects: ['통합과학', '물리학 (I·II통합)', '화학 (I·II통합)', '생명과학 (I·II통합)', '지구과학 (I·II통합)'] 
     },
     { 
         id: 'DEPT_SOC', label: '사회과', color: 'purple',
@@ -381,7 +381,7 @@ const SettingsManager = ({ currentUser }) => {
                                         <BookOpen className="text-purple-600"/> 학원 운영 부서 (대과목) 활성화
                                     </h2>
                                     <p className="text-sm text-gray-600 leading-relaxed">
-                                        아래 대과목 토글 스위치를 켜면, 해당 부서에 속한 <b>세부 과목(표준 코드) 전체가 시스템의 드롭다운에 자동으로 연동</b>됩니다.
+                                        아래 대과목 토글 스위치를 켜면, 해당 부서에 속한 <b className="text-purple-700">모든 세부 과목(표준 코드) 전체가 시스템의 드롭다운에 자동으로 연동</b>됩니다.
                                     </p>
                                 </div>
                                 

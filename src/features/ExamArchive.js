@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: '시험분석' 항목을 내신연구소로 이관하여 제거하고, UI를 쾌적하게 개선했습니다.) */
+   (🚀 CTO 패치: 기출 아카이브에도 '시공간 과목 엔진(동적 드롭다운)'을 적용하여 휴먼 에러를 원천 차단했습니다.) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
@@ -10,10 +10,10 @@ import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setD
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
+import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 시공간 엔진 로드
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 'analysis(시험분석)' 항목 제거
 const FILE_TYPES = [
     { key: 'studentWork', label: '학생풀이(원본)', icon: FileQuestion },
     { key: 'examPaper', label: '시험지', icon: FileText },
@@ -109,32 +109,40 @@ const ExamArchive = ({ currentUser }) => {
 
     const [showAddModal, setShowAddModal] = useState(false);
     const [showEditExamModal, setShowEditExamModal] = useState(false);
-    const [editExamForm, setEditExamForm] = useState(null);
     
-    const [newExamForm, setNewExamForm] = useState({
-        schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', grade: '1학년', 
-        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } // analysis 제거
-    });
-
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
+    // 🚀 부서 마스터 (엔진용)
+    const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+
     const [addSchoolType, setAddSchoolType] = useState('high');
     const [isAddCustom, setIsAddCustom] = useState(false);
+    const [isAddManualSubject, setIsAddManualSubject] = useState(false); // 🚀 예외 과목
+    const [newExamForm, setNewExamForm] = useState({
+        schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', standardCode: '', grade: '1학년', 
+        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
+    });
+
     const [editSchoolType, setEditSchoolType] = useState('high');
     const [isEditCustom, setIsEditCustom] = useState(false);
+    const [isEditManualSubject, setIsEditManualSubject] = useState(false); // 🚀 예외 과목
+    const [editExamForm, setEditExamForm] = useState(null);
 
     const isAdmin = ['admin', 'admin_assistant'].includes(currentUser.role);
     const isWorker = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role);
     const canAddExam = ['admin', 'ta', 'admin_assistant'].includes(currentUser.role);
 
     useEffect(() => {
-        const fetchSchools = async () => {
+        const fetchSettings = async () => {
             try {
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) setSchoolsData(docSnap.data());
-            } catch (e) { console.error("학교 리스트 로드 실패", e); }
+                const deptRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments');
+
+                const [schoolSnap, deptSnap] = await Promise.all([getDoc(docRef), getDoc(deptRef)]);
+                if (schoolSnap.exists()) setSchoolsData(schoolSnap.data());
+                if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
+            } catch (e) { console.error("환경설정 로드 실패", e); }
         };
-        fetchSchools();
+        fetchSettings();
     }, []);
 
     const getSchoolTypeKorean = (key) => ({'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[key] || '고등학교');
@@ -191,19 +199,26 @@ const ExamArchive = ({ currentUser }) => {
     };
 
     const handleAddSubmitExam = async () => {
-        if (!newExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
+        if (!newExamForm.schoolName.trim() || !newExamForm.subject.trim()) return alert("학교명과 과목명을 정확히 입력해주세요.");
         setIsProcessing(true);
         
         try {
             const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
+            const typeKor = getSchoolTypeKorean(addSchoolType);
+
+            // 🚀 시공간 엔진에서 표준 코드 발급
+            const finalCode = isAddManualSubject 
+                ? (newExamForm.standardCode || `CUSTOM_${newExamForm.subject.replace(/\s+/g,'').toUpperCase()}`)
+                : getStandardSubjectCode(typeKor, newExamForm.subject);
 
             const baseData = {
-                schoolType: getSchoolTypeKorean(addSchoolType),
+                schoolType: typeKor,
                 schoolName: newExamForm.schoolName.trim(),
                 year: String(newExamForm.year), 
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: newExamForm.subject,
+                standardCode: finalCode, // 🚀 꼬리표 부착
                 grade: newExamForm.grade,
                 region: '서울',   
                 district: '양천구', 
@@ -219,14 +234,18 @@ const ExamArchive = ({ currentUser }) => {
                 }
             });
 
-            const docId = await upsertExamData(baseData, updatePayload);
+            await upsertExamData(baseData, updatePayload);
             
             alert("신규 기출자료가 성공적으로 등록/병합되었습니다.");
             setShowAddModal(false);
+            
+            // 폼 초기화
+            const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
             setNewExamForm({ 
-                ...newExamForm, schoolName: '', 
+                schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: defaultSubjs[0]||'', standardCode: '', grade: '1학년',
                 urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
             });
+            setIsAddManualSubject(false);
             
             if (hasSearched) handleSearch();
         } catch (error) {
@@ -250,30 +269,41 @@ const ExamArchive = ({ currentUser }) => {
         setEditSchoolType(foundType);
         setIsEditCustom(isCustom);
 
+        const isManual = exam.standardCode?.startsWith('CUSTOM_') || false;
+        setIsEditManualSubject(isManual);
+
         setEditExamForm({
             id: exam.id,
             schoolName: exam.schoolName || '',
             year: exam.year || String(currentYear),
             combinedTerm: `${exam.semester || '1학기'} ${exam.termType || '중간고사'}`,
             subject: exam.subject || '',
+            standardCode: exam.standardCode || '',
             grade: exam.grade || '1학년'
         });
         setShowEditExamModal(true);
     };
 
     const handleEditSubmitExam = async () => {
-        if (!editExamForm.schoolName.trim()) return alert("학교명을 입력해주세요.");
+        if (!editExamForm.schoolName.trim() || !editExamForm.subject.trim()) return alert("학교명과 과목명을 확인해주세요.");
         setIsProcessing(true);
         try {
             const [parsedSemester, parsedTerm] = editExamForm.combinedTerm.split(' ');
-            
+            const typeKor = getSchoolTypeKorean(editSchoolType);
+
+            // 🚀 수정 시에도 코드 갱신
+            const finalCode = isEditManualSubject 
+                ? (editExamForm.standardCode || `CUSTOM_${editExamForm.subject.replace(/\s+/g,'').toUpperCase()}`)
+                : getStandardSubjectCode(typeKor, editExamForm.subject);
+
             const updateData = {
-                schoolType: getSchoolTypeKorean(editSchoolType),
+                schoolType: typeKor,
                 schoolName: editExamForm.schoolName.trim(),
                 year: String(editExamForm.year),
                 semester: parsedSemester,
                 termType: parsedTerm,
                 subject: editExamForm.subject,
+                standardCode: finalCode, // 🚀 갱신
                 grade: editExamForm.grade,
                 updatedAt: serverTimestamp()
             };
@@ -461,6 +491,10 @@ const ExamArchive = ({ currentUser }) => {
         );
     };
 
+    // 🚀 동적 드롭다운 렌더링용 과목 리스트 추출
+    const dynamicAddSubjects = getAvailableSubjects(getSchoolTypeKorean(addSchoolType), newExamForm.year, newExamForm.grade, activeDepartments) || [];
+    const dynamicEditSubjects = editExamForm ? (getAvailableSubjects(getSchoolTypeKorean(editSchoolType), editExamForm.year, editExamForm.grade, activeDepartments) || []) : [];
+
     return (
         <div className="space-y-6 w-full animate-in fade-in pb-20">
             <div className="flex justify-between items-center mb-2">
@@ -470,7 +504,15 @@ const ExamArchive = ({ currentUser }) => {
                 </div>
                 <div className="flex gap-2">
                     {canAddExam && (
-                        <Button onClick={() => setShowAddModal(true)} icon={Plus} variant="primary">
+                        <Button onClick={() => {
+                            const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
+                            setNewExamForm({ 
+                                schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: defaultSubjs[0]||'', standardCode: '', grade: '1학년', 
+                                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
+                            });
+                            setAddSchoolType('high'); setIsAddCustom(false); setIsAddManualSubject(false);
+                            setShowAddModal(true);
+                        }} icon={Plus} variant="primary">
                             <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
                         </Button>
                     )}
@@ -566,15 +608,21 @@ const ExamArchive = ({ currentUser }) => {
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="기출자료 신규 등록">
                 <div className="space-y-4 max-h-[80vh] overflow-y-auto pr-2 pb-10">
                     <div className="bg-blue-50 p-4 rounded-xl text-xs md:text-sm text-blue-800 mb-4">
-                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원 (내신연구소 연동)</p>
-                        <p>여기서 등록한 자료 정보는 <strong>내신 연구소에도 자동 연동</strong>됩니다.</p>
+                        <p className="font-bold flex items-center gap-1 mb-1"><AlertCircle size={16}/> 일괄 업로드 지원 (내신연구소 자동 연동)</p>
+                        <p>여기서 등록한 <b>시공간 과목 정보</b>는 내신 연구소 분석지로 즉시 연동됩니다.</p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
                         <div className="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
                             <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 검색/선택)</label>
                             <div className="flex gap-2 relative">
-                                <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={addSchoolType} onChange={e => { setAddSchoolType(e.target.value); setNewExamForm({...newExamForm, schoolName: '', grade: '1학년'}); setIsAddCustom(false); }}>
+                                <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={addSchoolType} onChange={e => { 
+                                    setAddSchoolType(e.target.value); 
+                                    const typeK = getSchoolTypeKorean(e.target.value);
+                                    const newSubjs = getAvailableSubjects(typeK, newExamForm.year, newExamForm.grade, activeDepartments);
+                                    setNewExamForm({...newExamForm, schoolName: '', subject: newSubjs[0]||''}); 
+                                    setIsAddCustom(false); 
+                                }}>
                                     <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                                 </select>
                                 
@@ -596,31 +644,61 @@ const ExamArchive = ({ currentUser }) => {
                         </div>
 
                         <div className="col-span-1">
-                            <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
-                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={newExamForm.grade} onChange={e => setNewExamForm({...newExamForm, grade: e.target.value})}>
-                                {getGradeOptions(addSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
-                            </select>
-                        </div>
-                        <div className="col-span-1">
-                            <label className="block text-xs font-bold text-gray-700 mb-1">과목</label>
-                            <input className="w-full border-2 p-2.5 rounded-xl focus:border-blue-400 outline-none bg-gray-50 font-bold" placeholder="예: 수학(상)" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}/>
-                        </div>
-                        
-                        <div className="col-span-1">
-                            <label className="block text-xs font-bold text-gray-700 mb-1">연도</label>
-                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={newExamForm.year} onChange={e => setNewExamForm({...newExamForm, year: e.target.value})}>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">연도 (시공간 축)</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold outline-none focus:border-blue-400" value={newExamForm.year} onChange={e => {
+                                const newY = e.target.value; const typeK = getSchoolTypeKorean(addSchoolType);
+                                const newSubjs = getAvailableSubjects(typeK, newY, newExamForm.grade, activeDepartments);
+                                setNewExamForm({...newExamForm, year: newY, subject: newSubjs[0]||''});
+                            }}>
                                 {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                             </select>
                         </div>
+
+                        <div className="col-span-1">
+                            <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold outline-none focus:border-blue-400" value={newExamForm.grade} onChange={e => {
+                                const newG = e.target.value; const typeK = getSchoolTypeKorean(addSchoolType);
+                                const newSubjs = getAvailableSubjects(typeK, newExamForm.year, newG, activeDepartments);
+                                setNewExamForm({...newExamForm, grade: newG, subject: newSubjs[0]||''});
+                            }}>
+                                {getGradeOptions(addSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                        </div>
                         
                         <div className="col-span-1">
-                            <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 시험</label>
-                            <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold text-sm outline-none focus:border-blue-400" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 고사</label>
+                            <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold text-sm outline-none focus:border-blue-400" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
                                 <option value="1학기 중간고사">1학기 중간고사</option>
                                 <option value="1학기 기말고사">1학기 기말고사</option>
                                 <option value="2학기 중간고사">2학기 중간고사</option>
                                 <option value="2학기 기말고사">2학기 기말고사</option>
                             </select>
+                        </div>
+
+                        {/* 🚀 시공간 엔진 연동 과목 드롭다운 */}
+                        <div className="col-span-1 md:col-span-2">
+                            <div className="flex justify-between items-center mb-1.5">
+                                <label className="block text-xs md:text-sm font-bold text-indigo-700">과목 (자동 필터링됨)</label>
+                                <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer hover:text-indigo-600">
+                                    <input type="checkbox" checked={isAddManualSubject} onChange={(e) => setIsAddManualSubject(e.target.checked)} className="accent-indigo-600"/> 예외 과목 수동 입력
+                                </label>
+                            </div>
+                            
+                            {!isAddManualSubject ? (
+                                <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})}>
+                                    {(dynamicAddSubjects || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                    <option disabled>──────────</option>
+                                    <option value="기타(수동입력)">기타 (체크박스 활성화 요망)</option>
+                                </select>
+                            ) : (
+                                <div className="flex gap-2">
+                                    <input type="text" className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold focus:ring-2 focus:ring-red-300" placeholder="과목명 직접 입력 (예: 문과 확통)" value={newExamForm.subject} onChange={e => setNewExamForm({...newExamForm, subject: e.target.value})} />
+                                    <select className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold bg-red-50 text-red-900" value={newExamForm.standardCode || ''} onChange={e => setNewExamForm({...newExamForm, standardCode: e.target.value})}>
+                                        <option value="">표준 코드 선택 (필수)</option>
+                                        {(STANDARD_CODES || []).map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                                    </select>
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -659,7 +737,13 @@ const ExamArchive = ({ currentUser }) => {
                             <div className="col-span-1 md:col-span-2 bg-gray-50 p-3 rounded-xl border border-gray-200">
                                 <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 검색/선택)</label>
                                 <div className="flex gap-2 relative">
-                                    <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={editSchoolType} onChange={e => { setEditSchoolType(e.target.value); setEditExamForm({...editExamForm, schoolName: '', grade: '1학년'}); setIsEditCustom(false); }}>
+                                    <select className="w-1/3 border-2 p-2.5 rounded-lg focus:border-blue-500 outline-none bg-white font-bold text-sm" value={editSchoolType} onChange={e => { 
+                                        setEditSchoolType(e.target.value); 
+                                        const typeK = getSchoolTypeKorean(e.target.value);
+                                        const newSubjs = getAvailableSubjects(typeK, editExamForm.year, editExamForm.grade, activeDepartments);
+                                        setEditExamForm({...editExamForm, schoolName: '', subject: newSubjs[0]||''}); 
+                                        setIsEditCustom(false); 
+                                    }}>
                                         <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
                                     </select>
                                     
@@ -681,31 +765,61 @@ const ExamArchive = ({ currentUser }) => {
                             </div>
 
                             <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
-                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={editExamForm.grade} onChange={e => setEditExamForm({...editExamForm, grade: e.target.value})}>
-                                    {getGradeOptions(editSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
-                                </select>
-                            </div>
-                            <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-700 mb-1">과목</label>
-                                <input className="w-full border-2 p-2.5 rounded-xl focus:border-blue-400 outline-none bg-gray-50 font-bold" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})}/>
-                            </div>
-                            
-                            <div className="col-span-1">
                                 <label className="block text-xs font-bold text-gray-700 mb-1">연도</label>
-                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold outline-none focus:border-blue-400" value={editExamForm.year} onChange={e => setEditExamForm({...editExamForm, year: e.target.value})}>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold outline-none focus:border-blue-400" value={editExamForm.year} onChange={e => {
+                                    const newY = e.target.value; const typeK = getSchoolTypeKorean(editSchoolType);
+                                    const newSubjs = getAvailableSubjects(typeK, newY, editExamForm.grade, activeDepartments);
+                                    setEditExamForm({...editExamForm, year: newY, subject: newSubjs[0]||''});
+                                }}>
                                     {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
                                 </select>
                             </div>
+
+                            <div className="col-span-1">
+                                <label className="block text-xs font-bold text-gray-700 mb-1">학년</label>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold outline-none focus:border-blue-400" value={editExamForm.grade} onChange={e => {
+                                    const newG = e.target.value; const typeK = getSchoolTypeKorean(editSchoolType);
+                                    const newSubjs = getAvailableSubjects(typeK, editExamForm.year, newG, activeDepartments);
+                                    setEditExamForm({...editExamForm, grade: newG, subject: newSubjs[0]||''});
+                                }}>
+                                    {getGradeOptions(editSchoolType).map(g => <option key={g} value={g}>{g}</option>)}
+                                </select>
+                            </div>
                             
                             <div className="col-span-1">
-                                <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 시험</label>
-                                <select className="w-full border-2 p-2.5 rounded-xl bg-gray-50 font-bold text-sm outline-none focus:border-blue-400" value={editExamForm.combinedTerm} onChange={e => setEditExamForm({...editExamForm, combinedTerm: e.target.value})}>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 고사</label>
+                                <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold text-sm outline-none focus:border-blue-400" value={editExamForm.combinedTerm} onChange={e => setEditExamForm({...editExamForm, combinedTerm: e.target.value})}>
                                     <option value="1학기 중간고사">1학기 중간고사</option>
                                     <option value="1학기 기말고사">1학기 기말고사</option>
                                     <option value="2학기 중간고사">2학기 중간고사</option>
                                     <option value="2학기 기말고사">2학기 기말고사</option>
                                 </select>
+                            </div>
+
+                            {/* 🚀 시공간 엔진 연동 과목 드롭다운 */}
+                            <div className="col-span-1 md:col-span-2">
+                                <div className="flex justify-between items-center mb-1.5">
+                                    <label className="block text-xs md:text-sm font-bold text-indigo-700">과목 (자동 필터링됨)</label>
+                                    <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer hover:text-indigo-600">
+                                        <input type="checkbox" checked={isEditManualSubject} onChange={(e) => setIsEditManualSubject(e.target.checked)} className="accent-indigo-600"/> 예외 과목 수동 입력
+                                    </label>
+                                </div>
+                                
+                                {!isEditManualSubject ? (
+                                    <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})}>
+                                        {(dynamicEditSubjects || []).map(s => <option key={s} value={s}>{s}</option>)}
+                                        <option disabled>──────────</option>
+                                        <option value="기타(수동입력)">기타 (체크박스 활성화 요망)</option>
+                                    </select>
+                                ) : (
+                                    <div className="flex gap-2">
+                                        <input type="text" className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold focus:ring-2 focus:ring-red-300" placeholder="과목명 직접 입력" value={editExamForm.subject} onChange={e => setEditExamForm({...editExamForm, subject: e.target.value})} />
+                                        <select className="w-1/2 border-2 border-red-200 p-2.5 rounded-lg text-sm outline-none font-bold bg-red-50 text-red-900" value={editExamForm.standardCode || ''} onChange={e => setEditExamForm({...editExamForm, standardCode: e.target.value})}>
+                                            <option value="">표준 코드 선택 (필수)</option>
+                                            {(STANDARD_CODES || []).map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                                        </select>
+                                    </div>
+                                )}
                             </div>
                         </div>
 
