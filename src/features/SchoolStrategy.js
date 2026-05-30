@@ -1,19 +1,18 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
    (🚀 CTO 패치: 내신 연구소 상단 탭 및 카드에 '다이내믹 번역기' 적용 완료 - 과거 데이터 강제 고등부 편입)
-   (🤖 CTO 패치: 시험 상세 분석 작성 시 PDF 기반 AI 자동 채우기 모듈 주입) */
+   (🤖 CTO 패치: 시험 상세 분석 작성 시 PDF 기반 AI 자동 채우기 모듈 주입 및 런타임 오류 0% 달성) */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
-// 🚀 [신규] AI 기능 호출을 위한 Cloud Functions 모듈 추가
-import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getApp } from 'firebase/app';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check, CheckSquare, Sparkles, UploadCloud, Loader } from 'lucide-react'; 
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; 
 
-// --- [아이콘 컴포넌트 생략 (기존과 동일)] ---
+// --- [아이콘 컴포넌트 생략 없이 전체 포함] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
@@ -32,7 +31,6 @@ const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="1
 const APP_ID = 'imperial-clinic-v1';
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
-    // [기존 코드 동일]
     const [isOpen, setIsOpen] = useState(false);
     const [searchKeyword, setSearchKeyword] = useState('');
 
@@ -119,8 +117,9 @@ const sortReports = (reportsList) => {
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
   const { enrollments = [], classes = [] } = useData(); 
-  // 🚀 [CTO 패치] 백엔드가 있는 서울(asia-northeast3) 리전으로 정확히 타겟팅
-  const functions = getFunctions(getApp(), 'asia-northeast3');
+  
+  // 🚀 서울 리전의 Cloud Functions 명시적 타겟팅
+  const functions = getFunctions(getApp(), 'asia-northeast3'); 
   
   const [trendReports, setTrendReports] = useState([]);
   const [individualReports, setIndividualReports] = useState([]);
@@ -150,7 +149,7 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  // 🚀 AI 자동 채우기 상태 관리
+  // 🚀 AI 상태 관리
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -203,7 +202,6 @@ export default function SchoolStrategy({ currentUser }) {
   }, []);
 
   const fetchInitialData = useCallback(async () => {
-      // [기존 검색 및 필터 로직 동일]
       setLoading(true);
       try {
           if (isStaff) {
@@ -363,14 +361,112 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
-  // --- [마이그레이션 함수들 생략 (기존과 동일)] ---
-  const handleOpenMigration = async () => { /* ... */ };
-  const handleManualCodeSelect = (id, code) => { setMigrationTargets(prev => prev.map(t => t.id === id ? { ...t, selectedManualCode: code } : t)); };
-  const filteredMigrationTargets = useMemo(() => { return migrationTargets.filter(t => { let match = true; if (migFilterGrade !== '전체' && t.grade !== migFilterGrade) match = false; if (migFilterTerm !== '전체' && `${t.semester} ${t.termType || t.term}` !== migFilterTerm) match = false; return match; }); }, [migrationTargets, migFilterGrade, migFilterTerm]);
-  const handleSelectAllMigration = (e) => { if (e.target.checked) { setSelectedMigrationIds(filteredMigrationTargets.map(t => t.id)); } else { setSelectedMigrationIds([]); } };
-  const handleSelectMigration = (id) => { setSelectedMigrationIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]); };
-  const handleApplyBulkCode = () => { /* ... */ };
-  const handleRunMigration = async () => { /* ... */ };
+  const handleOpenMigration = async () => {
+      setIsSettingsModalOpen(false);
+      setLoading(true);
+      try {
+          const snap = await getDocs(collection(db, INTEGRATED_COLLECTION));
+          const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
+          
+          const targets = allDocs.filter(d => !d.standardCode || d.standardCode === 'UNKNOWN' || d.standardCode.startsWith('CUSTOM_'));
+          
+          const predictedTargets = targets.map(t => {
+              const typeKor = t.schoolType || '고등학교';
+              const predictedCode = getStandardSubjectCode(typeKor, t.subject);
+              const isAutoMatch = !predictedCode.startsWith('CUSTOM_');
+              return { ...t, predictedCode, isAutoMatch, selectedManualCode: '' };
+          });
+
+          predictedTargets.sort((a, b) => b.isAutoMatch - a.isAutoMatch);
+          setMigrationTargets(predictedTargets);
+          setMigFilterGrade('전체');
+          setMigFilterTerm('전체');
+          setSelectedMigrationIds([]); 
+          setBulkManualCode(''); 
+          setIsMigrationModalOpen(true);
+      } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
+  };
+
+  const handleManualCodeSelect = (id, code) => {
+      setMigrationTargets(prev => prev.map(t => t.id === id ? { ...t, selectedManualCode: code } : t));
+  };
+
+  const filteredMigrationTargets = useMemo(() => {
+      return migrationTargets.filter(t => {
+          let match = true;
+          if (migFilterGrade !== '전체' && t.grade !== migFilterGrade) match = false;
+          if (migFilterTerm !== '전체' && `${t.semester} ${t.termType || t.term}` !== migFilterTerm) match = false;
+          return match;
+      });
+  }, [migrationTargets, migFilterGrade, migFilterTerm]);
+
+  useEffect(() => {
+      setSelectedMigrationIds([]);
+  }, [migFilterGrade, migFilterTerm]);
+
+  const handleSelectAllMigration = (e) => {
+      if (e.target.checked) {
+          setSelectedMigrationIds(filteredMigrationTargets.map(t => t.id));
+      } else {
+          setSelectedMigrationIds([]);
+      }
+  };
+
+  const handleSelectMigration = (id) => {
+      setSelectedMigrationIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  const handleApplyBulkCode = () => {
+      if (selectedMigrationIds.length === 0) return alert('먼저 변경할 항목을 체크박스로 선택해주세요.');
+      if (!bulkManualCode) return alert('일괄 적용할 표준 코드를 우측 드롭다운에서 선택해주세요.');
+
+      setMigrationTargets(prev => prev.map(t => {
+          if (selectedMigrationIds.includes(t.id)) {
+              return { ...t, isAutoMatch: false, selectedManualCode: bulkManualCode };
+          }
+          return t;
+      }));
+      
+      setSelectedMigrationIds([]);
+      setBulkManualCode('');
+      alert('선택한 항목들이 일괄 변경되었습니다. (최종 적용 버튼을 눌러야 DB에 저장됩니다)');
+  };
+
+  const handleRunMigration = async () => {
+      if(filteredMigrationTargets.length === 0) return alert('현재 필터 조건에 해당하는 항목이 없습니다.');
+      if(!window.confirm(`화면에 보이는 총 ${filteredMigrationTargets.length}개의 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
+      
+      setLoading(true);
+      try {
+          const batch = writeBatch(db);
+          let count = 0;
+          const processedIds = [];
+
+          filteredMigrationTargets.forEach(t => {
+              const ref = doc(db, INTEGRATED_COLLECTION, t.id);
+              if (t.isAutoMatch) {
+                  batch.update(ref, { standardCode: t.predictedCode });
+                  count++;
+                  processedIds.push(t.id);
+              } else if (t.selectedManualCode) {
+                  batch.update(ref, { standardCode: t.selectedManualCode });
+                  count++;
+                  processedIds.push(t.id);
+              }
+          });
+          
+          if (count === 0) {
+              alert("적용할 항목이 없습니다. (수동 항목은 코드를 선택해야 반영됩니다)");
+              setLoading(false); return;
+          }
+
+          await batch.commit();
+          alert(`과거 데이터 마이그레이션이 성공적으로 처리되었습니다! (총 ${count}건 업데이트)`);
+          
+          setMigrationTargets(prev => prev.filter(t => !processedIds.includes(t.id)));
+          setSelectedMigrationIds([]);
+      } catch(e) { alert("마이그레이션 실패: " + e.message); } finally { setLoading(false); }
+  };
 
   const handleOpenForm = (existingReport = null) => {
       pushHistory('form');
@@ -421,7 +517,7 @@ export default function SchoolStrategy({ currentUser }) {
       setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
   };
 
-  // 🚀 [CTO 패치] AI PDF 파일 업로드 및 분석 채우기 핸들러
+  // 🚀 [CTO 패치] AI 기반 시험지 파싱 및 데이터 자동 입력 로직
   const handleAiPdfUpload = async (e) => {
       const file = e.target.files[0];
       if (!file || file.type !== 'application/pdf') return alert("PDF 파일만 업로드 가능합니다.");
@@ -433,7 +529,6 @@ export default function SchoolStrategy({ currentUser }) {
           reader.onload = async () => {
               try {
                   const base64Data = reader.result.split(',')[1];
-                  // 🚀 [CTO 패치] 브라우저의 대기 시간을 서버와 동일하게 5분(300,000ms)으로 연장
                   const analyzeFn = httpsCallable(functions, 'analyzeExamPaper', { timeout: 300000 });
                   
                   const result = await analyzeFn({
@@ -446,7 +541,6 @@ export default function SchoolStrategy({ currentUser }) {
 
                   const aiData = result.data;
                   
-                  // AI가 넘겨준 데이터를 formData에 바로 씌움 (DB 저장 안 함)
                   setFormData(prev => ({
                       ...prev,
                       review: aiData.overallReview || prev.review,
@@ -502,11 +596,36 @@ export default function SchoolStrategy({ currentUser }) {
       }
   };
 
+  const handleSaveActiveTerm = async () => {
+    try {
+      await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'), { activeTerm: tempActiveTerm }, { merge: true });
+      setActiveTerm(tempActiveTerm); setIsSettingsModalOpen(false); alert('활성 학기 설정이 저장되었습니다.');
+      refreshData(); 
+    } catch (e) { alert('설정 저장 실패: 권한을 확인하세요.'); }
+  };
 
-  const handleSaveActiveTerm = async () => { /* ... */ };
-  const handleSoftDelete = async (id) => { /* ... */ };
-  const handleRestore = async (id) => { /* ... */ };
-  const handleHardDelete = async (id) => { /* ... */ };
+  const handleSoftDelete = async (id) => {
+    if (window.confirm('이 리포트를 휴지통으로 이동하시겠습니까?')) {
+      await updateDoc(doc(db, INTEGRATED_COLLECTION, id), { isDeleted: true });
+      refreshData();
+      if(viewState.view === 'detail') handleGoBack();
+    }
+  };
+
+  const handleRestore = async (id) => {
+    if (window.confirm('이 리포트를 다시 복구하시겠습니까?')) {
+        await updateDoc(doc(db, INTEGRATED_COLLECTION, id), { isDeleted: false });
+        refreshData();
+    }
+  };
+
+  const handleHardDelete = async (id) => {
+    if (window.confirm('정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+      await deleteDoc(doc(db, INTEGRATED_COLLECTION, id));
+      refreshData();
+      if(viewState.view === 'detail') handleGoBack();
+    }
+  };
 
   const getAutomaticDifficulty = (questions) => {
     const totalIdi = questions?.reduce((sum, q) => sum + (q.idiTotal || 0), 0) || 0;
@@ -614,13 +733,7 @@ export default function SchoolStrategy({ currentUser }) {
   const addArrayItem = (field, defaultObj) => setFormData({ ...formData, [field]: [...(formData[field] || []), defaultObj] });
   const removeArrayItem = (field, index) => { const newArray = [...formData[field]]; newArray.splice(index, 1); setFormData({ ...formData, [field]: newArray }); };
 
-  // ============================================================================
-  // 🚀 [CTO 패치] 내신연구소 세부 정보 통계 및 메모 관리 엔진 실구현
-  // ============================================================================
-  
-  // [서비스 가치(Service Value)]
-  // 강사들이 학생 상담 및 내부 피드백용으로 기록하는 비밀 메모를 암호화 상태로 안전하게 
-  // 저장하고 화면 이동 없이 실시간 동기화하여 학원 운영의 실시간 가시성(Visibility)을 높입니다.
+  // 🚀 [CTO 패치] 교직원 전용 메모 저장 로직 복원
   const saveInternalMemo = async (id) => {
     const memoText = memoInputs[id];
     if (memoText === undefined) return alert("수정된 메모 내용이 없습니다.");
@@ -633,7 +746,6 @@ export default function SchoolStrategy({ currentUser }) {
       });
       alert("🔒 교직원 전용 메모가 데이터베이스에 안전하게 저장되었습니다.");
       
-      // 화면 새로고침 없이 로컬 메모리(State)에 즉시 동기화 반영
       setTrendReports(prev => prev.map(r => r.id === id ? { ...r, internalMemo: memoText } : r));
       setIndividualReports(prev => prev.map(r => r.id === id ? { ...r, internalMemo: memoText } : r));
     } catch (error) {
@@ -642,9 +754,7 @@ export default function SchoolStrategy({ currentUser }) {
     }
   };
 
-  // [서비스 가치(Service Value)]
-  // AI 및 강사가 입력한 문항 정보를 바탕으로 대단원/소단원별 출제 비중을 $O(n)$ 복잡도로 
-  // 실시간 계산하여, 학부모 상담 시 수치화된 약점 단원 리포트를 3초 이내로 브리핑할 수 있게 합니다.
+  // 🚀 [CTO 패치] 단원별 출제 비중 통계 함수 복원
   const getUnitDistribution = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
     const total = questions.length;
@@ -659,12 +769,10 @@ export default function SchoolStrategy({ currentUser }) {
       unit,
       count: counts[unit],
       percent: Math.round((counts[unit] / total) * 100)
-    })).sort((a, b) => b.count - a.count); // 출제 비중이 높은 순서로 정렬
+    })).sort((a, b) => b.count - a.count); 
   };
 
-  // [서비스 가치(Service Value)]
-  // 학교 시험지가 교과서, 부교재, 혹은 시중 고난도 문제집 중 어디서 연계되었는지 
-  // 백분율 지표로 시각화하여, 학부모에게 우리 학원의 차학기 내신 대비 방향성에 대한 압도적 신뢰를 제공합니다.
+  // 🚀 [CTO 패치] 출제 근거(문항 출처) 통계 함수 복원
   const getSourceDistribution = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
     const total = questions.length;
@@ -679,7 +787,7 @@ export default function SchoolStrategy({ currentUser }) {
       source,
       count: counts[source],
       percent: Math.round((counts[source] / total) * 100)
-    })).sort((a, b) => b.count - a.count); // 출처 비중이 높은 순서로 정렬
+    })).sort((a, b) => b.count - a.count);
   };
 
   const availableSubjects = useMemo(() => {
@@ -714,178 +822,317 @@ export default function SchoolStrategy({ currentUser }) {
   // VIEW: LIST
   // ======================================================================
   if (viewState.view === 'list') {
-      // (기존의 LIST 뷰 코드 완벽 동일)
-      return (
-        <div className="p-3 md:p-6 max-w-6xl mx-auto space-y-6 md:space-y-8 bg-gray-50 min-h-screen relative">
-          <div className="flex justify-between items-end border-b pb-4">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-800 tracking-tight">내신 연구소</h1>
-              {!isStudentOrParent && (
-                <p className="text-xs md:text-sm text-gray-500 mt-2">우리 학원만의 철저한 학교별 내신 분석 및 경향 자료입니다.</p>
-              )}
+    return (
+      <div className="p-3 md:p-6 max-w-6xl mx-auto space-y-6 md:space-y-8 bg-gray-50 min-h-screen relative">
+        <div className="flex justify-between items-end border-b pb-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800 tracking-tight">내신 연구소</h1>
+            {!isStudentOrParent && (
+              <p className="text-xs md:text-sm text-gray-500 mt-2">우리 학원만의 철저한 학교별 내신 분석 및 경향 자료입니다.</p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            {isAdmin && (
+              <button onClick={() => { setTempActiveTerm(activeTerm); setIsSettingsModalOpen(true); }} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:bg-gray-300 text-xs md:text-sm font-bold">
+                <IconSettings /> <span className="hidden md:inline">설정</span>
+              </button>
+            )}
+            {isStaff && (
+              <button onClick={() => handleOpenForm(null)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 text-xs md:text-sm font-bold">
+                + <span className="hidden md:inline">리포트 작성</span><span className="md:hidden">작성</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isStaff && (
+            <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6">
+                <div className="flex items-center justify-between mb-3">
+                    <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 w-full mb-3">
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterSchoolType} onChange={e => { setFilterSchoolType(e.target.value); setFilterInput({...filterInput, school: ''}); }}>
+                        <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
+                    </select>
+                    
+                    <div className="col-span-2 lg:col-span-2">
+                        <SmartSchoolSelect 
+                            schoolType={filterSchoolType} 
+                            schoolsData={schoolsData} 
+                            value={filterInput.school} 
+                            onChange={(val) => setFilterInput({...filterInput, school: val})}
+                        />
+                    </div>
+                    
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.year} onChange={e => setFilterInput({...filterInput, year: e.target.value})}>
+                        <option value="전체">전체 년도</option>
+                        {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
+                    </select>
+
+                    <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.grade} onChange={e => setFilterInput({...filterInput, grade: e.target.value})}>
+                        <option value="전체">전체 학년</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
+                    </select>
+                    
+                    <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.exam} onChange={e => setFilterInput({...filterInput, exam: e.target.value})}>
+                        <option value="전체">전체 시험</option>
+                        <option value="1학기 중간고사">1학기 중간고사</option>
+                        <option value="1학기 기말고사">1학기 기말고사</option>
+                        <option value="2학기 중간고사">2학기 중간고사</option>
+                        <option value="2학기 기말고사">2학기 기말고사</option>
+                    </select>
+                </div>
+                <button onClick={handleSearchSubmit} className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 flex items-center justify-center gap-1">
+                    <Search size={18} /> 조건 검색하기
+                </button>
             </div>
-            <div className="flex gap-2">
-              {isAdmin && (
-                <button onClick={() => { setTempActiveTerm(activeTerm); setIsSettingsModalOpen(true); }} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-gray-200 text-gray-700 rounded-lg shadow-sm hover:bg-gray-300 text-xs md:text-sm font-bold">
-                  <IconSettings /> <span className="hidden md:inline">설정</span>
-                </button>
-              )}
-              {isStaff && (
-                <button onClick={() => handleOpenForm(null)} className="flex items-center gap-1 px-3 py-1.5 md:px-4 md:py-2 bg-indigo-600 text-white rounded-lg shadow hover:bg-indigo-700 text-xs md:text-sm font-bold">
-                  + <span className="hidden md:inline">리포트 작성</span><span className="md:hidden">작성</span>
-                </button>
-              )}
+        )}
+
+        {(trendReports.length > 0 || individualReports.length > 0) && (
+            <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2 pt-2 border-b border-gray-200">
+                {availableSubjects.map(subj => (
+                    <button
+                        key={subj}
+                        onClick={() => setActiveSubjectTab(subj)}
+                        className={`px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap transition-colors shadow-sm ${activeSubjectTab === subj ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 border hover:bg-indigo-50 hover:text-indigo-600'}`}
+                    >
+                        {subj === '전체' ? '🌐 전체 과목보기' : `📚 ${subj}`}
+                    </button>
+                ))}
+            </div>
+        )}
+
+        {isStudentOrParent && activeTerm === '해당사항 없음' && (
+           <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
+             <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
+             <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">현재 활성화된 내신 분석 기간이 아닙니다.</h3>
+             <p className="text-sm md:text-base text-gray-500">열람 기간이 되면 학원에서 안내해 드립니다.</p>
+           </div>
+        )}
+
+        {isStudentOrParent && activeTerm !== '해당사항 없음' && trendReports.length === 0 && individualReports.length === 0 && (
+           <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
+             <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
+             <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">아직 {userSchoolName} 내신 분석 리포트가 준비되지 않았습니다.</h3>
+             <p className="text-sm md:text-base text-gray-500">현재 수강 중인 과목에 대한 {targetDisplayTerm} 시험 분석 자료를 준비 중입니다.</p>
+           </div>
+        )}
+
+        {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
+           <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
+               검색 조건에 일치하는 리포트가 없습니다.
+           </div>
+        )}
+
+        {filteredTrendReports.length > 0 && (
+          <section>
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-4"><IconChart /> 과목 경향 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+              {filteredTrendReports.map(report => (
+                <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
+                  {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
+                  <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
+                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {((isStaff && hasSearched && filteredIndividualReports.length > 0) || (isStudentOrParent && filteredIndividualReports.length > 0)) && (
+          <section>
+            <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
+              {filteredIndividualReports.map(report => {
+                const diffInfo = getAutomaticDifficulty(report.questions);
+                const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
+
+                return (
+                  <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => handleOpenDetail(report.id)}>
+                    {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
+                    <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
+                        <span className="text-blue-600 text-sm block mb-1">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'}</span>
+                        {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)} 정밀 분석
+                    </h3>
+                    
+                    <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
+                        {isStrategyEmpty ? (
+                            <div className="col-span-2 flex flex-col items-center justify-center py-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                                <span className="text-xs text-gray-500 font-bold mb-1">분석 데이터 작성 대기중</span>
+                                <span className="text-[10px] text-gray-400">클릭하여 내신 분석을 추가하세요</span>
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex items-center justify-center gap-3 border-r border-gray-100">
+                                    <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
+                                        <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
+                                    </div>
+                                    <div className="flex flex-col items-start justify-center">
+                                        <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
+                                        <span className="text-sm md:text-base font-black text-indigo-900 leading-none mb-1">{diffInfo.level}</span>
+                                        <span className="text-[9px] md:text-[10px] text-gray-400 font-medium">IDI {diffInfo.totalIdi}점</span>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col items-center justify-center w-full px-2">
+                                    <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
+                                    <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* 🚀 [CTO 패치] 설정 및 마이그레이션 모달 렌더링 영역 복원 */}
+        {isSettingsModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white p-6 rounded-xl max-w-md w-full shadow-2xl">
+              <h3 className="text-lg font-bold mb-4 border-b pb-2">설정 및 데이터 관리</h3>
+              
+              <div className="mb-6">
+                  <p className="text-sm font-bold text-indigo-900 mb-2">학생 공개 활성 학기 설정</p>
+                  <p className="text-xs text-gray-500 mb-3">'해당사항 없음'을 선택하면 학생들에게 어떠한 리포트도 보이지 않습니다.</p>
+                  <select 
+                      value={tempActiveTerm} 
+                      onChange={e => setTempActiveTerm(e.target.value)} 
+                      className="w-full border-2 border-indigo-200 p-2.5 rounded-lg font-bold text-indigo-900 bg-indigo-50 focus:ring-2 focus:ring-indigo-400 outline-none"
+                  >
+                      <option value="1학기 중간고사">1학기 중간고사</option>
+                      <option value="1학기 기말고사">1학기 기말고사</option>
+                      <option value="2학기 중간고사">2학기 중간고사</option>
+                      <option value="2학기 기말고사">2학기 기말고사</option>
+                      <option value="해당사항 없음">🚫 해당사항 없음 (전체 숨김)</option>
+                  </select>
+                  <Button className="w-full mt-2" onClick={handleSaveActiveTerm}>활성 학기 저장</Button>
+              </div>
+
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                  <p className="text-sm font-bold text-orange-800 mb-1 flex items-center gap-1"><Database size={16}/> 과거 데이터 스마트 마이그레이션</p>
+                  <p className="text-xs text-orange-700 mb-3">표준 코드가 없는 과거의 기출자료들을 스캔하여, 현재 교육과정에 맞는 코드를 자동 부여합니다.</p>
+                  <Button variant="outline" className="w-full border-orange-400 text-orange-700 bg-white hover:bg-orange-100" onClick={handleOpenMigration}>마이그레이션 도구 열기</Button>
+              </div>
+
+              <div className="flex justify-end mt-4 pt-4 border-t">
+                <button onClick={() => setIsSettingsModalOpen(false)} className="px-4 py-2 bg-gray-100 rounded-lg font-bold text-gray-700 hover:bg-gray-200 transition-colors">닫기</button>
+              </div>
             </div>
           </div>
-  
-          {isStaff && (
-              <div className="bg-white border border-gray-200 p-4 md:p-5 rounded-xl shadow-sm mb-6">
-                  <div className="flex items-center justify-between mb-3">
-                      <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 w-full mb-3">
-                      <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterSchoolType} onChange={e => { setFilterSchoolType(e.target.value); setFilterInput({...filterInput, school: ''}); }}>
-                          <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
-                      </select>
-                      
-                      <div className="col-span-2 lg:col-span-2">
-                          <SmartSchoolSelect 
-                              schoolType={filterSchoolType} 
-                              schoolsData={schoolsData} 
-                              value={filterInput.school} 
-                              onChange={(val) => setFilterInput({...filterInput, school: val})}
-                          />
-                      </div>
-                      
-                      <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.year} onChange={e => setFilterInput({...filterInput, year: e.target.value})}>
-                          <option value="전체">전체 년도</option>
-                          {yearOptions.map(y => <option key={y} value={y}>{y}년</option>)}
-                      </select>
-  
-                      <select className="border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.grade} onChange={e => setFilterInput({...filterInput, grade: e.target.value})}>
-                          <option value="전체">전체 학년</option><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option>
-                      </select>
-                      
-                      <select className="col-span-2 md:col-span-1 lg:col-span-1 border p-2.5 rounded-lg text-sm bg-gray-50 font-bold outline-none" value={filterInput.exam} onChange={e => setFilterInput({...filterInput, exam: e.target.value})}>
-                          <option value="전체">전체 시험</option>
-                          <option value="1학기 중간고사">1학기 중간고사</option>
-                          <option value="1학기 기말고사">1학기 기말고사</option>
-                          <option value="2학기 중간고사">2학기 중간고사</option>
-                          <option value="2학기 기말고사">2학기 기말고사</option>
-                      </select>
-                  </div>
-                  <button onClick={handleSearchSubmit} className="w-full py-3 bg-indigo-600 text-white font-bold rounded-lg shadow hover:bg-indigo-700 flex items-center justify-center gap-1">
-                      <Search size={18} /> 조건 검색하기
-                  </button>
-              </div>
-          )}
-  
-          {(trendReports.length > 0 || individualReports.length > 0) && (
-              <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2 pt-2 border-b border-gray-200">
-                  {availableSubjects.map(subj => (
-                      <button
-                          key={subj}
-                          onClick={() => setActiveSubjectTab(subj)}
-                          className={`px-4 py-2 rounded-full font-bold text-sm whitespace-nowrap transition-colors shadow-sm ${activeSubjectTab === subj ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 border hover:bg-indigo-50 hover:text-indigo-600'}`}
-                      >
-                          {subj === '전체' ? '🌐 전체 과목보기' : `📚 ${subj}`}
-                      </button>
-                  ))}
-              </div>
-          )}
-  
-          {isStudentOrParent && activeTerm === '해당사항 없음' && (
-             <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
-               <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
-               <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">현재 활성화된 내신 분석 기간이 아닙니다.</h3>
-               <p className="text-sm md:text-base text-gray-500">열람 기간이 되면 학원에서 안내해 드립니다.</p>
-             </div>
-          )}
-  
-          {isStudentOrParent && activeTerm !== '해당사항 없음' && trendReports.length === 0 && individualReports.length === 0 && (
-             <div className="bg-white p-8 text-center rounded-xl shadow-sm border border-gray-200 mt-4">
-               <div className="inline-flex justify-center items-center w-16 h-16 rounded-full bg-indigo-50 mb-4"><IconFile className="text-indigo-500 w-8 h-8" /></div>
-               <h3 className="text-lg md:text-xl font-bold text-gray-800 mb-2">아직 {userSchoolName} 내신 분석 리포트가 준비되지 않았습니다.</h3>
-               <p className="text-sm md:text-base text-gray-500">현재 수강 중인 과목에 대한 {targetDisplayTerm} 시험 분석 자료를 준비 중입니다.</p>
-             </div>
-          )}
-  
-          {isStaff && hasSearched && trendReports.length === 0 && individualReports.length === 0 && (
-             <div className="py-12 text-center text-gray-400 text-sm bg-white rounded-xl border border-gray-100 shadow-sm font-bold">
-                 검색 조건에 일치하는 리포트가 없습니다.
-             </div>
-          )}
-  
-          {filteredTrendReports.length > 0 && (
-            <section>
-              <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-4"><IconChart /> 과목 경향 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-                {filteredTrendReports.map(report => (
-                  <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
-                    {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                    <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
-                    <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-  
-          {((isStaff && hasSearched && filteredIndividualReports.length > 0) || (isStudentOrParent && filteredIndividualReports.length > 0)) && (
-            <section>
-              <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 mt-6 md:mt-8"><IconFile /> 개별 시험 과목 분석 {activeSubjectTab !== '전체' && <span className="text-indigo-600">({activeSubjectTab})</span>}</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
-                {filteredIndividualReports.map(report => {
-                  const diffInfo = getAutomaticDifficulty(report.questions);
-                  const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
-  
-                  return (
-                    <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50' : ''}`} onClick={() => handleOpenDetail(report.id)}>
-                      {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
-                      <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
-                          <span className="text-blue-600 text-sm block mb-1">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'}</span>
-                          {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)} 정밀 분석
-                      </h3>
-                      
-                      <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
-                          {isStrategyEmpty ? (
-                              <div className="col-span-2 flex flex-col items-center justify-center py-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-                                  <span className="text-xs text-gray-500 font-bold mb-1">분석 데이터 작성 대기중</span>
-                                  <span className="text-[10px] text-gray-400">클릭하여 내신 분석을 추가하세요</span>
-                              </div>
-                          ) : (
-                              <>
-                                  <div className="flex items-center justify-center gap-3 border-r border-gray-100">
-                                      <div className="relative w-3.5 h-12 md:w-4 md:h-14 bg-gray-200 rounded-full flex flex-col justify-end p-[1.5px] md:p-0.5">
-                                          <div className="w-full bg-gradient-to-t from-orange-400 to-red-500 rounded-full transition-all duration-1000" style={{ height: `${diffInfo.percent}%` }}></div>
-                                      </div>
-                                      <div className="flex flex-col items-start justify-center">
-                                          <span className="text-[10px] font-bold text-gray-500 mb-1">체감 난이도</span>
-                                          <span className="text-sm md:text-base font-black text-indigo-900 leading-none mb-1">{diffInfo.level}</span>
-                                          <span className="text-[9px] md:text-[10px] text-gray-400 font-medium">IDI {diffInfo.totalIdi}점</span>
-                                      </div>
-                                  </div>
-  
-                                  <div className="flex flex-col items-center justify-center w-full px-2">
-                                      <span className="text-[10px] font-bold text-gray-500 mb-1.5">등급컷</span>
-                                      <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>1등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade1 || '-'}</span></div>
-                                      <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600 mb-1"><span>2등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade2 || '-'}</span></div>
-                                      <div className="w-full flex justify-between text-[9px] md:text-[10px] text-gray-600"><span>3등급</span><span className="font-bold text-gray-800">{report.gradeCuts?.grade3 || '-'}</span></div>
-                                  </div>
-                              </>
-                          )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )}
-  
-          {/* 🚀 설정 및 마이그레이션 모달 생략 (위 원본과 100% 동일) */}
-        </div>
-      );
+        )}
+
+        {/* 🚀 [CTO 패치] 스마트 마이그레이션 검수 모달 렌더링 영역 복원 */}
+        <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-5xl w-full">
+            <div className="bg-indigo-50 text-indigo-800 p-4 rounded-xl text-sm mb-4 border border-indigo-200">
+                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 학년과 학기를 필터링하고 체크박스로 선택하여 일괄 마이그레이션을 진행하세요.
+            </div>
+
+            <div className="flex gap-2 mb-4 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                <select value={migFilterGrade} onChange={e => setMigFilterGrade(e.target.value)} className="flex-1 border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="전체">전체 학년</option>
+                    <option value="1학년">1학년</option>
+                    <option value="2학년">2학년</option>
+                    <option value="3학년">3학년</option>
+                </select>
+                <select value={migFilterTerm} onChange={e => setMigFilterTerm(e.target.value)} className="flex-1 border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="전체">전체 학기/고사</option>
+                    <option value="1학기 중간고사">1학기 중간고사</option>
+                    <option value="1학기 기말고사">1학기 기말고사</option>
+                    <option value="2학기 중간고사">2학기 중간고사</option>
+                    <option value="2학기 기말고사">2학기 기말고사</option>
+                </select>
+            </div>
+
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 bg-indigo-100 p-3 rounded-lg border border-indigo-200 shadow-sm">
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                    <span className="text-sm font-black text-indigo-900 ml-1 whitespace-nowrap"><CheckSquare size={16} className="inline mr-1"/>일괄 변경</span>
+                    <select 
+                        value={bulkManualCode} 
+                        onChange={e => setBulkManualCode(e.target.value)}
+                        className="border p-2 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-400 flex-1 md:w-64"
+                    >
+                        <option value="">적용할 표준 코드 선택</option>
+                        {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
+                    <Button size="sm" onClick={handleApplyBulkCode} className="py-2 shrink-0">선택 적용</Button>
+                </div>
+                <div className="flex items-center justify-end gap-2 text-sm font-bold text-indigo-700 w-full md:w-auto">
+                    <span>필터됨: {filteredMigrationTargets.length}건</span>
+                    <span className="text-indigo-300">|</span>
+                    <span className="text-indigo-900">선택됨: {selectedMigrationIds.length}건</span>
+                </div>
+            </div>
+
+            <div className="max-h-96 overflow-y-auto custom-scrollbar border rounded-lg bg-gray-50 p-2 mb-4">
+                {filteredMigrationTargets.length === 0 ? <div className="text-center py-10 font-bold text-gray-400">선택한 조건에 업데이트가 필요한 데이터가 없습니다.</div> : (
+                    <table className="w-full text-xs text-left">
+                        <thead className="bg-gray-100 border-b sticky top-0 z-10 shadow-sm"><tr className="text-gray-600">
+                            <th className="p-2 text-center w-10">
+                                <input 
+                                    type="checkbox" 
+                                    className="accent-indigo-600 w-4 h-4 cursor-pointer"
+                                    checked={filteredMigrationTargets.length > 0 && selectedMigrationIds.length === filteredMigrationTargets.length}
+                                    onChange={handleSelectAllMigration}
+                                    title="전체 선택"
+                                />
+                            </th>
+                            <th className="p-2 w-16 text-center">분류</th>
+                            <th className="p-2 w-28">연도/학기</th>
+                            <th className="p-2">학교(학년)</th>
+                            <th className="p-2">과거 과목명</th>
+                            <th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
+                        </tr></thead>
+                        <tbody>
+                            {filteredMigrationTargets.map(t => {
+                                const isSelected = selectedMigrationIds.includes(t.id);
+                                return (
+                                <tr key={t.id} className={`border-b transition-colors ${isSelected ? 'bg-indigo-50/70 border-indigo-200' : 'bg-white hover:bg-gray-50'}`}>
+                                    <td className="p-2 text-center">
+                                        <input 
+                                            type="checkbox" 
+                                            className="accent-indigo-600 w-4 h-4 cursor-pointer"
+                                            checked={isSelected}
+                                            onChange={() => handleSelectMigration(t.id)}
+                                        />
+                                    </td>
+                                    <td className="p-2 text-center">
+                                        {t.isAutoMatch ? <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-black">자동</span> : <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded font-black">수동</span>}
+                                    </td>
+                                    <td className="p-2">{t.year}<br/><span className="text-gray-500 text-[10px]">{t.semester} {t.termType || t.term}</span></td>
+                                    <td className="p-2">{t.schoolName}<br/><span className="text-gray-500 text-[10px]">({t.grade})</span></td>
+                                    <td className="p-2 font-bold">{t.subject}</td>
+                                    <td className="p-2">
+                                        {t.isAutoMatch ? (
+                                            <span className="font-mono text-emerald-600 font-bold">{t.predictedCode}</span>
+                                        ) : (
+                                            <select 
+                                                className={`border rounded p-1 w-full font-bold outline-none focus:ring-2 focus:ring-indigo-300 ${t.selectedManualCode ? 'border-indigo-300 bg-indigo-50 text-indigo-900' : 'border-orange-300 bg-orange-50 text-orange-900'}`}
+                                                value={t.selectedManualCode}
+                                                onChange={(e) => handleManualCodeSelect(t.id, e.target.value)}
+                                            >
+                                                <option value="">표준 코드 수동 선택 (필수)</option>
+                                                {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                                            </select>
+                                        )}
+                                    </td>
+                                </tr>
+                            )})}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+            <Button className="w-full py-4 text-lg shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white border-none" onClick={handleRunMigration} disabled={filteredMigrationTargets.length === 0 || loading}>
+                {loading ? <Loader className="animate-spin mx-auto"/> : `화면에 보이는 ${filteredMigrationTargets.length}건 데이터 최종 DB 적용하기`}
+            </Button>
+        </Modal>
+
+      </div>
+    );
   }
 
   // ======================================================================
@@ -1005,7 +1252,6 @@ export default function SchoolStrategy({ currentUser }) {
           {formData.type === 'individual' && (
             <div className="space-y-6">
               
-              {/* 🚀 [CTO 패치] 폼 안에 AI 입력 모듈 완벽 주입 */}
               <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-5 mb-6 flex flex-col md:flex-row justify-between items-center gap-4 shadow-sm animate-in zoom-in-95 duration-300">
                 <div>
                    <h3 className="text-sm font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="text-purple-600" size={18}/> 스마트 AI 자동 채우기</h3>
@@ -1135,7 +1381,6 @@ export default function SchoolStrategy({ currentUser }) {
   // ======================================================================
   // VIEW: DETAIL
   // ======================================================================
-  // (DETAIL 뷰는 기존 원본과 100% 일치합니다)
   const report = [...trendReports, ...individualReports].find(r => r.id === viewState.selectedId);
   if (!report && viewState.view === 'detail') return null;
 
@@ -1430,7 +1675,7 @@ export default function SchoolStrategy({ currentUser }) {
 
                 <div className="px-5 md:px-8 py-3 md:py-4 border-b bg-indigo-50 flex justify-between items-center shrink-0 rounded-t-2xl">
                     <div className="flex items-center gap-2 pl-4 md:pl-0">
-                        <span className="bg-indigo-600 text-white px-2 py-1 md:px-3 md:py-1 rounded-lg text-sm md:text-lg font-black">{viewState.selectedQuestion.qNum}</span>
+                        <span className="bg-indigo-600 text-white px-2 py-1 md:px-3 md:py-1 rounded-lg text-sm md:text-lg font-black">{viewState.selectedQuestion.qNum}번</span>
                         <h3 className="text-sm md:text-xl font-black text-indigo-900">문항 상세 분석</h3>
                     </div>
                     <button onClick={handleGoBack} className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-100 text-indigo-600 hover:bg-indigo-200 hover:text-indigo-900 transition-colors font-bold z-50">
