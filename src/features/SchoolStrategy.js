@@ -5,6 +5,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
 // 🚀 [신규] AI 기능 호출을 위한 Cloud Functions 모듈 추가
+import { getApp } from 'firebase/app';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check, CheckSquare, Sparkles, UploadCloud, Loader } from 'lucide-react'; 
@@ -118,7 +119,8 @@ const sortReports = (reportsList) => {
 export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
   const { enrollments = [], classes = [] } = useData(); 
-  const functions = getFunctions(); // 🚀 AI 통신을 위한 함수 객체
+  // 🚀 [CTO 패치] 백엔드가 있는 서울(asia-northeast3) 리전으로 정확히 타겟팅
+  const functions = getFunctions(getApp(), 'asia-northeast3');
   
   const [trendReports, setTrendReports] = useState([]);
   const [individualReports, setIndividualReports] = useState([]);
