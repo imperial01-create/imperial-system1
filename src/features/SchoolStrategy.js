@@ -1,10 +1,10 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 렌더링 충돌(White Screen) 에러 완벽 해결 및 동적 과목 드롭다운 적용) */
+   (🚀 CTO 패치: 환경설정 부서 연동, 스마트 마이그레이션 센터(자동/수동 분리) 탑재) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database } from 'lucide-react'; 
+import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check } from 'lucide-react'; 
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
@@ -124,6 +124,10 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
+  // 🚀 설정에서 활성화된 부서 마스터 목록
+  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+
+  // 🚀 마이그레이션 센터 상태
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
 
@@ -148,20 +152,29 @@ export default function SchoolStrategy({ currentUser }) {
   const isAdmin = ['admin', 'admin_assistant'].includes(user.role);
   const isStudentOrParent = ['student', 'parent'].includes(user.role);
 
-  // 🚀 변수명 통일 (YEARS -> yearOptions)
   const currentYear = new Date().getFullYear();
   const yearOptions = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
   const [filterInput, setFilterInput] = useState({ year: '전체', school: '', grade: '전체', exam: '전체' });
 
   useEffect(() => {
-      const fetchSchools = async () => {
+      const fetchSettings = async () => {
           try {
-              const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
+              const docRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schools');
               const docSnap = await getDoc(docRef);
               if (docSnap.exists()) setSchoolsData(docSnap.data());
+
+              // 🚀 부서 마스터 불러오기
+              const deptSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments'));
+              if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
+
+              const stratSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
+              if (stratSnap.exists() && stratSnap.data().activeTerm) {
+                  setActiveTerm(stratSnap.data().activeTerm);
+                  setTempActiveTerm(stratSnap.data().activeTerm);
+              }
           } catch (e) {}
       };
-      fetchSchools();
+      fetchSettings();
   }, []);
 
   const getStudentDisplayTerm = useCallback((baseTerm, currentUserObj) => {
@@ -247,19 +260,6 @@ export default function SchoolStrategy({ currentUser }) {
           }
       } catch (e) { console.error(e); } finally { setLoading(false); }
   }, [isStaff, isStudentOrParent, user, activeTerm, getStudentTargetTerm, enrollments, classes]);
-
-  useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const docSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
-        if (docSnap.exists() && docSnap.data().activeTerm) {
-            setActiveTerm(docSnap.data().activeTerm);
-            setTempActiveTerm(docSnap.data().activeTerm);
-        }
-      } catch (e) {}
-    };
-    fetchSettings();
-  }, []);
 
   useEffect(() => { fetchInitialData(); }, [fetchInitialData]);
 
@@ -350,35 +350,60 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
+  // 🚀 스마트 마이그레이션 센터 스캔 엔진
   const handleOpenMigration = async () => {
       setIsSettingsModalOpen(false);
       setLoading(true);
       try {
           const snap = await getDocs(collection(db, INTEGRATED_COLLECTION));
           const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
-          const targets = allDocs.filter(d => !d.standardCode || d.standardCode === 'UNKNOWN');
+          
+          const targets = allDocs.filter(d => !d.standardCode || d.standardCode === 'UNKNOWN' || d.standardCode.startsWith('CUSTOM_'));
           
           const predictedTargets = targets.map(t => {
               const typeKor = t.schoolType || '고등학교';
               const predictedCode = getStandardSubjectCode(typeKor, t.subject);
-              return { ...t, predictedCode };
+              const isAutoMatch = !predictedCode.startsWith('CUSTOM_');
+              return { ...t, predictedCode, isAutoMatch, selectedManualCode: '' };
           });
+
+          // 자동과 수동을 분리 정렬 (자동이 위로)
+          predictedTargets.sort((a, b) => b.isAutoMatch - a.isAutoMatch);
+
           setMigrationTargets(predictedTargets);
           setIsMigrationModalOpen(true);
       } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
   };
 
+  const handleManualCodeSelect = (id, code) => {
+      setMigrationTargets(prev => prev.map(t => t.id === id ? { ...t, selectedManualCode: code } : t));
+  };
+
   const handleRunMigration = async () => {
-      if(!window.confirm(`총 ${migrationTargets.length}개의 과거 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
+      if(!window.confirm(`선택된 데이터들을 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
       setLoading(true);
       try {
           const batch = writeBatch(db);
+          let count = 0;
+
           migrationTargets.forEach(t => {
               const ref = doc(db, INTEGRATED_COLLECTION, t.id);
-              batch.update(ref, { standardCode: t.predictedCode || 'UNKNOWN' });
+              if (t.isAutoMatch) {
+                  batch.update(ref, { standardCode: t.predictedCode });
+                  count++;
+              } else if (t.selectedManualCode) {
+                  batch.update(ref, { standardCode: t.selectedManualCode });
+                  count++;
+              }
           });
+          
+          if (count === 0) {
+              alert("업데이트할 항목이 없습니다. (수동 항목은 코드를 선택해야 반영됩니다)");
+              setLoading(false); return;
+          }
+
           await batch.commit();
-          alert("과거 데이터 마이그레이션이 완벽하게 완료되었습니다!");
+          alert(`과거 데이터 마이그레이션이 완벽하게 완료되었습니다! (총 ${count}건 업데이트)`);
           setIsMigrationModalOpen(false);
           refreshData();
       } catch(e) { alert("마이그레이션 실패: " + e.message); } finally { setLoading(false); }
@@ -421,7 +446,7 @@ export default function SchoolStrategy({ currentUser }) {
           setFormSchoolType('high'); setIsFormCustomSchool(false); setIsManualSubject(false);
           
           const defaultYear = new Date().getFullYear().toString();
-          const defaultSubjects = getAvailableSubjects('고등학교', defaultYear, '1학년') || [];
+          const defaultSubjects = getAvailableSubjects('고등학교', defaultYear, '1학년', activeDepartments) || [];
           const initSubject = defaultSubjects.length > 0 ? defaultSubjects[0] : '';
           
           setFormData({ 
@@ -621,7 +646,7 @@ export default function SchoolStrategy({ currentUser }) {
   if (formData && viewState.view === 'form') {
       const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
       const gradeStr = formData.term ? formData.term.split(' ')[0] : '1학년';
-      dynamicSubjects = getAvailableSubjects(typeKor, formData.year, gradeStr) || [];
+      dynamicSubjects = getAvailableSubjects(typeKor, formData.year, gradeStr, activeDepartments) || [];
   }
 
   // ======================================================================
@@ -820,7 +845,7 @@ export default function SchoolStrategy({ currentUser }) {
               </div>
 
               <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
-                  <p className="text-sm font-bold text-orange-800 mb-1 flex items-center gap-1"><Database size={16}/> 과거 데이터 표준화 마이그레이션</p>
+                  <p className="text-sm font-bold text-orange-800 mb-1 flex items-center gap-1"><Database size={16}/> 과거 데이터 스마트 마이그레이션</p>
                   <p className="text-xs text-orange-700 mb-3">표준 코드가 없는 과거의 기출자료들을 스캔하여, 현재 교육과정에 맞는 코드를 자동 부여합니다.</p>
                   <Button variant="outline" className="w-full border-orange-400 text-orange-700 bg-white hover:bg-orange-100" onClick={handleOpenMigration}>마이그레이션 도구 열기</Button>
               </div>
@@ -832,21 +857,40 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         )}
 
-        {/* 🚀 마이그레이션 프리뷰 모달 */}
-        <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="과거 데이터 안전 마이그레이션 검수" className="max-w-3xl">
-            <div className="bg-yellow-50 text-yellow-800 p-4 rounded-xl text-sm mb-4 border border-yellow-200">
-                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 시공간 엔진이 예측한 코드를 확인 후 일괄 적용하세요.
+        {/* 🚀 스마트 마이그레이션 검수 모달 */}
+        <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-4xl w-full">
+            <div className="bg-indigo-50 text-indigo-800 p-4 rounded-xl text-sm mb-4 border border-indigo-200">
+                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 시공간 엔진이 자동 판별한 항목(초록색)과 수동 지정이 필요한 항목(주황색)을 확인 후 일괄 적용하세요.
             </div>
             <div className="max-h-96 overflow-y-auto custom-scrollbar border rounded-lg bg-gray-50 p-2 mb-4">
                 {migrationTargets.length === 0 ? <div className="text-center py-10 font-bold text-gray-400">업데이트가 필요한 과거 데이터가 없습니다.</div> : (
                     <table className="w-full text-xs text-left">
                         <thead className="bg-gray-100 border-b"><tr className="text-gray-600">
-                            <th className="p-2">연도</th><th className="p-2">학교/학년</th><th className="p-2">과거 과목명</th><th className="p-2 text-indigo-600">예측된 표준 코드</th>
+                            <th className="p-2">분류</th><th className="p-2">연도</th><th className="p-2">학교/학년</th><th className="p-2">과거 과목명</th><th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
                         </tr></thead>
                         <tbody>
                             {migrationTargets.map(t => (
                                 <tr key={t.id} className="border-b bg-white">
-                                    <td className="p-2">{t.year}</td><td className="p-2">{t.schoolName} ({t.grade})</td><td className="p-2 font-bold">{t.subject}</td><td className="p-2 font-mono text-indigo-600 bg-indigo-50 font-bold">{t.predictedCode}</td>
+                                    <td className="p-2 text-center">
+                                        {t.isAutoMatch ? <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-black">자동</span> : <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded font-black">수동</span>}
+                                    </td>
+                                    <td className="p-2">{t.year}</td>
+                                    <td className="p-2">{t.schoolName} ({t.grade})</td>
+                                    <td className="p-2 font-bold">{t.subject}</td>
+                                    <td className="p-2">
+                                        {t.isAutoMatch ? (
+                                            <span className="font-mono text-emerald-600 font-bold">{t.predictedCode}</span>
+                                        ) : (
+                                            <select 
+                                                className="border border-orange-300 bg-orange-50 text-orange-900 rounded p-1 w-full font-bold outline-none"
+                                                value={t.selectedManualCode}
+                                                onChange={(e) => handleManualCodeSelect(t.id, e.target.value)}
+                                            >
+                                                <option value="">표준 코드 수동 선택 (필수)</option>
+                                                {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                                            </select>
+                                        )}
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -895,7 +939,7 @@ export default function SchoolStrategy({ currentUser }) {
                   const newY = e.target.value; 
                   const gr = (formData.term || '').split(' ')[0] || '1학년'; 
                   const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
-                  const newSubjs = getAvailableSubjects(typeK, newY, gr) || [];
+                  const newSubjs = getAvailableSubjects(typeK, newY, gr, activeDepartments) || [];
                   setFormData({...formData, year: newY, subject: newSubjs[0]||''});
               }}>
                   {(yearOptions || []).map(y => <option key={y} value={y}>{y}년</option>)}
@@ -908,7 +952,7 @@ export default function SchoolStrategy({ currentUser }) {
                   <select className="w-1/3 border p-2.5 rounded-lg text-sm outline-none font-bold bg-white" value={formSchoolType} onChange={e => { 
                       const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[e.target.value] || '고등학교';
                       const gr = (formData.term || '').split(' ')[0] || '1학년';
-                      const newSubjs = getAvailableSubjects(typeK, formData.year, gr) || [];
+                      const newSubjs = getAvailableSubjects(typeK, formData.year, gr, activeDepartments) || [];
                       setFormSchoolType(e.target.value); 
                       setFormData({...formData, school: '', subject: newSubjs[0]||''}); 
                       setIsFormCustomSchool(false); 
@@ -938,7 +982,7 @@ export default function SchoolStrategy({ currentUser }) {
                   const newT = e.target.value; 
                   const gr = (newT || '').split(' ')[0] || '1학년'; 
                   const typeK = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
-                  const newSubjs = getAvailableSubjects(typeK, formData.year, gr) || [];
+                  const newSubjs = getAvailableSubjects(typeK, formData.year, gr, activeDepartments) || [];
                   setFormData({...formData, term: newT, subject: newSubjs[0]||''});
               }}>
                   {['1학년', '2학년', '3학년'].flatMap(g => 
@@ -957,7 +1001,6 @@ export default function SchoolStrategy({ currentUser }) {
                   </label>
               </div>
               
-              {/* 🚀 시공간 엔진 연동 동적 드롭다운 or 수동 입력 */}
               {!isManualSubject ? (
                   <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})}>
                       {(dynamicSubjects || []).map(s => <option key={s} value={s}>{s}</option>)}
