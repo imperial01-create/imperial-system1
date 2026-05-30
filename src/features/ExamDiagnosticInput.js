@@ -1,16 +1,14 @@
-// src/features/ExamDiagnosticInput.js
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-// 🚀 doc, updateDoc 추가 (DB 저장용)
-import { collection, getDocs, addDoc, serverTimestamp, query, where, doc, updateDoc } from 'firebase/firestore';
+/* [서비스 가치] 강사가 반 전체 학생의 시험 오답과 코멘트를 1분 만에 일괄 입력하여 AI 리포트를 생성합니다.
+   (🚀 CTO 패치: 글로벌 데이터 엔진 연결 및 시공간 과목 마스터 호환성 확보) */
+import React, { useState, useEffect, useMemo } from 'react';
+import { collection, getDocs, addDoc, serverTimestamp, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-// 🚀 클라우드 함수 호출 및 아이콘 추가
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { Save, AlertCircle, CheckCircle, Search, Users, Target, CheckSquare, Loader, UploadCloud, Sparkles, FileText } from 'lucide-react';
+import { Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckSquare, Loader } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { getDynamicSubjectLabel } from '../utils/subjectMapper'; // 🚀 번역기 로드
 
 export default function ExamDiagnosticInput({ currentUser }) {
   const { classes, users, loadingData } = useData();
-  const functions = getFunctions();
   
   const data = useMemo(() => ({
     classes: classes || [],
@@ -34,10 +32,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const [inputsByStudent, setInputsByStudent] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // === 🚀 [신규 기능] AI 시험지 분석 상태 관리 ===
-  const [aiAnalyzing, setAiAnalyzing] = useState(false);
-  const fileInputRef = useRef(null);
-
   const handleSearchExams = async () => {
     if (!filters.schoolName.trim()) {
       return alert("학교명을 입력해주세요. (예: 목동고, 목동 등 일부 입력 가능)");
@@ -58,7 +52,9 @@ export default function ExamDiagnosticInput({ currentUser }) {
       const snap = await getDocs(q);
       let results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      if (filters.year) results = results.filter(e => e.year === filters.year);
+      if (filters.year) {
+        results = results.filter(e => e.year === filters.year);
+      }
       if (filters.gradeSem) {
         const [gStr, sStr] = filters.gradeSem.split('-');
         const targetGrade = `${gStr}학년`;
@@ -70,75 +66,14 @@ export default function ExamDiagnosticInput({ currentUser }) {
       }
 
       setSearchedExams(results);
-      if (results.length === 0) alert("조건에 맞는 시험이 없습니다.");
+      if (results.length === 0) {
+        alert("조건에 맞는 시험이 없습니다.");
+      }
     } catch (error) {
       console.error(error);
       alert("시험 검색 중 오류가 발생했습니다.");
     } finally {
       setLoadingExams(false);
-    }
-  };
-
-  const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
-
-  // === 🚀 [신규 기능] AI PDF 파일 업로드 및 분석 로직 ===
-  const handlePdfUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || file.type !== 'application/pdf') return alert("PDF 파일만 업로드 가능합니다.");
-    if (!selectedExamData) return alert("먼저 분석할 시험을 선택해주세요.");
-
-    setAiAnalyzing(true);
-    try {
-      // 1. 파일을 Base64로 인코딩 (스토리지 과금 방지)
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = async () => {
-        try {
-          const base64Data = reader.result.split(',')[1];
-          const analyzeFn = httpsCallable(functions, 'analyzeExamPaper');
-          
-          // 2. 백엔드 AI 분석 호출
-          const result = await analyzeFn({
-            fileBase64: base64Data,
-            mimeType: file.type,
-            year: selectedExamData.year,
-            grade: selectedExamData.grade,
-            subject: selectedExamData.subject || '수학'
-          });
-
-          const aiData = result.data;
-          
-          // 3. Firestore 시험 문서 업데이트 (N+1 방지: 단 1회 업데이트)
-          const examDocRef = doc(db, 'artifacts/imperial-clinic-v1/public/data/integrated_exams', selectedExamData.id);
-          await updateDoc(examDocRef, {
-            overallReview: aiData.overallReview || '',
-            cutoffReasoning: aiData.cutoffReasoning || '',
-            cutoffs: aiData.cutoffs || {},
-            questions: aiData.questions || [],
-            updatedAt: serverTimestamp()
-          });
-
-          // 4. 로컬 상태 업데이트 (화면 즉시 반영)
-          setSearchedExams(prev => prev.map(ex => ex.id === selectedExamData.id ? {
-            ...ex, 
-            overallReview: aiData.overallReview,
-            cutoffReasoning: aiData.cutoffReasoning,
-            cutoffs: aiData.cutoffs,
-            questions: aiData.questions
-          } : ex));
-
-          alert("AI 분석 및 데이터베이스 반영이 완료되었습니다!");
-        } catch (err) {
-          console.error("AI 분석 실패:", err);
-          alert("AI 분석 중 오류가 발생했습니다: " + err.message);
-        } finally {
-          setAiAnalyzing(false);
-          if(fileInputRef.current) fileInputRef.current.value = '';
-        }
-      };
-    } catch (error) {
-      setAiAnalyzing(false);
-      alert("파일 처리 중 오류가 발생했습니다.");
     }
   };
 
@@ -172,11 +107,13 @@ export default function ExamDiagnosticInput({ currentUser }) {
       return [...prev, sId];
     });
   };
+
+  const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
   
   const examQuestionsList = selectedExamData?.questions && selectedExamData.questions.length > 0 
     ? selectedExamData.questions.map((q, idx) => ({
         ...q,
-        displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : String(idx + 1),
+        displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : (q.qNum ? String(q.qNum) : String(idx + 1)),
         calcPoint: (q.score !== undefined && q.score !== null) ? Number(q.score) : (q.point !== undefined && q.point !== null ? Number(q.point) : null)
       }))
     : Array.from({ length: 30 }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: null }));
@@ -221,7 +158,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
   };
 
   const handleInputChange = (sId, field, value) => {
-    setInputsByStudent(prev => ({ ...prev, [sId]: { ...prev[sId], [field]: value } }));
+    setInputsByStudent(prev => ({
+      ...prev,
+      [sId]: { ...prev[sId], [field]: value }
+    }));
   };
 
   const handleSubmitAll = async () => {
@@ -276,7 +216,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
           <Search className="text-blue-600" size={20} /> 1단계: 진단할 시험 검색 및 선택
         </h2>
         
-        {/* 기존 검색 영역 유지 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
           <input 
             type="text" 
@@ -286,11 +225,19 @@ export default function ExamDiagnosticInput({ currentUser }) {
             onChange={e => setFilters({...filters, schoolName: e.target.value})}
             onKeyDown={e => e.key === 'Enter' && handleSearchExams()}
           />
-          <select className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full" value={filters.year} onChange={e => setFilters({...filters, year: e.target.value})}>
+          <select 
+            className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full"
+            value={filters.year}
+            onChange={e => setFilters({...filters, year: e.target.value})}
+          >
             <option value="">연도 전체</option>
             {[...Array(5)].map((_, i) => <option key={i} value={String(currentYear - i)}>{currentYear - i}년</option>)}
           </select>
-          <select className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full" value={filters.gradeSem} onChange={e => setFilters({...filters, gradeSem: e.target.value})}>
+          <select 
+            className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full"
+            value={filters.gradeSem}
+            onChange={e => setFilters({...filters, gradeSem: e.target.value})}
+          >
             <option value="">학년/학기 전체</option>
             <option value="1-1">1학년 1학기</option>
             <option value="1-2">1학년 2학기</option>
@@ -299,7 +246,11 @@ export default function ExamDiagnosticInput({ currentUser }) {
             <option value="3-1">3학년 1학기</option>
             <option value="3-2">3학년 2학기</option>
           </select>
-          <select className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full" value={filters.term} onChange={e => setFilters({...filters, term: e.target.value})}>
+          <select 
+            className="border border-gray-300 p-2.5 rounded-xl bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500 w-full"
+            value={filters.term}
+            onChange={e => setFilters({...filters, term: e.target.value})}
+          >
             <option value="">시험 종류 전체</option>
             <option value="중간고사">중간고사</option>
             <option value="기말고사">기말고사</option>
@@ -323,53 +274,16 @@ export default function ExamDiagnosticInput({ currentUser }) {
               onChange={e => setSelectedExamId(e.target.value)}
             >
               <option value="">🎯 검색된 시험 중 하나를 선택하세요 ({searchedExams.length}건)</option>
-              {searchedExams.map(e => <option key={e.id} value={e.id}>{e.id.replace(/_/g, ' ')}</option>)}
+              {searchedExams.map(e => {
+                  // 🚀 시험 드롭다운에도 다이내믹 번역기 적용
+                  const examTitle = `[${e.year}] ${e.schoolName} ${e.grade} ${e.semester} ${e.termType || e.term || ''} ${getDynamicSubjectLabel(e.standardCode, e.schoolType, e.year, e.grade, e.subject)}`;
+                  return <option key={e.id} value={e.id}>{examTitle}</option>;
+              })}
             </select>
           </div>
         )}
       </div>
 
-      {/* 🚀 신규: 선택된 시험에 대한 AI 분석 패널 */}
-      {selectedExamData && (
-        <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-6 rounded-2xl shadow-sm border border-indigo-100 animate-in slide-in-from-top-4">
-          <div className="flex justify-between items-center mb-4">
-             <h3 className="text-lg font-bold text-indigo-900 flex items-center gap-2">
-               <Sparkles className="text-purple-600" size={20}/> 
-               AI 자동 문항 분석 및 등급컷 추출 (선택사항)
-             </h3>
-             <input type="file" ref={fileInputRef} className="hidden" accept=".pdf" onChange={handlePdfUpload} />
-             <button 
-               onClick={() => fileInputRef.current?.click()}
-               disabled={aiAnalyzing}
-               className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-indigo-700 transition flex items-center gap-2 disabled:bg-indigo-300"
-             >
-               {aiAnalyzing ? <Loader className="animate-spin w-4 h-4"/> : <UploadCloud className="w-4 h-4"/>}
-               {aiAnalyzing ? 'AI가 시험지를 분석 중입니다 (약 30초 소요)' : '시험지 PDF 업로드하여 자동 분석'}
-             </button>
-          </div>
-          
-          {selectedExamData.overallReview ? (
-             <div className="bg-white p-4 rounded-xl border border-indigo-100 text-sm">
-               <p className="font-bold text-gray-800 mb-1">📝 AI 총평:</p>
-               <p className="text-gray-600 mb-3">{selectedExamData.overallReview}</p>
-               <div className="flex gap-4 mb-2">
-                 <span className="bg-gray-100 px-2 py-1 rounded text-gray-700 font-bold">1등급 예상: {selectedExamData.cutoffs?.top10 || '-'}점</span>
-                 <span className="bg-gray-100 px-2 py-1 rounded text-gray-700 font-bold">3등급 예상: {selectedExamData.cutoffs?.top34 || '-'}점</span>
-                 <span className="bg-gray-100 px-2 py-1 rounded text-gray-700 font-bold">5등급 예상: {selectedExamData.cutoffs?.top66 || '-'}점</span>
-               </div>
-               <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded">💡 {selectedExamData.cutoffReasoning}</p>
-               <p className="text-xs text-indigo-500 font-bold mt-2 text-right">✔ 현재 이 시험에는 {selectedExamData.questions?.length || 0}개의 문항과 IDI 분석 데이터가 세팅되어 있습니다.</p>
-             </div>
-          ) : (
-            <div className="text-center p-6 bg-white rounded-xl border border-dashed border-indigo-200">
-              <FileText className="w-8 h-8 text-indigo-300 mx-auto mb-2" />
-              <p className="text-sm text-gray-500">아직 AI로 문항 정보를 추출하지 않은 시험입니다.<br/>PDF를 업로드하면 학생 오답 입력 시 배점 차감 및 자동 피드백이 적용됩니다.</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 기존 학생 선택 영역 유지 */}
       <div className={`bg-white p-6 rounded-2xl shadow-sm border border-gray-100 transition-opacity ${!selectedExamId ? 'opacity-50 pointer-events-none' : ''}`}>
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-4 border-b pb-2">
           <Users className="text-indigo-600" size={20} /> 2단계: 대상 반 및 학생 선택
@@ -409,7 +323,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
         )}
       </div>
 
-      {/* 기존 오답 입력 영역 유지 */}
       {selectedStudentIds.length > 0 && (
         <div className="space-y-4">
           <div className="flex justify-between items-center px-1">
