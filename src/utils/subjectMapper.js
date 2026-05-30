@@ -1,6 +1,6 @@
 /* [src/utils/subjectMapper.js] 
   시공간 과목 분류 엔진 (Spatiotemporal Subject Mapper)
-  (🚀 국어/영어/과학 과목 단일화 대통합 및 문/이과 대응 버전)
+  (🚀 과거 데이터(schoolType 누락) 완벽 대응 및 다이내믹 디스플레이 번역기 탑재 버전)
 */
 
 // 1. 대분류(부서) 마스터 정의
@@ -120,8 +120,8 @@ export const getStandardSubjectCode = (schoolType, subjectName) => {
     if (schoolType === '초등학교') return 'ELEM_ALL';
     if (schoolType === '중학교') return 'MIDDLE_ALL';
 
-    if (schoolType === '고등학교') {
-        // --- 국어과/영어과 (무조건 단일 코드로 병합) ---
+    if (schoolType === '고등학교' || !schoolType) { // 과거 데이터 기본 고등부 처리
+        // --- 국어과/영어과 ---
         if (cleanSubj.includes('국어') || cleanSubj.includes('문학') || cleanSubj.includes('독서') || cleanSubj.includes('화법') || cleanSubj.includes('작문') || cleanSubj.includes('언어') || cleanSubj.includes('매체')) return 'KOR_ALL';
         if (cleanSubj.includes('영어') || cleanSubj.includes('독해') || cleanSubj.includes('회화')) return 'ENG_ALL';
 
@@ -147,7 +147,7 @@ export const getStandardSubjectCode = (schoolType, subjectName) => {
         if (cleanSubj.includes('경제')) return 'SOC_H_ECON';
         if (cleanSubj.includes('문화') || cleanSubj.includes('사문')) return 'SOC_H_CULT';
 
-        // --- 과학과 매핑 (1,2 구분 없이 완벽한 대통합) ---
+        // --- 과학과 매핑 ---
         if (cleanSubj.includes('통합과학') || cleanSubj === '과학') return 'SCI_INT';
         if (cleanSubj.includes('물리')) return 'SCI_PHY';
         if (cleanSubj.includes('화학')) return 'SCI_CHE';
@@ -156,4 +156,59 @@ export const getStandardSubjectCode = (schoolType, subjectName) => {
     }
 
     return `CUSTOM_${cleanSubj.toUpperCase()}`; 
+};
+
+/**
+ * 🚀 [CTO 패치] 시공간 동적 번역기 (Dynamic Subject Labeler)
+ * 시스템 코드를 바탕으로 해당 연도/학년에 맞는 가장 완벽한 텍스트(예: "공통수학1" 또는 "수학(상)")로 번역하여 반환합니다.
+ */
+export const getDynamicSubjectLabel = (code, schoolType, yearStr, gradeStr, originalSubject) => {
+    if (!code || code === 'UNKNOWN' || code.startsWith('CUSTOM_')) return originalSubject || '미지정';
+
+    const year = parseInt(yearStr, 10) || new Date().getFullYear();
+    const grade = parseInt(String(gradeStr).replace(/[^0-9]/g, ''), 10) || 1;
+    
+    // 🚀 과거 데이터(schoolType 누락)를 고등부로 강제 편입시켜 번역기 작동 보장
+    const typeK = schoolType || '고등학교';
+
+    if (typeK === '고등학교') {
+        let is2022 = false;
+        if (year >= 2027) is2022 = true;
+        else if (year === 2026 && grade <= 2) is2022 = true;
+        else if (year === 2025 && grade === 1) is2022 = true;
+
+        const map2015 = {
+            'MATH_H1_S1': '수학(상)', 'MATH_H1_S2': '수학(하)', 'MATH_H2_ALG': '수학 I',
+            'MATH_H2_CALC1': '수학 II', 'MATH_H3_CALC2': '미적분', 'MATH_PROB_STAT': '확률과 통계',
+            'MATH_GEOMETRY': '기하', 'KOR_ALL': '국어', 'ENG_ALL': '영어',
+            'SCI_INT': '통합과학', 'SCI_PHY': '물리학', 'SCI_CHE': '화학', 'SCI_BIO': '생명과학', 'SCI_EAS': '지구과학',
+            'SOC_H_INT': '통합사회', 'SOC_H_HIS': '한국사', 'SOC_H_LIFE': '생활과 윤리', 'SOC_H_ETHICS': '윤리와 사상',
+            'SOC_H_GEO_K': '한국지리', 'SOC_H_GEO_W': '세계지리', 'SOC_H_HIS_E': '동아시아사', 'SOC_H_HIS_W': '세계사',
+            'SOC_H_LAW': '정치와 법', 'SOC_H_ECON': '경제', 'SOC_H_CULT': '사회·문화'
+        };
+
+        const map2022 = {
+            'MATH_H1_S1': '공통수학1', 'MATH_H1_S2': '공통수학2', 'MATH_H2_ALG': '대수',
+            'MATH_H2_CALC1': '미적분 I', 'MATH_H3_CALC2': '미적분 II', 'MATH_PROB_STAT': '확률과 통계',
+            'MATH_GEOMETRY': '기하', 'KOR_ALL': '국어', 'ENG_ALL': '영어',
+            'SCI_INT': '통합과학', 'SCI_PHY': '물리학', 'SCI_CHE': '화학', 'SCI_BIO': '생명과학', 'SCI_EAS': '지구과학',
+            'SOC_H_INT': '통합사회', 'SOC_H_HIS': '한국사', 'SOC_H_LIFE': '생활과 윤리', 'SOC_H_ETHICS': '윤리와 사상',
+            'SOC_H_GEO_K': '한국지리', 'SOC_H_GEO_W': '세계지리', 'SOC_H_HIS_E': '동아시아사', 'SOC_H_HIS_W': '세계사',
+            'SOC_H_LAW': '정치와 법', 'SOC_H_ECON': '경제', 'SOC_H_CULT': '사회·문화'
+        };
+
+        const targetMap = is2022 ? map2022 : map2015;
+        if (targetMap[code]) return targetMap[code];
+    } else if (typeK === '중학교') {
+         const mapMiddle = {
+             'MATH_M1': '수학 1', 'MATH_M2': '수학 2', 'MATH_M3': '수학 3',
+             'SCI_M1': '과학 1', 'SCI_M2': '과학 2', 'SCI_M3': '과학 3',
+             'MIDDLE_ALL': '중등 교과 공통'
+         };
+         if (mapMiddle[code]) return mapMiddle[code];
+    } else if (typeK === '초등학교') {
+         if (code === 'ELEM_ALL') return '초등 교과 공통';
+    }
+
+    return originalSubject || '미지정';
 };

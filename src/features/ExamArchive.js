@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
-   (🚀 CTO 패치: 기출 아카이브 검색 필터에 '세부 과목 드롭다운' 추가 및 목록에 세부 과목명 표시 적용) */
+   (🚀 CTO 패치: 기출 아카이브 다이내믹 번역기(수학 상/공통수학1 텍스트 구별) 완벽 적용) */
 import React, { useState, useEffect } from 'react';
 import { 
   Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
@@ -10,7 +10,7 @@ import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setD
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
-import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
+import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -23,12 +23,6 @@ const FILE_TYPES = [
 
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
-
-// 🚀 [CTO 패치] 표준 코드 번역 헬퍼 함수
-const getSubjectLabel = (code, fallback) => {
-    const found = STANDARD_CODES.find(c => c.code === code);
-    return found ? found.label : (fallback || '미지정');
-};
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -101,7 +95,6 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 };
 
 const ExamArchive = ({ currentUser }) => {
-    // 🚀 [CTO 패치] subjectCode 필터 추가
     const [filters, setFilters] = useState({
         schoolType: 'high', schoolName: '', year: '', combinedTerm: '', subjectCode: '', grade: ''
     });
@@ -174,7 +167,6 @@ const ExamArchive = ({ currentUser }) => {
             if (filters.year) q = query(q, where('year', '==', String(filters.year)));
             if (filters.grade) q = query(q, where('grade', '==', String(filters.grade)));
             
-            // 🚀 [CTO 패치] 세부 과목(표준 코드) 조건 추가
             if (filters.subjectCode) {
                 q = query(q, where('standardCode', '==', String(filters.subjectCode)));
             }
@@ -529,7 +521,6 @@ const ExamArchive = ({ currentUser }) => {
                     <label className="text-sm font-bold text-gray-700">학교 및 세부 필터</label>
                 </div>
                 
-                {/* 🚀 [CTO 패치] 과목 필터 드롭다운 추가로 7칸 그리드 구성 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
                     <select className="col-span-1 border p-2.5 rounded-lg bg-gray-50 w-full text-sm font-bold outline-none" value={filters.schoolType} onChange={e=>{setFilters({...filters, schoolType: e.target.value, schoolName: ''}); }}>
                         <option value="high">고등학교</option><option value="middle">중학교</option><option value="elementary">초등학교</option>
@@ -602,8 +593,8 @@ const ExamArchive = ({ currentUser }) => {
                                     </div>
                                     <div className="bg-blue-50/50 p-2 md:p-3 rounded-lg border border-blue-100 w-fit mt-2">
                                         <div className="font-bold text-gray-700 text-sm">
-                                            {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
-                                            {exam.year} {String(exam.grade || '1학년').replace('학년', '')}-{String(exam.semester || '1학기').replace('학기', '')} {exam.termType || exam.term || '고사'} <span className="text-indigo-700 ml-1">{getSubjectLabel(exam.standardCode, exam.subject)}</span>
+                                            {/* 🚀 [CTO 패치] 다이내믹 번역기 노출 */}
+                                            {exam.year} {String(exam.grade || '1학년').replace('학년', '')}-{String(exam.semester || '1학기').replace('학기', '')} {exam.termType || exam.term || '고사'} <span className="text-indigo-700 ml-1">{getDynamicSubjectLabel(exam.standardCode, exam.schoolType, exam.year, exam.grade, exam.subject)}</span>
                                         </div>
                                     </div>
                                 </div>

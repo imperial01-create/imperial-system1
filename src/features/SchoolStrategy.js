@@ -1,5 +1,5 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 내신 연구소 상단 탭 및 카드에 '세부 과목(표준 코드명)' 자동 번역 적용) */
+   (🚀 CTO 패치: 내신 연구소 상단 탭 및 카드에 '다이내믹 번역기' 적용 완료 - 과거 데이터 강제 고등부 편입) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
@@ -7,7 +7,7 @@ import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../uti
 import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check, CheckSquare } from 'lucide-react'; 
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
-import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
+import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
 
 // --- [아이콘 컴포넌트 생략 (기존과 동일)] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -26,12 +26,6 @@ const IconChevronRight = () => <svg xmlns="http://www.w3.org/2000/svg" width="24
 const IconX = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
 
 const APP_ID = 'imperial-clinic-v1';
-
-// 🚀 [CTO 패치] 표준 코드 번역 헬퍼 함수
-const getSubjectLabel = (code, fallback) => {
-    const found = STANDARD_CODES.find(c => c.code === code);
-    return found ? found.label : (fallback || '미지정');
-};
 
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -678,18 +672,18 @@ export default function SchoolStrategy({ currentUser }) {
 
   // 🚀 [CTO 패치] 과목별 필터 탭 이름 번역 표시
   const availableSubjects = useMemo(() => {
-      const allSubjects = [...trendReports, ...individualReports].map(r => getSubjectLabel(r.standardCode, r.subject)).filter(Boolean);
+      const allSubjects = [...trendReports, ...individualReports].map(r => getDynamicSubjectLabel(r.standardCode, r.schoolType, r.year, r.grade, r.subject)).filter(Boolean);
       return ['전체', ...new Set(allSubjects)].sort();
   }, [trendReports, individualReports]);
 
   const filteredTrendReports = useMemo(() => {
       if (activeSubjectTab === '전체') return trendReports;
-      return trendReports.filter(r => getSubjectLabel(r.standardCode, r.subject) === activeSubjectTab);
+      return trendReports.filter(r => getDynamicSubjectLabel(r.standardCode, r.schoolType, r.year, r.grade, r.subject) === activeSubjectTab);
   }, [trendReports, activeSubjectTab]);
 
   const filteredIndividualReports = useMemo(() => {
       if (activeSubjectTab === '전체') return individualReports;
-      return individualReports.filter(r => getSubjectLabel(r.standardCode, r.subject) === activeSubjectTab);
+      return individualReports.filter(r => getDynamicSubjectLabel(r.standardCode, r.schoolType, r.year, r.grade, r.subject) === activeSubjectTab);
   }, [individualReports, activeSubjectTab]);
 
 
@@ -819,8 +813,8 @@ export default function SchoolStrategy({ currentUser }) {
                 <div key={report.id} className={`bg-white border rounded-xl p-4 md:p-5 shadow-sm hover:shadow-md transition cursor-pointer relative ${report.isDeleted ? 'opacity-50 grayscale' : 'border-indigo-100'}`} onClick={() => handleOpenDetail(report.id)}>
                   {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                   <h3 className="font-bold text-base md:text-lg text-indigo-900">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')} {String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} 경향 분석</h3>
-                  {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
-                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {getSubjectLabel(report.standardCode, report.subject)}</p>
+                  {/* 🚀 [CTO 패치] 다이내믹 번역기 노출 */}
+                  <p className="text-xs md:text-sm text-gray-600 mt-2 font-bold bg-indigo-50 px-2 py-1 rounded w-fit text-indigo-700">과목: {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)}</p>
                 </div>
               ))}
             </div>
@@ -840,8 +834,8 @@ export default function SchoolStrategy({ currentUser }) {
                     {report.isDeleted && <span className="absolute top-2 right-2 text-xs bg-red-100 text-red-600 px-2 py-1 rounded">삭제됨</span>}
                     <h3 className="font-bold text-gray-800 text-base md:text-lg break-keep leading-tight mb-4">
                         <span className="text-blue-600 text-sm block mb-1">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'}</span>
-                        {/* 🚀 [CTO 패치] 세부 과목명으로 번역 노출 */}
-                        {getSubjectLabel(report.standardCode, report.subject)} 정밀 분석
+                        {/* 🚀 [CTO 패치] 다이내믹 번역기 노출 */}
+                        {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)} 정밀 분석
                     </h3>
                     
                     <div className="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4">
@@ -1314,8 +1308,8 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="inline-block px-2 md:px-3 py-1 bg-indigo-800 rounded-full text-[10px] md:text-xs font-semibold mb-2 md:mb-3 tracking-wider">
               {report.type === 'trend' ? '경향 분석 리포트' : '시험 정밀 분석 리포트'}
             </div>
-            {/* 🚀 [CTO 패치] 세부 과목명 번역 헤더 */}
-            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {getSubjectLabel(report.standardCode, report.subject)} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
+            {/* 🚀 [CTO 패치] 세부 과목명 번역 헤더 노출 */}
+            <h1 className="text-xl md:text-3xl font-bold">[{report.year}] {report.schoolName || report.school} {String(report.grade || '1학년').replace('학년','')}-{String(report.semester || '1학기').replace('학기','')} {report.termType || report.term || '고사'} {getDynamicSubjectLabel(report.standardCode, report.schoolType, report.year, report.grade, report.subject)} {report.type === 'trend' ? '경향 분석' : '분석'}</h1>
           </div>
 
           <div className="p-4 md:p-8">
