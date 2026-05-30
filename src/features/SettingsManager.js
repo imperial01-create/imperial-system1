@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
    최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 기존 고급 기능 완벽 복구 및 대분류(부서) 토글 시스템 통합 탑재) */
+   (🚀 CTO 패치: 대분류(부서) 토글 시 포함된 세부 과목 리스트를 직관적으로 노출하는 UI 적용) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -8,14 +8,37 @@ import { db, secondaryAuth } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
-  AlertTriangle, Database, School, Trash2, Star, Search,
-  ToggleRight, ToggleLeft
+  AlertTriangle, Database, School, Trash2, Star,
+  ToggleRight, ToggleLeft, Layers
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
-import { DEPARTMENTS } from '../utils/subjectMapper'; // 🚀 시공간 과목 엔진 로드
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [대분류 및 포함 세부 과목 안내용 데이터]
+const DEPT_INFO = [
+    { 
+        id: 'DEPT_KOR', label: '국어과', color: 'rose',
+        subjects: ['공통국어(1·2)', '문학', '독서', '화법과 작문', '언어와 매체', '독서와 작문', '화법과 언어'] 
+    },
+    { 
+        id: 'DEPT_ENG', label: '영어과', color: 'orange',
+        subjects: ['공통영어(1·2)', '영어 I', '영어 II', '영어 독해와 작문'] 
+    },
+    { 
+        id: 'DEPT_MATH', label: '수학과', color: 'blue',
+        subjects: ['공통수학(1·2)', '대수(수학 I)', '미적분 I(수학 II)', '미적분 II(미적분)', '확률과 통계', '기하'] 
+    },
+    { 
+        id: 'DEPT_SCI', label: '과학과', color: 'emerald',
+        subjects: ['통합과학(1·2)', '물리학 I·II', '화학 I·II', '생명과학 I·II', '지구과학 I·II'] 
+    },
+    { 
+        id: 'DEPT_SOC', label: '사회과', color: 'purple',
+        subjects: ['통합사회(1·2)', '한국사', '생활과윤리', '한국지리', '세계사', '정치와법', '사회문화', '경제'] 
+    }
+];
 
 const SettingsManager = ({ currentUser }) => {
     const { users, loadingData } = useData();
@@ -47,7 +70,7 @@ const SettingsManager = ({ currentUser }) => {
             try {
                 const masterRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data');
                 const schoolRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schools');
-                const deptRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments'); // 🚀 부서 설정
+                const deptRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments'); 
                 
                 const [masterSnap, schoolSnap, deptSnap] = await Promise.all([getDoc(masterRef), getDoc(schoolRef), getDoc(deptRef)]);
                 
@@ -83,9 +106,6 @@ const SettingsManager = ({ currentUser }) => {
         fetchAllSettings();
     }, []);
 
-    // ==============================================================================
-    // 1. 기본 인프라(마스터) 및 부서 관리 로직
-    // ==============================================================================
     const handleSaveMaster = async () => {
         setSaving(true);
         try {
@@ -93,9 +113,7 @@ const SettingsManager = ({ currentUser }) => {
             const masterRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'master_data');
             const deptRef = doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments');
             
-            // 기존 기본설정 저장
             batch.set(masterRef, { ...settings, updatedAt: serverTimestamp() }, { merge: true });
-            // 🚀 새로운 부서 설정 병합 저장
             batch.set(deptRef, { active: activeDepartments, updatedAt: serverTimestamp() }, { merge: true });
             
             await batch.commit();
@@ -130,9 +148,6 @@ const SettingsManager = ({ currentUser }) => {
         );
     };
 
-    // ==============================================================================
-    // 2. 학교 마스터 데이터 관리 로직
-    // ==============================================================================
     const handleSaveSchools = async () => {
         setSavingSchools(true);
         try {
@@ -170,9 +185,6 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    // ==============================================================================
-    // 3. 시스템 고급 도구 
-    // ==============================================================================
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
         
@@ -362,22 +374,37 @@ const SettingsManager = ({ currentUser }) => {
                                 </div>
                             </div>
 
-                            {/* 🚀 1-3. 계층형 부서(대분류) 관리 UI */}
+                            {/* 🚀 1-3. 계층형 부서(대과목) 관리 UI - 세부과목 가시화 */}
                             <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
-                                <h2 className="text-xl font-bold text-gray-900 border-b pb-4 flex items-center gap-2">
-                                    <BookOpen className="text-purple-600"/> 학원 운영 부서 (대분류) 활성화
-                                </h2>
-                                <p className="text-sm text-gray-600 leading-relaxed">
-                                    스위치를 켜두면 해당 부서의 <b className="text-purple-700">모든 세부 과목(개정 교육과정 포함)이 전체 시스템 드롭다운에 자동으로 연동</b>됩니다. 오타 및 누락을 방지하기 위해 대분류 단위로만 관리하세요.
-                                </p>
+                                <div className="border-b pb-4">
+                                    <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
+                                        <BookOpen className="text-purple-600"/> 학원 운영 부서 (대과목) 활성화
+                                    </h2>
+                                    <p className="text-sm text-gray-600 leading-relaxed">
+                                        아래 대과목 토글 스위치를 켜면, 해당 부서에 속한 <b>세부 과목(표준 코드) 전체가 시스템의 드롭다운에 자동으로 연동</b>됩니다.
+                                    </p>
+                                </div>
                                 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    {DEPARTMENTS.map(dept => {
+                                <div className="grid grid-cols-1 gap-4">
+                                    {DEPT_INFO.map(dept => {
                                         const isActive = activeDepartments.includes(dept.id);
                                         return (
-                                            <div key={dept.id} onClick={() => toggleDepartment(dept.id)} className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex justify-between items-center ${isActive ? 'bg-purple-50 border-purple-500 shadow-sm' : 'bg-white border-gray-200 hover:border-purple-300'}`}>
-                                                <span className={`font-black text-lg ${isActive ? 'text-purple-900' : 'text-gray-400'}`}>{dept.label}</span>
-                                                {isActive ? <ToggleRight size={32} className="text-purple-600" /> : <ToggleLeft size={32} className="text-gray-300" />}
+                                            <div key={dept.id} onClick={() => toggleDepartment(dept.id)} className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col gap-3 ${isActive ? `bg-${dept.color}-50 border-${dept.color}-500 shadow-sm` : 'bg-white border-gray-200 hover:border-gray-300'}`}>
+                                                <div className="flex justify-between items-center w-full">
+                                                    <span className={`font-black text-lg flex items-center gap-2 ${isActive ? `text-${dept.color}-900` : 'text-gray-400'}`}>
+                                                        <Layers size={20} /> {dept.label}
+                                                    </span>
+                                                    {isActive ? <ToggleRight size={32} className={`text-${dept.color}-600`} /> : <ToggleLeft size={32} className="text-gray-300" />}
+                                                </div>
+                                                
+                                                {/* 🚀 세부 과목 목록 노출 */}
+                                                <div className={`flex flex-wrap gap-1.5 ${isActive ? 'opacity-100' : 'opacity-40 grayscale'}`}>
+                                                    {dept.subjects.map(subj => (
+                                                        <span key={subj} className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded-md border ${isActive ? `bg-white text-${dept.color}-700 border-${dept.color}-200` : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                                                            {subj}
+                                                        </span>
+                                                    ))}
+                                                </div>
                                             </div>
                                         );
                                     })}
