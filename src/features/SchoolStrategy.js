@@ -1,10 +1,10 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
-   (🚀 CTO 패치: 스마트 마이그레이션 센터 내 일괄 작업용 학년/학기 필터 장착 완료) */
+   (🚀 CTO 패치: 스마트 마이그레이션 센터 내 '다중 선택 및 일괄 변경(Bulk Update)' 기능 탑재 완료) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check } from 'lucide-react'; 
+import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check, CheckSquare } from 'lucide-react'; 
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import { getAvailableSubjects, getStandardSubjectCode, STANDARD_CODES } from '../utils/subjectMapper'; 
@@ -124,13 +124,18 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
-  // 🚀 마이그레이션 관련 상태
+  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+
+  // 🚀 마이그레이션 모달 관련 상태
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
   const [migFilterGrade, setMigFilterGrade] = useState('전체');
   const [migFilterTerm, setMigFilterTerm] = useState('전체');
+  
+  // 🚀 [CTO 패치] 다중 선택 및 일괄 적용 상태
+  const [selectedMigrationIds, setSelectedMigrationIds] = useState([]);
+  const [bulkManualCode, setBulkManualCode] = useState('');
 
-  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
   const [activeSubjectTab, setActiveSubjectTab] = useState('전체');
   const [viewState, setViewState] = useState({ view: 'list', selectedId: null, selectedQuestion: null });
   const [memoInputs, setMemoInputs] = useState({});
@@ -145,6 +150,7 @@ export default function SchoolStrategy({ currentUser }) {
 
   const [formSchoolType, setFormSchoolType] = useState('high');
   const [isFormCustomSchool, setIsFormCustomSchool] = useState(false);
+
   const [isManualSubject, setIsManualSubject] = useState(false);
 
   const isStaff = ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(user.role);
@@ -348,7 +354,7 @@ export default function SchoolStrategy({ currentUser }) {
       else fetchInitialData();
   };
 
-  // 🚀 마이그레이션 스캔
+  // 🚀 스마트 마이그레이션 센터 스캔 엔진
   const handleOpenMigration = async () => {
       setIsSettingsModalOpen(false);
       setLoading(true);
@@ -369,6 +375,8 @@ export default function SchoolStrategy({ currentUser }) {
           setMigrationTargets(predictedTargets);
           setMigFilterGrade('전체');
           setMigFilterTerm('전체');
+          setSelectedMigrationIds([]); // 체크박스 초기화
+          setBulkManualCode(''); // 일괄변경 폼 초기화
           setIsMigrationModalOpen(true);
       } catch(e) { alert("마이그레이션 스캔 실패: " + e.message); } finally { setLoading(false); }
   };
@@ -387,7 +395,43 @@ export default function SchoolStrategy({ currentUser }) {
       });
   }, [migrationTargets, migFilterGrade, migFilterTerm]);
 
-  // 🚀 필터링된 애들만 마이그레이션 일괄 실행
+  // 🚀 필터가 바뀌면 선택 영역 초기화 방지
+  useEffect(() => {
+      setSelectedMigrationIds([]);
+  }, [migFilterGrade, migFilterTerm]);
+
+  // 🚀 [신규] 다중 선택 핸들러
+  const handleSelectAllMigration = (e) => {
+      if (e.target.checked) {
+          setSelectedMigrationIds(filteredMigrationTargets.map(t => t.id));
+      } else {
+          setSelectedMigrationIds([]);
+      }
+  };
+
+  const handleSelectMigration = (id) => {
+      setSelectedMigrationIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  // 🚀 [신규] 일괄 변경 적용 핸들러
+  const handleApplyBulkCode = () => {
+      if (selectedMigrationIds.length === 0) return alert('먼저 변경할 항목을 체크박스로 선택해주세요.');
+      if (!bulkManualCode) return alert('일괄 적용할 표준 코드를 우측 드롭다운에서 선택해주세요.');
+
+      setMigrationTargets(prev => prev.map(t => {
+          if (selectedMigrationIds.includes(t.id)) {
+              // 선택된 애들은 isAutoMatch를 끄고 수동 선택 모드로 덮어씌움
+              return { ...t, isAutoMatch: false, selectedManualCode: bulkManualCode };
+          }
+          return t;
+      }));
+      
+      setSelectedMigrationIds([]);
+      setBulkManualCode('');
+      alert('선택한 항목들이 일괄 변경되었습니다. (최종 적용 버튼을 눌러야 DB에 저장됩니다)');
+  };
+
+  // 🚀 필터링/선택된 애들 DB 마이그레이션 일괄 실행
   const handleRunMigration = async () => {
       if(filteredMigrationTargets.length === 0) return alert('현재 필터 조건에 해당하는 항목이 없습니다.');
       if(!window.confirm(`화면에 보이는 총 ${filteredMigrationTargets.length}개의 데이터를 최신 시공간 표준 코드로 덮어씁니다.\n진행하시겠습니까?`)) return;
@@ -419,8 +463,8 @@ export default function SchoolStrategy({ currentUser }) {
           await batch.commit();
           alert(`과거 데이터 마이그레이션이 성공적으로 처리되었습니다! (총 ${count}건 업데이트)`);
           
-          // 처리된 애들을 목록에서 뺌
           setMigrationTargets(prev => prev.filter(t => !processedIds.includes(t.id)));
+          setSelectedMigrationIds([]);
       } catch(e) { alert("마이그레이션 실패: " + e.message); } finally { setLoading(false); }
   };
 
@@ -872,13 +916,13 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         )}
 
-        {/* 🚀 스마트 마이그레이션 검수 모달 */}
-        <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-4xl w-full">
+        {/* 🚀 스마트 마이그레이션 검수 모달 (다중 선택/일괄 처리 탑재) */}
+        <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-5xl w-full">
             <div className="bg-indigo-50 text-indigo-800 p-4 rounded-xl text-sm mb-4 border border-indigo-200">
-                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 학년과 학기를 선택하여 안전하게 분할 마이그레이션을 진행할 수 있습니다.
+                총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 학년과 학기를 필터링하고 체크박스로 선택하여 일괄 마이그레이션을 진행하세요.
             </div>
 
-            {/* 🚀 학년 및 학기 필터 */}
+            {/* 학년 및 학기 필터 */}
             <div className="flex gap-2 mb-4 bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
                 <select value={migFilterGrade} onChange={e => setMigFilterGrade(e.target.value)} className="flex-1 border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-300">
                     <option value="전체">전체 학년</option>
@@ -895,19 +939,59 @@ export default function SchoolStrategy({ currentUser }) {
                 </select>
             </div>
 
-            <div className="flex justify-between items-center mb-2 px-1">
-                <span className="text-sm font-bold text-gray-600">필터링된 대상: <span className="text-indigo-600">{filteredMigrationTargets.length}</span>건</span>
+            {/* 🚀 다중 선택 일괄 변경 바 (Bulk Action Bar) */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 bg-indigo-100 p-3 rounded-lg border border-indigo-200 shadow-sm">
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                    <span className="text-sm font-black text-indigo-900 ml-1 whitespace-nowrap"><CheckSquare size={16} className="inline mr-1"/>일괄 변경</span>
+                    <select 
+                        value={bulkManualCode} 
+                        onChange={e => setBulkManualCode(e.target.value)}
+                        className="border p-2 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-400 flex-1 md:w-64"
+                    >
+                        <option value="">적용할 표준 코드 선택</option>
+                        {STANDARD_CODES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                    </select>
+                    <Button size="sm" onClick={handleApplyBulkCode} className="py-2 shrink-0">선택 적용</Button>
+                </div>
+                <div className="flex items-center justify-end gap-2 text-sm font-bold text-indigo-700 w-full md:w-auto">
+                    <span>필터됨: {filteredMigrationTargets.length}건</span>
+                    <span className="text-indigo-300">|</span>
+                    <span className="text-indigo-900">선택됨: {selectedMigrationIds.length}건</span>
+                </div>
             </div>
 
             <div className="max-h-96 overflow-y-auto custom-scrollbar border rounded-lg bg-gray-50 p-2 mb-4">
                 {filteredMigrationTargets.length === 0 ? <div className="text-center py-10 font-bold text-gray-400">선택한 조건에 업데이트가 필요한 데이터가 없습니다.</div> : (
                     <table className="w-full text-xs text-left">
-                        <thead className="bg-gray-100 border-b"><tr className="text-gray-600">
-                            <th className="p-2">분류</th><th className="p-2">연도/학기</th><th className="p-2">학교(학년)</th><th className="p-2">과거 과목명</th><th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
+                        <thead className="bg-gray-100 border-b sticky top-0 z-10 shadow-sm"><tr className="text-gray-600">
+                            <th className="p-2 text-center w-10">
+                                <input 
+                                    type="checkbox" 
+                                    className="accent-indigo-600 w-4 h-4 cursor-pointer"
+                                    checked={filteredMigrationTargets.length > 0 && selectedMigrationIds.length === filteredMigrationTargets.length}
+                                    onChange={handleSelectAllMigration}
+                                    title="전체 선택"
+                                />
+                            </th>
+                            <th className="p-2 w-16 text-center">분류</th>
+                            <th className="p-2 w-28">연도/학기</th>
+                            <th className="p-2">학교(학년)</th>
+                            <th className="p-2">과거 과목명</th>
+                            <th className="p-2 text-indigo-600">표준 코드 (자동/수동)</th>
                         </tr></thead>
                         <tbody>
-                            {filteredMigrationTargets.map(t => (
-                                <tr key={t.id} className="border-b bg-white">
+                            {filteredMigrationTargets.map(t => {
+                                const isSelected = selectedMigrationIds.includes(t.id);
+                                return (
+                                <tr key={t.id} className={`border-b transition-colors ${isSelected ? 'bg-indigo-50/70 border-indigo-200' : 'bg-white hover:bg-gray-50'}`}>
+                                    <td className="p-2 text-center">
+                                        <input 
+                                            type="checkbox" 
+                                            className="accent-indigo-600 w-4 h-4 cursor-pointer"
+                                            checked={isSelected}
+                                            onChange={() => handleSelectMigration(t.id)}
+                                        />
+                                    </td>
                                     <td className="p-2 text-center">
                                         {t.isAutoMatch ? <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded font-black">자동</span> : <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded font-black">수동</span>}
                                     </td>
@@ -919,7 +1003,7 @@ export default function SchoolStrategy({ currentUser }) {
                                             <span className="font-mono text-emerald-600 font-bold">{t.predictedCode}</span>
                                         ) : (
                                             <select 
-                                                className="border border-orange-300 bg-orange-50 text-orange-900 rounded p-1 w-full font-bold outline-none"
+                                                className={`border rounded p-1 w-full font-bold outline-none focus:ring-2 focus:ring-indigo-300 ${t.selectedManualCode ? 'border-indigo-300 bg-indigo-50 text-indigo-900' : 'border-orange-300 bg-orange-50 text-orange-900'}`}
                                                 value={t.selectedManualCode}
                                                 onChange={(e) => handleManualCodeSelect(t.id, e.target.value)}
                                             >
@@ -929,13 +1013,13 @@ export default function SchoolStrategy({ currentUser }) {
                                         )}
                                     </td>
                                 </tr>
-                            ))}
+                            )})}
                         </tbody>
                     </table>
                 )}
             </div>
-            <Button className="w-full py-4 text-lg shadow-lg" onClick={handleRunMigration} disabled={filteredMigrationTargets.length === 0 || loading}>
-                {loading ? <Loader className="animate-spin mx-auto"/> : `화면에 보이는 ${filteredMigrationTargets.length}건 마이그레이션 적용하기`}
+            <Button className="w-full py-4 text-lg shadow-lg bg-emerald-600 hover:bg-emerald-700 text-white border-none" onClick={handleRunMigration} disabled={filteredMigrationTargets.length === 0 || loading}>
+                {loading ? <Loader className="animate-spin mx-auto"/> : `화면에 보이는 ${filteredMigrationTargets.length}건 데이터 최종 DB 적용하기`}
             </Button>
         </Modal>
       </div>
