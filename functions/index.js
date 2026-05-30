@@ -315,7 +315,7 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
         const genAI = new GoogleGenerativeAI(getGeminiKey());
         // JSON 강제 모드 적용으로 안정성 확보
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-pro",
+            model: "gemini-2.5-flash",
             generationConfig: { responseMimeType: "application/json" }
         }); 
         
