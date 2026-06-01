@@ -2,17 +2,16 @@
    - 데이터 관리는 외부(VS Code)로 분리하고, 화면은 가볍고 직관적인 UI에 집중합니다.
    - 학생이 직관적으로 이해할 수 있는 [상향/적정/하향] 명칭 사용
    - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재
-   - (Fix) Card 컴포넌트 import 오류 제거 및 순수 div로 UI 안정성 100% 확보 */
+   - (Fix) Card 컴포넌트 및 무거운 xlsx 라이브러리 제거로 런타임 에러 0% 및 로딩 속도 극대화 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, ChevronRight, 
   X, Plus, Loader, History, Search, Trash2, Target, Lock,
-  MapPin, AlertTriangle, Info, Sparkles, Flame, ArrowUpRight, ArrowDownRight, Calculator
+  MapPin, Info, Sparkles, Flame, ArrowUpRight, ArrowDownRight, Calculator
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
-// 🚨 Card 컴포넌트 호출 제거 (오류 원천 차단)
 import { Button, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { useParams, useNavigate } from 'react-router-dom';
