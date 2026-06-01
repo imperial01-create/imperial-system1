@@ -1,17 +1,19 @@
 /* [서비스 가치] 입시 내비게이터 3.0 (학생 주도형 목표 설정 및 Gap 분석)
    - 데이터 관리는 외부(VS Code)로 분리하고, 화면은 가볍고 직관적인 UI에 집중합니다.
    - 학생이 직관적으로 이해할 수 있는 [상향/적정/하향] 명칭 사용
-   - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재 */
+   - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재
+   - (Fix) Card 컴포넌트 import 오류 제거 및 순수 div로 UI 안정성 100% 확보 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
-  Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
-  X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target, Lock,
+  Compass, TrendingUp, Camera, CheckCircle, ChevronRight, 
+  X, Plus, Loader, History, Search, Trash2, Target, Lock,
   MapPin, AlertTriangle, Info, Sparkles, Flame, ArrowUpRight, ArrowDownRight, Calculator
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
-import { Button, Card, Modal } from '../components/UI';
+// 🚨 Card 컴포넌트 호출 제거 (오류 원천 차단)
+import { Button, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { useParams, useNavigate } from 'react-router-dom';
 
@@ -47,7 +49,7 @@ const CollegeNavigator = ({ currentUser }) => {
   const [searchDept, setSearchDept] = useState('');
   const [targetDept, setTargetDept] = useState(null);
 
-  // 🚀 [신규] 다음 시험 목표 계산기 모달 상태
+  // 🚀 다음 시험 목표 계산기 모달 상태
   const [selectedUnivForNextExam, setSelectedUnivForNextExam] = useState(null);
 
   // --- 성적 입력 폼 초기화 데이터 ---
@@ -212,7 +214,7 @@ const CollegeNavigator = ({ currentUser }) => {
       }
   };
 
-  // 목표 학과 엑셀 데이터 기반 부서 검색 리스트
+  // 목표 학과 검색 리스트
   const searchResultsNav = useMemo(() => {
     if (!searchUniv && !searchDept) return [];
     return admissionsDB.filter(item => {
@@ -242,7 +244,7 @@ const CollegeNavigator = ({ currentUser }) => {
       return { status, message, gapText, diff };
   }, [targetDept, myGpa]);
 
-  // 🚀 [신규] 상향/적정/하향 자동 분류 알고리즘
+  // 🚀 상향/적정/하향 자동 분류 알고리즘
   const categorizedList = useMemo(() => {
       if (myGpa === 0 || admissionsDB.length === 0) return { safety: [], match: [], reach: [] };
       const safety = []; const match = []; const reach = [];
@@ -348,7 +350,7 @@ const CollegeNavigator = ({ currentUser }) => {
         {/* 기존 상단부 UI: 성적 히스토리 및 그래프 영역 완벽 유지 */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
             <div className="lg:col-span-1 space-y-6">
-                <Card className="p-5 sm:p-6 border-none shadow-sm bg-white rounded-3xl">
+                <div className="p-5 sm:p-6 border border-slate-100 shadow-sm bg-white rounded-3xl">
                     <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><History size={20} className="text-blue-600"/> 기존 성적 내역</h3>
                     <p className="text-xs text-slate-400 font-bold mb-4 bg-slate-50 p-2 rounded-lg">클릭 시 수정 및 시뮬레이션 가능</p>
                     <div className="space-y-3 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
@@ -363,12 +365,12 @@ const CollegeNavigator = ({ currentUser }) => {
                             </div>
                         )})}
                     </div>
-                </Card>
+                </div>
             </div>
 
             <div className="lg:col-span-3 space-y-8">
                 {isInputOpen && (
-                    <Card className="border-4 border-blue-600 shadow-2xl p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] animate-in slide-in-from-top-4">
+                    <div className="border-4 border-blue-600 shadow-2xl p-6 sm:p-8 rounded-[32px] sm:rounded-[40px] animate-in slide-in-from-top-4 bg-white">
                         <div className="flex justify-between items-center mb-6">
                             <h3 className="text-xl font-black text-blue-900">{inputForm.id ? '성적 수정 및 시뮬레이션' : '새로운 성적 등록'}</h3>
                             <button onClick={()=>setIsInputOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:text-slate-600"><X size={20}/></button>
@@ -419,18 +421,18 @@ const CollegeNavigator = ({ currentUser }) => {
                         ) : (
                             <Button className="w-full py-5 text-lg font-black bg-blue-600 hover:bg-blue-700 shadow-xl rounded-2xl" onClick={handleSaveClick}>성적 안전하게 저장하기</Button>
                         )}
-                    </Card>
+                    </div>
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <Card className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border-none shadow-sm bg-white">
+                    <div className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border border-slate-100 shadow-sm bg-white">
                         <h3 className="font-black text-slate-800 flex items-center gap-2 mb-2"><TrendingUp size={20} className="text-indigo-600"/> 내신성적 성장 곡선</h3>
                         <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-center overflow-hidden">{renderGraph('school')}</div>
-                    </Card>
-                    <Card className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border-none shadow-sm bg-white">
+                    </div>
+                    <div className="flex flex-col h-64 sm:h-72 p-4 sm:p-6 rounded-[32px] border border-slate-100 shadow-sm bg-white">
                         <h3 className="font-black text-slate-800 flex items-center gap-2 mb-2"><TrendingUp size={20} className="text-blue-600"/> 모의고사 성장 곡선</h3>
                         <div className="flex-1 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-center overflow-hidden">{renderGraph('mock')}</div>
-                    </Card>
+                    </div>
                 </div>
 
                 {/* ========================================================= */}
@@ -443,7 +445,7 @@ const CollegeNavigator = ({ currentUser }) => {
                         <p className="text-slate-500 font-bold">성적을 먼저 입력하시면 입시 판별 데이터가 활성화됩니다.</p>
                     </div>
                 ) : (
-                    <Card className="p-6 sm:p-8 overflow-hidden border-none shadow-xl bg-white rounded-[32px] animate-in fade-in">
+                    <div className="p-6 sm:p-8 overflow-hidden border border-slate-100 shadow-xl bg-white rounded-[32px] animate-in fade-in">
                         <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2 mb-6"><Target className="text-blue-500" size={28}/> 초정밀 지원 판별기</h3>
                         
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
@@ -577,7 +579,7 @@ const CollegeNavigator = ({ currentUser }) => {
                             </div>
                             
                         </div>
-                    </Card>
+                    </div>
                 )}
             </div>
         </div>
