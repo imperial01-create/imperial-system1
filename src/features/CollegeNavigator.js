@@ -1,16 +1,14 @@
 /* [서비스 가치] 입시 내비게이터 3.0 (학생 주도형 목표 설정 및 Gap 분석)
-   - 관리자의 엑셀 업로드 기능 및 AI 성적표 파싱(OCR) 기능 완벽 유지
-   - 학생이 원하는 '과'를 검색하여 목표로 설정하고, 현재 점수와의 격차를 시각화(Gauge Bar)
-   - 내 점수로 갈 수 있는 [안정/적정/소신/상향] 대학 리스트를 즉석에서 매칭하여 동기부여 극대화 */
+   - 데이터 관리는 외부(VS Code)로 분리하고, 화면은 가볍고 직관적인 UI에 집중합니다.
+   - 학생이 직관적으로 이해할 수 있는 [상향/적정/하향] 명칭 사용
+   - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
-// 🚀 [CTO 패치] Database 아이콘 import 누락 수정 완료
 import { 
   Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
   X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target, Lock,
-  MapPin, AlertTriangle, Info, Sparkles, Flame, Database 
+  MapPin, AlertTriangle, Info, Sparkles, Flame, ArrowUpRight, ArrowDownRight, Calculator
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
@@ -19,58 +17,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 대학 로고 맵 (유지) ---
-const UNIV_LOGOS = {
-  "서울대학교": "https://i.postimg.cc/SNx2knJ9/seouldaehaggyo.png",
-  "연세대학교": "https://i.postimg.cc/k4ZJCgZp/yeonsedaehaggyo.png",
-  "고려대학교": "https://i.postimg.cc/d3rLSC1R/keugibyeonhwan-golyeodaehaggyo.jpg",
-  "성균관대학교": "https://i.postimg.cc/J0VhJhQg/seong-gyungwandaehaggyo.png",
-  "한양대학교": "https://i.postimg.cc/D0T20Mv7/han-yangdaehaggyo.jpg",
-  "중앙대학교": "https://i.postimg.cc/Pqvh4jNz/jung-angdaehaggyo.png",
-  "경희대학교": "https://i.postimg.cc/m2ZsnMtx/keugibyeonhwan-gyeonghuidaehaggyo.png",
-  "건국대학교": "https://i.postimg.cc/MHWhh2Z4/geongugdaehaggyo.jpg",
-  "동국대학교": "https://i.postimg.cc/VkS3yF1Y/dong-gugdaehaggyo.png",
-  "홍익대학교": "https://i.postimg.cc/sDxLSJMC/hong-igdaehaggyo.jpg",
-  "서강대학교": "https://i.postimg.cc/j2hr56SK/seogangdaehaggyo.gif",
-  "한국외국어대학교": "https://i.postimg.cc/7Zfp8r0P/hangug-oegug-eodaehaggyo.gif",
-  "서울시립대학교": "https://i.postimg.cc/yxLrtLNT/seoulsilibdaehaggyo.png",
-  "국민대학교": "https://i.postimg.cc/h4ZsFzrm/gugmindaehaggyo.png",
-  "숭실대학교": "https://i.postimg.cc/PqMbSPJ8/sungsildaehaggyo.jpg",
-  "세종대학교": "https://i.postimg.cc/6pJdwdGC/sejongdaehaggyo.png",
-  "단국대학교": "https://i.postimg.cc/J0HkCnrZ/dangugdaehaggyo.png",
-  "가천대학교": "https://i.postimg.cc/K82JQXQ2/gacheondaehaggyo.jpg",
-  "가톨릭대학교": "https://i.postimg.cc/QtwqTvVT/gatolligdaehaggyo.jpg",
-  "인하대학교": "https://i.postimg.cc/W186ndhT/inhadaehaggyo.png",
-  "아주대학교": "https://i.postimg.cc/fLGxLXrn/ajudaehaggyo.jpg",
-  "광운대학교": "https://i.postimg.cc/CLHjhRCc/gwang-undaehaggyo.png",
-  "경기대학교": "https://i.postimg.cc/43hy3Mky/logo-1947-01-10.png",
-  "한성대학교": "https://i.postimg.cc/kX1gv9qp/hanseongdaehaggyo.jpg",
-  "부산대학교": "https://i.postimg.cc/XYtNt8ZR/busandaehaggyo.png",
-  "경북대학교": "https://i.postimg.cc/L4v9mRYq/gyeongbugdaehaggyo.png",
-  "충남대학교": "https://i.postimg.cc/bvX8mwWY/chungnamdaehaggyo.jpg",
-  "전남대학교": "https://i.postimg.cc/ZnqhWBB0/jeonnamdaehaggyo.png",
-  "가야대학교": "https://i.postimg.cc/0j0jZ0Z0/default.png", 
-  "지방": ""
-};
-
-// 🚀 백엔드 연결 전 테스트용 임베디드 엑셀 데이터
-const DEMO_ADMISSIONS_DB = [
-  { region: '서울', univ: '홍익대학교', type: '학생부교과', dept: '법학부', cut: 1.34, min: 1.29, max: 1.39, strategy: '안정적 유지' },
-  { region: '서울', univ: '홍익대학교', type: '학생부교과', dept: '산업데이터공학과', cut: 1.31, min: 1.21, max: 1.36, strategy: '최근 입결 상승(주의)' },
-  { region: '서울', univ: '홍익대학교', type: '학생부교과', dept: '수학교육과', cut: 1.37, min: 1.27, max: 1.47, strategy: '소폭 변동' },
-  { region: '서울', univ: '홍익대학교', type: '학생부교과', dept: '역사교육과', cut: 1.49, min: 1.44, max: 1.64, strategy: '최근 입결 하락(기회)' },
-  { region: '서울', univ: '홍익대학교', type: '학생부종합', dept: '신소재화공시스템공학부', cut: 1.63, min: 1.53, max: 1.68, strategy: '최근 입결 상승(주의)' },
-  { region: '경기', univ: '가천대학교', type: '학생부종합', dept: '건축학부', cut: 2.48, min: 2.43, max: 2.63, strategy: '최근 입결 하락(기회)' },
-  { region: '경기', univ: '가천대학교', type: '학생부종합', dept: 'AI인문대학', cut: 2.64, min: 2.54, max: 2.79, strategy: '변동성 큼(스나이핑 유의)' },
-  { region: '경남', univ: '가야대학교', type: '학생부교과', dept: '간호학과', cut: 1.98, min: 1.88, max: 2.47, strategy: '변동성 큼(스나이핑 유의)' },
-  { region: '경남', univ: '가야대학교', type: '학생부교과', dept: '사회복지상담학과', cut: 4.35, min: 4.25, max: 4.86, strategy: '변동성 큼(스나이핑 유의)' },
-];
-
 const CollegeNavigator = ({ currentUser }) => {
   const { studentId } = useParams(); 
   const navigate = useNavigate();
   const { users } = useData();
-  const isAdminView = ['admin', 'admin_assistant'].includes(currentUser?.role);
+  const isAdminView = ['admin', 'admin_assistant', 'lecturer'].includes(currentUser?.role);
   
   const [searchInput, setSearchInput] = useState('');
   const [searchModalOpen, setSearchModalOpen] = useState(false);
@@ -86,15 +37,18 @@ const CollegeNavigator = ({ currentUser }) => {
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   
   const fileInputRef = useRef(null);
-  const excelInputRef = useRef(null);
 
-  // 입시 데이터 (Firestore 기반)
+  // 입시 데이터 (정적 JSON 파일 기반)
   const [admissionsDB, setAdmissionsDB] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // 🚀 [신규] 목표 대학/학과 검색 및 설정용 상태
+  // 🚀 목표 대학/학과 검색 및 설정용 상태
   const [searchUniv, setSearchUniv] = useState('');
   const [searchDept, setSearchDept] = useState('');
   const [targetDept, setTargetDept] = useState(null);
+
+  // 🚀 [신규] 다음 시험 목표 계산기 모달 상태
+  const [selectedUnivForNextExam, setSelectedUnivForNextExam] = useState(null);
 
   // --- 성적 입력 폼 초기화 데이터 ---
   const initForm = { 
@@ -114,23 +68,26 @@ const CollegeNavigator = ({ currentUser }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  // --- 입결 데이터 로드 (Firestore) ---
+  // --- 정적 입결 데이터 로드 ---
   useEffect(() => {
-    const fetchAdmissions = async () => {
+    const fetchStaticData = async () => {
+        setIsLoading(true);
         try {
-            const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'college_admissions'));
-            const snap = await getDocs(q);
-            if (!snap.empty) {
-                setAdmissionsDB(snap.docs.map(d => ({id: d.id, ...d.data()})));
+            const response = await fetch('/data/admissions_data.json');
+            if(response.ok) {
+                const data = await response.json();
+                setAdmissionsDB(data);
             } else {
-                setAdmissionsDB(DEMO_ADMISSIONS_DB); // 백엔드 업로드 전 폴백(Fallback)
+                setAdmissionsDB([]); 
             }
-        } catch (e) {
-            console.error(e);
-            setAdmissionsDB(DEMO_ADMISSIONS_DB);
+        } catch (error) {
+            console.error("데이터 로드 실패:", error);
+            setAdmissionsDB([]);
+        } finally {
+            setIsLoading(false);
         }
     };
-    fetchAdmissions();
+    fetchStaticData();
   }, []);
 
   const handleSearchStudent = () => {
@@ -196,54 +153,6 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch (error) { alert(error.message); setIsOcrLoading(false); }
   };
 
-  // --- 관리자 엑셀 업로드 ---
-  const [isExcelUploading, setIsExcelUploading] = useState(false);
-  const handleExcelUpload = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      setIsExcelUploading(true);
-      try {
-          const reader = new FileReader();
-          reader.onload = async (evt) => {
-              try {
-                  const bstr = evt.target.result;
-                  const wb = XLSX.read(bstr, { type: 'binary' });
-                  let allAdmissions = [];
-                  ['학생부교과', '학생부종합'].forEach(sheetName => {
-                      if (wb.SheetNames.includes(sheetName)) {
-                          const ws = wb.Sheets[sheetName];
-                          const data = XLSX.utils.sheet_to_json(ws, { range: 2 });
-                          data.forEach(row => {
-                              if (row['대학'] && row['학과명']) {
-                                  allAdmissions.push({
-                                      region: row['지역'] || '기타', univ: row['대학'], type: row['전형'] || sheetName,
-                                      dept: row['학과명'], cut: Number(row['5등급제 예측컷']) || null, min: Number(row['구간 Min']) || null,
-                                      max: Number(row['구간 Max']) || null, strategy: row['지원 전략 판별기'] || '예측 불가'
-                                  });
-                              }
-                          });
-                      }
-                  });
-                  if (allAdmissions.length === 0) throw new Error("추출된 데이터가 없습니다.");
-
-                  const updateDB = httpsCallable(functions, 'updateAdmissionsDB', { timeout: 300000 });
-                  const result = await updateDB({ admissionsData: allAdmissions });
-
-                  alert(`🎉 성공! 총 ${result.data.count}개의 대학/학과 입시 데이터가 업데이트되었습니다.`);
-                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'college_admissions'));
-                  const snap = await getDocs(q);
-                  setAdmissionsDB(snap.docs.map(d => ({id: d.id, ...d.data()})));
-
-              } catch (err) { alert(`업로드 실패: ${err.message}`); } finally {
-                  setIsExcelUploading(false);
-                  if (excelInputRef.current) excelInputRef.current.value = '';
-              }
-          };
-          reader.readAsBinaryString(file);
-      } catch (error) { setIsExcelUploading(false); alert("파일 읽기 오류"); }
-  };
-
   const handleSaveClick = () => {
       const validSubjects = inputForm.subjects.filter(s => s.name && s.grade);
       if (validSubjects.length === 0) return alert('과목명과 등급을 정확히 입력해주세요.');
@@ -264,7 +173,8 @@ const CollegeNavigator = ({ currentUser }) => {
   };
 
   // --- 내신 평균 계산 ---
-  const avgGrades = useMemo(() => {
+  const { avgGrades, numSchoolExams } = useMemo(() => {
+      const schoolGrades = grades.filter(g => g.type === 'school');
       const calcAvg = (type) => {
           const arr = grades.filter(g => g.type === type);
           if(arr.length === 0) return 0;
@@ -274,22 +184,45 @@ const CollegeNavigator = ({ currentUser }) => {
           }); });
           return count > 0 ? (sum / count).toFixed(2) : 0;
       };
-      return { school: Number(calcAvg('school')), mock: Number(calcAvg('mock')) };
+      return { 
+          school: Number(calcAvg('school')), 
+          mock: Number(calcAvg('mock')),
+          numSchoolExams: schoolGrades.length
+      };
   }, [grades]);
 
   const myGpa = avgGrades.school;
 
-  // 🚀 [신규] 엑셀 데이터 기반 부서 검색 리스트
+  // 🚀 [신규] 다음 시험 목표 계산기 알고리즘
+  const calculateNextTermGoal = (targetCut) => {
+      if (numSchoolExams === 0) return null;
+      if (numSchoolExams >= 5) return { possible: false, required: 0, msg: "이미 3학년 1학기까지 주요 내신이 모두 반영되었습니다. 수능 최저 준비와 면접에 집중하세요." };
+
+      const targetTotal = targetCut * (numSchoolExams + 1);
+      const currentTotal = myGpa * numSchoolExams;
+      let required = targetTotal - currentTotal;
+      required = Number(required.toFixed(2));
+
+      if (required < 1.0) {
+          return { possible: false, required, msg: `다음 학기에 올 1등급(1.0)을 받아도 목표 내신(${targetCut})에 도달하기 어렵습니다. (산술적 필요 등급: ${required})\n학생부종합전형이나 정시를 병행해야 합니다.` };
+      } else if (required > 5.0) {
+          return { possible: true, required, msg: `다음 학기에 평균 ${required}등급 이내만 유지해도 안정적으로 합격선에 안착합니다.` };
+      } else {
+          return { possible: true, required, msg: `목표 합격선에 도달하려면 다음 시험에서 평균 [ ${required} 등급 ]을 받아야 합니다!` };
+      }
+  };
+
+  // 목표 학과 엑셀 데이터 기반 부서 검색 리스트
   const searchResultsNav = useMemo(() => {
     if (!searchUniv && !searchDept) return [];
     return admissionsDB.filter(item => {
         const matchUniv = searchUniv ? item.univ.includes(searchUniv) : true;
         const matchDept = searchDept ? item.dept.includes(searchDept) : true;
         return matchUniv && matchDept && item.cut !== null;
-    }).slice(0, 50); // 상위 50개만
+    }).slice(0, 50); 
   }, [admissionsDB, searchUniv, searchDept]);
 
-  // 🚀 [신규] 목표 대학과의 Gap 분석 로직
+  // 목표 대학과의 Gap 분석 로직 (게이지바 용)
   const gapAnalysis = useMemo(() => {
       if (!targetDept || myGpa === 0) return null;
       if (!targetDept.cut) return { status: 'unknown', text: '데이터 집계 중' };
@@ -298,31 +231,30 @@ const CollegeNavigator = ({ currentUser }) => {
       let status = 'danger'; let message = ''; let gapText = '';
       
       if (myGpa <= targetDept.min) {
-          status = 'success'; message = "🎉 훌륭합니다! 최초 합격 보장(안정권)입니다."; gapText = `안정선보다 ${Math.abs(diff)}등급 여유가 있습니다.`;
+          status = 'success'; message = "🎉 하향(안정) 지원 가능합니다!"; gapText = `안정선보다 ${Math.abs(diff)}등급 여유가 있습니다.`;
       } else if (myGpa <= targetDept.cut) {
-          status = 'success'; message = "✅ 좋은 성적입니다! 주력 지원 구간(적정권)입니다."; gapText = `예측컷 이내에 안정적으로 진입했습니다.`;
+          status = 'success'; message = "✅ 적정 지원 구간입니다."; gapText = `예측컷 이내에 안정적으로 진입했습니다.`;
       } else if (myGpa <= targetDept.max) {
-          status = 'warning'; message = "🔥 조금만 더! 추가합격/스나이핑 노림수(소신권) 구간입니다."; gapText = `안전하게 합격하려면 내신 평균 ${diff}등급 향상이 필요합니다.`;
+          status = 'warning'; message = "🔥 상향 지원 (스나이핑 노림수) 구간입니다."; gapText = `안전하게 합격하려면 내신 평균 ${diff}등급 향상이 필요합니다.`;
       } else {
-          status = 'danger'; message = "🚨 현재 성적으로는 합격 확률이 희박(상향)합니다."; gapText = `목표 달성을 위해 평균 ${diff}등급 이상의 획기적인 향상이 필요합니다.`;
+          status = 'danger'; message = "🚨 현재 성적으로는 합격 확률이 희박합니다."; gapText = `평균 ${diff}등급 이상의 획기적인 점수 향상이 필요합니다.`;
       }
       return { status, message, gapText, diff };
   }, [targetDept, myGpa]);
 
-  // 🚀 [신규] 내 점수 기반 4단계 자동 분류 (안정/적정/소신/상향)
+  // 🚀 [신규] 상향/적정/하향 자동 분류 알고리즘
   const categorizedList = useMemo(() => {
-      if (myGpa === 0 || admissionsDB.length === 0) return { safe: [], reach: [], challenge: [], danger: [] };
-      const safe = []; const reach = []; const challenge = []; const danger = [];
+      if (myGpa === 0 || admissionsDB.length === 0) return { safety: [], match: [], reach: [] };
+      const safety = []; const match = []; const reach = [];
       
       admissionsDB.filter(d => d.cut !== null).forEach(d => {
-          if (myGpa <= d.min) safe.push(d);
-          else if (myGpa <= d.cut) reach.push(d);
-          else if (myGpa <= d.max) challenge.push(d);
-          // else danger.push(d); // 상향은 너무 많으므로 추천에서 제외
+          if (myGpa <= d.min) safety.push(d);            // 하향 (안정지원)
+          else if (myGpa <= d.cut) match.push(d);        // 적정 (주력지원)
+          else if (myGpa <= d.max) reach.push(d);        // 상향 (소신/스나이핑)
       });
 
-      const shuffle = (array) => array.sort(() => 0.5 - Math.random()).slice(0, 6);
-      return { safe: shuffle(safe), reach: shuffle(reach), challenge: shuffle(challenge) };
+      const shuffle = (array) => array.sort(() => 0.5 - Math.random()).slice(0, 7);
+      return { safety: shuffle(safety), match: shuffle(match), reach: shuffle(reach) };
   }, [myGpa, admissionsDB]);
 
   const renderGraph = (type) => {
@@ -359,33 +291,18 @@ const CollegeNavigator = ({ currentUser }) => {
       );
   };
 
-  // --- 관리자 선택 UI ---
+  // --- 관리자 학생 검색 UI ---
   if (isAdminView && !activeStudentId) {
       return (
         <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
             <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl text-center md:text-left relative">
-                <h1 className="text-3xl font-black mb-2 flex items-center justify-center md:justify-start gap-3"><Compass className="text-blue-400" size={32}/> 초정밀 입시 내비게이터 (관리자)</h1>
-                <p className="text-slate-400 font-bold mb-8">지원 판별 엑셀 데이터를 기반으로 4단계 합격 가능성을 분석합니다.</p>
+                <h1 className="text-3xl font-black mb-2 flex items-center justify-center md:justify-start gap-3"><Compass className="text-blue-400" size={32}/> 입시 내비게이터 (학생 검색)</h1>
+                <p className="text-slate-400 font-bold mb-8">상담할 학생의 이름을 검색해주세요.</p>
                 
                 <div className="flex flex-col sm:flex-row items-center gap-2 bg-white/10 p-2 rounded-2xl border border-white/20 max-w-lg mx-auto md:mx-0 mb-6">
                     <Search className="ml-4 text-white/50 shrink-0 hidden sm:block" />
                     <input type="text" className="w-full p-3 bg-transparent text-white font-bold outline-none placeholder:text-white/40 text-center sm:text-left" placeholder="학생 이름 검색 (예: 홍길동)" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearchStudent()} />
                     <Button onClick={handleSearchStudent} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-3 px-6 font-black shrink-0 shadow-lg">검색</Button>
-                </div>
-
-                {/* 관리자 엑셀 업로드 존 유지 */}
-                <div className="border-t border-slate-700 pt-6 mt-6 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="text-left">
-                        <h4 className="font-bold text-slate-300 flex items-center gap-2"><Database size={16}/> 입시 예측 컷 DB 업데이트</h4>
-                        <p className="text-xs text-slate-500 mt-1">학원의 [지원판별기 엑셀]을 업로드하면 최신 예측 데이터가 시스템에 덮어씌워집니다.</p>
-                    </div>
-                    <div>
-                        <input type="file" ref={excelInputRef} className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload} />
-                        <Button variant="secondary" className="bg-emerald-600 hover:bg-emerald-700 text-white border-none shadow-lg font-black" onClick={() => excelInputRef.current?.click()} disabled={isExcelUploading}>
-                            {isExcelUploading ? <Loader className="animate-spin mr-2" size={16} /> : <Camera className="mr-2" size={16} />}
-                            {isExcelUploading ? '데이터 추출 중...' : '최신 엑셀 업로드'}
-                        </Button>
-                    </div>
                 </div>
             </div>
 
@@ -548,7 +465,6 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 <div>
                                                     <span className="inline-block px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-black rounded mb-2">{targetDept.type}</span>
                                                     <h3 className="text-lg font-black text-slate-800">{targetDept.univ} {targetDept.dept}</h3>
-                                                    {targetDept.strategy && <p className="text-xs font-bold text-rose-500 mt-1">{targetDept.strategy}</p>}
                                                 </div>
                                                 <button onClick={() => setTargetDept(null)} className="text-xs font-bold text-slate-400 hover:text-rose-500 underline underline-offset-2">취소</button>
                                             </div>
@@ -560,16 +476,13 @@ const CollegeNavigator = ({ currentUser }) => {
 
                                             {/* 시각적 Gap 게이지 바 */}
                                             {targetDept.cut && (
-                                                <div className="mt-8 mb-4 px-2 relative">
+                                                <div className="mt-8 mb-4 px-2 relative cursor-pointer" onClick={() => setSelectedUnivForNextExam(targetDept)} title="클릭하여 다음 시험 목표 확인">
                                                     <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-                                                        {/* Cut을 기준으로 한 그라데이션 채우기 */}
                                                         <div className="absolute top-0 h-full bg-gradient-to-r from-emerald-400 to-amber-400" style={{ left: '0%', width: `${Math.max(0, Math.min(100, ((targetDept.cut - 1) / 4) * 100))}%` }}></div>
                                                     </div>
-                                                    {/* 목표 핀 */}
                                                     <div className="absolute top-1/2 -translate-y-1/2 h-5 w-1 bg-slate-800 rounded-full" style={{ left: `${Math.max(0, Math.min(100, ((targetDept.cut - 1) / 4) * 100))}%` }}>
                                                         <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] font-black text-slate-800 whitespace-nowrap">목표 {targetDept.cut}</span>
                                                     </div>
-                                                    {/* 학생 내신 핀 */}
                                                     <div className="absolute -bottom-6 transform -translate-x-1/2 transition-all duration-1000 z-10" style={{ left: `${Math.max(0, Math.min(100, ((myGpa - 1) / 4) * 100))}%` }}>
                                                         <div className="flex flex-col items-center">
                                                             <div className="w-0 h-0 border-l-[6px] border-r-[6px] border-b-[6px] border-transparent border-b-indigo-600 mb-1"></div>
@@ -578,6 +491,11 @@ const CollegeNavigator = ({ currentUser }) => {
                                                     </div>
                                                 </div>
                                             )}
+                                            <div className="mt-4 text-center">
+                                                <Button size="sm" variant="outline" className="w-full border-slate-200 font-black text-slate-600 hover:bg-slate-50" onClick={() => setSelectedUnivForNextExam(targetDept)}>
+                                                    <Calculator size={14} className="mr-1 inline"/> 이 학과에 가려면 다음 시험에 몇 등급을 받아야 할까?
+                                                </Button>
+                                            </div>
                                         </div>
                                     ) : searchResultsNav.length > 0 ? (
                                         <div className="max-h-[300px] overflow-y-auto custom-scrollbar border border-slate-200 rounded-2xl bg-white mt-4">
@@ -603,36 +521,36 @@ const CollegeNavigator = ({ currentUser }) => {
                                 </div>
                             </div>
 
-                            {/* 우측: 내 점수 기반 4단계 지원 가능 리스트 */}
+                            {/* 우측: 내 점수 기반 3단계 지원 가능 리스트 (롤백 반영) */}
                             <div className="space-y-6">
                                 <div className="bg-indigo-50 p-5 sm:p-6 rounded-3xl border border-indigo-100 h-full">
-                                    <h4 className="font-black text-indigo-900 mb-2 flex items-center gap-2"><Sparkles className="text-indigo-500"/> 내 성적으로 갈 수 있는 곳</h4>
-                                    <p className="text-xs font-bold text-indigo-600 mb-6">현재 {myGpa}등급 기준으로 스캔한 엑셀 추천 리스트입니다.</p>
+                                    <h4 className="font-black text-indigo-900 mb-2 flex items-center gap-2"><Sparkles className="text-indigo-500"/> 내 성적 지원 가능 라인</h4>
+                                    <p className="text-xs font-bold text-indigo-600 mb-6">현재 {myGpa}등급 기준으로 스캔한 엑셀 추천 리스트입니다. <br/>항목을 클릭하면 <b>다음 시험 목표 점수</b>를 확인할 수 있습니다.</p>
 
                                     <div className="space-y-6">
-                                        {/* 안정권 라인 */}
+                                        {/* 상향 지원 (Reach) */}
                                         <div>
-                                            <h5 className="text-sm font-black text-blue-700 mb-3 flex items-center gap-1"><CheckCircle size={16}/> 1. 안정권 (합격 유력)</h5>
+                                            <h5 className="text-sm font-black text-rose-600 mb-3 flex items-center gap-1"><ArrowUpRight size={16}/> 상향 (소신지원)</h5>
                                             <div className="space-y-2">
-                                                {categorizedList.safe.length > 0 ? categorizedList.safe.map((d, i) => (
-                                                    <div key={i} className="bg-white p-3 rounded-xl border border-blue-100 shadow-sm flex justify-between items-center">
+                                                {categorizedList.reach.length > 0 ? categorizedList.reach.map((d, i) => (
+                                                    <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-rose-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-rose-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-rose-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
                                                         </div>
-                                                        <div className="text-xs font-black text-blue-600">{d.cut}</div>
+                                                        <div className="text-xs font-black text-rose-500">{d.cut}</div>
                                                     </div>
-                                                )) : <div className="text-xs text-slate-400 bg-white p-3 rounded-xl border border-dashed">지원 가능한 안정권 데이터가 없습니다.</div>}
+                                                )) : <div className="text-xs text-slate-400 bg-white p-3 rounded-xl border border-dashed">지원 가능한 데이터가 없습니다.</div>}
                                             </div>
                                         </div>
 
-                                        {/* 적정권 라인 */}
+                                        {/* 적정 지원 (Match) */}
                                         <div>
-                                            <h5 className="text-sm font-black text-emerald-700 mb-3 flex items-center gap-1"><TrendingUp size={16}/> 2. 적정권 (주력 지원)</h5>
+                                            <h5 className="text-sm font-black text-emerald-600 mb-3 flex items-center gap-1"><Target size={16}/> 적정 (주력지원)</h5>
                                             <div className="space-y-2">
-                                                {categorizedList.reach.length > 0 ? categorizedList.reach.map((d, i) => (
-                                                    <div key={i} className="bg-white p-3 rounded-xl border border-emerald-100 shadow-sm flex justify-between items-center">
+                                                {categorizedList.match.length > 0 ? categorizedList.match.map((d, i) => (
+                                                    <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-emerald-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-emerald-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-emerald-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
                                                         </div>
                                                         <div className="text-xs font-black text-emerald-600">{d.cut}</div>
                                                     </div>
@@ -640,18 +558,18 @@ const CollegeNavigator = ({ currentUser }) => {
                                             </div>
                                         </div>
 
-                                        {/* 소신권 라인 */}
+                                        {/* 하향 지원 (Safety) */}
                                         <div>
-                                            <h5 className="text-sm font-black text-amber-600 mb-3 flex items-center gap-1"><Flame size={16}/> 3. 소신권 (추합/스나이핑)</h5>
+                                            <h5 className="text-sm font-black text-blue-600 mb-3 flex items-center gap-1"><ArrowDownRight size={16}/> 하향 (안정지원)</h5>
                                             <div className="space-y-2">
-                                                {categorizedList.challenge.length > 0 ? categorizedList.challenge.map((d, i) => (
-                                                    <div key={i} className="bg-white p-3 rounded-xl border border-amber-100 shadow-sm flex justify-between items-center">
+                                                {categorizedList.safety.length > 0 ? categorizedList.safety.map((d, i) => (
+                                                    <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-blue-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-blue-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-blue-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
                                                         </div>
-                                                        <div className="text-xs font-black text-amber-600">{d.cut}</div>
+                                                        <div className="text-xs font-black text-blue-500">{d.cut}</div>
                                                     </div>
-                                                )) : <div className="text-xs text-slate-400 bg-white p-3 rounded-xl border border-dashed">소신 지원 데이터가 없습니다.</div>}
+                                                )) : <div className="text-xs text-slate-400 bg-white p-3 rounded-xl border border-dashed">하향(안정권) 데이터가 없습니다.</div>}
                                             </div>
                                         </div>
                                     </div>
@@ -663,6 +581,45 @@ const CollegeNavigator = ({ currentUser }) => {
                 )}
             </div>
         </div>
+
+        {/* 🚀 [신규] 다음 시험 목표 계산기 모달 */}
+        <Modal isOpen={!!selectedUnivForNextExam} onClose={() => setSelectedUnivForNextExam(null)} title="다음 시험 목표 계산기">
+            {selectedUnivForNextExam && (() => {
+                const result = calculateNextTermGoal(selectedUnivForNextExam.cut);
+                return (
+                    <div className="p-4 space-y-4 text-center">
+                        <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200">
+                            <p className="text-xs font-black text-indigo-500 mb-1">{selectedUnivForNextExam.type}</p>
+                            <h3 className="text-2xl font-black text-slate-800 mb-2">{selectedUnivForNextExam.univ} {selectedUnivForNextExam.dept}</h3>
+                            <div className="flex justify-center gap-4 text-sm mt-4">
+                                <div className="bg-white border rounded-xl p-2 px-4 shadow-sm">
+                                    <span className="text-slate-400 font-bold block text-xs">현재 내 평균</span>
+                                    <span className="font-black text-slate-800 text-lg">{myGpa}</span>
+                                </div>
+                                <div className="bg-white border rounded-xl p-2 px-4 shadow-sm">
+                                    <span className="text-slate-400 font-bold block text-xs">합격 예측컷</span>
+                                    <span className="font-black text-rose-500 text-lg">{selectedUnivForNextExam.cut}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {!result ? (
+                            <div className="py-6 font-bold text-slate-500">계산을 위한 내신 성적 기록이 부족합니다.</div>
+                        ) : (
+                            <div className={`p-6 rounded-2xl border-2 ${result.possible ? 'bg-indigo-50 border-indigo-200' : 'bg-rose-50 border-rose-200'}`}>
+                                <h4 className={`text-lg font-black mb-2 ${result.possible ? 'text-indigo-900' : 'text-rose-900'}`}>
+                                    {result.possible ? '🎯 합격 목표 달성을 위해!' : '🚨 현실적인 전략 수정 필요'}
+                                </h4>
+                                <p className={`font-bold leading-relaxed whitespace-pre-wrap ${result.possible ? 'text-indigo-700' : 'text-rose-700'}`}>
+                                    {result.msg}
+                                </p>
+                            </div>
+                        )}
+                        <Button className="w-full mt-4 bg-slate-800 hover:bg-slate-900 text-white font-black py-4 rounded-xl" onClick={() => setSelectedUnivForNextExam(null)}>확인</Button>
+                    </div>
+                );
+            })()}
+        </Modal>
 
         <Modal isOpen={isConfirmModalOpen} onClose={() => setIsConfirmModalOpen(false)} title="최종 제출 확인">
             <div className="p-4 text-center space-y-4">
