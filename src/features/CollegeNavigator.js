@@ -1,8 +1,6 @@
-/* [서비스 가치] 입시 내비게이터 3.0 (학생 주도형 목표 설정 및 Gap 분석)
-   - 데이터 관리는 외부(VS Code)로 분리하고, 화면은 가볍고 직관적인 UI에 집중합니다.
-   - 학생이 직관적으로 이해할 수 있는 [상향/적정/하향] 명칭 사용
-   - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재
-   - [안정성 보장] 구조 분해 할당 오류 완벽 해결 및 Zero Trust 방어적 코딩 적용 */
+/* [서비스 가치] 입시 내비게이터 3.0 (개인화 큐레이션 엔진 탑재)
+   - Null 데이터 처리 무결점화 (예측 불가 대응)
+   - 학생의 '관심 학과' 키워드를 추출하여 타겟 전공 위주의 상향/적정/하향 맞춤형 정렬 제공 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, ChevronRight, 
@@ -40,7 +38,6 @@ const CollegeNavigator = ({ currentUser }) => {
   
   const fileInputRef = useRef(null);
 
-  // 입시 데이터 (정적 JSON 파일 기반)
   const [admissionsDB, setAdmissionsDB] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -92,7 +89,6 @@ const CollegeNavigator = ({ currentUser }) => {
     fetchStaticData();
   }, []);
 
-  // 🚀 [수정 완료] Zero Trust 방어적 코딩 (이름이 없는 비정상 데이터 에러 방지)
   const handleSearchStudent = () => {
       if (!searchInput.trim()) return alert('이름을 입력해주세요.');
       const results = (users || []).filter(u => 
@@ -138,7 +134,6 @@ const CollegeNavigator = ({ currentUser }) => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // --- AI OCR (성적표 파싱) ---
   const handleFileChange = async (e) => {
       if (isReadOnly) return;
       const file = e.target.files[0];
@@ -178,7 +173,6 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch(e) { alert(e.message); setIsConfirmModalOpen(false); }
   };
 
-  // 🚀 [수정 완료] 내신 평균 계산 리팩토링 (객체 구조 분해 할당 일치)
   const { avgGrades, numSchoolExams } = useMemo(() => {
       const schoolGrades = grades.filter(g => g.type === 'school');
       const calcAvg = (type) => {
@@ -194,21 +188,18 @@ const CollegeNavigator = ({ currentUser }) => {
           return count > 0 ? (sum / count).toFixed(2) : 0;
       };
       
-      // avgGrades 래퍼 객체로 명확하게 묶어 반환
       return { 
-          avgGrades: {
-              school: Number(calcAvg('school')), 
-              mock: Number(calcAvg('mock'))
-          },
+          avgGrades: { school: Number(calcAvg('school')), mock: Number(calcAvg('mock')) },
           numSchoolExams: schoolGrades.length
       };
   }, [grades]);
 
-  const myGpa = avgGrades.school; // 이제 오류 없이 안전하게 참조 가능!
+  const myGpa = avgGrades.school;
 
   // 다음 시험 목표 계산기 알고리즘
   const calculateNextTermGoal = (targetCut) => {
       if (numSchoolExams === 0) return null;
+      if (!targetCut || isNaN(targetCut)) return { possible: false, required: 0, msg: "해당 학과는 예측 데이터가 없어 목표 산출이 불가능합니다." };
       if (numSchoolExams >= 5) return { possible: false, required: 0, msg: "이미 3학년 1학기까지 주요 내신이 모두 반영되었습니다. 수능 최저 준비와 면접에 집중하세요." };
 
       const targetTotal = targetCut * (numSchoolExams + 1);
@@ -225,30 +216,33 @@ const CollegeNavigator = ({ currentUser }) => {
       }
   };
 
-  // 목표 학과 검색 리스트
+  // 🚀 [패치] 유효성 검사 헬퍼 함수 (null, 0 등을 예측불가로 처리)
+  const isValidCut = (cut) => cut !== null && cut !== undefined && !isNaN(cut) && cut > 0;
+
+  // 목표 학과 검색 리스트 (검색 결과에는 '예측 불가'도 노출)
   const searchResultsNav = useMemo(() => {
     if (!searchUniv && !searchDept) return [];
     if (!Array.isArray(admissionsDB)) return [];
     return admissionsDB.filter(item => {
         const matchUniv = searchUniv ? item.univ?.includes(searchUniv) : true;
         const matchDept = searchDept ? item.dept?.includes(searchDept) : true;
-        return matchUniv && matchDept && item.cut !== null && item.cut !== undefined;
+        return matchUniv && matchDept;
     }).slice(0, 50); 
   }, [admissionsDB, searchUniv, searchDept]);
 
-  // 목표 대학과의 Gap 분석 로직 (게이지바 용)
+  // 목표 대학과의 Gap 분석 로직
   const gapAnalysis = useMemo(() => {
       if (!targetDept || myGpa === 0) return null;
-      if (!targetDept.cut) return { status: 'unknown', text: '데이터 집계 중' };
+      if (!isValidCut(targetDept.cut)) return { status: 'unknown', text: '데이터 예측 불가', message: '💡 현재 내신 데이터 기준 예측 불가', gapText: '모집 요강 변동 등으로 데이터가 부족합니다.' };
 
       const diff = Number((myGpa - targetDept.cut).toFixed(2));
       let status = 'danger'; let message = ''; let gapText = '';
       
-      if (targetDept.min && myGpa <= targetDept.min) {
+      if (isValidCut(targetDept.min) && myGpa <= targetDept.min) {
           status = 'success'; message = "🎉 하향(안정) 지원 가능합니다!"; gapText = `안정선보다 ${Math.abs(diff)}등급 여유가 있습니다.`;
       } else if (myGpa <= targetDept.cut) {
           status = 'success'; message = "✅ 적정 지원 구간입니다."; gapText = `예측컷 이내에 안정적으로 진입했습니다.`;
-      } else if (targetDept.max && myGpa <= targetDept.max) {
+      } else if (isValidCut(targetDept.max) && myGpa <= targetDept.max) {
           status = 'warning'; message = "🔥 상향 지원 (스나이핑 노림수) 구간입니다."; gapText = `안전하게 합격하려면 내신 평균 ${diff}등급 향상이 필요합니다.`;
       } else {
           status = 'danger'; message = "🚨 현재 성적으로는 합격 확률이 희박합니다."; gapText = `평균 ${diff}등급 이상의 획기적인 점수 향상이 필요합니다.`;
@@ -256,20 +250,51 @@ const CollegeNavigator = ({ currentUser }) => {
       return { status, message, gapText, diff };
   }, [targetDept, myGpa]);
 
-  // 상향/적정/하향 자동 분류 알고리즘
+  // 🚀 [패치] 관심 전공 키워드 추출기 (예: "컴퓨터공학과" -> "컴퓨터")
+  const interestKeyword = useMemo(() => {
+      let rawText = targetDept ? targetDept.dept : searchDept;
+      if (!rawText) return "";
+      // 학과, 학부, 전공 등의 단어를 잘라내어 핵심 키워드만 추출
+      return rawText.replace(/(학과|학부|전공|과)$/g, '').trim();
+  }, [targetDept, searchDept]);
+
+  // 🚀 [패치] 관심사 기반 개인화 알고리즘 + Null 원천 차단
   const categorizedList = useMemo(() => {
       if (myGpa === 0 || !Array.isArray(admissionsDB) || admissionsDB.length === 0) return { safety: [], match: [], reach: [] };
       const safety = []; const match = []; const reach = [];
       
-      admissionsDB.filter(d => d.cut !== null && d.cut !== undefined).forEach(d => {
-          if (d.min && myGpa <= d.min) safety.push(d);            // 하향 (안정지원)
-          else if (myGpa <= d.cut) match.push(d);                 // 적정 (주력지원)
-          else if (d.max && myGpa <= d.max) reach.push(d);        // 상향 (소신/스나이핑)
+      admissionsDB.forEach(d => {
+          // 🚨 Null, 0 등 잘못된 데이터는 추천에서 완벽하게 배제
+          if (!isValidCut(d.cut)) return;
+
+          if (isValidCut(d.min) && myGpa <= d.min) safety.push(d);            // 하향 (안정지원)
+          else if (myGpa <= d.cut) match.push(d);                             // 적정 (주력지원)
+          else if (isValidCut(d.max) && myGpa <= d.max) reach.push(d);        // 상향 (소신/스나이핑)
       });
 
-      const shuffle = (array) => array.sort(() => 0.5 - Math.random()).slice(0, 7);
-      return { safety: shuffle(safety), match: shuffle(match), reach: shuffle(reach) };
-  }, [myGpa, admissionsDB]);
+      // 🌟 스마트 큐레이션 정렬 엔진
+      const smartSort = (array) => {
+          return array.sort((a, b) => {
+              let scoreA = 0; let scoreB = 0;
+              
+              // 1. 관심 키워드(전공)가 일치하면 압도적 가중치(+100점)
+              if (interestKeyword) {
+                  if (a.dept.includes(interestKeyword)) scoreA += 100;
+                  if (b.dept.includes(interestKeyword)) scoreB += 100;
+              }
+              // 2. 내 점수와 컷이 가까운 대학 우선 (+점수)
+              scoreA += (10 - Math.abs(myGpa - a.cut));
+              scoreB += (10 - Math.abs(myGpa - b.cut));
+              // 3. 동점일 경우 섞기 위한 미세한 랜덤 값
+              scoreA += Math.random();
+              scoreB += Math.random();
+              
+              return scoreB - scoreA; // 내림차순 정렬
+          }).slice(0, 7); // 상위 7개만 노출
+      };
+
+      return { safety: smartSort(safety), match: smartSort(match), reach: smartSort(reach) };
+  }, [myGpa, admissionsDB, interestKeyword]);
 
   const renderGraph = (type) => {
       const targetGrades = grades.filter(g => g.type === type);
@@ -459,7 +484,7 @@ const CollegeNavigator = ({ currentUser }) => {
                         
                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
                             
-                            {/* 좌측: 목표 학과 검색 및 Gap 시각화 */}
+                            {/* 좌측: 목표 학과 설정 */}
                             <div className="space-y-6">
                                 <div className="bg-slate-50 p-5 sm:p-6 rounded-3xl border border-slate-200">
                                     <h4 className="font-black text-slate-800 mb-4 flex items-center gap-2"><MapPin className="text-rose-500"/> 나의 목표 학과 설정</h4>
@@ -480,12 +505,13 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 <button onClick={() => setTargetDept(null)} className="text-xs font-bold text-slate-400 hover:text-rose-500 underline underline-offset-2">취소</button>
                                             </div>
 
-                                            <div className={`p-4 rounded-xl mb-6 ${gapAnalysis?.status === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' : gapAnalysis?.status === 'warning' ? 'bg-amber-50 text-amber-800 border border-amber-100' : 'bg-rose-50 text-rose-800 border border-rose-100'}`}>
+                                            <div className={`p-4 rounded-xl mb-6 ${gapAnalysis?.status === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' : gapAnalysis?.status === 'warning' ? 'bg-amber-50 text-amber-800 border border-amber-100' : gapAnalysis?.status === 'unknown' ? 'bg-slate-100 text-slate-600 border border-slate-200' : 'bg-rose-50 text-rose-800 border border-rose-100'}`}>
                                                 <p className="font-black text-sm">{gapAnalysis?.message}</p>
                                                 <p className="font-bold text-xs mt-1">{gapAnalysis?.gapText}</p>
                                             </div>
 
-                                            {targetDept.cut && (
+                                            {/* 시각적 Gap 게이지 바 (유효한 데이터일 때만 표시) */}
+                                            {isValidCut(targetDept.cut) && (
                                                 <div className="mt-8 mb-4 px-2 relative cursor-pointer" onClick={() => setSelectedUnivForNextExam(targetDept)} title="클릭하여 다음 시험 목표 확인">
                                                     <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
                                                         <div className="absolute top-0 h-full bg-gradient-to-r from-emerald-400 to-amber-400" style={{ left: '0%', width: `${Math.max(0, Math.min(100, ((targetDept.cut - 1) / 4) * 100))}%` }}></div>
@@ -501,6 +527,7 @@ const CollegeNavigator = ({ currentUser }) => {
                                                     </div>
                                                 </div>
                                             )}
+                                            
                                             <div className="mt-4 text-center">
                                                 <Button size="sm" variant="outline" className="w-full border-slate-200 font-black text-slate-600 hover:bg-slate-50" onClick={() => setSelectedUnivForNextExam(targetDept)}>
                                                     <Calculator size={14} className="mr-1 inline"/> 이 학과에 가려면 다음 시험에 몇 등급을 받아야 할까?
@@ -513,7 +540,9 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 <div key={idx} className="flex items-center justify-between p-4 border-b border-slate-100 hover:bg-slate-50 transition-colors">
                                                     <div>
                                                         <span className="font-black text-slate-700 text-sm">{item.univ} {item.dept}</span>
-                                                        <span className="ml-2 text-xs font-bold text-indigo-500">예측컷: {item.cut}</span>
+                                                        <span className={`ml-2 text-xs font-bold ${isValidCut(item.cut) ? 'text-indigo-500' : 'text-slate-400'}`}>
+                                                            {isValidCut(item.cut) ? `예측컷: ${item.cut}` : '예측 불가'}
+                                                        </span>
                                                     </div>
                                                     <button onClick={() => setTargetDept(item)} className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-lg transition-colors">
                                                         목표 📌
@@ -531,11 +560,11 @@ const CollegeNavigator = ({ currentUser }) => {
                                 </div>
                             </div>
 
-                            {/* 우측: 내 점수 기반 3단계 지원 가능 리스트 */}
+                            {/* 우측: 내 성적 지원 가능 라인 (관심학과 기반 큐레이션) */}
                             <div className="space-y-6">
                                 <div className="bg-indigo-50 p-5 sm:p-6 rounded-3xl border border-indigo-100 h-full">
                                     <h4 className="font-black text-indigo-900 mb-2 flex items-center gap-2"><Sparkles className="text-indigo-500"/> 내 성적 지원 가능 라인</h4>
-                                    <p className="text-xs font-bold text-indigo-600 mb-6">현재 {myGpa}등급 기준으로 스캔한 엑셀 추천 리스트입니다. <br/>항목을 클릭하면 <b>다음 시험 목표 점수</b>를 확인할 수 있습니다.</p>
+                                    <p className="text-xs font-bold text-indigo-600 mb-6">현재 {myGpa}등급 기준으로 분석한 맞춤형 추천 리스트입니다. <br/>항목을 클릭하면 <b>다음 시험 목표 점수</b>를 확인할 수 있습니다.</p>
 
                                     <div className="space-y-6">
                                         <div>
@@ -544,7 +573,9 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 {categorizedList.reach.length > 0 ? categorizedList.reach.map((d, i) => (
                                                     <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-rose-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-rose-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800 group-hover:text-rose-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-rose-600">
+                                                                {d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span>
+                                                            </div>
                                                         </div>
                                                         <div className="text-xs font-black text-rose-500">{d.cut}</div>
                                                     </div>
@@ -558,7 +589,9 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 {categorizedList.match.length > 0 ? categorizedList.match.map((d, i) => (
                                                     <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-emerald-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-emerald-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800 group-hover:text-emerald-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-emerald-600">
+                                                                {d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span>
+                                                            </div>
                                                         </div>
                                                         <div className="text-xs font-black text-emerald-600">{d.cut}</div>
                                                     </div>
@@ -572,7 +605,9 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 {categorizedList.safety.length > 0 ? categorizedList.safety.map((d, i) => (
                                                     <div key={i} onClick={() => setSelectedUnivForNextExam(d)} className="bg-white p-3 rounded-xl border border-blue-100 shadow-sm flex justify-between items-center cursor-pointer hover:border-blue-400 transition-all group">
                                                         <div>
-                                                            <div className="font-black text-sm text-slate-800 group-hover:text-blue-600">{d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span></div>
+                                                            <div className="font-black text-sm text-slate-800 group-hover:text-blue-600">
+                                                                {d.univ} <span className="text-[10px] text-slate-500 font-normal ml-1">{d.dept}</span>
+                                                            </div>
                                                         </div>
                                                         <div className="text-xs font-black text-blue-500">{d.cut}</div>
                                                     </div>
@@ -604,7 +639,7 @@ const CollegeNavigator = ({ currentUser }) => {
                                 </div>
                                 <div className="bg-white border rounded-xl p-2 px-4 shadow-sm">
                                     <span className="text-slate-400 font-bold block text-xs">합격 예측컷</span>
-                                    <span className="font-black text-rose-500 text-lg">{selectedUnivForNextExam.cut}</span>
+                                    <span className="font-black text-rose-500 text-lg">{isValidCut(selectedUnivForNextExam.cut) ? selectedUnivForNextExam.cut : '불가'}</span>
                                 </div>
                             </div>
                         </div>
