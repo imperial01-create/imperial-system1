@@ -1,6 +1,7 @@
 /* [서비스 가치] 학원의 핵심 자산인 학교별 분석 리포트를 생산하고 공유합니다.
    (🚀 CTO 패치: 내신 연구소 상단 탭 및 카드에 '다이내믹 번역기' 적용 완료 - 과거 데이터 강제 고등부 편입)
-   (🤖 CTO 패치: 시험 상세 분석 작성 시 PDF 기반 AI 자동 채우기 모듈 주입 및 런타임 오류 0% 달성) */
+   (🤖 CTO 패치: 시험 상세 분석 작성 시 PDF 기반 AI 자동 채우기 모듈 주입 및 런타임 오류 0% 달성)
+   (🛠️ CTO 패치: 예외 과목 수동 입력 늪(무한 루프) 탈출 및 State 강제 동기화 적용) */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { db } from '../firebase'; 
 import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, deleteDoc, serverTimestamp, writeBatch } from 'firebase/firestore'; 
@@ -12,7 +13,6 @@ import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; 
 
-// --- [아이콘 컴포넌트 생략 없이 전체 포함] ---
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
 const IconFile = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>;
 const IconLock = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>;
@@ -118,7 +118,6 @@ export default function SchoolStrategy({ currentUser }) {
   const user = currentUser || { role: 'admin', school: '영일고' }; 
   const { enrollments = [], classes = [] } = useData(); 
   
-  // 🚀 서울 리전의 Cloud Functions 명시적 타겟팅
   const functions = getFunctions(getApp(), 'asia-northeast3'); 
   
   const [trendReports, setTrendReports] = useState([]);
@@ -149,7 +148,6 @@ export default function SchoolStrategy({ currentUser }) {
   const [showQuestions, setShowQuestions] = useState(false);
   const [showInternalMemo, setShowInternalMemo] = useState(false);
 
-  // 🚀 AI 상태 관리
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   const fileInputRef = useRef(null);
 
@@ -517,7 +515,6 @@ export default function SchoolStrategy({ currentUser }) {
       setViewState({ view: 'form', selectedId: existingReport ? existingReport.id : null, selectedQuestion: null });
   };
 
-  // 🚀 [CTO 패치] AI 기반 시험지 파싱 및 데이터 자동 입력 로직
   const handleAiPdfUpload = async (e) => {
       const file = e.target.files[0];
       if (!file || file.type !== 'application/pdf') return alert("PDF 파일만 업로드 가능합니다.");
@@ -662,9 +659,15 @@ export default function SchoolStrategy({ currentUser }) {
 
       const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
 
-      const finalCode = isManualSubject 
-        ? (formData.standardCode || `CUSTOM_${formData.subject.replace(/\s+/g,'').toUpperCase()}`)
-        : getStandardSubjectCode(typeKor, formData.subject);
+      // 🚀 버그 수정: 예외 과목 수동 입력의 무한 루프 탈출 및 ID/Code 강제 동기화
+      let finalCode = formData.standardCode;
+      if (isManualSubject) {
+          if (!finalCode || finalCode.startsWith('CUSTOM_')) {
+              finalCode = `CUSTOM_${formData.subject.replace(/\s+/g,'').toUpperCase()}`;
+          }
+      } else {
+          finalCode = getStandardSubjectCode(typeKor, formData.subject);
+      }
 
       const baseData = {
           schoolType: typeKor,
@@ -733,7 +736,6 @@ export default function SchoolStrategy({ currentUser }) {
   const addArrayItem = (field, defaultObj) => setFormData({ ...formData, [field]: [...(formData[field] || []), defaultObj] });
   const removeArrayItem = (field, index) => { const newArray = [...formData[field]]; newArray.splice(index, 1); setFormData({ ...formData, [field]: newArray }); };
 
-  // 🚀 [CTO 패치] 교직원 전용 메모 저장 로직 복원
   const saveInternalMemo = async (id) => {
     const memoText = memoInputs[id];
     if (memoText === undefined) return alert("수정된 메모 내용이 없습니다.");
@@ -754,7 +756,6 @@ export default function SchoolStrategy({ currentUser }) {
     }
   };
 
-  // 🚀 [CTO 패치] 단원별 출제 비중 통계 함수 복원
   const getUnitDistribution = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
     const total = questions.length;
@@ -772,7 +773,6 @@ export default function SchoolStrategy({ currentUser }) {
     })).sort((a, b) => b.count - a.count); 
   };
 
-  // 🚀 [CTO 패치] 출제 근거(문항 출처) 통계 함수 복원
   const getSourceDistribution = (questions) => {
     if (!questions || !Array.isArray(questions) || questions.length === 0) return [];
     const total = questions.length;
@@ -990,7 +990,7 @@ export default function SchoolStrategy({ currentUser }) {
           </section>
         )}
 
-        {/* 🚀 [CTO 패치] 설정 및 마이그레이션 모달 렌더링 영역 복원 */}
+        {/* 🚀 [CTO 패치] 설정 및 마이그레이션 모달 복원 */}
         {isSettingsModalOpen && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white p-6 rounded-xl max-w-md w-full shadow-2xl">
@@ -1026,7 +1026,7 @@ export default function SchoolStrategy({ currentUser }) {
           </div>
         )}
 
-        {/* 🚀 [CTO 패치] 스마트 마이그레이션 검수 모달 렌더링 영역 복원 */}
+        {/* 🚀 [CTO 패치] 스마트 마이그레이션 검수 모달 복원 */}
         <Modal isOpen={isMigrationModalOpen} onClose={() => setIsMigrationModalOpen(false)} title="스마트 마이그레이션 검수 센터" className="max-w-5xl w-full">
             <div className="bg-indigo-50 text-indigo-800 p-4 rounded-xl text-sm mb-4 border border-indigo-200">
                 총 <strong>{migrationTargets.length}</strong>개의 옛날 데이터가 발견되었습니다. 학년과 학기를 필터링하고 체크박스로 선택하여 일괄 마이그레이션을 진행하세요.
@@ -1226,13 +1226,33 @@ export default function SchoolStrategy({ currentUser }) {
             <div className="col-span-2 md:col-span-2">
               <div className="flex justify-between items-center mb-1.5">
                   <label className="block text-xs md:text-sm font-bold text-indigo-700">과목 (자동 필터링됨)</label>
+                  {/* 🚀 [CTO 패치] 무한 루프 탈출: State 강제 초기화 로직 삽입 */}
                   <label className="flex items-center gap-1 text-[10px] text-gray-500 cursor-pointer hover:text-indigo-600">
-                      <input type="checkbox" checked={isManualSubject} onChange={(e) => setIsManualSubject(e.target.checked)} className="accent-indigo-600"/> 예외 과목 수동 입력
+                      <input type="checkbox" checked={isManualSubject} onChange={(e) => {
+                          const checked = e.target.checked;
+                          setIsManualSubject(checked);
+                          if (!checked) {
+                              const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[formSchoolType] || '고등학교';
+                              const gradeStr = formData.term ? formData.term.split(' ')[0] : '1학년';
+                              const available = getAvailableSubjects(typeKor, formData.year, gradeStr, activeDepartments) || [];
+                              setFormData({ ...formData, subject: available[0] || '', standardCode: '' });
+                          } else {
+                              setFormData({ ...formData, standardCode: '' });
+                          }
+                      }} className="accent-indigo-600"/> 예외 과목 수동 입력
                   </label>
               </div>
               
               {!isManualSubject ? (
-                  <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={formData.subject} onChange={e => setFormData({...formData, subject: e.target.value})}>
+                  <select className="w-full border-2 border-indigo-200 bg-indigo-50 p-2.5 rounded-lg text-sm outline-none font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-400" value={formData.subject} onChange={e => {
+                      const val = e.target.value;
+                      if (val === '기타(수동입력)') {
+                          setIsManualSubject(true);
+                          setFormData({...formData, subject: '', standardCode: ''});
+                      } else {
+                          setFormData({...formData, subject: val, standardCode: ''});
+                      }
+                  }}>
                       {(dynamicSubjects || []).map(s => <option key={s} value={s}>{s}</option>)}
                       <option disabled>──────────</option>
                       <option value="기타(수동입력)">기타 (체크박스 활성화 요망)</option>
@@ -1325,7 +1345,6 @@ export default function SchoolStrategy({ currentUser }) {
           )}
 
           {formData.type === 'trend' && (
-              // [경향 분석 폼 유지]
               <div className="space-y-6">
                  <div className="border p-4 rounded-xl bg-gray-50 shadow-sm">
                   <h3 className="text-sm font-bold mb-3 flex justify-between">
