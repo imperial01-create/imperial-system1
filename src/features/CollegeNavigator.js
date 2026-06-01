@@ -2,7 +2,7 @@
    - 데이터 관리는 외부(VS Code)로 분리하고, 화면은 가볍고 직관적인 UI에 집중합니다.
    - 학생이 직관적으로 이해할 수 있는 [상향/적정/하향] 명칭 사용
    - 항목 클릭 시, 다음 학기 목표 등급을 자동으로 계산해 주는 '학습 동기부여 엔진' 탑재
-   - [안정성 보장] Null 참조 에러, 데이터 파싱 에러 등 런타임 Crash 원인 100% 차단 */
+   - [안정성 보장] 구조 분해 할당 오류 완벽 해결 및 Zero Trust 방어적 코딩 적용 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, ChevronRight, 
@@ -23,7 +23,6 @@ const CollegeNavigator = ({ currentUser }) => {
   const navigate = useNavigate();
   const { users } = useData();
   
-  // 🚀 [Crash Fix 1] currentUser가 렌더링 찰나에 null일 수 있으므로 옵셔널 체이닝(?.) 필수
   const isAdminView = ['admin', 'admin_assistant', 'lecturer'].includes(currentUser?.role);
   
   const [searchInput, setSearchInput] = useState('');
@@ -31,7 +30,6 @@ const CollegeNavigator = ({ currentUser }) => {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState(studentId || '');
 
-  // 🚀 [Crash Fix 1] currentUser?.id 적용
   const activeStudentId = isAdminView ? selectedStudentId : currentUser?.id;
   const studentInfo = isAdminView ? (users || []).find(s => s.id === activeStudentId) : currentUser;
 
@@ -80,7 +78,6 @@ const CollegeNavigator = ({ currentUser }) => {
             const response = await fetch('/data/admissions_data.json');
             if(response.ok) {
                 const data = await response.json();
-                // 🚀 [Crash Fix 3] JSON이 배열이 아닌 객체로 잘못 반환될 경우의 Crash 원천 차단
                 setAdmissionsDB(Array.isArray(data) ? data : []);
             } else {
                 setAdmissionsDB([]); 
@@ -95,9 +92,13 @@ const CollegeNavigator = ({ currentUser }) => {
     fetchStaticData();
   }, []);
 
+  // 🚀 [수정 완료] Zero Trust 방어적 코딩 (이름이 없는 비정상 데이터 에러 방지)
   const handleSearchStudent = () => {
       if (!searchInput.trim()) return alert('이름을 입력해주세요.');
-      const results = (users || []).filter(u => u.role === 'student' && u.name.includes(searchInput.trim()));
+      const results = (users || []).filter(u => 
+          u.role === 'student' && 
+          u.name?.includes(searchInput.trim())
+      );
       setSearchResults(results);
       setSearchModalOpen(true);
   };
@@ -177,7 +178,7 @@ const CollegeNavigator = ({ currentUser }) => {
       } catch(e) { alert(e.message); setIsConfirmModalOpen(false); }
   };
 
-  // --- 내신 평균 계산 ---
+  // 🚀 [수정 완료] 내신 평균 계산 리팩토링 (객체 구조 분해 할당 일치)
   const { avgGrades, numSchoolExams } = useMemo(() => {
       const schoolGrades = grades.filter(g => g.type === 'school');
       const calcAvg = (type) => {
@@ -185,23 +186,27 @@ const CollegeNavigator = ({ currentUser }) => {
           if(arr.length === 0) return 0;
           let sum = 0, count = 0;
           arr.forEach(g => { 
-              const subs = g.subjects || []; // 🚀 [Crash Fix 2] 방어 로직 추가
+              const subs = g.subjects || [];
               subs.forEach(s => { 
                   if (s.grade && !isNaN(Number(s.grade))) { sum += Number(s.grade); count++; }
               }); 
           });
           return count > 0 ? (sum / count).toFixed(2) : 0;
       };
+      
+      // avgGrades 래퍼 객체로 명확하게 묶어 반환
       return { 
-          school: Number(calcAvg('school')), 
-          mock: Number(calcAvg('mock')),
+          avgGrades: {
+              school: Number(calcAvg('school')), 
+              mock: Number(calcAvg('mock'))
+          },
           numSchoolExams: schoolGrades.length
       };
   }, [grades]);
 
-  const myGpa = avgGrades.school;
+  const myGpa = avgGrades.school; // 이제 오류 없이 안전하게 참조 가능!
 
-  // 🚀 다음 시험 목표 계산기 알고리즘
+  // 다음 시험 목표 계산기 알고리즘
   const calculateNextTermGoal = (targetCut) => {
       if (numSchoolExams === 0) return null;
       if (numSchoolExams >= 5) return { possible: false, required: 0, msg: "이미 3학년 1학기까지 주요 내신이 모두 반영되었습니다. 수능 최저 준비와 면접에 집중하세요." };
@@ -251,7 +256,7 @@ const CollegeNavigator = ({ currentUser }) => {
       return { status, message, gapText, diff };
   }, [targetDept, myGpa]);
 
-  // 🚀 상향/적정/하향 자동 분류 알고리즘
+  // 상향/적정/하향 자동 분류 알고리즘
   const categorizedList = useMemo(() => {
       if (myGpa === 0 || !Array.isArray(admissionsDB) || admissionsDB.length === 0) return { safety: [], match: [], reach: [] };
       const safety = []; const match = []; const reach = [];
@@ -272,7 +277,7 @@ const CollegeNavigator = ({ currentUser }) => {
 
       const maxGrade = type === 'school' ? 5 : 9;
       const points = targetGrades.map((g, i) => {
-          const subs = g.subjects || []; // 🚀 [Crash Fix 2] 방어 로직
+          const subs = g.subjects || [];
           let sum = 0, count = 0; 
           subs.forEach(s => { if(s.grade && !isNaN(Number(s.grade))) { sum += Number(s.grade); count++; }});
           const avg = count > 0 ? sum / count : 0;
@@ -363,7 +368,7 @@ const CollegeNavigator = ({ currentUser }) => {
                     <div className="space-y-3 max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
                         {grades.length === 0 ? <p className="text-center py-10 text-slate-400 font-bold">등록된 성적이 없습니다.</p> :
                         grades.map(g => {
-                            const subs = g.subjects || []; // 🚀 [Crash Fix 2]
+                            const subs = g.subjects || [];
                             const avg = subs.length > 0 ? (subs.reduce((a,b)=>a+(Number(b.grade)||0),0)/subs.length).toFixed(2) : '-';
                             return (
                             <div key={g.id} onClick={() => handleEditEntry(g)} className={`p-4 rounded-2xl border transition-all cursor-pointer group ${inputForm.id === g.id ? 'bg-blue-50 border-blue-400 shadow-md ring-2 ring-blue-100' : 'bg-slate-50 border-slate-100 hover:border-blue-200'}`}>
