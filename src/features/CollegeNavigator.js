@@ -4,10 +4,11 @@
    - 내 점수로 갈 수 있는 [안정/적정/소신/상향] 대학 리스트를 즉석에서 매칭하여 동기부여 극대화 */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
+// 🚀 [CTO 패치] Database 아이콘 import 누락 수정 완료
 import { 
   Compass, TrendingUp, Camera, CheckCircle, Edit2, ChevronRight, Award, 
   X, Plus, Loader, History, Search, ArrowRight, Trash2, Users, Target, Lock,
-  MapPin, AlertTriangle, Info, Sparkles, Flame
+  MapPin, AlertTriangle, Info, Sparkles, Flame, Database 
 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';

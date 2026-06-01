@@ -2,7 +2,6 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 
-// 💡 엑셀 파일 이름이 다를 경우 아래 이름을 수정해주세요.
 const EXCEL_FILE_PATH = path.join(__dirname, '목동임페리얼학원_학생맞춤_지원판별기.xlsx');
 const OUTPUT_JSON_PATH = path.join(__dirname, 'public', 'data', 'admissions_data.json');
 
@@ -28,8 +27,8 @@ try {
             dept: row['학과명'],
             cut: Number(row['5등급제 예측컷']) || null,
             min: Number(row['구간 Min']) || null,
-            max: Number(row['구간 Max']) || null,
-            strategy: row['지원 전략 판별기'] || '예측 불가'
+            max: Number(row['구간 Max']) || null
+            // 🚀 [CTO 패치] 불필요한 strategy 필드 추출 로직 완전 제거 (용량 최적화)
           });
         }
       });
@@ -47,9 +46,9 @@ try {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  // JSON 파일로 저장
+  // JSON 파일로 저장 (가독성을 위한 들여쓰기 유지)
   fs.writeFileSync(OUTPUT_JSON_PATH, JSON.stringify(allAdmissions, null, 2), 'utf-8');
-  console.log(`\n🎉 성공! 총 ${allAdmissions.length}개의 데이터가 JSON으로 변환되었습니다.`);
+  console.log(`\n🎉 성공! 총 ${allAdmissions.length}개의 데이터가 군더더기 없이 깔끔하게 변환되었습니다.`);
   console.log(`📁 저장 위치: ${OUTPUT_JSON_PATH}`);
 
 } catch (error) {
