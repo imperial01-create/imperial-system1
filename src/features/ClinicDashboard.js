@@ -948,7 +948,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
           try {
               const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목: ${formattedTopic}\n📖 범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 슬롯: 총 ${studentSelectedSlots.length}건\n\n승인을 진행해 주세요!`;
               await httpsCallable(functions, 'sendTelegramAlert')({ text: telegramMsg });
-          } catch (teleErr) {}
+          } catch (teleErr) {
+                console.error("텔레그램 발송 실패:", teleErr);
+            }
           setModalState({type:null}); setStudentSelectedSlots([]); notify('신청이 완료되었습니다!', 'success');
       } catch(e) { notify(`예약 실패: ${e.message}`, 'error'); } finally { setIsSubmittingBooking(false); }
     };
