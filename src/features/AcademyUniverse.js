@@ -355,15 +355,45 @@ const AcademyUniverse = ({ currentUser }) => {
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-2 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
                   
-                  {/* 🚀 [신규 추가] 영어 과목일 때 단어장 긴급 복구/출력 단추 배치 */}
+                  {/* 🚀 [영어 특화] Voca 3대 스탯 및 분실방지 인쇄 UI */}
                   {selectedSubject === '영어' && studentEnglishStat && (
-                      <div className="mt-2 mb-4">
-                          <button 
-                              onClick={() => window.print()}
-                              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-sm px-5 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition-transform active:scale-95"
-                          >
-                              <Printer size={16}/> 📥 [분실 방지] 오늘의 단어장 다운로드 / 종이 인쇄하기
-                          </button>
+                      <div className="mt-4 mb-4 bg-white/50 p-5 rounded-2xl border border-blue-100 shadow-inner">
+                          <div className="flex justify-between items-center mb-3 border-b border-blue-200 pb-2">
+                              <h3 className="font-black text-blue-900 text-sm flex items-center gap-1.5"><BookOpen size={16}/> Voca 종합 스탯 리포트</h3>
+                              <button onClick={() => window.print()} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs px-3 py-1.5 rounded-lg shadow-md flex items-center gap-1.5 transition-transform active:scale-95">
+                                  <Printer size={14}/> 📥 [결석/분실] 맞춤 시험지 PDF 다운로드
+                              </button>
+                          </div>
+                          
+                          <div className="space-y-3 mb-4">
+                              {/* 스탯 1: 어휘 진도 */}
+                              <div>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                      <span>📚 어휘 진도 (학습량)</span><span>{studentEnglishStat.vocaProgress || 0}%</span>
+                                  </div>
+                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full" style={{ width: `${studentEnglishStat.vocaProgress || 0}%` }}></div></div>
+                              </div>
+                              {/* 스탯 2: 뜻 이해도 */}
+                              <div>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                      <span>🧠 뜻 이해도 (다의어/추론)</span><span>{studentEnglishStat.vocaComprehension || 0}%</span>
+                                  </div>
+                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full" style={{ width: `${studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
+                              </div>
+                              {/* 스탯 3: 장기 기억력 */}
+                              <div>
+                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
+                                      <span>🔋 장기 기억 유지력</span><span>{studentEnglishStat.vocaRetention || 0}%</span>
+                                  </div>
+                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${studentEnglishStat.vocaRetention || 0}%` }}></div></div>
+                              </div>
+                          </div>
+
+                          {/* 루브릭 한 줄 요약 */}
+                          <div className="bg-blue-50 text-blue-800 text-xs font-bold p-3 rounded-xl border border-blue-200 flex items-start gap-2">
+                              <Sparkles size={16} className="shrink-0 mt-0.5 text-blue-500"/>
+                              <p className="leading-relaxed break-keep">{studentEnglishStat.vocaRubric || "성적 데이터가 수집되는 중입니다. 꾸준히 시험을 진행해 주세요."}</p>
+                          </div>
                       </div>
                   )}
 
