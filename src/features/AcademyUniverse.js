@@ -327,10 +327,14 @@ const AcademyUniverse = ({ currentUser }) => {
       );
   }
 
-  // --- 세부 역량 스캔 화면 ---
+// --- 세부 역량 스캔 화면 ---
   const currData = subjectData[selectedSubject];
   const Icon = currData.meta.icon;
   
+  // 🚀 [신규 추가] 학생 본인이 직접 출력할 수 있도록 실시간 세션 데이터 바인딩
+  const studentEnglishStat = englishStats.find(s => s.studentId === activeStudentId);
+  const activeSessionData = studentEnglishStat ? studentEnglishStat.vocaSession : null;
+
   const calcExpectedGrade = (score) => {
       if(score >= 90) return 1; if(score >= 80) return 2; if(score >= 70) return 3;
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
@@ -338,22 +342,33 @@ const AcademyUniverse = ({ currentUser }) => {
 
   return (
       <div className="max-w-[1400px] mx-auto space-y-6 animate-in fade-in pb-20 px-2 sm:px-4 pt-6">
-          
           <button onClick={() => setSelectedSubject(null)} className="flex items-center gap-2 text-slate-500 hover:text-slate-900 font-bold mb-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 transition-colors w-fit">
               <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
           </button>
 
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
-              
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
                   <Icon size={64} />
               </div>
 
               <div className="relative z-10 text-center md:text-left flex-1">
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
-                  <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-4 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
+                  <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-2 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
+                  
+                  {/* 🚀 [신규 추가] 영어 과목일 때 단어장 긴급 복구/출력 단추 배치 */}
+                  {selectedSubject === '영어' && studentEnglishStat && (
+                      <div className="mt-2 mb-4">
+                          <button 
+                              onClick={() => window.print()}
+                              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-sm px-5 py-2.5 rounded-xl shadow-md flex items-center gap-2 transition-transform active:scale-95"
+                          >
+                              <Printer size={16}/> 📥 [분실 방지] 오늘의 단어장 다운로드 / 종이 인쇄하기
+                          </button>
+                      </div>
+                  )}
+
                   <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep">
-                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 부족한 세부 역량을 파악하고 전략을 수립하세요.
+                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다.
                   </p>
               </div>
 
@@ -363,6 +378,8 @@ const AcademyUniverse = ({ currentUser }) => {
                   <div className="text-xs font-bold text-slate-400 mt-2">최근 누적 데이터 환산치</div>
               </div>
           </div>
+          
+          {/* (이하 6대 역량 스캐너 바인딩 및 레이아웃 코드는 기존과 동일 유지) */}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
