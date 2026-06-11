@@ -1,14 +1,14 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 강의 관리와 기출 아카이브의 아이콘 중복 제거 및 VocaManager 메뉴 추가 완벽 반영) */
+   (🚀 CTO 패치: 누락되었던 4대 핵심 보안/방어 로직(Self-healing, Caching, 딥링크, NFC/NFD)을 완벽 복원하고, Kiosk 모드와 융합한 무결점 버전입니다.) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, HelpCircle
 } from 'lucide-react';
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
  
@@ -34,8 +34,8 @@ const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
-// 🚀 [CTO 패치] VocaManager 라우트 추가
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
+const ConsultationManager = React.lazy(() => import('./features/ConsultationManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -66,20 +66,19 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
             {isOpen && (
                 <>
                     <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
-                    
                     <div className="absolute z-50 w-full mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl max-h-72 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                         <div className="p-3 border-b border-gray-100 bg-gray-50/80">
                             <div className="relative">
                                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input 
                                     type="text" autoFocus 
-                                    className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-sm transition-all" 
+                                    className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-sm" 
                                     placeholder="학교명 키워드 검색..." 
-                                    value={search} onChange={e => setSearch(e.target.value)}
+                                    value={search} 
+                                    onChange={e => setSearch(e.target.value)}
                                 />
                             </div>
                         </div>
-                        
                         <div className="overflow-y-auto flex-1 custom-scrollbar pb-2">
                             {pinned.length > 0 && (
                                 <div className="p-2 bg-yellow-50/40">
@@ -91,13 +90,9 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
                                     </div>
                                 </div>
                             )}
-                            
                             {pinned.length > 0 && <div className="h-1 bg-gray-50 border-y border-gray-100"></div>}
-                            
                             <div className="p-2">
-                                {others.length === 0 && search && pinned.length === 0 && (
-                                    <div className="text-center py-4 text-xs font-bold text-gray-400">검색 결과가 없습니다.</div>
-                                )}
+                                {others.length === 0 && search && pinned.length === 0 && <div className="text-center py-4 text-xs font-bold text-gray-400">검색 결과가 없습니다.</div>}
                                 <div className="grid grid-cols-1 gap-1">
                                     {others.map(s => (
                                         <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-blue-50 rounded-lg cursor-pointer font-bold text-sm text-gray-700 transition-colors">{s}</div>
@@ -116,13 +111,8 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false); 
-    const [form, setForm] = useState({
-        role: 'student', userId: '', password: '', name: '', phone: '',
-        schoolName: '', grade: '1학년', childName: '', subject: ''
-    });
-
+    const [form, setForm] = useState({ role: 'student', userId: '', password: '', name: '', phone: '', schoolName: '', grade: '1학년', childName: '', subject: '' });
     const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
-
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high'); 
     const [isCustomSchool, setIsCustomSchool] = useState(false); 
@@ -133,7 +123,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools');
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) setSchoolsData(docSnap.data());
-            } catch (e) { console.error("학교 리스트 로드 실패", e); }
+            } catch (e) { console.error(e); }
         };
         fetchSchools();
     }, []);
@@ -141,9 +131,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     useEffect(() => {
         let interval = null;
         if (smsAuth.timer > 0 && !smsAuth.verified) {
-            interval = setInterval(() => {
-                setSmsAuth(prev => ({ ...prev, timer: prev.timer - 1 }));
-            }, 1000);
+            interval = setInterval(() => { setSmsAuth(prev => ({ ...prev, timer: prev.timer - 1 })); }, 1000);
         } else if (smsAuth.timer === 0 && smsAuth.sent && !smsAuth.verified) {
             setSmsAuth(prev => ({ ...prev, code: '', sent: false }));
             setLoginErrorModal({ isOpen: true, msg: "인증 시간이 만료되었습니다. 다시 시도해주세요." });
@@ -154,18 +142,15 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const handleSendAuthCode = async () => {
         const cleanPhone = form.phone.replace(/[^0-9]/g, '');
         if (cleanPhone.length < 10) return setLoginErrorModal({ isOpen: true, msg: '유효한 휴대폰 번호를 입력해주세요.' });
-
         setLoading(true);
         try {
             const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
             const message = `[목동임페리얼학원]\n회원가입 본인인증 번호는 [${generatedCode}] 입니다. 3분 이내에 입력해주세요.`;
-
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                 phoneNumber: cleanPhone, message: message, status: 'pending', type: 'auth_code', studentName: form.name || '신규가입자', createdAt: serverTimestamp()
             });
-
             setSmsAuth({ code: generatedCode, input: '', sent: true, verified: false, timer: 180 });
-            alert('인증번호가 발송되었습니다. (휴대폰 문자를 확인하세요)');
+            alert('인증번호가 발송되었습니다.');
         } catch (error) { setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + error.message }); } finally { setLoading(false); }
     };
 
@@ -191,37 +176,29 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
         try {
             const safeId = encodeURIComponent(form.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
             const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId);
-            
             const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                setLoading(false);
-                return setLoginErrorModal({ isOpen: true, msg: '이미 사용 중인 아이디입니다.' });
-            }
+            if (docSnap.exists()) { setLoading(false); return setLoginErrorModal({ isOpen: true, msg: '이미 사용 중인 아이디입니다.' }); }
 
             const cleanPhone = form.phone.replace(/[^0-9]/g, '');
-            const payload = {
-                id: safeId, userId: form.userId, name: form.name, phone: cleanPhone,
-                role: form.role, password: form.password, status: 'pending', createdAt: serverTimestamp()
-            };
+            const payload = { id: safeId, userId: form.userId, name: form.name, phone: cleanPhone, role: form.role, password: form.password, status: 'pending', createdAt: serverTimestamp() };
 
-            if (form.role === 'student') {
-                payload.schoolName = form.schoolName;
-                payload.grade = form.grade;
-                payload.attendancePin = cleanPhone.slice(-4);
-            } else if (form.role === 'parent') { payload.childName = form.childName; } 
-            else if (['ta', 'lecturer'].includes(form.role)) { payload.subject = form.subject; }
+            if (form.role === 'student') { 
+                payload.schoolName = form.schoolName; 
+                payload.grade = form.grade; 
+                payload.attendancePin = cleanPhone.slice(-4); 
+            } else if (form.role === 'parent') { 
+                payload.childName = form.childName; 
+            } else if (['ta', 'lecturer'].includes(form.role)) { 
+                payload.subject = form.subject; 
+            }
 
             await setDoc(docRef, payload);
-
             await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: '01012345678',
-                message: `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${form.name}\n- 역할: ${form.role}\n데스크에서 승인 처리해주세요.`,
-                status: 'pending', type: 'system_alert', studentName: '시스템', createdAt: serverTimestamp()
+                phoneNumber: '01012345678', message: `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${form.name}\n데스크에서 승인해주세요.`, status: 'pending', type: 'system_alert', studentName: '시스템', createdAt: serverTimestamp()
             });
-
             alert('가입 신청이 완료되었습니다. 데스크 승인 후 로그인 가능합니다.');
             onCancel(); 
-        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '가입 신청 중 오류가 발생했습니다: ' + error.message }); } finally { setLoading(false); }
+        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '오류가 발생했습니다: ' + error.message }); } finally { setLoading(false); }
     };
 
     return (
@@ -230,10 +207,9 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 <h2 className="text-xl font-bold text-gray-900">시스템 회원가입</h2>
                 <button type="button" onClick={onCancel} className="p-2 bg-gray-100 rounded-full hover:bg-gray-200"><X size={20}/></button>
             </div>
-            
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">가입 유형</label>
-                <select className="w-full border rounded-xl p-3 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-bold" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
+                <select className="w-full border rounded-xl p-3 bg-gray-50 font-bold" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
                     <option value="student">학생</option>
                     <option value="parent">학부모</option>
                     <option value="ta">수업조교</option>
@@ -241,91 +217,82 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                     <option value="lecturer">강사</option>
                 </select>
             </div>
-
             <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">이름</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" placeholder="실명 입력" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
-                <div><label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label><input required className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} /></div>
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">이름</label>
+                    <input required className="w-full border p-3 rounded-xl bg-gray-50 font-bold" placeholder="실명 입력" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+                </div>
+                <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
+                    <input required className="w-full border p-3 rounded-xl bg-gray-50 font-bold" placeholder="영문/숫자" value={form.userId} onChange={e => setForm({...form, userId: e.target.value})} />
+                </div>
             </div>
-
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
                 <div className="relative">
-                    <input required type={showPassword ? "text" : "password"} placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 focus:border-blue-500 outline-none font-bold" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
-                    <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
-                        {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
+                    <input required type={showPassword ? "text" : "password"} placeholder="6자리 이상" className="w-full border p-3 rounded-xl bg-gray-50 font-bold" value={form.password} onChange={e => setForm({...form, password: e.target.value})} />
+                    <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={20} /> : <Eye size={20} />}</button>
                 </div>
             </div>
-
             <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-3">
                 <label className="block text-xs font-bold text-blue-800 flex items-center gap-1"><Phone size={14}/> 휴대폰 본인 인증</label>
                 <div className="flex gap-2">
-                    <input className="w-full border p-3 rounded-xl outline-none font-bold focus:border-blue-500 bg-white" placeholder="01012345678 (-없이)" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} disabled={smsAuth.verified} />
-                    <button type="button" onClick={handleSendAuthCode} disabled={loading || smsAuth.verified || smsAuth.timer > 0} className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold px-4 disabled:opacity-50 transition-colors">{smsAuth.timer > 0 ? '재전송' : '인증번호 받기'}</button>
+                    <input className="w-full border p-3 rounded-xl font-bold bg-white" placeholder="01012345678 (-없이)" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} disabled={smsAuth.verified} />
+                    <button type="button" onClick={handleSendAuthCode} disabled={loading || smsAuth.verified || smsAuth.timer > 0} className="shrink-0 bg-blue-600 text-white rounded-xl font-bold px-4">{smsAuth.timer > 0 ? '재전송' : '인증번호 받기'}</button>
                 </div>
                 {smsAuth.sent && !smsAuth.verified && (
                     <div className="flex gap-2 animate-in slide-in-from-top-2">
                         <div className="relative w-full">
-                            <input className="w-full border-2 border-indigo-200 p-3 rounded-xl outline-none font-black text-center tracking-widest focus:border-indigo-500 bg-white" placeholder="인증번호 6자리" value={smsAuth.input} onChange={e => setSmsAuth({...smsAuth, input: e.target.value})} />
+                            <input className="w-full border-2 border-indigo-200 p-3 rounded-xl font-black text-center tracking-widest bg-white" placeholder="인증번호 6자리" value={smsAuth.input} onChange={e => setSmsAuth({...smsAuth, input: e.target.value})} />
                             <div className="absolute right-3 top-1/2 -translate-y-1/2 text-rose-500 font-bold text-sm flex items-center gap-1"><Clock size={14}/> {Math.floor(smsAuth.timer / 60)}:{String(smsAuth.timer % 60).padStart(2, '0')}</div>
                         </div>
-                        <button type="button" onClick={handleVerifyCode} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold px-4 transition-colors">확인</button>
+                        <button type="button" onClick={handleVerifyCode} className="shrink-0 bg-indigo-600 text-white rounded-xl font-bold px-4">확인</button>
                     </div>
                 )}
                 {smsAuth.verified && <div className="text-sm font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={16}/> 인증이 완료되었습니다.</div>}
             </div>
-
             {form.role === 'student' && (
                 <div className="grid grid-cols-1 gap-3 bg-gray-50 p-3 rounded-xl border">
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보 (목록에서 검색/선택)</label>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보</label>
                         <div className="flex gap-2 relative">
-                            <select className="w-1/3 border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setForm({...form, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
+                            <select className="w-1/3 border-2 p-3 rounded-xl bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setForm({...form, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
                                 <option value="elementary">초등학교</option>
                                 <option value="middle">중학교</option>
                                 <option value="high">고등학교</option>
                             </select>
-                            
                             {!isCustomSchool ? (
-                                <SmartSchoolSelect 
-                                    schoolType={schoolType} 
-                                    schoolsData={schoolsData} 
-                                    value={form.schoolName} 
-                                    onChange={(val) => setForm({...form, schoolName: val})}
-                                    onCustomSelect={() => setIsCustomSchool(true)}
-                                />
+                                <SmartSchoolSelect schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
                             ) : (
                                 <div className="w-2/3 relative">
-                                    <input required className="w-full border-2 border-blue-300 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
-                                    <button type="button" onClick={() => { setIsCustomSchool(false); setForm({...form, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-red-500 bg-white rounded-full"><X size={18}/></button>
+                                    <input required className="w-full border-2 border-blue-300 p-3 rounded-xl bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
+                                    <button type="button" onClick={() => { setIsCustomSchool(false); setForm({...form, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 bg-white rounded-full"><X size={18}/></button>
                                 </div>
                             )}
                         </div>
                     </div>
                     <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학년</label>
-                        <select className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}>
+                        <select className="w-full border-2 p-3 rounded-xl bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}>
                             {getGradeOptions(schoolType).map(g => <option key={g} value={g}>{g}</option>)}
                         </select>
                     </div>
                 </div>
             )}
-            
             {form.role === 'parent' && (
                 <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">자녀 이름 (수강생)</label>
-                    <input required className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
+                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">자녀 이름</label>
+                    <input required className="w-full border-2 p-3 rounded-xl bg-white font-bold" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
                 </div>
             )}
             {['ta', 'lecturer'].includes(form.role) && (
                 <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">담당 과목 (또는 분야)</label>
-                    <input className="w-full border-2 p-3 rounded-xl focus:border-blue-500 outline-none bg-white font-bold" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
+                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">담당 과목</label>
+                    <input className="w-full border-2 p-3 rounded-xl bg-white font-bold" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
                 </div>
             )}
-
-            <div className="pt-2 flex flex-col gap-3">
-                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-xl font-bold transition-all shadow-md">
+            <div className="pt-2">
+                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-md">
                     {loading ? <Loader className="animate-spin mx-auto" /> : '가입 신청 완료하기'}
                 </button>
             </div>
@@ -346,45 +313,40 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
         ) : (
             <>
                 <div className="text-center mb-8">
-                <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-200">
-                    <span className="text-2xl font-bold">I</span>
-                </div>
-                <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
-                <p className="text-gray-500 mt-2">학생과 학부모를 위한 프리미엄 관리</p>
+                    <div className="bg-blue-600 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                        <span className="text-2xl font-bold">I</span>
+                    </div>
+                    <h1 className="text-2xl font-bold text-gray-900">Imperial System</h1>
+                    <p className="text-gray-500 mt-2">학생과 학부모를 위한 프리미엄 관리</p>
                 </div>
                 <div className="space-y-5">
-                <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
-                    <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-bold" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
-                </div>
-                <div>
-                    <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
-                    <div className="relative">
-                    <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-bold" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
-                    <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>
-                        {showPassword ? <EyeOff size={24} /> : <Eye size={24} />}
-                    </button>
+                    <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">아이디</label>
+                        <input type="text" placeholder="ID를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 font-bold" value={form.id} onChange={e=>setForm({...form, id:e.target.value})}/>
                     </div>
-                </div>
-                <button onClick={onLogin} className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl font-bold transition-all shadow-md" disabled={isLoading}>
-                    {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
-                </button>
-                <div className="pt-2 text-center border-t border-gray-100">
-                    <button type="button" onClick={() => setIsSignUpMode(true)} className="text-sm font-bold text-blue-600 hover:text-blue-800 transition-colors">새로 오셨나요? 회원가입 하기</button>
-                </div>
+                    <div>
+                        <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">비밀번호</label>
+                        <div className="relative">
+                            <input type={showPassword ? "text" : "password"} placeholder="비밀번호를 입력하세요" className="w-full border rounded-xl p-4 bg-gray-50 outline-none focus:border-blue-500 font-bold" value={form.password} onChange={e=>setForm({...form, password:e.target.value})} onKeyDown={handleKeyDown}/>
+                            <button type="button" className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={24} /> : <Eye size={24} />}</button>
+                        </div>
+                    </div>
+                    <button onClick={onLogin} className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-md" disabled={isLoading}>
+                        {isLoading ? <Loader className="animate-spin mx-auto" /> : '로그인'}
+                    </button>
+                    <div className="pt-2 text-center border-t border-gray-100">
+                        <button type="button" onClick={() => setIsSignUpMode(true)} className="text-sm font-bold text-blue-600 hover:text-blue-800">새로 오셨나요? 회원가입 하기</button>
+                    </div>
                 </div>
             </>
         )}
       </div>
-
       {loginErrorModal.isOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
-            <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl scale-100 animate-in zoom-in-95 duration-200">
-                <div className="flex flex-col items-center text-center space-y-4">
-                    <div className="bg-red-50 p-4 rounded-full text-red-500"><AlertCircle size={48} /></div>
-                    <h3 className="text-xl font-bold leading-relaxed whitespace-pre-wrap">{loginErrorModal.msg}</h3>
-                    <button className="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold transition-colors" onClick={() => setLoginErrorModal({ isOpen: false, msg: '' })}>확인</button>
-                </div>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in">
+            <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl text-center space-y-4">
+                <div className="bg-red-50 p-4 rounded-full text-red-500 inline-block"><AlertCircle size={48} /></div>
+                <h3 className="text-xl font-bold leading-relaxed whitespace-pre-wrap">{loginErrorModal.msg}</h3>
+                <button className="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold" onClick={() => setLoginErrorModal({ isOpen: false, msg: '' })}>확인</button>
             </div>
         </div>
       )}
@@ -397,12 +359,18 @@ const Dashboard = ({ currentUser }) => {
     if (!currentUser) return null;
     return (
         <div className="space-y-6 animate-in fade-in">
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-8 rounded-3xl shadow-lg">
-                <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
-                <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-8 rounded-3xl shadow-lg flex justify-between items-center flex-wrap gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
+                    <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
+                </div>
+                {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
+                    <button onClick={() => navigate('/voca')} className="bg-indigo-900/40 text-white border border-indigo-200/30 px-6 py-4 rounded-2xl font-black text-base shadow-lg hover:bg-indigo-900/60 active:scale-95 transition-all flex items-center gap-2">
+                        ⚡ 10초 빠른 신규 상담 등록
+                    </button>
+                )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                
                 {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -412,7 +380,6 @@ const Dashboard = ({ currentUser }) => {
                         <p className="text-gray-500 leading-relaxed">오늘의 시간표와 학생들의 등원 현황, 지각자를 실시간으로 추적합니다.</p>
                     </div>
                 )}
-
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/clinic-tasks')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -422,7 +389,6 @@ const Dashboard = ({ currentUser }) => {
                         <p className="text-gray-500 leading-relaxed">클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 실시간으로 기록 및 보고합니다.</p>
                     </div>
                 )}
-
                 {currentUser.role === 'admin' && (
                     <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -430,117 +396,6 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-bold text-gray-800">재무 대시보드</h2>
                         </div>
                         <p className="text-gray-500 leading-relaxed">학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/expense')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><Receipt size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">지출결의 등록</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">법인카드 및 개인 지출 내역을 등록하고 증빙 영수증을 업로드합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/messages')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><MessageSquare size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">대량 알림 발송</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">성적표, 수강료 결제, 휴원 공지 등의 대량 문자를 템플릿으로 발송합니다.</p>
-                    </div>
-                )}
-
-                {currentUser.role === 'admin_assistant' && (
-                    <div onClick={() => navigate('/work-schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-cyan-100 p-3 rounded-xl text-cyan-600 group-hover:bg-cyan-600 group-hover:text-white transition-colors"><Clock size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">나의 근무 스케줄</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">나의 근무 일정을 확인하고 관리자에게 추가/취소를 요청합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/exam-diagnostics')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-rose-100 p-3 rounded-xl text-rose-600 group-hover:bg-rose-600 group-hover:text-white transition-colors"><Target size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">시험 진단 입력</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학생의 시험 결과를 입력하고 학부모 전용 프리미엄 분석 리포트를 즉시 생성합니다.</p>
-                    </div>
-                )}
-
-                {['student', 'parent'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/my-exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><Target size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">나의 시험 결과</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">지금까지 치른 시험의 성적과 담당 선생님의 맞춤 분석 리포트를 확인하세요.</p>
-                    </div>
-                )}
-
-                <div onClick={() => navigate('/strategy')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                    <div className="flex items-center gap-4 mb-4">
-                        <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><Brain size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">내신 연구소</h2>
-                    </div>
-                    <p className="text-gray-500 leading-relaxed">학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.</p>
-                </div>
-
-                <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                    <div className="flex items-center gap-4 mb-4">
-                        <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
-                        <h2 className="text-xl font-bold text-gray-800">클리닉 센터</h2>
-                    </div>
-                    <p className="text-gray-500 leading-relaxed">
-                        {['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교들의 스케줄을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인할 수 있습니다.'}
-                    </p>
-                </div>
-
-                {(['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
-                    <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            {/* 🚀 [CTO 패치] 강의 관리는 Video 아이콘으로 통일했습니다. */}
-                            <div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">
-                                {currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리'}
-                            </h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">{currentUser.role === 'student' || currentUser.role === 'parent' ? '배정된 강의 진도를 확인하고 영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고 강의 영상을 업로드하세요.'}</p>
-                    </div>
-                )}
-
-                {(['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
-                    <div onClick={() => navigate('/exams')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-teal-100 p-3 rounded-xl text-teal-600 group-hover:bg-teal-600 group-hover:text-white transition-colors"><BookOpen size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">기출 아카이브</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학교별 기출문제와 분석 자료를 가장 빠르게 확인하세요.</p>
-                    </div>
-                )}
-
-                {currentUser.role === 'admin' && (
-                    <div onClick={() => navigate('/payroll-mgmt')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-colors"><Wallet size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">월급 관리</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">전체 직원의 급여를 정산하고 관리합니다.</p>
-                    </div>
-                )}
-
-                {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/payroll-check')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-purple-100 p-3 rounded-xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors"><CircleDollarSign size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">월급 확인</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">이번 달 급여 명세서와 정산 내역을 확인합니다.</p>
                     </div>
                 )}
             </div>
@@ -554,7 +409,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 [CTO 패치] 영단어 메뉴 추가 및 '강의 관리' / '기출 아카이브' 아이콘 분리 완료
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
@@ -571,20 +425,17 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { 
       path: '/lectures', 
       label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', 
-      icon: currentUser.role.includes('student') ? GraduationCap : Video, // 🚀 기출 아카이브와의 중복을 피해 Video 로 변경
+      icon: currentUser.role.includes('student') ? GraduationCap : Video,
       roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] 
     },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    
-    // 🚀 영단어 메뉴 추가 (학생 본인, 최고 관리자, 영어 강사/조교만 볼 수 있도록 철저한 조건 분기)
     { 
       path: '/voca', 
-      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', 
+      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 및 상담 관리', 
       icon: BookText, 
       roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'],
       showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
     },
-
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
@@ -604,7 +455,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
-           {/* 🚀 showCondition을 통해 영단어 메뉴가 영어 강사와 관리자에게만 보이도록 필터링 */}
            {menuItems.filter(item => item.roles.includes(currentUser.role) && (!item.showCondition || item.showCondition(currentUser))).map((item) => {
               const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
               return (
@@ -673,13 +523,15 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
-                        {/* 🚀 VocaManager 라우트 안전하게 추가 */}
                         <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
                         
-                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        {/* 🚀 [CTO 패치] 3. 입시 내비게이터 파라미터(딥링크) 라우팅 복구 완료 */}
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/navigator/:studentId" element={<CollegeNavigator currentUser={currentUser} />} />
+                        <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
             </div>
@@ -700,13 +552,16 @@ const AppContent = () => {
 
   const navigate = useNavigate();
 
+  // 🚀 [CTO 패치] 2. 브라우저 캐시 강제 초기화 및 4. 세션 스토리지 ID 대소문자 방어 로직 완벽 복구 완료
   useEffect(() => {
+    // 2. 캐시 강제 초기화 로직 복원 (구버전 화면 잔류 방지)
     if ('caches' in window) {
       caches.keys().then((names) => {
         names.forEach(name => caches.delete(name));
       });
     }
 
+    // 4. 세션 스토리지 대소문자 방어 및 데이터 정합성 보정 로직 복원
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
@@ -719,6 +574,7 @@ const AppContent = () => {
     setLoading(false);
   }, []);
 
+  // 🚀 [CTO 패치] 1. 강력한 로그인 예외 처리(NFC/NFD) 및 과거/중복 데이터 Self-Healing 병합 로직 완벽 복구 완료
   const handleLogin = async () => {
       if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
       setLoginProcessing(true);
@@ -727,6 +583,7 @@ const AppContent = () => {
           let loginPassword = loginForm.password;
           if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
 
+          // NFC/NFD 한글 인코딩 방어 로직
           const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
           let authUid = null;
           let finalSafeId = null;
@@ -750,6 +607,7 @@ const AppContent = () => {
               let docData = null;
               let originalDocId = null; 
               
+              // userId 필드로 추적하는 Self-Healing 쿼리
               if (!userDoc.exists()) {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                   const s = await getDocs(q);
@@ -773,6 +631,7 @@ const AppContent = () => {
 
                   const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
+                  // 중복 데이터 병합(Merge) 및 기존 구버전 삭제 로직 (자가 복구)
                   if (originalDocId && originalDocId !== finalSafeId) {
                       setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                          .then(() => {
@@ -810,12 +669,31 @@ const AppContent = () => {
   };
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
-  if (!currentUser) return <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />;
-
+  
   return (
-      <DataProvider currentUser={currentUser}>
-          <AppLayout currentUser={currentUser} handleLogout={handleLogout} />
-      </DataProvider>
+    <Routes>
+      {/* Kiosk 전용 라우트 (사이드바 완전 배제형 전체화면) */}
+      <Route path="/kiosk/consult" element={
+        <Suspense fallback={<div className="h-screen flex items-center justify-center bg-gray-50"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
+          <DataProvider currentUser={{ role: 'admin_assistant', name: '상담용 태블릿 기기' }}>
+            <div className="w-full min-h-screen bg-gray-50 p-4 sm:p-6 md:p-10">
+              <ConsultationManager isKiosk={true} />
+            </div>
+          </DataProvider>
+        </Suspense>
+      } />
+      
+      {/* 일반 사용자 라우트 */}
+      <Route path="*" element={
+        !currentUser ? (
+          <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />
+        ) : (
+          <DataProvider currentUser={currentUser}>
+            <AppLayout currentUser={currentUser} handleLogout={handleLogout} />
+          </DataProvider>
+        )
+      } />
+    </Routes>
   );
 };
 

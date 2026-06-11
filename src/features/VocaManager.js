@@ -2,8 +2,9 @@
    상세 학습 로그를 지연 로딩(Lazy Loading)으로 구현하여 데이터 요금은 최소화하되, 
    학부모에게는 "내 아이의 회차별 점수 향상과 오답 트래킹"을 가시적으로 증명합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock, Target, Crosshair, ShieldCheck, AlertTriangle, BookX, ArrowUpDown, ChevronRight, BarChart2, Calendar } from 'lucide-react';
-import { Button, Card, Toast, Modal, Loader } from '../components/UI';
+// 🚀 [CTO 핫픽스] Loader 컴포넌트를 lucide-react에서 정상적으로 import 합니다.
+import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock, Target, Crosshair, ShieldCheck, AlertTriangle, BookX, ArrowUpDown, ChevronRight, BarChart2, Calendar, Loader } from 'lucide-react';
+import { Button, Card, Toast, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { generateDailyVocaSet, processVocaTestResult } from '../utils/vocaEngine';
 import { doc, updateDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
@@ -30,7 +31,6 @@ const VocaManager = ({ currentUser }) => {
     const [sortConfig, setSortConfig] = useState({ key: 'vocaProgress', direction: 'desc' });
     
     const [hellRoomModal, setHellRoomModal] = useState({ isOpen: false, loading: false, words: [] });
-    // 🚀 [CTO 패치] 상세 학습 로그(타임라인) 모달 상태 추가
     const [historyLogModal, setHistoryLogModal] = useState({ isOpen: false, loading: false, sessions: [] });
 
     const [catScoreInput, setCatScoreInput] = useState('');
@@ -176,7 +176,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 버튼을 누를 때만 최근 완료된 회차 이력을 불러오는 Lazy Loading 로직
     const fetchDetailedHistoryLog = async () => {
         if (!selectedStudent) return;
         setHistoryLogModal({ isOpen: true, loading: true, sessions: [] });
@@ -189,7 +188,6 @@ const VocaManager = ({ currentUser }) => {
             const snap = await getDocs(q);
             let sessions = snap.docs.map(d => d.data());
             
-            // 회차별 내림차순 정렬 및 최근 15회차만 제한 (모바일 렌더링 부하 방지)
             sessions.sort((a, b) => b.sessionNumber - a.sessionNumber);
             setHistoryLogModal({ isOpen: true, loading: false, sessions: sessions.slice(0, 15) });
         } catch (error) {
@@ -348,7 +346,6 @@ const VocaManager = ({ currentUser }) => {
                             )}
                         </div>
 
-                        {/* 🚀 [투명성 뷰어 확장] 오답 지옥방과 회차별 학습 로그 버튼 배치 */}
                         <div className="flex flex-wrap gap-2">
                             <button onClick={fetchDetailedHistoryLog} className="bg-white border-2 border-blue-200 text-blue-600 hover:bg-blue-50 font-black text-sm px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm transition-all active:scale-95">
                                 <BarChart2 size={18}/> 📊 성장 로그 및 상세 이력 보기
@@ -388,7 +385,7 @@ const VocaManager = ({ currentUser }) => {
                         <div className="col-span-1 flex flex-col justify-center gap-3">
                             {!['student', 'parent'].includes(currentUser?.role) ? (
                                 <Button onClick={handleGenerateSet} disabled={isGenerating} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 font-black h-16 w-full text-base shadow-lg transition-transform active:scale-95">
-                                    {isGenerating ? <RefreshCw className="animate-spin mx-auto" /> : <span className="flex items-center justify-center gap-2"><FileText size={20}/> 오늘의 맞춤 시험지 발급</span>}
+                                    {isGenerating ? <Loader className="animate-spin mx-auto" /> : <span className="flex items-center justify-center gap-2"><FileText size={20}/> 오늘의 맞춤 시험지 발급</span>}
                                 </Button>
                             ) : (
                                 <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center h-16 flex items-center justify-center font-bold text-blue-800 text-sm">
@@ -431,7 +428,6 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             ))}
 
-            {/* 고속 채점 그리드 (강사/조교 전용) */}
             {currentTestSession && !['student', 'parent'].includes(currentUser?.role) && (
                 <Card className="p-8 bg-white border-2 border-emerald-100 shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-500 mt-6">
                     <div className="flex justify-between items-center border-b border-slate-200 pb-5 mb-8">
@@ -461,13 +457,12 @@ const VocaManager = ({ currentUser }) => {
                             정답률 : <span className="text-emerald-600 font-black text-2xl mx-1">{((50 - wrongAnswers.size) / 50 * 100).toFixed(0)}</span> %
                         </div>
                         <Button onClick={handleSubmitScores} disabled={isSubmitting} className="bg-emerald-600 hover:bg-emerald-700 font-black text-lg px-10 py-4 shadow-lg w-full sm:w-auto">
-                            {isSubmitting ? '연산 처리 중...' : '채점 마감 및 스탯 반영하기'}
+                            {isSubmitting ? <Loader className="animate-spin mx-auto" /> : '채점 마감 및 스탯 반영하기'}
                         </Button>
                     </div>
                 </Card>
             )}
 
-            {/* 🚀 모달 1: 상세 학습 로그 (타임라인) */}
             <Modal isOpen={historyLogModal.isOpen} onClose={() => setHistoryLogModal({ isOpen: false, loading: false, sessions: [] })} title={`${selectedStudent?.name} 학생의 회차별 상세 로그`}>
                 <div className="p-2">
                     <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-6 text-sm text-blue-800 font-bold leading-relaxed flex items-start gap-2 shadow-sm">
@@ -489,7 +484,7 @@ const VocaManager = ({ currentUser }) => {
                                         <div className="flex justify-between items-center border-b border-gray-50 pb-3">
                                             <div className="flex items-center gap-2">
                                                 <span className="bg-blue-600 text-white font-black text-xs px-2.5 py-1 rounded-lg">Session {sess.sessionNumber}</span>
-                                                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Calendar size={12}/> {new Date(sess.completedAt?.seconds * 1000).toLocaleDateString()}</span>
+                                                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Calendar size={12}/> {sess.completedAt ? new Date(sess.completedAt.seconds * 1000).toLocaleDateString() : '날짜 정보 없음'}</span>
                                             </div>
                                             <div className="font-black text-xl text-slate-800">
                                                 정답률: <span className={sess.sessionScore >= 80 ? 'text-emerald-600' : 'text-rose-600'}>{sess.sessionScore || 0}%</span>
@@ -518,7 +513,6 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 🚀 모달 2: 오답 지옥방 목록 */}
             <Modal isOpen={hellRoomModal.isOpen} onClose={() => setHellRoomModal({ isOpen: false, loading: false, words: [] })} title={`${selectedStudent?.name} 학생의 오답 지옥방`}>
                 <div className="p-2">
                     <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 mb-4 text-sm text-rose-800 font-bold leading-relaxed flex items-start gap-2 shadow-sm">
@@ -550,7 +544,6 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 인쇄 전용 영역 */}
             {currentTestSession && (
                 <div className="print-only-section">
                     <div className="p-8">
