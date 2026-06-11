@@ -116,7 +116,7 @@ const RadarChart = ({ stats, isDummy = false }) => {
 };
 
 const AcademyUniverse = ({ currentUser }) => {
-  const { users, classes, enrollments } = useData();
+  const { users, classes, enrollments, englishStats } = useData();
   
   const accessibleStudents = useMemo(() => {
       const allStudents = (users || []).filter(u => u.role === 'student');
@@ -332,7 +332,7 @@ const AcademyUniverse = ({ currentUser }) => {
   const Icon = currData.meta.icon;
   
   // 🚀 [신규 추가] 학생 본인이 직접 출력할 수 있도록 실시간 세션 데이터 바인딩
-  const studentEnglishStat = englishStats.find(s => s.studentId === activeStudentId);
+  const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
   const activeSessionData = studentEnglishStat ? studentEnglishStat.vocaSession : null;
 
   const calcExpectedGrade = (score) => {
