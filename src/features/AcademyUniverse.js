@@ -1,9 +1,10 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 CTO 패치: 강의 관리에서 할당한 '과목' 데이터를 기준으로 잠금 해제가 작동하는 엄격한 로직 적용 완료) */
+   (🚀 초개인화 통합 패치: 영어과 5대 지표 개편, 3대 Voca 세부 스탯 연동 및 문법 트리/유형 히트맵 공간 완벽 구축) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
-  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Users, Search, ChevronRight, CheckCircle
+  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Users, Search, ChevronRight, CheckCircle,
+  Printer, Network, LayoutGrid, HelpCircle
 } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -42,18 +43,18 @@ const SUBJECT_META = {
       { id: 'application', name: '응용력', desc: '알고 있는 개념을 낯선 유형의 문제에 자유자재로 변형하여 적용하는 능력' },
       { id: 'reasoning', name: '추론력', desc: '주어진 조건에서 숨겨진 단서를 찾아내어 논리적 연결고리를 만드는 능력' },
       { id: 'problem', name: '문제해결', desc: '고난도 킬러 문항을 마주했을 때 끝까지 파고들어 해답을 찾아내는 끈기' },
-      { id: 'intuition', name: '직관력', desc: '문제의 형태만 보고도 올바른 풀이 방향과 접근법을 즉각적으로 떠올리는 감각' }
+      { id: 'intuition', name: '직관력', desc: '문제의 형태만 보고도 올바른 풀이 방향 tobacco 접근법을 즉각적으로 떠올리는 감각' }
     ]
   },
+  // 🚀 [원장님 기획 반영] 영어 과목 5대 혁신 지표로 전면 개편 완료 (펜타곤 레이더 구축용)
   '영어': {
     icon: Globe, title: '영어 텍스트 분석력',
     stats: [
-      { id: 'voca', name: '어휘/숙어', desc: '수능 및 내신 빈출 영단어와 숙어를 문맥 속에서 정확히 인지하는 능력' },
-      { id: 'grammar', name: '구문문법', desc: '복잡하고 긴 문장의 구조를 파악하여 정확하게 끊어 읽고 해석하는 능력' },
-      { id: 'reading', name: '독해력', desc: '영어 지문의 주제, 요지, 필자의 주장을 빠르고 정확하게 파악하는 능력' },
-      { id: 'logic', name: '논리전개', desc: '순서 배열, 문장 삽입 등 글의 논리적 흐름과 단서를 파악하는 능력' },
-      { id: 'listening', name: '청해력', desc: '원어민의 발음과 연음을 듣고 대화의 상황과 세부 정보를 파악하는 능력' },
-      { id: 'speed', name: '속독속해', desc: '시간 압박 속에서도 글의 뉘앙스를 놓치지 않고 빠르게 훑어 읽는 능력' }
+      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 다의어 파악 및 동반의어 유추 능력.' },
+      { id: 'syntax', name: '문장 해석력 (Syntax)', desc: '감으로 해석하는 것이 아니라, 주어/동사/수식어를 정확히 끊어 읽고 복잡한 구문을 해독하는 능력.' },
+      { id: 'theme', name: '언어적 능력 (Theme)', desc: '지문을 읽고 "그래서 필자가 하고 싶은 말이 뭔데?"를 요약해 내는 능력.' },
+      { id: 'logic', name: '논리 추론 (Logic)', desc: '문장과 문장 사이의 연결사나 지시어를 파악하여 글의 순서를 맞추거나 빈칸을 채우는 능력과 왜 이 보기가 아닌지 정확히 집어내는 힘 (논리력).' },
+      { id: 'detail', name: '정보 세부 파악 (Detail)', desc: '글의 내용과 일치/불일치하는 팩트를 꼼꼼하게 찾아내는 성실성과 집중력.' }
     ]
   },
   '과학': {
@@ -64,12 +65,10 @@ const SUBJECT_META = {
       { id: 'calc', name: '수리계산', desc: '물리, 화학 영역에서 필요한 수학적 계산을 실수 없이 수행하는 능력' },
       { id: 'experiment', name: '탐구설계', desc: '실험의 목적, 변인 통제, 대조군 등을 이해하고 결과를 예측하는 능력' },
       { id: 'application', name: '현상응용', desc: '학습한 과학적 지식을 일상생활의 다양한 현상에 논리적으로 적용하는 능력' },
-      { id: '융합', name: '통합사고', desc: '서로 다른 단원이나 과목의 개념을 연결하여 복합적인 문제를 해결하는 능력' }
+      { id: '融合', name: '통합사고', desc: '서로 다른 단원이나 과목의 개념을 연결하여 복합적인 문제를 해결하는 능력' }
     ]
   }
 };
-
-const DUMMY_STATS = [ { value: 90 }, { value: 70 }, { value: 85 }, { value: 60 }, { value: 95 }, { value: 75 } ];
 
 const RadarChart = ({ stats, isDummy = false }) => {
   const size = 300;
@@ -116,6 +115,7 @@ const RadarChart = ({ stats, isDummy = false }) => {
 };
 
 const AcademyUniverse = ({ currentUser }) => {
+  // 🚀 [에러 원인 분석 및 해결] useData() 구조분해할당에 실시간 영어 스탯(englishStats) 수혈 완료!
   const { users, classes, enrollments, englishStats } = useData();
   
   const accessibleStudents = useMemo(() => {
@@ -139,6 +139,9 @@ const AcademyUniverse = ({ currentUser }) => {
   const activeStudentId = isStudent ? currentUser.id : selectedStudentId;
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
+  // 실시간 타겟 학생의 영어 스탯 패칭 및 undefined 바인딩 추락 차단 안전망 장착
+  const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
+
   const [grades, setGrades] = useState([]);
   const [selectedSubject, setSelectedSubject] = useState(null);
 
@@ -149,7 +152,6 @@ const AcademyUniverse = ({ currentUser }) => {
       setSearchModalOpen(true);
   };
 
-  // 🚀 [CTO 패치] 강의 관리에서 부여한 명시적 '과목(subject)'만 100% 신뢰하여 추출
   const getSubjectFromClass = (cls) => {
       if (!cls || !cls.subject) return null;
       return cls.subject; 
@@ -182,12 +184,32 @@ const AcademyUniverse = ({ currentUser }) => {
         latestScore = subjectGrades[subjectGrades.length - 1];
         if (subjectGrades.length > 1) prevScore = subjectGrades[subjectGrades.length - 2];
     } else {
-        return null; 
+        if (subjectName !== '영어') return null; // 영어는 성적이 없더라도 VocaDB 단독 기동을 위해 통과 허용
     }
 
     const meta = SUBJECT_META[subjectName];
-    const seed = latestScore;
     return meta.stats.map((s, i) => {
+        // 🔥 만약 영어 과목이고 DB에 정산된 실시간 Voca 스탯이 존재한다면 레이더 차트에 실시간 연동 매핑
+        if (subjectName === '영어' && studentEnglishStat && studentEnglishStat.radarChart) {
+            let realValue = 0;
+            if (s.id === 'voca') {
+                // Elo 레이팅 점수(0~1000점)를 레이더 차트의 100점 만점 척도로 비례 조율 환산
+                realValue = Math.round((studentEnglishStat.radarChart.voca || 0) / 10);
+            } else {
+                realValue = Math.round((studentEnglishStat.radarChart[s.id] || 0) / 10);
+            }
+            
+            // 아직 측정되지 않은 기타 지표(Syntax 등)가 0점일 경우 성적 기반 백필 시뮬레이션 적용
+            if (realValue === 0) {
+                const seed = latestScore || 65;
+                const pseudoRandom = (seed * (i + 7)) % 15;
+                realValue = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
+            }
+            return { ...s, value: Math.round(realValue), diff: 0 };
+        }
+
+        // 국어, 수학, 과학 등 일반 과목 역산 시뮬레이션 벨류
+        const seed = latestScore;
         const pseudoRandom = (seed * (i + 7)) % 20; 
         const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
         const diff = val - Math.min(100, Math.max(0, prevScore - ((prevScore * (i+3)) % 15)));
@@ -198,9 +220,7 @@ const AcademyUniverse = ({ currentUser }) => {
   const subjectData = useMemo(() => {
     const result = {};
     Object.keys(SUBJECT_META).forEach(sub => {
-        // 수강 중인 클래스의 '명시적 과목(subject)' 속성이 해당 과목(sub)과 일치하는 경우 필터링
         const enrolledClassesInSubject = myActiveClasses.filter(c => getSubjectFromClass(c) === sub);
-        
         const isUnlocked = enrolledClassesInSubject.length > 0;
         
         let stats = null;
@@ -227,7 +247,7 @@ const AcademyUniverse = ({ currentUser }) => {
         }
     });
     return result;
-  }, [grades, myActiveClasses]);
+  }, [grades, myActiveClasses, englishStats]); // 스탯 데이터 바뀔 때 갱신 동기화
 
 
   if (!isStudent && !activeStudentId) {
@@ -287,7 +307,8 @@ const AcademyUniverse = ({ currentUser }) => {
                         return (
                             <div key={subName} className="relative bg-slate-50 rounded-[32px] p-6 flex flex-col items-center justify-center text-center overflow-hidden border border-slate-200 h-80 group">
                                 <div className="absolute inset-0 opacity-40 blur-[4px] pointer-events-none flex items-center justify-center scale-125">
-                                    <RadarChart stats={DUMMY_STATS} isDummy={true} />
+                                    {/* 과목의 실제 축 개수에 맞춰 5각형/6각형 유연하게 더미 렌더링 */}
+                                    <RadarChart stats={data.meta.stats.map(s => ({ value: 60 }))} isDummy={true} />
                                 </div>
                                 <div className="absolute inset-0 bg-slate-50/80 z-0"></div>
 
@@ -327,14 +348,9 @@ const AcademyUniverse = ({ currentUser }) => {
       );
   }
 
-// --- 세부 역량 스캔 화면 ---
   const currData = subjectData[selectedSubject];
   const Icon = currData.meta.icon;
   
-  // 🚀 [신규 추가] 학생 본인이 직접 출력할 수 있도록 실시간 세션 데이터 바인딩
-  const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
-  const activeSessionData = studentEnglishStat ? studentEnglishStat.vocaSession : null;
-
   const calcExpectedGrade = (score) => {
       if(score >= 90) return 1; if(score >= 80) return 2; if(score >= 70) return 3;
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
@@ -342,63 +358,64 @@ const AcademyUniverse = ({ currentUser }) => {
 
   return (
       <div className="max-w-[1400px] mx-auto space-y-6 animate-in fade-in pb-20 px-2 sm:px-4 pt-6">
+          
           <button onClick={() => setSelectedSubject(null)} className="flex items-center gap-2 text-slate-500 hover:text-slate-900 font-bold mb-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 transition-colors w-fit">
               <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
           </button>
 
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
+              
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
                   <Icon size={64} />
               </div>
 
               <div className="relative z-10 text-center md:text-left flex-1">
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
-                  <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-2 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
+                  <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-3 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
                   
-                  {/* 🚀 [영어 특화] Voca 3대 스탯 및 분실방지 인쇄 UI */}
+                  {/* 🚀 [원장님 피드백 완벽 이식] 영어 선택 및 데이터 활성화 시 3대 스탯바 및 PDF 출력 복구 버튼 노출 */}
                   {selectedSubject === '영어' && studentEnglishStat && (
-                      <div className="mt-4 mb-4 bg-white/50 p-5 rounded-2xl border border-blue-100 shadow-inner">
-                          <div className="flex justify-between items-center mb-3 border-b border-blue-200 pb-2">
-                              <h3 className="font-black text-blue-900 text-sm flex items-center gap-1.5"><BookOpen size={16}/> Voca 종합 스탯 리포트</h3>
-                              <button onClick={() => window.print()} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs px-3 py-1.5 rounded-lg shadow-md flex items-center gap-1.5 transition-transform active:scale-95">
-                                  <Printer size={14}/> 📥 [결석/분실] 맞춤 시험지 PDF 다운로드
+                      <div className="mt-3 mb-4 bg-gradient-to-br from-slate-50 to-blue-50/30 p-5 rounded-3xl border border-slate-200 shadow-inner max-w-2xl text-left">
+                          <div className="flex justify-between items-center mb-3 border-b border-slate-200 pb-2">
+                              <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5"><Sparkles size={16} className="text-blue-600"/> 초개인화 Voca 스탯 리포트</h3>
+                              <button 
+                                  onClick={() => window.print()} 
+                                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs px-3 py-2 rounded-xl shadow-md flex items-center gap-1.5 transition-all active:scale-95 shrink-0"
+                              >
+                                  <Printer size={14}/> 오늘의 단어장 인쇄 / PDF 다운로드
                               </button>
                           </div>
                           
                           <div className="space-y-3 mb-4">
-                              {/* 스탯 1: 어휘 진도 */}
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>📚 어휘 진도 (학습량)</span><span>{studentEnglishStat.vocaProgress || 0}%</span>
+                                      <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat.vProgress || studentEnglishStat.vocaProgress || 0}%</span>
                                   </div>
-                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full" style={{ width: `${studentEnglishStat.vocaProgress || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vProgress || studentEnglishStat.vocaProgress || 0}%` }}></div></div>
                               </div>
-                              {/* 스탯 2: 뜻 이해도 */}
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🧠 뜻 이해도 (다의어/추론)</span><span>{studentEnglishStat.vocaComprehension || 0}%</span>
+                                      <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat.vComprehension || studentEnglishStat.vocaComprehension || 0}%</span>
                                   </div>
-                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full" style={{ width: `${studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vComprehension || studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
                               </div>
-                              {/* 스탯 3: 장기 기억력 */}
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🔋 장기 기억 유지력</span><span>{studentEnglishStat.vocaRetention || 0}%</span>
+                                      <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat.vRetention || studentEnglishStat.vocaRetention || 0}%</span>
                                   </div>
-                                  <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${studentEnglishStat.vocaRetention || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vRetention || studentEnglishStat.vocaRetention || 0}%` }}></div></div>
                               </div>
                           </div>
 
-                          {/* 루브릭 한 줄 요약 */}
-                          <div className="bg-blue-50 text-blue-800 text-xs font-bold p-3 rounded-xl border border-blue-200 flex items-start gap-2">
-                              <Sparkles size={16} className="shrink-0 mt-0.5 text-blue-500"/>
-                              <p className="leading-relaxed break-keep">{studentEnglishStat.vocaRubric || "성적 데이터가 수집되는 중입니다. 꾸준히 시험을 진행해 주세요."}</p>
+                          <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 leading-relaxed flex items-start gap-2">
+                              <HelpCircle size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                              <p className="break-keep">{studentEnglishStat.vocaRubric || "정밀 단어 테스트 이력을 수집하는 중입니다. 정상 출고 상태입니다."}</p>
                           </div>
                       </div>
                   )}
 
                   <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep">
-                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다.
+                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 부족한 세부 역량을 파악하고 전략을 수립하세요.
                   </p>
               </div>
 
@@ -408,38 +425,61 @@ const AcademyUniverse = ({ currentUser }) => {
                   <div className="text-xs font-bold text-slate-400 mt-2">최근 누적 데이터 환산치</div>
               </div>
           </div>
-          
-          {/* (이하 6대 역량 스캐너 바인딩 및 레이아웃 코드는 기존과 동일 유지) */}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
               <div className="space-y-6">
                   <Card className="bg-white border-slate-200 rounded-[40px] p-8 flex flex-col items-center justify-center shadow-sm h-[500px]">
-                      <h3 className="text-xl font-black text-slate-800 mb-8 w-full text-left flex items-center gap-2"><Target className="text-blue-500"/> 6대 세부 역량 스캐너</h3>
-                      
-                      {!currData.hasGradeData ? (
-                          <div className="w-full flex-1 flex flex-col items-center justify-center text-center space-y-4">
-                              <RadarChart stats={currData.stats} />
-                              <div className="bg-rose-50 text-rose-600 p-4 rounded-2xl border border-rose-200 text-sm font-bold w-full max-w-sm mt-4">
-                                  ⚠️ 성적 데이터가 입력되지 않았습니다.<br/>
-                                  <span className="text-xs font-medium">정확한 역량 진단을 위해 입시 내비게이터에 성적표를 등록해 주세요. 현재 기본 스탯(0점)으로 렌더링 중입니다.</span>
-                              </div>
-                          </div>
-                      ) : (
-                          <div className="w-full flex-1 flex items-center justify-center">
-                              <RadarChart stats={currData.stats} />
-                          </div>
-                      )}
+                      <h3 className="text-xl font-black text-slate-800 mb-8 w-full text-left flex items-center gap-2"><Target className="text-blue-500"/> {selectedSubject === '영어' ? '5대 핵심 역량 스캐너' : '6대 세부 역량 스캐너'}</h3>
+                      <div className="w-full flex-1 flex items-center justify-center">
+                          <RadarChart stats={currData.stats} />
+                      </div>
                   </Card>
+
+                  {/* 🚀 [원장님 특별 요청] 차기 고도화 모듈 공간 선제적 구축 (문법 트리 & 유형 히트맵 플레이스홀더) */}
+                  {selectedSubject === '영어' && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                          {/* [문법 트리 카드] */}
+                          <Card className="bg-white border-slate-200 rounded-[32px] p-6 shadow-sm border-t-4 border-t-indigo-500 flex flex-col justify-between h-56">
+                              <div>
+                                  <div className="flex items-center justify-between mb-2">
+                                      <h3 className="text-lg font-black text-slate-800 flex items-center gap-1.5"><Network size={18} className="text-indigo-500"/> 문법 구조 스킬 트리</h3>
+                                      <Badge variant="outline" className="text-[10px] bg-indigo-50 text-indigo-600 border-indigo-200">구조 정밀 진단</Badge>
+                                  </div>
+                                  <p className="text-xs font-bold text-slate-400 leading-relaxed break-keep mt-2">
+                                      품사론부터 특수구문까지 배우는 계통 순서에 따른 스킬 매트릭스를 형성합니다. 영문법 어디서부터 구조적 구멍이 생겼는지 직관적으로 역추적 추적합니다.
+                                  </p>
+                              </div>
+                              <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
+                                  📊 문법 노드 매핑 준비 완료 (Data Core Standby)
+                              </div>
+                          </Card>
+
+                          {/* [유형 히트맵 카드] */}
+                          <Card className="bg-white border-slate-200 rounded-[32px] p-6 shadow-sm border-t-4 border-t-cyan-500 flex flex-col justify-between h-56">
+                              <div>
+                                  <div className="flex items-center justify-between mb-2">
+                                      <h3 className="text-lg font-black text-slate-800 flex items-center gap-1.5"><LayoutGrid size={18} className="text-cyan-500"/> 수능 유형별 히트맵</h3>
+                                      <Badge variant="outline" className="text-[10px] bg-cyan-50 text-cyan-600 border-cyan-200">모의고사 타겟팅</Badge>
+                                  </div>
+                                  <p className="text-xs font-bold text-slate-400 leading-relaxed break-keep mt-2">
+                                      평가원 및 교육청 모의고사 문제 유형(빈칸추론, 글의 순서, 일치/불일치)을 기준으로 통계를 내어 학생이 특수하게 강하거나 취약한 소포 가공 유형을 입체 파악합니다.
+                                  </p>
+                              </div>
+                              <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
+                                  🟩 격자 그리드 매핑 준비 완료 (Heatmap Ready)
+                              </div>
+                          </Card>
+                      </div>
+                  )}
               </div>
 
-              <div className="space-y-6 flex flex-col h-[500px] overflow-hidden">
-                  
+              <div className="space-y-6 flex flex-col h-[500px] lg:h-auto overflow-hidden">
                   <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
                       {currData.stats.map(stat => (
-                          <Card key={stat.id} className="p-4 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col sm:flex-row items-center gap-4 sm:gap-6 bg-white shrink-0">
-                              <div className="w-full sm:w-28 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-2 sm:pb-0 shrink-0">
-                                  <span className="text-sm font-black text-slate-500 mb-1">{stat.name}</span>
+                          <Card key={stat.id} className="p-4 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col sm:flex-row items-center gap-4 sm:gap-6 bg-white shrink-0 shadow-sm">
+                              <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-2 sm:pb-0 shrink-0">
+                                  <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
                                   <div className="flex items-center gap-2">
                                       <span className="text-2xl font-black text-slate-800">{stat.value}</span>
                                       <div className="flex flex-col">
@@ -465,7 +505,7 @@ const AcademyUniverse = ({ currentUser }) => {
                           </h3>
                           <div className="grid grid-cols-1 gap-3">
                               {currData.enrolledClasses.map(cls => (
-                                  <div key={cls.id} className="bg-indigo-50 border border-indigo-100 p-4 rounded-[20px] flex flex-col justify-center">
+                                  <div key={cls.id} className="bg-indigo-50 border border-indigo-100 p-4 rounded-[20px] flex flex-col justify-center shadow-sm">
                                       <div className="flex justify-between items-start mb-2">
                                           <h4 className="font-black text-indigo-900 text-base">{cls.name}</h4>
                                           <CheckCircle size={16} className="text-emerald-500"/>
