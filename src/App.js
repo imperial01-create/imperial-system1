@@ -1,12 +1,12 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 스마트 콤보박스 + 신규 '오늘의 할 일' 독립 메뉴 분리 및 라우팅 하이라이트 버그 수정 완료) */
+   (🚀 CTO 패치: 강의 관리와 기출 아카이브의 아이콘 중복 제거 및 VocaManager 메뉴 추가 완벽 반영) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -34,6 +34,7 @@ const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
+// 🚀 [CTO 패치] VocaManager 라우트 추가
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
 
 const APP_ID = 'imperial-clinic-v1';
@@ -43,9 +44,6 @@ const ReportWrapper = () => {
   return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
 };
 
-// ============================================================================
-// 스마트 콤보박스 (검색 + 즐겨찾기 상단 핀 고정)
-// ============================================================================
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
@@ -415,7 +413,6 @@ const Dashboard = ({ currentUser }) => {
                     </div>
                 )}
 
-                {/* 🚀 메뉴명 변경 반영 */}
                 {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
                     <div onClick={() => navigate('/clinic-tasks')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
@@ -494,7 +491,6 @@ const Dashboard = ({ currentUser }) => {
                     <p className="text-gray-500 leading-relaxed">학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.</p>
                 </div>
 
-                {/* 🚀 메뉴명 변경 반영 */}
                 <div onClick={() => navigate('/clinic')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                     <div className="flex items-center gap-4 mb-4">
                         <div className="bg-blue-100 p-3 rounded-xl text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors"><CalendarIcon size={32} /></div>
@@ -508,6 +504,7 @@ const Dashboard = ({ currentUser }) => {
                 {(['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'].includes(currentUser.role)) && (
                     <div onClick={() => navigate('/lectures')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
                         <div className="flex items-center gap-4 mb-4">
+                            {/* 🚀 [CTO 패치] 강의 관리는 Video 아이콘으로 통일했습니다. */}
                             <div className="bg-green-100 p-3 rounded-xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-colors"><Video size={32} /></div>
                             <h2 className="text-xl font-bold text-gray-800">
                                 {currentUser.role === 'student' || currentUser.role === 'parent' ? '수강 강의' : '강의 관리'}
@@ -557,7 +554,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 메뉴 리스트 및 이름 변경 적용 완료
+  // 🚀 [CTO 패치] 영단어 메뉴 추가 및 '강의 관리' / '기출 아카이브' 아이콘 분리 완료
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
@@ -569,13 +566,25 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
-    { path: '/voca', label: currentUser.role === 'student' ? '🔥 오늘의 영단어' : currentUser.role === 'parent' ? '📈 영단어 리포트' : '📚 영단어 출제/관리', 
-      icon: BookOpen, 
-      roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant']},
     { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
-    { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
+    { 
+      path: '/lectures', 
+      label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', 
+      icon: currentUser.role.includes('student') ? GraduationCap : Video, // 🚀 기출 아카이브와의 중복을 피해 Video 로 변경
+      roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] 
+    },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
+    
+    // 🚀 영단어 메뉴 추가 (학생 본인, 최고 관리자, 영어 강사/조교만 볼 수 있도록 철저한 조건 분기)
+    { 
+      path: '/voca', 
+      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', 
+      icon: BookText, 
+      roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'],
+      showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
+    },
+
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
@@ -595,8 +604,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-4 space-y-2 flex-1 overflow-y-auto custom-scrollbar pb-24">
-           {menuItems.filter(item => item.roles.includes(currentUser.role)).map((item) => {
-              // 🚀 하이라이트 매칭 버그 해결 (정확히 일치하거나 서브 경로일 때만)
+           {/* 🚀 showCondition을 통해 영단어 메뉴가 영어 강사와 관리자에게만 보이도록 필터링 */}
+           {menuItems.filter(item => item.roles.includes(currentUser.role) && (!item.showCondition || item.showCondition(currentUser))).map((item) => {
               const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
               return (
               <button key={item.path} onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${isActive ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-600 hover:bg-gray-50'}`}>
@@ -663,11 +672,14 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
+                        {/* 🚀 VocaManager 라우트 안전하게 추가 */}
+                        <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
+                        
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={<CollegeNavigator currentUser={currentUser} />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
                     </Routes>
                 </Suspense>
             </div>
