@@ -1,5 +1,5 @@
-/* [서비스 가치] 학생의 CAT 점수를 기반으로 Z1~Z3 구간을 나누어 맞춤 출제하고, 
-   영점 조절 기간에는 '고속 마스터(Fast-Track)'를 적용하여 아는 단어를 지루하게 반복하지 않게 해주는 핵심 AI 엔진입니다. */
+/* [서비스 가치] 채점 완료 시 '오답 단어 리스트'와 '회차별 점수'를 영구적인 영수증(Snapshot) 형태로 
+   DB에 박제하여, 추후 학부모가 상세 로그를 열람할 때 과도한 DB 읽기 비용이 발생하지 않도록 극한으로 최적화합니다. */
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -20,7 +20,6 @@ const generateVariedQuestion = (word, qNumber) => {
     const hasSynonyms = meaningObj?.synonyms && meaningObj.synonyms.length > 0;
     const hasBlank = meaningObj?.blankSentence && meaningObj.blankSentence.length > 0;
     
-    // 0: 기본(뜻 모두 쓰기), 1: 유의어 제시 후 뜻 쓰기, 2: 예문 빈칸에 들어갈 영어 스펠링 쓰기
     const possibleTypes = [0]; 
     if (hasSynonyms) possibleTypes.push(1);
     if (hasBlank) possibleTypes.push(2);
@@ -31,7 +30,7 @@ const generateVariedQuestion = (word, qNumber) => {
         questionNumber: qNumber,
         wordId: word.wordId,
         isPassiveScan: word.isPassiveScan || false,
-        zone: word.zone || 'normal' // 🚀 Z1, Z2, Z3 출처 추적용 데이터 추가
+        zone: word.zone || 'normal' 
     };
 
     if (selectedType === 2) {
@@ -64,7 +63,6 @@ export const generateDailyVocaSet = async (studentId) => {
         const statSnap = await getDoc(statRef);
         if (!statSnap.exists()) throw new Error("영어 스탯 데이터가 없습니다.");
         
-        // 🚀 CAT 진단으로 세팅된 데이터들 불러오기
         const { vocaSession, vocaBook, radarChart, studyMode = 'progress', calibrationSessionsLeft = 0, zones } = statSnap.data();
         const currentScore = radarChart?.voca || 0;
 
@@ -81,45 +79,22 @@ export const generateDailyVocaSet = async (studentId) => {
         let final40Words = [];
         const selectedWordIds = new Set();
 
-        // =========================================================================
-        // 🚀 Phase 2. 영점 조절 모드 가동 (Calibration Mode)
-        // =========================================================================
         if (studyMode === 'calibration' && calibrationSessionsLeft > 0 && zones) {
-            
-            // 난이도 데이터가 있는 미학습 단어들 추출
             const unlearnedWords = allBookWords.filter(w => !userHistory[w.wordId]);
-
-            // [Z1] 초등 완전 패스 구역 딥스캔 (4단어)
-            const z1Words = shuffleArray(unlearnedWords.filter(w => 
-                w.meanings[0]?.meaningDifficulty >= zones.Z1_Pass[0] && w.meanings[0]?.meaningDifficulty <= zones.Z1_Pass[1]
-            )).slice(0, 4);
+            const z1Words = shuffleArray(unlearnedWords.filter(w => w.meanings[0]?.meaningDifficulty >= zones.Z1_Pass[0] && w.meanings[0]?.meaningDifficulty <= zones.Z1_Pass[1])).slice(0, 4);
             z1Words.forEach(w => { w.zone = 'Z1'; selectedWordIds.add(w.wordId); });
-
-            // [Z2] 중1~2 의심 구역 스캔 (24단어)
-            const z2Words = shuffleArray(unlearnedWords.filter(w => 
-                !selectedWordIds.has(w.wordId) && w.meanings[0]?.meaningDifficulty >= zones.Z2_Grey[0] && w.meanings[0]?.meaningDifficulty <= zones.Z2_Grey[1]
-            )).slice(0, 24);
+            const z2Words = shuffleArray(unlearnedWords.filter(w => !selectedWordIds.has(w.wordId) && w.meanings[0]?.meaningDifficulty >= zones.Z2_Grey[0] && w.meanings[0]?.meaningDifficulty <= zones.Z2_Grey[1])).slice(0, 24);
             z2Words.forEach(w => { w.zone = 'Z2'; selectedWordIds.add(w.wordId); });
-
-            // [Z3] 타겟 학습 구역 (12단어)
-            const z3Words = shuffleArray(unlearnedWords.filter(w => 
-                !selectedWordIds.has(w.wordId) && w.meanings[0]?.meaningDifficulty >= zones.Z3_Target[0] && w.meanings[0]?.meaningDifficulty <= zones.Z3_Target[1]
-            )).slice(0, 12);
+            const z3Words = shuffleArray(unlearnedWords.filter(w => !selectedWordIds.has(w.wordId) && w.meanings[0]?.meaningDifficulty >= zones.Z3_Target[0] && w.meanings[0]?.meaningDifficulty <= zones.Z3_Target[1])).slice(0, 12);
             z3Words.forEach(w => { w.zone = 'Z3'; selectedWordIds.add(w.wordId); });
 
             final40Words = [...z1Words, ...z2Words, ...z3Words];
-
-            // 40개가 안 채워졌을 경우 (Z1, Z2 단어가 고갈된 경우) 남은 단어 아무거나 욱여넣어 40개 맞춤
             if (final40Words.length < 40) {
                 const fillers = shuffleArray(unlearnedWords.filter(w => !selectedWordIds.has(w.wordId))).slice(0, 40 - final40Words.length);
-                fillers.forEach(w => w.zone = 'Z3'); // 부족분은 전부 타겟으로 취급
+                fillers.forEach(w => w.zone = 'Z3'); 
                 final40Words = [...final40Words, ...fillers];
             }
-
         } 
-        // =========================================================================
-        // 🚀 Phase 3. 정상화 모드 (일반 프리셋)
-        // =========================================================================
         else {
             let maxNew = 24, maxReview = 12, maxPassive = 4; 
             if (studyMode === 'basic') { maxNew = 12; maxReview = 16; maxPassive = 12; } 
@@ -129,29 +104,23 @@ export const generateDailyVocaSet = async (studentId) => {
 
             for (const [wordId, hist] of Object.entries(userHistory)) {
                 if (hist.status === 'chronic_error' || hist.status === 'mastered') continue;
-                
                 if (hist.lastIncorrectSession === vocaSession - 1) {
                     const wordData = allBookWords.find(w => w.wordId === wordId);
-                    if (wordData) queue1_Urgent.push(wordData); // 어제 틀린 단어 무조건 재출제 (지옥방)
+                    if (wordData) queue1_Urgent.push(wordData); 
                 } else if (hist.nextReviewSession && hist.nextReviewSession <= vocaSession) {
                     const wordData = allBookWords.find(w => w.wordId === wordId);
-                    if (wordData) queue2_Review.push(wordData); // 주기적 누적 복습 단어
+                    if (wordData) queue2_Review.push(wordData); 
                 }
             }
 
             let combinedReview = [...shuffleArray(queue1_Urgent), ...shuffleArray(queue2_Review)].slice(0, maxReview);
             combinedReview.forEach(w => { w.zone = 'Review'; selectedWordIds.add(w.wordId); });
 
-            // 패시브 스캔 (Z2구역 잔여 찌꺼기들)
-            const passiveQuery = query(vocaDBRef, 
-                where('meanings.0.meaningDifficulty', '>=', Math.max(0, currentScore - 200)),
-                where('meanings.0.meaningDifficulty', '<=', Math.max(0, currentScore - 150))
-            );
+            const passiveQuery = query(vocaDBRef, where('meanings.0.meaningDifficulty', '>=', Math.max(0, currentScore - 200)), where('meanings.0.meaningDifficulty', '<=', Math.max(0, currentScore - 150)));
             const passiveSnap = await getDocs(passiveQuery);
             queue3_Passive = shuffleArray(passiveSnap.docs.map(d => d.data()).filter(w => !userHistory[w.wordId])).slice(0, maxPassive);
             queue3_Passive.forEach(w => { w.isPassiveScan = true; w.zone = 'Z2'; selectedWordIds.add(w.wordId); });
 
-            // 신규 진도 (Z3)
             const candidateNew = allBookWords.filter(w => !userHistory[w.wordId] && !selectedWordIds.has(w.wordId));
             queue4_New = candidateNew.slice(0, Math.max(0, 40 - (combinedReview.length + queue3_Passive.length)));
             queue4_New.forEach(w => { w.zone = 'Z3'; });
@@ -159,7 +128,6 @@ export const generateDailyVocaSet = async (studentId) => {
             final40Words = [...combinedReview, ...queue3_Passive, ...queue4_New];
         }
 
-        // 40단어를 섞어서 50문제로 뻥튀기(10문제는 반복 변주 출제)
         const full50Questions = shuffleArray([...final40Words, ...shuffleArray(final40Words).slice(0, 10)]).map((word, index) => {
             return generateVariedQuestion(word, index + 1);
         });
@@ -191,23 +159,33 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const wrongSet = new Set(wrongAnswerNumbers);
 
     let sessionTotal = 0; let sessionCorrect = 0;
+    // 🚀 [CTO 패치] 오답 단어를 영구 박제하기 위한 리스트
+    let wrongWordsDetails = []; 
 
     for (const q of questionsForTest) {
         sessionTotal++;
         const isCorrect = !wrongSet.has(q.questionNumber);
-        if (isCorrect) sessionCorrect++;
+        
+        if (isCorrect) {
+            sessionCorrect++;
+        } else {
+            // 틀린 단어의 상세 정보 저장
+            wrongWordsDetails.push({
+                word: q.wordId || q.wordText.split(' ')[0], 
+                question: q.wordText,
+                meaning: q.answerText,
+                zone: q.zone || 'normal'
+            });
+        }
 
         const historyWordRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, q.wordId);
         const histSnap = await getDoc(historyWordRef);
         const hist = histSnap.exists() ? histSnap.data() : { consecutiveCorrect: 0, incorrectCount: 0 };
 
         if (isCorrect) {
-            // 🚀 [고속 마스터 규칙(Fast-Track)] 
-            // 영점 조절 모드에서 출제된 Z1(초등), Z2(중1~2) 구역 단어이거나, 일상 패시브 스캔인 경우 단 한 번만 맞아도 즉시 마스터!
             if (q.isPassiveScan || (statData.studyMode === 'calibration' && (q.zone === 'Z1' || q.zone === 'Z2'))) {
                 await setDoc(historyWordRef, { status: 'mastered', updatedAt: serverTimestamp() }, { merge: true });
             } else {
-                // Z3 타겟 단어이거나 일반 진도인 경우 -> 3번은 반복해서 맞아야 마스터 인정
                 const newConsecutive = (hist.consecutiveCorrect || 0) + 1;
                 await setDoc(historyWordRef, {
                     consecutiveCorrect: newConsecutive,
@@ -218,11 +196,10 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             }
             currentVocaScore += 3;
         } else {
-            // 틀린 단어는 오답 지옥방(chronic_error)으로 보냄
             await setDoc(historyWordRef, {
                 consecutiveCorrect: 0,
                 incorrectCount: (hist.incorrectCount || 0) + 1,
-                lastIncorrectSession: sessionNumber, // 바로 다음 세션에서 지옥방 큐(Queue1)로 빨려들어감
+                lastIncorrectSession: sessionNumber,
                 status: (hist.incorrectCount || 0) + 1 >= 3 ? 'chronic_error' : 'learning',
                 updatedAt: serverTimestamp()
             }, { merge: true });
@@ -230,7 +207,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         }
     }
 
-    // 🚀 [스탯 자동 정산 및 정상화 엔진]
     const vocaDBRef = collection(db, 'VocabularyDB');
     const bookQuery = query(vocaDBRef, where('tags', 'array-contains', statData.vocaBook || '기본교재'));
     const bookSnap = await getDocs(bookQuery);
@@ -251,7 +227,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
 
-    // 🚀 모드 전환 로직 (영점 조절 -> 정상화)
     let newStudyMode = statData.studyMode;
     let newCalibrationLeft = statData.calibrationSessionsLeft || 0;
     let rubricStr = "";
@@ -259,21 +234,16 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     if (newStudyMode === 'calibration') {
         newCalibrationLeft -= 1;
         if (newCalibrationLeft <= 0) {
-            newStudyMode = 'progress'; // 10회 끝나면 일반 진도 모드로 정상화
+            newStudyMode = 'progress'; 
             rubricStr = `[영점 조절 완료] 숨어있던 약점 스캔이 마무리되어, 표준 진도 모드로 전환되었습니다.`;
         } else {
             rubricStr = `[영점 조절 중] 학생의 진짜 빈틈(Z2 구역)을 스캔하며 지옥방으로 분류 중입니다. (남은 횟수: ${newCalibrationLeft}회)`;
         }
     } else {
-        if (vocaProgress < 20) {
-            rubricStr = `현재 교재에 적응 중입니다. 기초 누적 학습을 진행합니다.`;
-        } else if (retentionRate < 60) {
-            rubricStr = `기억 버팀도(${retentionRate}%)가 일시적으로 낮아져 [복습 모드]로 궤도를 수정, 오답을 방어합니다.`;
-        } else if (comprehension < 70) {
-            rubricStr = `스펠링은 외우나 다의어, 문맥 활용(${comprehension}%)에서 약점이 보입니다. 예문 빈칸 훈련을 강화합니다.`;
-        } else {
-            rubricStr = `장기 기억력(${retentionRate}%)과 뜻 이해도(${comprehension}%) 모두 훌륭합니다. 진도(${vocaProgress}%)를 공격적으로 뺍니다.`;
-        }
+        if (vocaProgress < 20) { rubricStr = `현재 교재에 적응 중입니다. 기초 누적 학습을 진행합니다.`; } 
+        else if (retentionRate < 60) { rubricStr = `기억 버팀도(${retentionRate}%)가 일시적으로 낮아져 [복습 모드]로 궤도를 수정, 오답을 방어합니다.`; } 
+        else if (comprehension < 70) { rubricStr = `스펠링은 외우나 다의어, 문맥 활용(${comprehension}%)에서 약점이 보입니다. 예문 빈칸 훈련을 강화합니다.`; } 
+        else { rubricStr = `장기 기억력(${retentionRate}%)과 뜻 이해도(${comprehension}%) 모두 훌륭합니다. 진도(${vocaProgress}%)를 공격적으로 뺍니다.`; }
     }
 
     await updateDoc(statRef, {
@@ -288,5 +258,12 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         updatedAt: serverTimestamp()
     });
 
-    await updateDoc(sessionRef, { status: 'completed', wrongCount: wrongSet.size });
+    // 🚀 [CTO 패치] 추후 상세 로그 조회를 위해 오답 내역과 정답률(Score)을 영구 보존합니다.
+    await updateDoc(sessionRef, { 
+        status: 'completed', 
+        wrongCount: wrongSet.size,
+        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100), // 해당 회차 정답률
+        wrongWordsDetails: wrongWordsDetails, // 오답 단어 상세 내역
+        completedAt: serverTimestamp()
+    });
 };

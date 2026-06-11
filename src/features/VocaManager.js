@@ -1,11 +1,12 @@
-/* [서비스 가치] 신규 원생의 CAT 점수 기반 '영점 조절(Calibration) 모드'를 도입하여, 
-   학생의 초기 학습 이탈률(Churn Rate)을 0%로 만들고, 학부모에게 압도적인 신뢰감을 주는 초개인화 시스템입니다. */
-import React, { useState, useEffect } from 'react';
-import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock, Target, Crosshair, ShieldCheck } from 'lucide-react';
-import { Button, Card, Toast } from '../components/UI';
+/* [서비스 가치] 학원 운영의 '극단적 투명성(Radical Transparency)'을 실현합니다.
+   상세 학습 로그를 지연 로딩(Lazy Loading)으로 구현하여 데이터 요금은 최소화하되, 
+   학부모에게는 "내 아이의 회차별 점수 향상과 오답 트래킹"을 가시적으로 증명합니다. */
+import React, { useState, useEffect, useMemo } from 'react';
+import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock, Target, Crosshair, ShieldCheck, AlertTriangle, BookX, ArrowUpDown, ChevronRight, BarChart2, Calendar } from 'lucide-react';
+import { Button, Card, Toast, Modal, Loader } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { generateDailyVocaSet, processVocaTestResult } from '../utils/vocaEngine';
-import { doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -13,9 +14,9 @@ const APP_ID = 'imperial-clinic-v1';
 const VocaManager = ({ currentUser }) => {
     const isAuthorized = currentUser?.role === 'admin' || currentUser?.role === 'admin_assistant' || 
                          (['lecturer', 'ta'].includes(currentUser?.role) && currentUser?.subject === '영어') ||
-                         currentUser?.role === 'student';
+                         ['student', 'parent'].includes(currentUser?.role);
 
-    const { users, englishStats } = useData();
+    const { users, classes, enrollments, englishStats } = useData();
     const [searchInput, setSearchInput] = useState('');
     const [selectedStudent, setSelectedStudent] = useState(null);
     const [currentTestSession, setCurrentTestSession] = useState(null);
@@ -24,53 +25,78 @@ const VocaManager = ({ currentUser }) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [toast, setToast] = useState({ message: '', type: 'info' });
 
-    // 🚀 CAT 진단 점수 입력용 상태
+    const [viewMode, setViewMode] = useState('class'); 
+    const [selectedClassId, setSelectedClassId] = useState('');
+    const [sortConfig, setSortConfig] = useState({ key: 'vocaProgress', direction: 'desc' });
+    
+    const [hellRoomModal, setHellRoomModal] = useState({ isOpen: false, loading: false, words: [] });
+    // 🚀 [CTO 패치] 상세 학습 로그(타임라인) 모달 상태 추가
+    const [historyLogModal, setHistoryLogModal] = useState({ isOpen: false, loading: false, sessions: [] });
+
     const [catScoreInput, setCatScoreInput] = useState('');
     const [isInitializingCat, setIsInitializingCat] = useState(false);
 
     useEffect(() => {
         if (currentUser?.role === 'student') {
             setSelectedStudent(currentUser);
+        } else if (currentUser?.role === 'parent' && currentUser?.linkedChildrenIds?.length > 0) {
+            const firstChild = users.find(u => u.id === currentUser.linkedChildrenIds[0]);
+            if (firstChild) setSelectedStudent(firstChild);
         }
-    }, [currentUser]);
+    }, [currentUser, users]);
 
     if (!isAuthorized) {
         return (
             <div className="flex flex-col items-center justify-center h-[60vh] space-y-5 animate-in fade-in zoom-in-95">
-                <div className="bg-red-50 p-6 rounded-full border-4 border-red-100">
-                    <Lock className="text-red-500" size={48} />
-                </div>
+                <div className="bg-red-50 p-6 rounded-full border-4 border-red-100"><Lock className="text-red-500" size={48} /></div>
                 <h2 className="text-2xl font-black text-gray-800">접근 권한이 차단되었습니다</h2>
-                <p className="text-gray-500 font-bold text-center">
-                    이 페이지는 <span className="text-red-500">영어 전문 강사 및 학생 본인</span> 전용 메뉴입니다.<br/>
-                    본인의 담당 과목 설정이 올바른지 관리자에게 문의해 주세요.
-                </p>
+                <p className="text-gray-500 font-bold text-center">영어과 소속 교직원 또는 수강생 전용 메뉴입니다.</p>
             </div>
         );
     }
 
     const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
+    const availableClasses = useMemo(() => {
+        if (['admin', 'admin_assistant', 'ta'].includes(currentUser?.role)) return classes;
+        return classes.filter(c => c.lecturerId === currentUser?.id);
+    }, [classes, currentUser]);
+
+    const classStudentStats = useMemo(() => {
+        if (!selectedClassId) return [];
+        const studentIdsInClass = enrollments.filter(e => e.classId === selectedClassId && e.status === 'active').map(e => e.studentId);
+        const rawData = studentIdsInClass.map(id => {
+            const user = users.find(u => u.id === id);
+            const stat = englishStats.find(s => s.studentId === id) || { vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, studyMode: 'pending' };
+            return { user, stat };
+        }).filter(item => item.user);
+
+        return rawData.sort((a, b) => {
+            const valA = a.stat[sortConfig.key] || 0;
+            const valB = b.stat[sortConfig.key] || 0;
+            return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
+        });
+    }, [selectedClassId, enrollments, users, englishStats, sortConfig]);
+
+    const handleSort = (key) => {
+        setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
+    };
+
     const handleSearch = () => {
         const student = users.find(u => u.role === 'student' && u.name === searchInput.trim());
         if (!student) return showToast('해당 학생이 존재하지 않습니다.', 'error');
-        setSelectedStudent(student);
-        setCurrentTestSession(null);
-        setCatScoreInput(''); 
+        setSelectedStudent(student); setCurrentTestSession(null); setCatScoreInput(''); 
     };
 
     const rawStat = englishStats.find(s => s.studentId === selectedStudent?.id);
     const studentStat = rawStat || (selectedStudent ? { vocaSession: 0 } : null);
 
     const handleInitializeCAT = async () => {
-        if (!catScoreInput || isNaN(catScoreInput) || catScoreInput < 0 || catScoreInput > 1000) {
-            return showToast('유효한 CAT 점수(0~1000)를 입력해주세요.', 'error');
-        }
-        if (!window.confirm(`${selectedStudent.name} 학생의 CAT 초기 진단 점수를 [${catScoreInput}점]으로 확정하시겠습니까?\n\n확인 시, 즉각적으로 Z1~Z4 구간이 분할되며 향후 10회차(약 2주) 동안 '영점 조절(Calibration) 모드'가 강제 가동됩니다.`)) return;
+        if (!catScoreInput || isNaN(catScoreInput) || catScoreInput < 0 || catScoreInput > 1000) return showToast('유효한 점수를 입력해주세요.', 'error');
+        if (!window.confirm(`${selectedStudent.name} 학생의 CAT 초기 점수를 [${catScoreInput}점]으로 확정하고 영점 조절을 시작합니까?`)) return;
 
         setIsInitializingCat(true);
         const score = Number(catScoreInput);
-        
         const zones = {
             Z1_Pass: [0, Math.max(0, score - 150)],                   
             Z2_Grey: [Math.max(0, score - 149), Math.max(0, score - 20)], 
@@ -81,42 +107,26 @@ const VocaManager = ({ currentUser }) => {
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, selectedStudent.id);
             await setDoc(statRef, {
-                studentId: selectedStudent.id,
-                catScore: score,
-                vocaSession: 1, 
-                studyMode: 'calibration', 
-                calibrationSessionsLeft: 10, 
-                zones: zones,
-                vocaProgress: 0,
-                vocaComprehension: 0,
-                vocaRetention: 0,
-                vocaRubric: `[CAT 초기화 완료: ${score}점] 딥스캔 및 영점 조절 작업이 진행 중입니다. (앞으로 ${10}회 남음)`,
+                studentId: selectedStudent.id, catScore: score, vocaSession: 1, 
+                studyMode: 'calibration', calibrationSessionsLeft: 10, zones: zones,
+                vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0,
+                vocaRubric: `[CAT 초기화 완료: ${score}점] 딥스캔 및 영점 조절 작업이 진행 중입니다. (앞으로 10회 남음)`,
                 updatedAt: serverTimestamp()
             }, { merge: true });
-
-            showToast('✅ 구간 분할 및 영점 조절 시스템이 성공적으로 셋업되었습니다.', 'success');
+            showToast('✅ 영점 조절 시스템이 셋업되었습니다.', 'success');
             setCatScoreInput('');
-        } catch (error) {
-            showToast(error.message, 'error');
-        } finally {
-            setIsInitializingCat(false);
-        }
+        } catch (error) { showToast(error.message, 'error'); } finally { setIsInitializingCat(false); }
     };
 
     const handleChangeMode = async (mode) => {
-        if (!selectedStudent || !studentStat || currentUser?.role === 'student') return;
-        
+        if (!selectedStudent || !studentStat || ['student', 'parent'].includes(currentUser?.role)) return;
         if (studentStat.studyMode === 'calibration' && studentStat.calibrationSessionsLeft > 0) {
-            if (!window.confirm("현재 '영점 조절 딥스캔'이 진행 중입니다. 강제로 일반 모드로 변경하시면 스캔이 중단됩니다. 변경하시겠습니까?")) return;
+            if (!window.confirm("현재 '영점 조절 딥스캔'이 진행 중입니다. 강제로 일반 모드로 변경하시겠습니까?")) return;
         }
-
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, selectedStudent.id);
-            await updateDoc(statRef, { 
-                studyMode: mode,
-                calibrationSessionsLeft: mode === 'calibration' ? 10 : 0 
-            });
-            showToast(`💡 학습 모드가 [${mode === 'calibration' ? '영점 조절' : mode === 'progress' ? '진도' : mode === 'basic' ? '기초' : '복습'}] 모드로 업데이트되었습니다.`);
+            await updateDoc(statRef, { studyMode: mode, calibrationSessionsLeft: mode === 'calibration' ? 10 : 0 });
+            showToast(`💡 학습 모드가 업데이트되었습니다.`);
         } catch (e) { showToast(e.message, 'error'); }
     };
 
@@ -128,8 +138,7 @@ const VocaManager = ({ currentUser }) => {
             setCurrentTestSession(testPayload);
             setWrongAnswers(new Set());
             showToast('🎯 맞춤형 40단어 및 50문항 셔플 시험지가 출고되었습니다.');
-        } catch (error) { showToast(error.message, 'error'); } 
-        finally { setIsGenerating(false); }
+        } catch (error) { showToast(error.message, 'error'); } finally { setIsGenerating(false); }
     };
 
     const toggleAnswer = (num) => {
@@ -143,85 +152,193 @@ const VocaManager = ({ currentUser }) => {
 
     const handleSubmitScores = async () => {
         if (!currentTestSession || isSubmitting) return;
-        if (!window.confirm("채점 내역을 최종 마감하고 학생의 3대 스탯창에 반영하시겠습니까?")) return;
-
+        if (!window.confirm("채점 내역을 최종 마감하고 스탯에 반영하시겠습니까?")) return;
         setIsSubmitting(true);
         try {
             await processVocaTestResult(selectedStudent.id, currentTestSession.sessionNumber, Array.from(wrongAnswers));
-            showToast('🎉 채점 연산 종료! 학생의 장기기억력 및 이해도 스탯이 실시간 업데이트되었습니다.', 'success');
-            setCurrentTestSession(null);
-            setWrongAnswers(new Set());
-        } catch (e) { showToast(e.message, 'error'); } 
-        finally { setIsSubmitting(false); }
+            showToast('🎉 스탯이 실시간 업데이트되었습니다.', 'success');
+            setCurrentTestSession(null); setWrongAnswers(new Set());
+        } catch (e) { showToast(e.message, 'error'); } finally { setIsSubmitting(false); }
+    };
+
+    const fetchHellRoomWords = async () => {
+        if (!selectedStudent) return;
+        setHellRoomModal({ isOpen: true, loading: true, words: [] });
+        try {
+            const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${selectedStudent.id}/word_history`);
+            const q = query(historyRef, where("status", "==", "chronic_error")); 
+            const snap = await getDocs(q);
+            const hellWords = snap.docs.map(d => ({ word: d.id, ...d.data() }));
+            setHellRoomModal({ isOpen: true, loading: false, words: hellWords });
+        } catch (error) {
+            showToast("오답 데이터를 불러오지 못했습니다.", "error");
+            setHellRoomModal({ isOpen: false, loading: false, words: [] });
+        }
+    };
+
+    // 🚀 [CTO 패치] 버튼을 누를 때만 최근 완료된 회차 이력을 불러오는 Lazy Loading 로직
+    const fetchDetailedHistoryLog = async () => {
+        if (!selectedStudent) return;
+        setHistoryLogModal({ isOpen: true, loading: true, sessions: [] });
+        try {
+            const q = query(
+                collection(db, `artifacts/${APP_ID}/public/data/test_sessions`),
+                where("studentId", "==", selectedStudent.id),
+                where("status", "==", "completed")
+            );
+            const snap = await getDocs(q);
+            let sessions = snap.docs.map(d => d.data());
+            
+            // 회차별 내림차순 정렬 및 최근 15회차만 제한 (모바일 렌더링 부하 방지)
+            sessions.sort((a, b) => b.sessionNumber - a.sessionNumber);
+            setHistoryLogModal({ isOpen: true, loading: false, sessions: sessions.slice(0, 15) });
+        } catch (error) {
+            showToast("학습 로그를 불러오는 중 오류가 발생했습니다.", "error");
+            setHistoryLogModal({ isOpen: false, loading: false, sessions: [] });
+        }
     };
 
     return (
-        <div className="space-y-6 max-w-6xl mx-auto pb-20">
+        <div className="space-y-6 max-w-7xl mx-auto pb-20 animate-in fade-in">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
 
-            {/* 🚀 [CTO 패치] 타이틀 옆의 불필요한 색상 아이콘 제거하여 다른 페이지와의 통일성 확보 */}
-            <div className="flex items-center gap-3 mb-8">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
                 <div>
                     <h1 className="text-3xl font-black text-gray-800">
-                        {currentUser?.role === 'student' ? '오늘의 영단어' : 'Voca 데스크 클리닉 콘솔'}
+                        {['student', 'parent'].includes(currentUser?.role) ? '영단어 스탯 대시보드' : 'Voca 출제 & 클래스 관리'}
                     </h1>
                     <p className="text-sm font-bold text-gray-500 mt-1">
-                        {currentUser?.role === 'student' ? '나만의 맞춤형 단어장과 누적 성장 스탯을 확인하세요.' : '학생 스탯 관리 및 초개인화 채점 시스템'}
+                        {['student', 'parent'].includes(currentUser?.role) 
+                            ? '나의 초개인화 단어장과 숨겨진 약점(오답 지옥방)을 투명하게 확인하세요.' 
+                            : '반별 위험군 식별 리더보드 및 초개인화 채점 시스템'}
                     </p>
                 </div>
+
+                {currentUser?.role === 'parent' && currentUser?.linkedChildrenIds?.length > 1 && (
+                    <select 
+                        className="p-3 border-2 border-indigo-200 rounded-xl bg-white font-black text-indigo-800 outline-none"
+                        value={selectedStudent?.id || ''}
+                        onChange={(e) => {
+                            const child = users.find(u => u.id === e.target.value);
+                            setSelectedStudent(child); setCurrentTestSession(null);
+                        }}
+                    >
+                        {currentUser.linkedChildrenIds.map(childId => {
+                            const child = users.find(u => u.id === childId);
+                            return child ? <option key={child.id} value={child.id}>{child.name} 학생의 리포트 보기</option> : null;
+                        })}
+                    </select>
+                )}
             </div>
 
-            <Card className="p-6 bg-white shadow-sm border-2 border-blue-50">
-                {currentUser?.role !== 'student' && (
-                    <div className="flex gap-4 mb-6">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                            <input type="text" className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none font-bold focus:border-blue-500 transition-colors" placeholder="학생 이름을 검색하세요 (예: 홍길동)" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()}/>
-                        </div>
-                        <Button onClick={handleSearch} className="px-8 font-bold">학생 조회</Button>
+            {!['student', 'parent'].includes(currentUser?.role) && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-6">
+                    <div className="flex border-b border-gray-100 bg-gray-50">
+                        <button onClick={() => setViewMode('class')} className={`flex-1 py-4 font-black text-sm transition-colors ${viewMode === 'class' ? 'text-blue-600 bg-white border-t-4 border-blue-600' : 'text-gray-500 hover:bg-gray-100'}`}>📋 내 클래스 위험군 뷰</button>
+                        <button onClick={() => setViewMode('search')} className={`flex-1 py-4 font-black text-sm transition-colors ${viewMode === 'search' ? 'text-indigo-600 bg-white border-t-4 border-indigo-600' : 'text-gray-500 hover:bg-gray-100'}`}>🔍 특정 학생 정밀 검색</button>
                     </div>
-                )}
 
-                {selectedStudent && (!rawStat || !rawStat.catScore) ? (
-                    <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-8 animate-in fade-in zoom-in-95 text-center shadow-inner">
-                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-rose-100">
-                            <Target className="text-rose-500" size={32} />
-                        </div>
-                        <h3 className="text-2xl font-black text-rose-900 mb-2">초기 진단평가(CAT) 영점 조절 세팅</h3>
-                        <p className="text-rose-700 font-bold mb-6 text-sm leading-relaxed">
-                            {selectedStudent.name} 학생의 첫 어휘력 스탯 기준점(Zero-point)을 설정해야 합니다.<br/>
-                            테스트 결과를 입력하면 <span className="bg-rose-200 px-1 rounded text-rose-900">Z1(패스) ~ Z4(잠금) 구간이 자동 분할</span>되며, 첫 2주간 딥스캔 모드가 가동됩니다.
-                        </p>
-                        
-                        {currentUser?.role !== 'student' ? (
-                            <div className="flex items-center justify-center gap-3 max-w-sm mx-auto">
-                                <input 
-                                    type="number" 
-                                    className="w-32 p-4 text-center text-xl font-black rounded-xl border-2 border-rose-300 outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-200 bg-white shadow-sm" 
-                                    placeholder="점수" 
-                                    value={catScoreInput} 
-                                    onChange={(e) => setCatScoreInput(e.target.value)}
-                                />
-                                <Button 
-                                    onClick={handleInitializeCAT} 
-                                    disabled={isInitializingCat}
-                                    className="bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-4 rounded-xl shadow-md h-full flex items-center gap-2"
-                                >
-                                    {isInitializingCat ? <RefreshCw className="animate-spin" size={20}/> : <><Crosshair size={20} /> 초개인화 알고리즘 가동</>}
-                                </Button>
+                    <div className="p-6">
+                        {viewMode === 'search' ? (
+                            <div className="flex gap-4 max-w-xl mx-auto">
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                    <input type="text" className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none font-bold focus:border-indigo-500 transition-colors" placeholder="학생 이름 검색 (예: 홍길동)" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()}/>
+                                </div>
+                                <Button onClick={handleSearch} className="px-8 font-bold bg-indigo-600 hover:bg-indigo-700">조회</Button>
                             </div>
                         ) : (
-                            <div className="bg-white p-4 rounded-xl border border-rose-200 text-rose-600 font-bold shadow-sm inline-block">
-                                선생님이 초기 레벨 설정을 진행 중입니다. 잠시만 기다려주세요!
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-3">
+                                    <Layers className="text-blue-500"/>
+                                    <select className="border-2 border-blue-200 p-2.5 rounded-xl font-black text-blue-900 outline-none focus:ring-2 focus:ring-blue-100" value={selectedClassId} onChange={(e) => setSelectedClassId(e.target.value)}>
+                                        <option value="" disabled>확인할 반을 선택하세요</option>
+                                        {availableClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    </select>
+                                </div>
+
+                                {selectedClassId && classStudentStats.length > 0 && (
+                                    <div className="overflow-x-auto border border-gray-200 rounded-xl mt-4">
+                                        <table className="w-full text-left bg-white whitespace-nowrap">
+                                            <thead className="bg-gray-50 text-gray-500 text-xs uppercase font-black border-b border-gray-200">
+                                                <tr>
+                                                    <th className="p-4">학생명</th>
+                                                    <th className="p-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSort('vocaProgress')}>진도율 <ArrowUpDown size={12} className="inline ml-1"/></th>
+                                                    <th className="p-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSort('vocaComprehension')}>이해도 <ArrowUpDown size={12} className="inline ml-1"/></th>
+                                                    <th className="p-4 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleSort('vocaRetention')}>
+                                                        기억 유지력 <ArrowUpDown size={12} className="inline ml-1"/>
+                                                        {sortConfig.key === 'vocaRetention' && sortConfig.direction === 'asc' && <span className="ml-2 text-rose-500 bg-rose-100 px-1.5 py-0.5 rounded text-[10px]">위험군 뷰</span>}
+                                                    </th>
+                                                    <th className="p-4">현재 모드</th>
+                                                    <th className="p-4 text-right">관리</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {classStudentStats.map(({ user, stat }, idx) => (
+                                                    <tr key={user.id} className={`hover:bg-blue-50/50 transition-colors ${selectedStudent?.id === user.id ? 'bg-blue-50' : ''}`}>
+                                                        <td className="p-4 font-bold text-gray-800 flex items-center gap-2">
+                                                            <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs">{idx + 1}</div>
+                                                            {user.name}
+                                                        </td>
+                                                        <td className="p-4 font-bold text-blue-600">{stat.vocaProgress || 0}%</td>
+                                                        <td className="p-4 font-bold text-emerald-600">{stat.vocaComprehension || 0}%</td>
+                                                        <td className="p-4 font-bold">
+                                                            <span className={stat.vocaRetention < 60 ? 'text-rose-600 bg-rose-100 px-2 py-0.5 rounded-full' : 'text-indigo-600'}>{stat.vocaRetention || 0}%</span>
+                                                        </td>
+                                                        <td className="p-4">
+                                                            <span className={`text-[10px] font-black px-2 py-1 rounded-full ${stat.studyMode === 'calibration' ? 'bg-amber-100 text-amber-700 animate-pulse' : 'bg-gray-100 text-gray-600'}`}>
+                                                                {stat.studyMode === 'calibration' ? '🎯 영점 조절 중' : stat.studyMode === 'progress' ? '진도 모드' : stat.studyMode === 'basic' ? '기초 모드' : stat.studyMode === 'review' ? '복습 모드' : '미진행'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="p-4 text-right">
+                                                            <button onClick={() => { setSelectedStudent(user); setCurrentTestSession(null); setCatScoreInput(''); window.scrollTo(0, document.body.scrollHeight); }} className="text-blue-600 hover:text-blue-800 font-bold text-sm flex items-center justify-end gap-1 w-full">
+                                                                상세 보기 <ChevronRight size={16}/>
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                                {selectedClassId && classStudentStats.length === 0 && <div className="text-center p-8 text-gray-400 font-bold">이 반에 등록된 학생이 없습니다.</div>}
                             </div>
                         )}
                     </div>
-                ) : (
-                selectedStudent && studentStat && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
-                        <div className="flex items-center gap-3 mb-5 border-b border-slate-200 pb-4">
+                </div>
+            )}
+
+            {selectedStudent && (!rawStat || !rawStat.catScore) ? (
+                <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-8 animate-in fade-in zoom-in-95 text-center shadow-inner">
+                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-rose-100">
+                        <Target className="text-rose-500" size={32} />
+                    </div>
+                    <h3 className="text-2xl font-black text-rose-900 mb-2">초기 진단평가(CAT) 영점 조절 세팅</h3>
+                    <p className="text-rose-700 font-bold mb-6 text-sm leading-relaxed">
+                        {selectedStudent.name} 학생의 첫 어휘력 스탯 기준점(Zero-point)을 설정해야 합니다.<br/>
+                        테스트 결과를 입력하면 <span className="bg-rose-200 px-1 rounded text-rose-900">Z1(패스) ~ Z4(잠금) 구간이 자동 분할</span>되며, 첫 2주간 딥스캔 모드가 가동됩니다.
+                    </p>
+                    
+                    {!['student', 'parent'].includes(currentUser?.role) ? (
+                        <div className="flex items-center justify-center gap-3 max-w-sm mx-auto">
+                            <input type="number" className="w-32 p-4 text-center text-xl font-black rounded-xl border-2 border-rose-300 outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-200 bg-white shadow-sm" placeholder="점수" value={catScoreInput} onChange={(e) => setCatScoreInput(e.target.value)} />
+                            <Button onClick={handleInitializeCAT} disabled={isInitializingCat} className="bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-4 rounded-xl shadow-md h-full flex items-center gap-2">
+                                {isInitializingCat ? <RefreshCw className="animate-spin" size={20}/> : <><Crosshair size={20} /> 초개인화 알고리즘 가동</>}
+                            </Button>
+                        </div>
+                    ) : (
+                        <div className="bg-white p-4 rounded-xl border border-rose-200 text-rose-600 font-bold shadow-sm inline-block">
+                            선생님이 초기 레벨 설정을 진행 중입니다. 잠시만 기다려주세요!
+                        </div>
+                    )}
+                </div>
+            ) : (
+            selectedStudent && studentStat && (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 shadow-sm animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex flex-wrap items-center justify-between gap-4 mb-5 border-b border-slate-200 pb-4">
+                        <div className="flex items-center gap-3">
                             <User className="text-indigo-600" size={28}/>
-                            <span className="font-black text-2xl text-slate-800">{selectedStudent.name}</span>
+                            <span className="font-black text-2xl text-slate-800">{selectedStudent.name} <span className="text-lg font-bold text-gray-400">학생 리포트</span></span>
                             <span className="bg-indigo-100 text-indigo-700 font-black text-xs px-3 py-1.5 rounded-lg ml-2">Session {studentStat.vocaSession}</span>
                             
                             {studentStat.studyMode === 'calibration' && (
@@ -231,78 +348,98 @@ const VocaManager = ({ currentUser }) => {
                             )}
                         </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
-                            <div className="col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                                <h4 className="text-xs font-black text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2"><Zap size={14}/> AI Data Matrix</h4>
-                                <div className="grid grid-cols-3 gap-3 text-center">
-                                    <div className="bg-blue-50/50 rounded-xl p-3 border border-blue-100 relative overflow-hidden">
-                                        <div className="text-[11px] font-bold text-blue-600 mb-1">어휘 진도</div>
-                                        <div className="text-2xl font-black text-blue-900">{studentStat.vocaProgress || 0}%</div>
-                                    </div>
-                                    <div className="bg-emerald-50/50 rounded-xl p-3 border border-emerald-100 relative overflow-hidden">
-                                        <div className="text-[11px] font-bold text-emerald-600 mb-1">뜻 이해도</div>
-                                        <div className="text-2xl font-black text-emerald-900">{studentStat.vocaComprehension || 0}%</div>
-                                    </div>
-                                    <div className="bg-indigo-50/50 rounded-xl p-3 border border-indigo-100 relative overflow-hidden">
-                                        <div className="text-[11px] font-bold text-indigo-600 mb-1">기억 유지력</div>
-                                        <div className="text-2xl font-black text-indigo-900">{studentStat.vocaRetention || 0}%</div>
-                                    </div>
+                        {/* 🚀 [투명성 뷰어 확장] 오답 지옥방과 회차별 학습 로그 버튼 배치 */}
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={fetchDetailedHistoryLog} className="bg-white border-2 border-blue-200 text-blue-600 hover:bg-blue-50 font-black text-sm px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm transition-all active:scale-95">
+                                <BarChart2 size={18}/> 📊 성장 로그 및 상세 이력 보기
+                            </button>
+                            <button onClick={fetchHellRoomWords} className="bg-white border-2 border-rose-200 text-rose-600 hover:bg-rose-50 font-black text-sm px-4 py-2 rounded-xl flex items-center gap-2 shadow-sm transition-all active:scale-95">
+                                <BookX size={18}/> 나의 오답 지옥방 보기
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+                        <div className="col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                            <h4 className="text-xs font-black text-slate-400 mb-4 uppercase tracking-wider flex items-center gap-2"><Zap size={14}/> AI Data Matrix</h4>
+                            <div className="grid grid-cols-3 gap-3 text-center">
+                                <div className="bg-blue-50/50 rounded-xl p-3 border border-blue-100">
+                                    <div className="text-[11px] font-bold text-blue-600 mb-1">어휘 진도율</div>
+                                    <div className="text-2xl font-black text-blue-900">{studentStat.vocaProgress || 0}%</div>
                                 </div>
-                                <div className="mt-4 bg-amber-50/50 p-3.5 rounded-xl border border-amber-100 text-sm font-bold text-slate-700 flex items-start gap-2 leading-relaxed">
-                                    <Award size={18} className="text-amber-500 shrink-0 mt-0.5"/>
-                                    {studentStat.vocaRubric}
+                                <div className="bg-emerald-50/50 rounded-xl p-3 border border-emerald-100">
+                                    <div className="text-[11px] font-bold text-emerald-600 mb-1">뜻 이해도</div>
+                                    <div className="text-2xl font-black text-emerald-900">{studentStat.vocaComprehension || 0}%</div>
+                                </div>
+                                <div className={`rounded-xl p-3 border ${studentStat.vocaRetention < 60 ? 'bg-rose-50/50 border-rose-200' : 'bg-indigo-50/50 border-indigo-100'}`}>
+                                    <div className={`text-[11px] font-bold mb-1 ${studentStat.vocaRetention < 60 ? 'text-rose-600' : 'text-indigo-600'}`}>기억 유지력</div>
+                                    <div className={`text-2xl font-black flex items-center justify-center gap-1 ${studentStat.vocaRetention < 60 ? 'text-rose-700' : 'text-indigo-900'}`}>
+                                        {studentStat.vocaRetention || 0}%
+                                        {studentStat.vocaRetention < 60 && <AlertTriangle size={16} className="text-rose-500 animate-pulse"/>}
+                                    </div>
                                 </div>
                             </div>
-
-                            <div className="col-span-1 flex flex-col justify-center gap-3">
-                                <Button onClick={handleGenerateSet} disabled={isGenerating} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 font-black h-16 w-full text-base shadow-lg transition-transform active:scale-95">
-                                    {isGenerating ? <RefreshCw className="animate-spin mx-auto" /> : <span className="flex items-center justify-center gap-2"><FileText size={20}/> 오늘의 맞춤 시험지 발급</span>}
-                                </Button>
-                                {currentTestSession && (
-                                    <button onClick={() => window.print()} className="text-sm font-bold text-slate-600 hover:text-slate-900 bg-white py-3 rounded-xl border-2 border-slate-200 hover:border-slate-300 transition-colors flex justify-center items-center gap-2 shadow-sm">
-                                        <Printer size={16}/> {currentUser?.role === 'student' ? '단어장 및 시험지 인쇄' : '시험지 인쇄 창 열기'}
-                                    </button>
-                                )}
+                            <div className="mt-4 bg-gray-800 p-4 rounded-xl border border-gray-700 text-sm font-bold text-white flex items-start gap-3 leading-relaxed shadow-inner">
+                                <Award size={20} className="text-yellow-400 shrink-0 mt-0.5"/>
+                                <div><span className="block text-gray-400 text-xs mb-1 uppercase tracking-wider">AI 분석 코멘트</span>{studentStat.vocaRubric}</div>
                             </div>
                         </div>
 
-                        {currentUser?.role !== 'student' && (
-                            <div className="border-t border-slate-200 pt-5 flex flex-col sm:flex-row items-center gap-4">
-                                <div className="text-sm font-black text-slate-600 flex items-center gap-1.5"><Layers size={18} className="text-indigo-500"/> 강사지정 학습 모드 :</div>
-                                <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1">
-                                    {[
-                                        { id: 'calibration', label: '🎯 영점 조절', desc: 'Z1+Z2 딥스캔' },
-                                        { id: 'progress', label: '🚀 진도 모드', desc: '신규 60%' },
-                                        { id: 'basic', label: '🧱 기초 모드', desc: '복습 40%' },
-                                        { id: 'review', label: '🔄 복습 모드', desc: '복습 80%' }
-                                    ].map(m => (
-                                        <button
-                                            key={m.id} onClick={() => handleChangeMode(m.id)}
-                                            className={`min-w-[90px] flex-none px-3 py-2.5 rounded-xl border-2 font-black text-xs transition-all flex flex-col items-center justify-center
-                                                ${(studentStat.studyMode || 'progress') === m.id 
-                                                    ? 'bg-blue-600 border-blue-600 text-white shadow-md transform -translate-y-0.5' 
-                                                    : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-                                        >
-                                            <span>{m.label}</span>
-                                            <span className={`text-[10px] font-bold mt-0.5 ${(studentStat.studyMode || 'progress') === m.id ? 'text-blue-200' : 'text-slate-400'}`}>{m.desc}</span>
-                                        </button>
-                                    ))}
+                        <div className="col-span-1 flex flex-col justify-center gap-3">
+                            {!['student', 'parent'].includes(currentUser?.role) ? (
+                                <Button onClick={handleGenerateSet} disabled={isGenerating} className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 font-black h-16 w-full text-base shadow-lg transition-transform active:scale-95">
+                                    {isGenerating ? <RefreshCw className="animate-spin mx-auto" /> : <span className="flex items-center justify-center gap-2"><FileText size={20}/> 오늘의 맞춤 시험지 발급</span>}
+                                </Button>
+                            ) : (
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 text-center h-16 flex items-center justify-center font-bold text-blue-800 text-sm">
+                                    선생님이 시험지를 발급해주시면 아래에서 인쇄할 수 있습니다.
                                 </div>
-                            </div>
-                        )}
-                    </div>
-                ))}
-            </Card>
+                            )}
 
-            {currentTestSession && currentUser?.role !== 'student' && (
-                <Card className="p-8 bg-white border-2 border-emerald-100 shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-500">
+                            {currentTestSession && (
+                                <button onClick={() => window.print()} className="text-sm font-bold text-slate-600 hover:text-slate-900 bg-white py-3 rounded-xl border-2 border-slate-200 hover:border-slate-300 transition-colors flex justify-center items-center gap-2 shadow-sm">
+                                    <Printer size={16}/> {['student', 'parent'].includes(currentUser?.role) ? '내 맞춤 단어장 인쇄하기' : '시험지 인쇄 창 열기'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {!['student', 'parent'].includes(currentUser?.role) && (
+                        <div className="border-t border-slate-200 pt-5 flex flex-col sm:flex-row items-center gap-4">
+                            <div className="text-sm font-black text-slate-600 flex items-center gap-1.5"><Layers size={18} className="text-indigo-500"/> 강사지정 학습 모드 :</div>
+                            <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1">
+                                {[
+                                    { id: 'calibration', label: '🎯 영점 조절', desc: 'Z1+Z2 딥스캔' },
+                                    { id: 'progress', label: '🚀 진도 모드', desc: '신규 60%' },
+                                    { id: 'basic', label: '🧱 기초 모드', desc: '복습 40%' },
+                                    { id: 'review', label: '🔄 복습 모드', desc: '복습 80%' }
+                                ].map(m => (
+                                    <button
+                                        key={m.id} onClick={() => handleChangeMode(m.id)}
+                                        className={`min-w-[90px] flex-none px-3 py-2.5 rounded-xl border-2 font-black text-xs transition-all flex flex-col items-center justify-center
+                                            ${(studentStat.studyMode || 'progress') === m.id 
+                                                ? 'bg-blue-600 border-blue-600 text-white shadow-md transform -translate-y-0.5' 
+                                                : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                                    >
+                                        <span>{m.label}</span>
+                                        <span className={`text-[10px] font-bold mt-0.5 ${(studentStat.studyMode || 'progress') === m.id ? 'text-blue-200' : 'text-slate-400'}`}>{m.desc}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            ))}
+
+            {/* 고속 채점 그리드 (강사/조교 전용) */}
+            {currentTestSession && !['student', 'parent'].includes(currentUser?.role) && (
+                <Card className="p-8 bg-white border-2 border-emerald-100 shadow-xl animate-in fade-in slide-in-from-bottom-4 duration-500 mt-6">
                     <div className="flex justify-between items-center border-b border-slate-200 pb-5 mb-8">
                         <div>
                             <h2 className="text-2xl font-black text-gray-800 mb-1 flex items-center gap-2"><ShieldCheck className="text-emerald-500"/> 고속 채점 그리드</h2>
                             <p className="text-sm font-bold text-rose-500">조교님, 학생이 틀린 번호만 클릭하여 빨간색으로 변경해 주세요.</p>
                         </div>
                     </div>
-
                     <div className="grid grid-cols-5 sm:grid-cols-10 gap-3 mb-8">
                         {Array.from({ length: 50 }, (_, i) => i + 1).map(num => (
                             <button
@@ -317,7 +454,6 @@ const VocaManager = ({ currentUser }) => {
                             </button>
                         ))}
                     </div>
-
                     <div className="flex flex-col sm:flex-row justify-between items-center bg-slate-50 p-5 rounded-2xl border border-slate-200 gap-4">
                         <div className="text-lg font-bold text-slate-700">
                             오답 문항 수 : <span className="text-rose-600 font-black text-2xl mx-1">{wrongAnswers.size}</span> 개 
@@ -331,6 +467,90 @@ const VocaManager = ({ currentUser }) => {
                 </Card>
             )}
 
+            {/* 🚀 모달 1: 상세 학습 로그 (타임라인) */}
+            <Modal isOpen={historyLogModal.isOpen} onClose={() => setHistoryLogModal({ isOpen: false, loading: false, sessions: [] })} title={`${selectedStudent?.name} 학생의 회차별 상세 로그`}>
+                <div className="p-2">
+                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-6 text-sm text-blue-800 font-bold leading-relaxed flex items-start gap-2 shadow-sm">
+                        <Award className="shrink-0 text-blue-500 mt-0.5" size={18}/>
+                        <div>투명한 데이터가 신뢰를 만듭니다.<br/>학생이 지난 회차에서 어떤 점수를 받았고, 어떤 단어에서 약점을 보였는지 추적합니다. (최근 15회차)</div>
+                    </div>
+                    
+                    {historyLogModal.loading ? (
+                        <div className="py-10 flex flex-col items-center justify-center text-gray-400 font-bold gap-3">
+                            <Loader className="animate-spin text-blue-500" size={32}/> 학습 이력을 불러오는 중입니다...
+                        </div>
+                    ) : (
+                        historyLogModal.sessions.length === 0 ? (
+                            <div className="text-center py-12 text-gray-400 font-black text-lg">아직 완료된 시험 기록이 없습니다.</div>
+                        ) : (
+                            <div className="space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
+                                {historyLogModal.sessions.map((sess, idx) => (
+                                    <div key={sess.testId} className="bg-white border-2 border-gray-100 p-5 rounded-2xl shadow-sm flex flex-col gap-3">
+                                        <div className="flex justify-between items-center border-b border-gray-50 pb-3">
+                                            <div className="flex items-center gap-2">
+                                                <span className="bg-blue-600 text-white font-black text-xs px-2.5 py-1 rounded-lg">Session {sess.sessionNumber}</span>
+                                                <span className="text-xs font-bold text-gray-400 flex items-center gap-1"><Calendar size={12}/> {new Date(sess.completedAt?.seconds * 1000).toLocaleDateString()}</span>
+                                            </div>
+                                            <div className="font-black text-xl text-slate-800">
+                                                정답률: <span className={sess.sessionScore >= 80 ? 'text-emerald-600' : 'text-rose-600'}>{sess.sessionScore || 0}%</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <span className="text-xs font-black text-gray-500 mb-2 block">해당 회차 오답 내역 ({sess.wrongCount || 0}개)</span>
+                                            {sess.wrongWordsDetails && sess.wrongWordsDetails.length > 0 ? (
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {sess.wrongWordsDetails.map((w, wIdx) => (
+                                                        <span key={wIdx} className="bg-rose-50 border border-rose-200 text-rose-700 px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1">
+                                                            {w.word} <span className="font-normal text-rose-400">|</span> {w.meaning}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <span className="text-sm font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg inline-block">🎉 만점! 틀린 단어가 없습니다.</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )
+                    )}
+                </div>
+            </Modal>
+
+            {/* 🚀 모달 2: 오답 지옥방 목록 */}
+            <Modal isOpen={hellRoomModal.isOpen} onClose={() => setHellRoomModal({ isOpen: false, loading: false, words: [] })} title={`${selectedStudent?.name} 학생의 오답 지옥방`}>
+                <div className="p-2">
+                    <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 mb-4 text-sm text-rose-800 font-bold leading-relaxed flex items-start gap-2 shadow-sm">
+                        <AlertTriangle className="shrink-0 text-rose-500 mt-0.5" size={18}/>
+                        <div>여기에 등록된 단어들은 최근 3번 이상 반복해서 틀려 <strong>'만성 오답(Chronic Error)'</strong>으로 분류된 단어들입니다. AI가 다음 숙제 출제 시 최우선 순위로 강제 출제합니다.</div>
+                    </div>
+                    
+                    {hellRoomModal.loading ? (
+                        <div className="py-10 flex flex-col items-center justify-center text-gray-400 font-bold gap-3">
+                            <Loader className="animate-spin text-rose-500" size={32}/> 데이터를 분석 중입니다...
+                        </div>
+                    ) : (
+                        hellRoomModal.words.length === 0 ? (
+                            <div className="text-center py-12 text-gray-400 font-black text-lg">
+                                🎉 축하합니다!<br/>현재 지옥방에 갇힌 만성 오답 단어가 없습니다.
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2">
+                                {hellRoomModal.words.map((w, idx) => (
+                                    <div key={idx} className="bg-white border border-gray-200 p-3 rounded-xl shadow-sm text-center flex flex-col gap-1 relative overflow-hidden group hover:border-rose-300 transition-colors">
+                                        <div className="absolute top-0 left-0 w-1 h-full bg-rose-500"></div>
+                                        <span className="font-black text-gray-800 text-lg">{w.word}</span>
+                                        <span className="text-[10px] text-gray-400 font-bold">오답 횟수: <span className="text-rose-600">{w.incorrectCount}</span>회</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )
+                    )}
+                </div>
+            </Modal>
+
+            {/* 인쇄 전용 영역 */}
             {currentTestSession && (
                 <div className="print-only-section">
                     <div className="p-8">
@@ -348,13 +568,9 @@ const VocaManager = ({ currentUser }) => {
                         <div className="grid grid-cols-2 gap-x-10 gap-y-5">
                             {currentTestSession.wordsForPrint.map((word, idx) => (
                                 <div key={idx} className="flex border-b border-slate-300 pb-2 items-center">
-                                    <div className="w-1/2 font-black text-xl text-slate-800 pr-4 border-r-2 border-dashed border-slate-400 break-words">
-                                        {word.word}
-                                    </div>
+                                    <div className="w-1/2 font-black text-xl text-slate-800 pr-4 border-r-2 border-dashed border-slate-400 break-words">{word.word}</div>
                                     <div className="w-1/2 pl-4 text-sm font-bold text-slate-700 flex flex-col justify-center">
-                                        {word.meanings.map((m, mIdx) => (
-                                            <span key={mIdx} className="mb-0.5">{mIdx + 1}. {m.koreanMeaning}</span>
-                                        ))}
+                                        {word.meanings.map((m, mIdx) => <span key={mIdx} className="mb-0.5">{mIdx + 1}. {m.koreanMeaning}</span>)}
                                     </div>
                                 </div>
                             ))}
