@@ -1,5 +1,5 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: '신규 상담 등록'과 'Voca 관리' 메뉴를 완벽히 분리하고 사이드바 탭 누락 버그를 수정했습니다.) */
+   (🚀 CTO 패치: 대시보드 메뉴 카드가 사용자의 권한(Role)에 맞게 100% 동적으로 자동 생성되도록 아키텍처를 대폭 개선했습니다.) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -348,51 +348,69 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
+// 🚀 [CTO 패치] 대시보드의 메뉴들을 완벽하게 동적 카드로 렌더링하기 위한 컴포넌트
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
     if (!currentUser) return null;
+
+    // 대시보드에 뿌려질 모든 카드 목록 (권한, 조건 포함)
+    const DASHBOARD_CARDS = [
+        { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'], desc: '신규 원생 상담 데이터를 입력하고 초기 세팅을 진행합니다.', color: 'text-indigo-600', bg: 'bg-indigo-100', hoverBg: 'group-hover:bg-indigo-600' },
+        { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '오늘의 시간표와 학생들의 등원/지각 현황을 실시간으로 추적합니다.', color: 'text-emerald-600', bg: 'bg-emerald-100', hoverBg: 'group-hover:bg-emerald-600' },
+        { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'], desc: '학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.', color: 'text-blue-600', bg: 'bg-blue-100', hoverBg: 'group-hover:bg-blue-600' },
+        { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '법인카드 및 개인 지출 내역을 등록하고 증빙을 업로드합니다.', color: 'text-teal-600', bg: 'bg-teal-100', hoverBg: 'group-hover:bg-teal-600' },
+        { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'], desc: '학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.', color: 'text-purple-600', bg: 'bg-purple-100', hoverBg: 'group-hover:bg-purple-600' },
+        { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '학생의 시험 결과를 입력하고 프리미엄 분석 리포트를 생성합니다.', color: 'text-rose-600', bg: 'bg-rose-100', hoverBg: 'group-hover:bg-rose-600' },
+        { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'], desc: '지금까지 치른 시험의 성적과 담당 선생님의 리포트를 확인하세요.', color: 'text-rose-600', bg: 'bg-rose-100', hoverBg: 'group-hover:bg-rose-600' },
+        { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'], desc: '목표 대학 및 학과 진학을 위한 성적 분석 및 전략을 수립합니다.', color: 'text-cyan-600', bg: 'bg-cyan-100', hoverBg: 'group-hover:bg-cyan-600' },
+        { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'], desc: ['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교 일정을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인합니다.', color: 'text-orange-600', bg: 'bg-orange-100', hoverBg: 'group-hover:bg-orange-600' },
+        { path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'], desc: '클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 기록합니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
+        { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'], desc: '나의 근무 일정을 확인하고 추가/취소를 요청합니다.', color: 'text-lime-600', bg: 'bg-lime-100', hoverBg: 'group-hover:bg-lime-600' },
+        { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'], desc: '학생 픽업을 요청하고 관리합니다.', color: 'text-pink-600', bg: 'bg-pink-100', hoverBg: 'group-hover:bg-pink-600' },
+        { path: '/lectures', label: ['student', 'parent'].includes(currentUser.role) ? '수강 강의' : '강의 관리', icon: ['student', 'parent'].includes(currentUser.role) ? GraduationCap : Video, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'], desc: ['student', 'parent'].includes(currentUser.role) ? '배정된 강의 진도를 확인하고 영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고 강의 영상을 업로드하세요.', color: 'text-fuchsia-600', bg: 'bg-fuchsia-100', hoverBg: 'group-hover:bg-fuchsia-600' },
+        { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '학교별 기출문제와 분석 자료를 가장 빠르게 확인하세요.', color: 'text-sky-600', bg: 'bg-sky-100', hoverBg: 'group-hover:bg-sky-600' },
+        { path: '/voca', label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어'), desc: currentUser.role === 'student' ? '나만의 맞춤형 단어장과 숨겨진 약점을 투명하게 확인하세요.' : '영단어 시험지를 발급하고 고속 채점을 통해 스탯을 관리합니다.', color: 'text-violet-600', bg: 'bg-violet-100', hoverBg: 'group-hover:bg-violet-600' },
+        { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'], desc: '학원의 다양한 소식과 커뮤니티 랭킹을 확인합니다.', color: 'text-amber-600', bg: 'bg-amber-100', hoverBg: 'group-hover:bg-amber-600' },
+        { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'], desc: '성적표, 결제 안내 등 대량 문자를 템플릿으로 발송합니다.', color: 'text-red-600', bg: 'bg-red-100', hoverBg: 'group-hover:bg-red-600' },
+        { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'], desc: '학원 구성원(학생, 학부모, 강사 등)의 계정과 권한을 관리합니다.', color: 'text-slate-600', bg: 'bg-slate-100', hoverBg: 'group-hover:bg-slate-600' },
+        { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'], desc: '전체 직원의 급여를 정산하고 관리합니다.', color: 'text-stone-600', bg: 'bg-stone-100', hoverBg: 'group-hover:bg-stone-600' },
+        { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'], desc: '이번 달 급여 명세서와 정산 내역을 확인합니다.', color: 'text-stone-600', bg: 'bg-stone-100', hoverBg: 'group-hover:bg-stone-600' },
+        { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'], desc: '학원 시스템의 전반적인 환경과 코어 데이터를 설정합니다.', color: 'text-zinc-600', bg: 'bg-zinc-100', hoverBg: 'group-hover:bg-zinc-600' },
+    ];
+
+    // 현재 접속한 사용자 권한에 맞는 카드만 필터링
+    const visibleCards = DASHBOARD_CARDS.filter(card => 
+        card.roles.includes(currentUser.role) && 
+        (!card.showCondition || card.showCondition(currentUser))
+    );
+
     return (
-        <div className="space-y-6 animate-in fade-in">
+        <div className="space-y-6 animate-in fade-in pb-10">
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-8 rounded-3xl shadow-lg flex justify-between items-center flex-wrap gap-4">
                 <div>
                     <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
                     <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
                 </div>
-                {/* 🚀 [CTO 패치] 대시보드 번개 버튼이 분리된 '상담 메뉴(/consult)' 로 정상 연결되도록 수정 */}
                 {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
                     <button onClick={() => navigate('/consult')} className="bg-indigo-900/40 text-white border border-indigo-200/30 px-6 py-4 rounded-2xl font-black text-base shadow-lg hover:bg-indigo-900/60 active:scale-95 transition-all flex items-center gap-2">
                         ⚡ 10초 빠른 신규 상담 등록
                     </button>
                 )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/schedule')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-emerald-100 p-3 rounded-xl text-emerald-600 group-hover:bg-emerald-600 group-hover:text-white transition-colors"><Activity size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">실시간 운영 현황</h2>
+
+            {/* 🚀 사용자 맞춤형 대시보드 카드 그리드 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {visibleCards.map((card, index) => (
+                    <div key={index} onClick={() => navigate(card.path)} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 cursor-pointer group active:scale-95 transition-all flex flex-col h-full">
+                        <div className="flex items-center gap-4 mb-3">
+                            <div className={`p-3 rounded-xl transition-colors ${card.bg} ${card.color} ${card.hoverBg} group-hover:text-white`}>
+                                <card.icon size={28} />
+                            </div>
+                            <h2 className="text-lg font-bold text-gray-800">{card.label}</h2>
                         </div>
-                        <p className="text-gray-500 leading-relaxed">오늘의 시간표와 학생들의 등원 현황, 지각자를 실시간으로 추적합니다.</p>
+                        <p className="text-sm text-gray-500 leading-relaxed flex-1">{card.desc}</p>
                     </div>
-                )}
-                {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && (
-                    <div onClick={() => navigate('/clinic-tasks')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-cyan-100 p-3 rounded-xl text-cyan-600 group-hover:bg-cyan-600 group-hover:text-white transition-colors"><ClipboardList size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">오늘의 할 일</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 실시간으로 기록 및 보고합니다.</p>
-                    </div>
-                )}
-                {currentUser.role === 'admin' && (
-                    <div onClick={() => navigate('/financial-dashboard')} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer group active:scale-95 transition-all">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="bg-indigo-100 p-3 rounded-xl text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><PieChart size={32} /></div>
-                            <h2 className="text-xl font-bold text-gray-800">재무 대시보드</h2>
-                        </div>
-                        <p className="text-gray-500 leading-relaxed">학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.</p>
-                    </div>
-                )}
+                ))}
             </div>
         </div>
     );
@@ -404,13 +422,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 [CTO 패치] '신규 상담 관리' 탭을 사이드바에 정식으로 노출시킵니다.
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    
-    // 신규 분리된 상담 메뉴
     { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
-    
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
@@ -429,8 +443,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] 
     },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    
-    // 순수 Voca 운영/출제 메뉴
     { 
       path: '/voca', 
       label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', 
@@ -438,7 +450,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'],
       showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
     },
-    
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
@@ -502,10 +513,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        
-                        {/* 🚀 [CTO 패치] 데스크용 일반 상담 메뉴 라우트 추가 */}
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
-                        
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
                         <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -525,13 +533,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
-                        
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        {/* 🚀 [CTO 패치] 입시 내비게이터 딥링크 복원 완료 */}
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
@@ -554,14 +558,12 @@ const AppContent = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // 🚀 [CTO 패치] 캐시 강제 초기화 로직 복원 (구버전 화면 잔류 방지)
     if ('caches' in window) {
       caches.keys().then((names) => {
         names.forEach(name => caches.delete(name));
       });
     }
 
-    // 🚀 [CTO 패치] 세션 스토리지 대소문자 방어 및 데이터 정합성 보정 로직 복원
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
@@ -582,7 +584,6 @@ const AppContent = () => {
           let loginPassword = loginForm.password;
           if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
 
-          // 🚀 [CTO 패치] 강력한 예외 처리 (NFC/NFD 한글 인코딩 방어)
           const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
           let authUid = null;
           let finalSafeId = null;
@@ -606,7 +607,6 @@ const AppContent = () => {
               let docData = null;
               let originalDocId = null; 
               
-              // 🚀 [CTO 패치] userId 필드로 추적하는 Self-Healing 쿼리
               if (!userDoc.exists()) {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                   const s = await getDocs(q);
@@ -630,7 +630,6 @@ const AppContent = () => {
 
                   const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
-                  // 🚀 [CTO 패치] 중복 데이터 병합(Merge) 및 기존 구버전 삭제 로직 (자가 복구)
                   if (originalDocId && originalDocId !== finalSafeId) {
                       setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                          .then(() => {
@@ -671,7 +670,6 @@ const AppContent = () => {
   
   return (
     <Routes>
-      {/* 태블릿 Kiosk 전용 라우트 (사이드바 완전 배제형 전체화면) */}
       <Route path="/kiosk/consult" element={
         <Suspense fallback={<div className="h-screen flex items-center justify-center bg-gray-50"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
           <DataProvider currentUser={{ role: 'admin_assistant', name: '상담용 태블릿 기기' }}>
@@ -682,7 +680,6 @@ const AppContent = () => {
         </Suspense>
       } />
       
-      {/* 일반 사용자 라우트 */}
       <Route path="*" element={
         !currentUser ? (
           <LoginView form={loginForm} setForm={setLoginForm} onLogin={handleLogin} isLoading={loginProcessing} loginErrorModal={loginErrorModal} setLoginErrorModal={setLoginErrorModal} />
