@@ -1,5 +1,6 @@
 // functions/index.js
 // 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
+const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
@@ -10,9 +11,12 @@ if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
+// 🚀 [CTO 패치 1] 모든 함수의 기본 리전을 서울(asia-northeast3)로 통일
+// 프론트엔드와 통신 위치를 맞춰 404 CORS(internal) 에러를 원천 차단합니다.
+setGlobalOptions({ region: "asia-northeast3" });
+
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 확실한 API 키 로드 (여기에 원장님의 실제 키를 꼭 넣어주세요!)
 const getGeminiKey = () => {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
@@ -37,13 +41,21 @@ exports.adminResetPassword = onCall(async (request) => {
       return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
     } catch (error) {
       if (error.code === 'auth/user-not-found') {
-        const newUserRecord = await admin.auth().createUser({ email: email, password: newPassword, emailVerified: true });
-        return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
+        // 🚀 [CTO 패치 2] 계정 생성 중 발생하는 에러를 낚아채는 완벽한 안전망 추가
+        try {
+            const newUserRecord = await admin.auth().createUser({ email: email, password: newPassword, emailVerified: true });
+            return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
+        } catch (createError) {
+            console.error("Auth 계정 생성 실패:", createError);
+            throw new HttpsError("internal", `계정 생성 실패: ${createError.message}`);
+        }
       }
-      throw new HttpsError("unknown", error.message);
+      console.error("Auth 계정 업데이트 실패:", error);
+      throw new HttpsError("internal", `비밀번호 업데이트 실패: ${error.message}`);
     }
   }
 
+  // 이메일이 없는 경우의 폴백 로직
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
     return { success: true, authUid: uid };
@@ -58,7 +70,8 @@ exports.adminResetPassword = onCall(async (request) => {
         throw new HttpsError("not-found", "인증 서버에서 계정을 식별할 수 없습니다. 이메일을 명시해 주세요.");
       }
     }
-    throw new HttpsError("unknown", error.message);
+    console.error("UID 기반 업데이트 실패:", error);
+    throw new HttpsError("internal", `비밀번호 업데이트 실패: ${error.message}`);
   }
 });
 
@@ -121,7 +134,6 @@ exports.clinicReminderCron = onSchedule({
     timeoutSeconds: 300,
     memory: "512MiB"
 }, async (event) => {
-    // ... 기존 로직 보존 ...
     try {
         const db = admin.firestore();
         const now = new Date();
@@ -184,7 +196,6 @@ exports.clinicReminderCron = onSchedule({
 // [기능 5] 입시 내비게이터용 성적표 파싱
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
-    // ... 기존 로직 보존 ...
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     const { fileData, type } = request.data; 
     if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
@@ -220,7 +231,6 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 // [기능 6] 텔레그램 봇 보안 알림 전송
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
-    // ... 기존 로직 보존 ...
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -245,7 +255,6 @@ exports.sendTelegramAlert = onCall(async (request) => {
 // [기능 7] 데이터 연쇄 청소기
 // ============================================================================
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
-    // ... 기존 로직 보존 ...
     const snap = event.data;
     if (!snap) return null;
     const deletedUser = snap.data();
@@ -264,14 +273,14 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 });
 
 // ============================================================================
-// 🚀 [기능 8] Gemini Vision AI 기반 시험지 정밀 분석기 (원장님 기획안 적용 완료)
+// [기능 8] Gemini Vision AI 기반 시험지 정밀 분석기
 // ============================================================================
-exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region: "asia-northeast3" }, async (request) => {
+// 이미 글로벌 리전이 선언되었으므로 옵션 병합
+exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
-    // 프롬프트: 원장님의 <IDI 5대 지표> 및 <등급컷 예상> 완벽 반영
     const prompt = `
     당신은 한국 고등학교 수학 교육과정에 정통한 '베테랑 수학 교사'이자 '시험 난이도 및 등급컷 분석 전문가'입니다.
     첨부된 고등학교 수학 시험지(PDF/이미지)를 바탕으로, 다음 단계를 엄격히 따라 분석해 주세요.
@@ -313,7 +322,6 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB", region:
 
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
-        // JSON 강제 모드 적용으로 안정성 확보
         const model = genAI.getGenerativeModel({ 
             model: "gemini-2.5-flash",
             generationConfig: { responseMimeType: "application/json" }
