@@ -34,6 +34,7 @@ const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
+const VocaManager = React.lazy(() => import('./features/VocaManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -568,6 +569,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
     { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
+    { path: '/voca', label: currentUser.role === 'student' ? '🔥 오늘의 영단어' : currentUser.role === 'parent' ? '📈 영단어 리포트' : '📚 영단어 출제/관리', 
+      icon: BookOpen, 
+      roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant']},
     { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
     { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
     { path: '/lectures', label: currentUser.role.includes('student') || currentUser.role.includes('parent') ? '수강 강의' : '강의 관리', icon: currentUser.role.includes('student') ? GraduationCap : BookOpen, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
@@ -663,6 +667,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={<CollegeNavigator currentUser={currentUser} />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
                     </Routes>
                 </Suspense>
             </div>

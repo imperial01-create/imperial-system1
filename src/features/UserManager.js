@@ -1,6 +1,7 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 스마트 콤보박스 탑재 및 DB 평문 비밀번호(Password) 저장 보안 취약점 원천 차단 완료) */
+   (🚀 CTO 패치: 스마트 콤보박스 탑재 및 DB 평문 비밀번호(Password) 저장 보안 취약점 원천 차단 완료) 
+   (🚀 추가 패치: 강사/조교 과목 할당을 드롭다운으로 변경하여 RBAC 권한 제어의 기반을 마련했습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -92,7 +93,8 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
 
-    const { users, classes, enrollments, loadingData } = useData();
+    // 🚀 masterData를 DataContext에서 불러와 과목 드롭다운에 활용합니다.
+    const { users, classes, enrollments, masterData, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('student'); 
@@ -121,6 +123,9 @@ const UserManager = ({ currentUser }) => {
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false);
+
+    // 전역 환경설정에 등록된 과목 리스트 (없을 경우 기본값)
+    const availableSubjects = masterData?.subjects?.length > 0 ? masterData.subjects : ['국어', '수학', '영어', '과학'];
 
     useEffect(() => {
         const fetchSchools = async () => {
@@ -154,7 +159,6 @@ const UserManager = ({ currentUser }) => {
             const result = await resetPasswordFn({ uid: targetUid, newPassword: newPassword, email: realEmail });
             const freshAuthUid = result.data.authUid || targetUid;
 
-            // 🚀 [CTO 보안 패치] 데이터베이스에는 비밀번호(password)를 절대 저장하지 않습니다. 오직 authUid만 저장합니다.
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), { 
                 authUid: freshAuthUid, 
                 updatedAt: serverTimestamp() 
@@ -173,7 +177,6 @@ const UserManager = ({ currentUser }) => {
             let authUid = '';
 
             try {
-                // 가입 시에만 비밀번호를 사용하여 Firebase Authentication에 등록합니다.
                 const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, user.password);
                 authUid = userCredential.user.uid;
                 await signOut(secondaryAuth);
@@ -183,12 +186,8 @@ const UserManager = ({ currentUser }) => {
             }
 
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
-            
-            // 🚀 [CTO 보안 패치] 승인 처리 시에도 password 필드를 지워버립니다. (Firebase Auth에만 보관됨)
             const approvalPayload = { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() };
             
-            // 기존 데이터에 남아있는 비밀번호 찌꺼기를 없애기 위해 FieldValue.delete()를 쓸 수도 있으나
-            // 가장 깔끔한 방법은 문서를 병합할 때 덮어쓰는 것입니다.
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), approvalPayload, { merge: true });
 
             if (user.phone) {
@@ -230,7 +229,7 @@ const UserManager = ({ currentUser }) => {
 
     const handleOpenEdit = (user) => {
         setFormData({ 
-            ...user, id: user.id, password: '', // 🚀 기존 비밀번호는 불러오지도, 폼에 채우지도 않습니다.
+            ...user, id: user.id, password: '', 
             hourlyRate: user.hourlyRate || user.hourlyWage || '', 
             schoolName: user.schoolName || '', grade: user.grade || '1학년', authUid: user.authUid || '', bankName: user.bankName || '',
             accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', linkedChildrenIds: user.linkedChildrenIds || []
@@ -294,7 +293,6 @@ const UserManager = ({ currentUser }) => {
             const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
-                // 🚀 [CTO 보안 패치] payload.password = formData.password 삭제 완료!
                 if (formData.authUid) payload.authUid = formData.authUid;
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload, { merge: true });
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
@@ -303,7 +301,6 @@ const UserManager = ({ currentUser }) => {
                 const email = `${targetDocId}@imperial.com`;
                 let authUid = '';
                 try {
-                    // Firebase Auth에만 비밀번호를 넘겨주고 끝냅니다.
                     const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
                     authUid = userCredential.user.uid;
                     await signOut(secondaryAuth);
@@ -312,7 +309,6 @@ const UserManager = ({ currentUser }) => {
                     throw authError;
                 }
                 payload.authUid = authUid; 
-                // 🚀 [CTO 보안 패치] payload.password = formData.password 삭제 완료! DB에 비밀번호를 남기지 않습니다.
                 payload.createdAt = serverTimestamp();
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload);
                 setIsEditMode(true); setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
@@ -625,7 +621,17 @@ const UserManager = ({ currentUser }) => {
                                         {['ta', 'lecturer'].includes(activeTab === 'pending' ? formData.role : activeTab) && (
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-600 mb-1">담당 과목</label>
-                                                <input className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white" placeholder="예: 수학, 국어" value={formData.subject || ''} onChange={e => setFormData({...formData, subject: e.target.value})} />
+                                                {/* 🚀 [CTO 패치] 과목 입력란을 DataContext를 기반으로 한 드롭다운으로 교체 */}
+                                                <select 
+                                                    className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white font-bold text-gray-700" 
+                                                    value={formData.subject || ''} 
+                                                    onChange={e => setFormData({...formData, subject: e.target.value})}
+                                                >
+                                                    <option value="" disabled>과목을 선택하세요</option>
+                                                    {availableSubjects.map(sub => (
+                                                        <option key={sub} value={sub}>{sub}</option>
+                                                    ))}
+                                                </select>
                                             </div>
                                         )}
                                         {['ta', 'admin_assistant'].includes(activeTab === 'pending' ? formData.role : activeTab) && (

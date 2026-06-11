@@ -1,5 +1,7 @@
+/* [서비스 가치] 권한이 없는 타 과목 강사의 Voca 데이터 무단 접근을 UI단에서 즉각 차단하여 
+   학원 내 학생 PII(개인식별정보) 보안 위협을 제로(Zero Trust) 상태로 유지합니다. */
 import React, { useState } from 'react';
-import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText } from 'lucide-react';
+import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { generateDailyVocaSet, processVocaTestResult } from '../utils/vocaEngine';
@@ -9,6 +11,10 @@ import { db } from '../firebase';
 const APP_ID = 'imperial-clinic-v1';
 
 const VocaManager = ({ currentUser }) => {
+    // 🚀 [CTO 보안 패치] 컴포넌트 마운트 즉시, 강제 접근 여부를 판별합니다.
+    const isAuthorized = currentUser?.role === 'admin' || currentUser?.role === 'admin_assistant' || 
+                         (['lecturer', 'ta'].includes(currentUser?.role) && currentUser?.subject === '영어');
+
     const { users, englishStats } = useData();
     const [searchInput, setSearchInput] = useState('');
     const [selectedStudent, setSelectedStudent] = useState(null);
@@ -17,6 +23,22 @@ const VocaManager = ({ currentUser }) => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [toast, setToast] = useState({ message: '', type: 'info' });
+
+    // 권한이 없으면 컴포넌트 렌더링 자체를 차단하고 보안 경고창을 띄웁니다.
+    if (!isAuthorized) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[60vh] space-y-5 animate-in fade-in zoom-in-95">
+                <div className="bg-red-50 p-6 rounded-full border-4 border-red-100">
+                    <Lock className="text-red-500" size={48} />
+                </div>
+                <h2 className="text-2xl font-black text-gray-800">접근 권한이 차단되었습니다</h2>
+                <p className="text-gray-500 font-bold text-center">
+                    이 페이지는 <span className="text-red-500">영어 전문 강사 및 최고 관리자</span> 전용 메뉴입니다.<br/>
+                    본인의 담당 과목 설정이 올바른지 관리자에게 문의해 주세요.
+                </p>
+            </div>
+        );
+    }
 
     const showToast = (msg, type = 'success') => setToast({ message: msg, type });
 
