@@ -1,12 +1,12 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 누락되었던 4대 핵심 보안/방어 로직(Self-healing, Caching, 딥링크, NFC/NFD)을 완벽 복원하고, Kiosk 모드와 융합한 무결점 버전입니다.) */
+   (🚀 CTO 패치: '신규 상담 등록'과 'Voca 관리' 메뉴를 완벽히 분리하고 사이드바 탭 누락 버그를 수정했습니다.) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, HelpCircle
+  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, HelpCircle, UserPlus2
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -70,13 +70,7 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
                         <div className="p-3 border-b border-gray-100 bg-gray-50/80">
                             <div className="relative">
                                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                                <input 
-                                    type="text" autoFocus 
-                                    className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-sm" 
-                                    placeholder="학교명 키워드 검색..." 
-                                    value={search} 
-                                    onChange={e => setSearch(e.target.value)}
-                                />
+                                <input type="text" autoFocus className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-sm" placeholder="학교명 키워드 검색..." value={search} onChange={e => setSearch(e.target.value)} />
                             </div>
                         </div>
                         <div className="overflow-y-auto flex-1 custom-scrollbar pb-2">
@@ -364,8 +358,9 @@ const Dashboard = ({ currentUser }) => {
                     <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
                     <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
                 </div>
+                {/* 🚀 [CTO 패치] 대시보드 번개 버튼이 분리된 '상담 메뉴(/consult)' 로 정상 연결되도록 수정 */}
                 {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
-                    <button onClick={() => navigate('/voca')} className="bg-indigo-900/40 text-white border border-indigo-200/30 px-6 py-4 rounded-2xl font-black text-base shadow-lg hover:bg-indigo-900/60 active:scale-95 transition-all flex items-center gap-2">
+                    <button onClick={() => navigate('/consult')} className="bg-indigo-900/40 text-white border border-indigo-200/30 px-6 py-4 rounded-2xl font-black text-base shadow-lg hover:bg-indigo-900/60 active:scale-95 transition-all flex items-center gap-2">
                         ⚡ 10초 빠른 신규 상담 등록
                     </button>
                 )}
@@ -409,8 +404,13 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // 🚀 [CTO 패치] '신규 상담 관리' 탭을 사이드바에 정식으로 노출시킵니다.
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    
+    // 신규 분리된 상담 메뉴
+    { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
+    
     { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
@@ -429,13 +429,16 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] 
     },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
+    
+    // 순수 Voca 운영/출제 메뉴
     { 
       path: '/voca', 
-      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 및 상담 관리', 
+      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', 
       icon: BookText, 
       roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'],
       showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
     },
+    
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
@@ -499,21 +502,20 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        
+                        {/* 🚀 [CTO 패치] 데스크용 일반 상담 메뉴 라우트 추가 */}
+                        <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
+                        
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
-                        
                         <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/settings" element={currentUser.role === 'admin' ? <SettingsManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
-                        
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
                         <Route path="/clinic-tasks" element={['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) ? <ClinicTaskManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
@@ -522,11 +524,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
                         
-                        {/* 🚀 [CTO 패치] 3. 입시 내비게이터 파라미터(딥링크) 라우팅 복구 완료 */}
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        {/* 🚀 [CTO 패치] 입시 내비게이터 딥링크 복원 완료 */}
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
 
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -552,16 +553,15 @@ const AppContent = () => {
 
   const navigate = useNavigate();
 
-  // 🚀 [CTO 패치] 2. 브라우저 캐시 강제 초기화 및 4. 세션 스토리지 ID 대소문자 방어 로직 완벽 복구 완료
   useEffect(() => {
-    // 2. 캐시 강제 초기화 로직 복원 (구버전 화면 잔류 방지)
+    // 🚀 [CTO 패치] 캐시 강제 초기화 로직 복원 (구버전 화면 잔류 방지)
     if ('caches' in window) {
       caches.keys().then((names) => {
         names.forEach(name => caches.delete(name));
       });
     }
 
-    // 4. 세션 스토리지 대소문자 방어 및 데이터 정합성 보정 로직 복원
+    // 🚀 [CTO 패치] 세션 스토리지 대소문자 방어 및 데이터 정합성 보정 로직 복원
     const savedUser = sessionStorage.getItem('imperial_user');
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
@@ -574,7 +574,6 @@ const AppContent = () => {
     setLoading(false);
   }, []);
 
-  // 🚀 [CTO 패치] 1. 강력한 로그인 예외 처리(NFC/NFD) 및 과거/중복 데이터 Self-Healing 병합 로직 완벽 복구 완료
   const handleLogin = async () => {
       if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
       setLoginProcessing(true);
@@ -583,7 +582,7 @@ const AppContent = () => {
           let loginPassword = loginForm.password;
           if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
 
-          // NFC/NFD 한글 인코딩 방어 로직
+          // 🚀 [CTO 패치] 강력한 예외 처리 (NFC/NFD 한글 인코딩 방어)
           const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
           let authUid = null;
           let finalSafeId = null;
@@ -607,7 +606,7 @@ const AppContent = () => {
               let docData = null;
               let originalDocId = null; 
               
-              // userId 필드로 추적하는 Self-Healing 쿼리
+              // 🚀 [CTO 패치] userId 필드로 추적하는 Self-Healing 쿼리
               if (!userDoc.exists()) {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
                   const s = await getDocs(q);
@@ -631,7 +630,7 @@ const AppContent = () => {
 
                   const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
 
-                  // 중복 데이터 병합(Merge) 및 기존 구버전 삭제 로직 (자가 복구)
+                  // 🚀 [CTO 패치] 중복 데이터 병합(Merge) 및 기존 구버전 삭제 로직 (자가 복구)
                   if (originalDocId && originalDocId !== finalSafeId) {
                       setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
                          .then(() => {
@@ -672,7 +671,7 @@ const AppContent = () => {
   
   return (
     <Routes>
-      {/* Kiosk 전용 라우트 (사이드바 완전 배제형 전체화면) */}
+      {/* 태블릿 Kiosk 전용 라우트 (사이드바 완전 배제형 전체화면) */}
       <Route path="/kiosk/consult" element={
         <Suspense fallback={<div className="h-screen flex items-center justify-center bg-gray-50"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
           <DataProvider currentUser={{ role: 'admin_assistant', name: '상담용 태블릿 기기' }}>

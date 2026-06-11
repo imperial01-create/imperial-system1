@@ -2,12 +2,11 @@
    상세 학습 로그를 지연 로딩(Lazy Loading)으로 구현하여 데이터 요금은 최소화하되, 
    학부모에게는 "내 아이의 회차별 점수 향상과 오답 트래킹"을 가시적으로 증명합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
-// 🚀 [CTO 핫픽스] Loader 컴포넌트를 lucide-react에서 정상적으로 import 합니다.
 import { Search, Printer, RefreshCw, User, Award, Layers, Zap, FileText, Lock, Target, Crosshair, ShieldCheck, AlertTriangle, BookX, ArrowUpDown, ChevronRight, BarChart2, Calendar, Loader } from 'lucide-react';
 import { Button, Card, Toast, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { generateDailyVocaSet, processVocaTestResult } from '../utils/vocaEngine';
-import { doc, updateDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -32,9 +31,6 @@ const VocaManager = ({ currentUser }) => {
     
     const [hellRoomModal, setHellRoomModal] = useState({ isOpen: false, loading: false, words: [] });
     const [historyLogModal, setHistoryLogModal] = useState({ isOpen: false, loading: false, sessions: [] });
-
-    const [catScoreInput, setCatScoreInput] = useState('');
-    const [isInitializingCat, setIsInitializingCat] = useState(false);
 
     useEffect(() => {
         if (currentUser?.role === 'student') {
@@ -85,38 +81,11 @@ const VocaManager = ({ currentUser }) => {
     const handleSearch = () => {
         const student = users.find(u => u.role === 'student' && u.name === searchInput.trim());
         if (!student) return showToast('해당 학생이 존재하지 않습니다.', 'error');
-        setSelectedStudent(student); setCurrentTestSession(null); setCatScoreInput(''); 
+        setSelectedStudent(student); setCurrentTestSession(null); 
     };
 
     const rawStat = englishStats.find(s => s.studentId === selectedStudent?.id);
-    const studentStat = rawStat || (selectedStudent ? { vocaSession: 0 } : null);
-
-    const handleInitializeCAT = async () => {
-        if (!catScoreInput || isNaN(catScoreInput) || catScoreInput < 0 || catScoreInput > 1000) return showToast('유효한 점수를 입력해주세요.', 'error');
-        if (!window.confirm(`${selectedStudent.name} 학생의 CAT 초기 점수를 [${catScoreInput}점]으로 확정하고 영점 조절을 시작합니까?`)) return;
-
-        setIsInitializingCat(true);
-        const score = Number(catScoreInput);
-        const zones = {
-            Z1_Pass: [0, Math.max(0, score - 150)],                   
-            Z2_Grey: [Math.max(0, score - 149), Math.max(0, score - 20)], 
-            Z3_Target: [Math.max(0, score - 19), score + 30],         
-            Z4_Lock: [score + 31, 1000]                               
-        };
-
-        try {
-            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, selectedStudent.id);
-            await setDoc(statRef, {
-                studentId: selectedStudent.id, catScore: score, vocaSession: 1, 
-                studyMode: 'calibration', calibrationSessionsLeft: 10, zones: zones,
-                vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0,
-                vocaRubric: `[CAT 초기화 완료: ${score}점] 딥스캔 및 영점 조절 작업이 진행 중입니다. (앞으로 10회 남음)`,
-                updatedAt: serverTimestamp()
-            }, { merge: true });
-            showToast('✅ 영점 조절 시스템이 셋업되었습니다.', 'success');
-            setCatScoreInput('');
-        } catch (error) { showToast(error.message, 'error'); } finally { setIsInitializingCat(false); }
-    };
+    const studentStat = rawStat || null; // Voca 메뉴에서는 임시 데이터 껍데기를 만들지 않습니다.
 
     const handleChangeMode = async (mode) => {
         if (!selectedStudent || !studentStat || ['student', 'parent'].includes(currentUser?.role)) return;
@@ -289,7 +258,7 @@ const VocaManager = ({ currentUser }) => {
                                                             </span>
                                                         </td>
                                                         <td className="p-4 text-right">
-                                                            <button onClick={() => { setSelectedStudent(user); setCurrentTestSession(null); setCatScoreInput(''); window.scrollTo(0, document.body.scrollHeight); }} className="text-blue-600 hover:text-blue-800 font-bold text-sm flex items-center justify-end gap-1 w-full">
+                                                            <button onClick={() => { setSelectedStudent(user); setCurrentTestSession(null); window.scrollTo(0, document.body.scrollHeight); }} className="text-blue-600 hover:text-blue-800 font-bold text-sm flex items-center justify-end gap-1 w-full">
                                                                 상세 보기 <ChevronRight size={16}/>
                                                             </button>
                                                         </td>
@@ -306,28 +275,20 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {selectedStudent && (!rawStat || !rawStat.catScore) ? (
-                <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-8 animate-in fade-in zoom-in-95 text-center shadow-inner">
-                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-rose-100">
-                        <Target className="text-rose-500" size={32} />
+            {/* 🚀 [CTO 패치] CAT 정보가 없는 학생일 경우 상담 메뉴로 유도하는 안내창으로 변경 */}
+            {selectedStudent && !rawStat ? (
+                <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl p-10 animate-in fade-in zoom-in-95 text-center">
+                    <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm border border-gray-100">
+                        <Target className="text-gray-400" size={32} />
                     </div>
-                    <h3 className="text-2xl font-black text-rose-900 mb-2">초기 진단평가(CAT) 영점 조절 세팅</h3>
-                    <p className="text-rose-700 font-bold mb-6 text-sm leading-relaxed">
-                        {selectedStudent.name} 학생의 첫 어휘력 스탯 기준점(Zero-point)을 설정해야 합니다.<br/>
-                        테스트 결과를 입력하면 <span className="bg-rose-200 px-1 rounded text-rose-900">Z1(패스) ~ Z4(잠금) 구간이 자동 분할</span>되며, 첫 2주간 딥스캔 모드가 가동됩니다.
+                    <h3 className="text-2xl font-black text-gray-700 mb-2">초기 진단평가(CAT) 데이터가 없습니다.</h3>
+                    <p className="text-gray-500 font-bold mb-2 text-sm leading-relaxed">
+                        이 학생은 아직 영어 어휘력 진단(CAT)을 받지 않아 Voca 스탯이 활성화되지 않았습니다.
                     </p>
-                    
-                    {!['student', 'parent'].includes(currentUser?.role) ? (
-                        <div className="flex items-center justify-center gap-3 max-w-sm mx-auto">
-                            <input type="number" className="w-32 p-4 text-center text-xl font-black rounded-xl border-2 border-rose-300 outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-200 bg-white shadow-sm" placeholder="점수" value={catScoreInput} onChange={(e) => setCatScoreInput(e.target.value)} />
-                            <Button onClick={handleInitializeCAT} disabled={isInitializingCat} className="bg-rose-600 hover:bg-rose-700 text-white font-black px-6 py-4 rounded-xl shadow-md h-full flex items-center gap-2">
-                                {isInitializingCat ? <RefreshCw className="animate-spin" size={20}/> : <><Crosshair size={20} /> 초개인화 알고리즘 가동</>}
-                            </Button>
-                        </div>
-                    ) : (
-                        <div className="bg-white p-4 rounded-xl border border-rose-200 text-rose-600 font-bold shadow-sm inline-block">
-                            선생님이 초기 레벨 설정을 진행 중입니다. 잠시만 기다려주세요!
-                        </div>
+                    {!['student', 'parent'].includes(currentUser?.role) && (
+                        <p className="text-indigo-600 font-black text-sm">
+                            👉 좌측 메뉴의 [신규 상담 등록] 탭으로 이동하여 진단평가를 먼저 진행해 주세요.
+                        </p>
                     )}
                 </div>
             ) : (
