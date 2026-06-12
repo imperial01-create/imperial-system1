@@ -1,6 +1,6 @@
 /* [서비스 가치] 학생에게는 게임 같은 쫄깃한 몰입감을 주어 마찰(Friction)을 없애고,
    학원에게는 '가짜 지식'과 '찍기'를 원천 차단한 99% 순도의 어휘력 데이터를 제공하는 Kiosk용 평가 엔진입니다. 
-   (🚀 CTO 핫픽스: Firebase 복합 색인 에러 우회 및 중간 종료(Abort) 방어 로직 적용 완료) */
+   (🚀 CTO 핫픽스: 배포 서버의 ESLint 규칙 충돌(exhaustive-deps) 에러를 원천 해결한 클린 빌드 버전입니다.) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Loader, Clock, AlertTriangle, CheckCircle, Target, X } from 'lucide-react';
 import { collection, query, getDocs, limit } from 'firebase/firestore';
@@ -29,15 +29,22 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
     const [answers, setAnswers] = useState([]);
     
     const timerRef = useRef(null);
+    // 🚀 타이머 내부에서 최신 상태를 참조하기 위한 Ref 추가 (ESLint 에러 방지용)
+    const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore });
+    
     const MAX_QUESTIONS = 20;
 
-    // 1. 단어 풀(Pool) 로딩: 복합 색인 에러 방지를 위해 단순 Limit 쿼리 후 메모리 필터링
+    // 상태 동기화
+    useEffect(() => {
+        stateRef.current = { currentQ, currentIndex, timeLeft, currentScore };
+    }, [currentQ, currentIndex, timeLeft, currentScore]);
+
+    // 1. 단어 풀(Pool) 로딩
     useEffect(() => {
         const fetchCATPool = async () => {
             setIsLoadingPool(true);
             try {
                 const vocaRef = collection(db, 'VocabularyDB');
-                // 🚀 [CTO 패치] 에러 유발 쿼리 제거, 랜덤 샘플링을 위해 400개 문서 일괄 Fetch (비용 극소화)
                 const snap = await getDocs(query(vocaRef, limit(400)));
                 const fetchedWords = snap.docs.map(doc => doc.data());
 
@@ -46,7 +53,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             } catch (error) {
                 console.error("단어 풀 로딩 실패:", error);
                 alert("단어 데이터를 불러오는데 실패했습니다. 데이터베이스 상태를 확인해주세요.");
-                onComplete(null); // 에러 시 평가 즉시 취소
+                onComplete(null); 
             } finally {
                 setIsLoadingPool(false);
             }
@@ -55,7 +62,31 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         fetchCATPool();
     }, [onComplete]);
 
-    // 2. 적응형(Adaptive) 문제 생성 엔진
+    // 2. 정답 처리 및 점수 연산 로직 (useCallback으로 메모리 캐싱)
+    const handleSelectOption = useCallback((selectedOption, isTimeOut = false) => {
+        clearInterval(timerRef.current);
+        
+        const { currentQ: q, currentIndex: idx, timeLeft: tLeft, currentScore: score } = stateRef.current;
+        if (!q) return;
+
+        const isCorrect = !isTimeOut && selectedOption === q.answer;
+        setAnswers(prev => [...prev, { wordId: q.id, isCorrect, selectedOption }]);
+
+        if (isCorrect) {
+            const timeBonus = (tLeft / q.timeLimit) * 20; 
+            setCurrentScore(Math.min(1000, score + 60 + timeBonus));
+        } else {
+            setCurrentScore(Math.max(0, score - 40));
+        }
+
+        if (idx < MAX_QUESTIONS - 1) {
+            setCurrentIndex(idx + 1);
+        } else {
+            setIsFinished(true);
+        }
+    }, [MAX_QUESTIONS]);
+
+    // 3. 적응형(Adaptive) 문제 생성 엔진
     const generateNextQuestion = useCallback((estimatedScore) => {
         if (wordPool.length === 0) return null;
 
@@ -121,58 +152,36 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         };
     }, [wordPool, answers]);
 
+    // 4. 문제 갱신 및 타이머 세팅
     useEffect(() => {
         if (isStarted && !isFinished) {
             const nextQ = generateNextQuestion(currentScore);
             if (nextQ) {
                 setCurrentQ(nextQ);
                 setTimeLeft(nextQ.timeLimit);
+                
+                // 타이머 가동
+                clearInterval(timerRef.current);
+                timerRef.current = setInterval(() => {
+                    setTimeLeft((prev) => {
+                        if (prev <= 0.1) {
+                            clearInterval(timerRef.current);
+                            handleSelectOption('TIMEOUT_OR_IDK', true); // 시간 초과 처리
+                            return 0;
+                        }
+                        return prev - 0.1; 
+                    });
+                }, 100);
+
             } else {
-                // 🚀 [CTO 패치] 단어가 고갈되어도 300점을 확정하지 않고 취소 처리
                 alert("단어 풀이 부족하여 평가를 중단합니다.");
                 onComplete(null);
             }
         }
-    }, [currentIndex, isStarted, isFinished, currentScore, generateNextQuestion, onComplete]);
-
-    useEffect(() => {
-        if (isStarted && !isFinished && currentQ) {
-            clearInterval(timerRef.current);
-            timerRef.current = setInterval(() => {
-                setTimeLeft((prev) => {
-                    if (prev <= 0.1) {
-                        clearInterval(timerRef.current);
-                        handleSelectOption('TIMEOUT_OR_IDK'); 
-                        return 0;
-                    }
-                    return prev - 0.1; 
-                });
-            }, 100);
-        }
         return () => clearInterval(timerRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentQ, isStarted, isFinished]); 
+    }, [currentIndex, isStarted, isFinished, currentScore, generateNextQuestion, handleSelectOption, onComplete]);
 
-    const handleSelectOption = (selectedOption) => {
-        clearInterval(timerRef.current);
-        
-        const isCorrect = selectedOption === currentQ.answer;
-        setAnswers(prev => [...prev, { wordId: currentQ.id, isCorrect, selectedOption }]);
-
-        if (isCorrect) {
-            const timeBonus = (timeLeft / currentQ.timeLimit) * 20; 
-            setCurrentScore(prev => Math.min(1000, prev + 60 + timeBonus));
-        } else {
-            setCurrentScore(prev => Math.max(0, prev - 40));
-        }
-
-        if (currentIndex < MAX_QUESTIONS - 1) {
-            setCurrentIndex(prev => prev + 1);
-        } else {
-            setIsFinished(true);
-        }
-    };
-
+    // 5. 평가 종료 처리
     useEffect(() => {
         if (isFinished) {
             setTimeout(() => {
@@ -195,7 +204,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
     if (!isStarted) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative">
-                {/* 🚀 [CTO 패치] 평가 강제 취소(닫기) 버튼 */}
                 <button onClick={() => onComplete(null)} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white">
                     <X size={28} />
                 </button>
@@ -244,7 +252,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
 
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-none relative">
-            {/* 🚀 [CTO 패치] 시험 도중에도 닫기(중단) 기능 제공 */}
             <button onClick={() => { if(window.confirm("시험을 중단하시겠습니까? 점수가 저장되지 않습니다.")) onComplete(null); }} className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors z-50">
                 <X size={24} />
             </button>
@@ -282,7 +289,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                     {currentQ.options.map((opt, idx) => (
                         <button 
                             key={idx}
-                            onClick={() => handleSelectOption(opt)}
+                            onClick={() => handleSelectOption(opt, false)}
                             className="bg-white border-2 border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 active:bg-indigo-100 text-gray-800 font-bold text-lg sm:text-xl p-5 sm:p-6 rounded-2xl transition-all text-center flex items-center justify-center shadow-sm break-keep-all"
                         >
                             {opt}
@@ -291,7 +298,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 </div>
 
                 <button 
-                    onClick={() => handleSelectOption('TIMEOUT_OR_IDK')}
+                    onClick={() => handleSelectOption('TIMEOUT_OR_IDK', false)}
                     className="mt-4 w-full sm:w-2/3 mx-auto bg-gray-800 hover:bg-black text-white font-black text-lg py-5 rounded-2xl transition-colors shadow-md active:scale-95 flex items-center justify-center gap-2"
                 >
                     🤷 솔직히 모르겠습니다 (Pass)
