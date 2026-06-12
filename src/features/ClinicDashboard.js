@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.2 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진
-   (🚀 CTO 핫픽스: 동시간대 타 조교 스케줄 증발 버그 해결 및 클리닉 마감 직관적 UI 적용 완료) */
+/* [서비스 가치] 클리닉 V3.1.3 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
+   (🚀 CTO 핫픽스: 연속된 스케줄을 병합해서 보여주되, 수정/취소 시 1시간 단위로 개별 선택할 수 있는 '부분 관리' 아키텍처 적용 완료) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -80,9 +80,11 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
+// 🚀 [CTO 패치] 오리지널 세션 보존을 통한 그룹핑
 const groupSessions = (sessionList) => {
     if (!sessionList || !Array.isArray(sessionList)) return [];
     
+    // 예약 확정 및 진행 완료 슬롯만 합침 (빈 슬롯은 학생 신청을 위해 개별로 놔둠)
     const toGroup = sessionList.filter(s => ['pending', 'confirmed', 'completed'].includes(s.status));
     const others = sessionList.filter(s => !['pending', 'confirmed', 'completed'].includes(s.status));
 
@@ -115,7 +117,8 @@ const groupSessions = (sessionList) => {
         const sEnd = s.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`;
         
         if (!current) {
-            current = { ...s, originalIds: [s.id], endTime: sEnd };
+            // 🚀 originalSessions 원본 저장
+            current = { ...s, originalIds: [s.id], originalSessions: [{...s, endTime: sEnd}], endTime: sEnd };
         } else {
             const currentStList = Array.isArray(current.students) ? current.students : [];
             const sStList = Array.isArray(s.students) ? s.students : [];
@@ -125,6 +128,7 @@ const groupSessions = (sessionList) => {
             if (current.date === s.date && current.taId === s.taId && currentSt === sSt && current.endTime === s.startTime && current.status === s.status && current.classroom === s.classroom) {
                 current.endTime = sEnd;
                 current.originalIds.push(s.id);
+                current.originalSessions.push({...s, endTime: sEnd}); // 원본 개별 저장
                 if (current.topic !== s.topic && s.topic) {
                     const topics = (current.topic || '').split(' / ');
                     if (!topics.includes(s.topic)) current.topic = (current.topic ? current.topic + ' / ' : '') + s.topic;
@@ -135,16 +139,18 @@ const groupSessions = (sessionList) => {
                 }
             } else {
                 grouped.push(current);
-                current = { ...s, originalIds: [s.id], endTime: sEnd };
+                current = { ...s, originalIds: [s.id], originalSessions: [{...s, endTime: sEnd}], endTime: sEnd };
             }
         }
     });
     if (current) grouped.push(current);
 
     others.forEach(o => { 
-        o.originalIds = [o.id]; 
         const startStr = o.startTime || '00:00';
-        o.endTime = o.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`; 
+        const sEnd = o.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`;
+        o.originalIds = [o.id]; 
+        o.originalSessions = [{...o, endTime: sEnd}];
+        o.endTime = sEnd; 
     });
 
     return [...grouped, ...others].sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
@@ -216,8 +222,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
      return safeSessions.filter(s => s.date === selectedDateStr);
   }, [sessions, currentUser, selectedDateStr, isMyScheduleView]);
 
-  // 🚀 [CTO 패치] coveredHours 글로벌 상태 삭제 (동시간대 타 조교 스케줄 증발의 원흉 제거 완료)
-
   const now = new Date();
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser.role === 'parent';
@@ -254,7 +258,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     return false;
   };
 
-  // 🚀 시간대별 렌더링된 슬롯들을 배열로 추출 (마감되었습니다 UI 표시 여부 판단용)
   const renderedSlots = generateTimeSlots().map((t, i) => {
     let slots = mySessions.filter(s => s.startTime === t);
     
@@ -277,12 +280,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     }
     if (isLecturer && slots.length === 0) return null;
 
-    // 🚀 [CTO 패치] 동시간대 타 조교 스케줄 보호 로직
-    // 현재 시간(t)이 병합된 스케줄의 중간 시간인지 검증하되, 화면 렌더링을 완전히 꺼버리지 않도록 개선
     const isCoveredByOngoing = mySessions.some(s => s.startTime < t && s.endTime > t);
 
     if(slots.length === 0) {
-         // 현재 시간에 시작하는 슬롯은 없지만, 어떤 조교의 긴 스케줄이 이 시간을 덮고 있다면 빈칸 렌더링 생략
          if (isCoveredByOngoing) return null; 
 
          return isInteractive ? (
@@ -528,18 +528,16 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
            </h3>
         </div>
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
-          {/* 🚀 [CTO 패치] 클리닉 마감 Empty State (마감되었습니다) UI 적용 */}
           {renderedSlots.filter(Boolean).length > 0 ? (
               renderedSlots
           ) : (
               <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 animate-in fade-in">
-                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4 shadow-sm border border-white">
                       <span className="text-3xl">🚫</span>
                   </div>
                   <h3 className="text-xl font-black text-gray-700 mb-2">클리닉 마감</h3>
-                  <p className="text-sm font-bold text-gray-500 text-center">
-                      선택하신 날짜에는 예약 가능한 클리닉이 없거나 모두 마감되었습니다.<br/>
-                      다른 날짜를 선택해 주세요.
+                  <p className="text-sm font-bold text-gray-500 text-center leading-relaxed">
+                      선택하신 날짜에는 예약 가능한 클리닉이 없거나<br/>모든 스케줄이 마감되었습니다.
                   </p>
               </div>
           )}
@@ -559,7 +557,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [sessions, setSessions] = useState([]);
     const [appLoading, setAppLoading] = useState(true);
     const [notifications, setNotifications] = useState([]);
-    const [modalState, setModalState] = useState({ type: null, data: null });
+    const [modalState, setModalState] = useState({ type: null, actionType: null, partialIds: [] });
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDateStr, setSelectedDateStr] = useState(getLocalToday());
     const [studentSelectedSlots, setStudentSelectedSlots] = useState([]); 
@@ -574,7 +572,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [confirmConfig, setConfirmConfig] = useState(null);
     
     const [adminEditData, setAdminEditData] = useState({ students: [], topic: '', questionRange: '' });
-    
     const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
     const [isRefining, setIsRefining] = useState(false); 
     
@@ -748,6 +745,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const handleAction = async (action, payload) => {
       try {
+        // 🚀 [CTO 패치] 부분 관리(드릴다운) 인터셉터
+        const partialActions = ['cancel_request', 'delete', 'cancel_booking_admin', 'approve_booking', 'withdraw_cancel', 'withdraw_add', 'admin_edit', 'write_feedback', 'send_feedback_msg'];
+        
+        if (partialActions.includes(action) && payload?.originalIds?.length > 1 && !payload.isPartialBypassed) {
+            setSelectedSession(payload);
+            setModalState({ type: 'partial_action', actionType: action, partialIds: payload.originalIds });
+            return;
+        }
+
         if (action === 'toggle_slot') {
             const s = payload; 
             if (studentSelectedSlots.includes(s.id)) { setStudentSelectedSlots(p => p.filter(id => id !== s.id)); } 
@@ -773,7 +779,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'cancel_request') {
              setSelectedSession(payload); setRequestData({reason:'', type:'cancel'}); setModalState({ type: 'request_change' });
         } else if (action === 'delete') {
-            if(payload) askConfirm("정말 이 클리닉 기록 전체를 삭제하시겠습니까?", async () => {
+            if(payload) askConfirm("선택하신 클리닉 기록을 삭제하시겠습니까?", async () => {
                 const ids = payload.originalIds || [payload.id];
                 const batch = writeBatch(db);
                 ids.forEach(id => batch.delete(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id)));
@@ -819,7 +825,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setPreviewMessage(TEMPLATES.confirmParent(payload));
             setModalState({ type: 'preview_confirm' });
         } else if (action === 'cancel_booking_admin') { 
-            askConfirm("이 신청을 취소하고 슬롯을 초기화하시겠습니까?", async () => {
+            askConfirm("선택하신 시간의 신청을 취소하고 슬롯을 빈 상태로 초기화하시겠습니까?", async () => {
                 const resetData = { status: 'open', studentId: '', studentName: '', studentPhone: '', students: [], topic: '', questionRange: '', source: 'system', classroom: payload.classroom || '' };
                 const ids = payload.originalIds || [payload.id];
                 const batch = writeBatch(db);
@@ -1313,6 +1319,48 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         )}
 
       {/* --- Modals --- */}
+
+      {/* 🚀 [CTO 패치] 개별 시간 선택 (부분 관리) 팝업 추가 */}
+      <Modal isOpen={modalState.type === 'partial_action'} onClose={()=>setModalState({type:null})} title="개별 시간 선택 (부분 관리)">
+            <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-4">
+                이 일정은 연속된 여러 시간으로 묶여 있습니다.<br/>적용할 특정 시간만 선택하여 진행할 수 있습니다.
+            </div>
+            <div className="space-y-2 mb-6 max-h-60 overflow-y-auto custom-scrollbar">
+                {selectedSession?.originalSessions?.map(sub => {
+                    const isChecked = modalState.partialIds?.includes(sub.id);
+                    return (
+                        <label key={sub.id} className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition-all ${isChecked ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 bg-white'}`}>
+                            <input 
+                                type="checkbox" 
+                                className="w-5 h-5 accent-indigo-600"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                    const curr = modalState.partialIds || [];
+                                    if (e.target.checked) setModalState({...modalState, partialIds: [...curr, sub.id]});
+                                    else setModalState({...modalState, partialIds: curr.filter(id => id !== sub.id)});
+                                }}
+                            />
+                            <div className="font-bold text-gray-800 text-lg w-36 shrink-0">{formatAmPm(sub.startTime)} ~ {formatAmPm(sub.endTime)}</div>
+                            <div className="text-sm text-gray-500 truncate font-bold">{sub.studentName || (sub.students?.length > 0 ? sub.students.map(st=>st.name).join(', ') : '개별 클리닉')}</div>
+                        </label>
+                    )
+                })}
+            </div>
+            <Button 
+                className="w-full py-4 text-lg font-black shadow-md bg-indigo-600 hover:bg-indigo-700"
+                disabled={!modalState.partialIds?.length}
+                onClick={() => {
+                    const modifiedPayload = { ...selectedSession, originalIds: modalState.partialIds, isPartialBypassed: true };
+                    setModalState({ type: null }); // 현재 팝업 먼저 닫기
+                    setTimeout(() => {
+                        handleAction(modalState.actionType, modifiedPayload); // 원래 호출하려던 액션 이어서 실행
+                    }, 150);
+                }}
+            >
+                선택한 {modalState.partialIds?.length}개 시간만 진행하기
+            </Button>
+      </Modal>
+
       <Modal isOpen={modalState.type==='request_change'} onClose={()=>setModalState({type:null})} title="근무 변경/취소 요청">
         <textarea className="w-full border-2 rounded-xl p-4 h-32 mb-4 text-lg outline-none focus:ring-2 focus:ring-blue-300" placeholder="사유를 입력해 주세요 (예: 개인 사정으로 출근 불가)" value={requestData.reason} onChange={e=>setRequestData({...requestData, reason:e.target.value})}/>
         <Button onClick={async()=>{ 
