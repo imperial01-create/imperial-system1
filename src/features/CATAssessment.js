@@ -1,12 +1,10 @@
-/* [서비스 가치] 학생에게는 게임 같은 쫄깃한 몰입감을 주어 마찰(Friction)을 없애고,
-   학원에게는 '가짜 지식'과 '찍기'를 원천 차단한 99% 순도의 어휘력 데이터를 제공하는 Kiosk용 평가 엔진입니다. 
-   (🚀 CTO 패치: Test Anxiety 방지용 무소음 컬러바, 첫 문제 안구 적응 버퍼(+2초), 레벤슈타인 거리 기반 자동 스펠링 함정 생성 알고리즘 적용 완료) */
+/* [서비스 가치] 가짜 지식과 운(Guessing)에 의한 '점수 인플레이션'을 완벽하게 파괴하는 상용화 CAT 엔진입니다.
+   (🚀 CTO 패치: 3단계 감쇠형 이진탐색, 비대칭 오답 페널티, 천장 검증 및 Top 5 기반 최종 스탯 산출 알고리즘 적용 완료) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Loader, AlertTriangle, CheckCircle, Target, X } from 'lucide-react';
 import { collection, query, getDocs, limit, where, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
-// 🚀 배열 셔플 유틸리티
 const shuffleArray = (array) => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -16,8 +14,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// 🚀 [CTO 패치] 레벤슈타인 거리 (Levenshtein Distance) 알고리즘
-// 두 단어의 스펠링 차이(몇 글자를 바꾸고 빼야 같아지는지)를 계산합니다.
 const getLevenshteinDistance = (a, b) => {
     const matrix = [];
     for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
@@ -28,8 +24,8 @@ const getLevenshteinDistance = (a, b) => {
                 matrix[i][j] = matrix[i - 1][j - 1];
             } else {
                 matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1, // 대체
-                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1) // 삽입, 삭제
+                    matrix[i - 1][j - 1] + 1,
+                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
                 );
             }
         }
@@ -45,21 +41,21 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
     const [isFinished, setIsFinished] = useState(false);
     
     const [currentIndex, setCurrentIndex] = useState(0);
-    const [currentScore, setCurrentScore] = useState(300); // 초기 시작 난이도 300점
+    const [currentScore, setCurrentScore] = useState(300); 
+    const [currentStep, setCurrentStep] = useState(200); // 1단계 이진 탐색용 점프 폭
     const [currentQ, setCurrentQ] = useState(null);
     const [timeLeft, setTimeLeft] = useState(0);
     const [answers, setAnswers] = useState([]);
     
     const timerRef = useRef(null);
-    const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore });
+    const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore, step: currentStep });
     
-    const MAX_QUESTIONS = 20;
+    const MAX_QUESTIONS = 25; // 🚀 천장 검증을 위해 25문항으로 확장
 
     useEffect(() => {
-        stateRef.current = { currentQ, currentIndex, timeLeft, currentScore };
-    }, [currentQ, currentIndex, timeLeft, currentScore]);
+        stateRef.current = { currentQ, currentIndex, timeLeft, currentScore, step: currentStep };
+    }, [currentQ, currentIndex, timeLeft, currentScore, currentStep]);
 
-    // 1. 단어 풀(Pool) 로딩: ID 기반 층화 표집(초/중/고 골고루 추출)
     useEffect(() => {
         const fetchCATPool = async () => {
             setIsLoadingPool(true);
@@ -96,22 +92,38 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         fetchCATPool();
     }, [onComplete]);
 
-    // 2. 정답 처리 및 점수 연산 로직 (CAT 엔진)
+    // 🚀 [핵심 알고리즘 1 & 2] 구간별 비대칭 가중치 처리
     const handleSelectOption = useCallback((selectedOption, isTimeOut = false) => {
         clearInterval(timerRef.current);
         
-        const { currentQ: q, currentIndex: idx, timeLeft: tLeft, currentScore: score } = stateRef.current;
+        const { currentQ: q, currentIndex: idx, currentScore: score, step } = stateRef.current;
         if (!q) return;
 
-        const isCorrect = !isTimeOut && selectedOption === q.answer;
-        setAnswers(prev => [...prev, { wordId: q.id, isCorrect, selectedOption }]);
+        const isTimeOutOrIdk = isTimeOut || selectedOption === 'TIMEOUT_OR_IDK';
+        const isCorrect = !isTimeOutOrIdk && selectedOption === q.answer;
 
-        if (isCorrect) {
-            const timeBonus = (tLeft / q.timeLimit) * 20; 
-            setCurrentScore(Math.min(1000, score + 60 + timeBonus));
+        // 최종 계산을 위해 단어의 고유 난이도(difficulty) 기록
+        setAnswers(prev => [...prev, { wordId: q.id, isCorrect, selectedOption, difficulty: q.difficulty }]);
+
+        let newScore = score;
+        let newStep = step;
+
+        if (idx < 7) {
+            // 1단계: 감쇠형 이진 탐색 (Dampening)
+            if (isCorrect) newScore += step;
+            else newScore -= step;
+            newStep = step / 2;
+            setCurrentStep(newStep);
+        } else if (idx < 20) {
+            // 2단계: 페널티 가중치 IRT (오답 페널티 극대화)
+            if (isCorrect) newScore += 10;
+            else if (isTimeOutOrIdk) newScore -= 15;
+            else newScore -= 40;
         } else {
-            setCurrentScore(Math.max(0, score - 40));
+            // 3단계: 천장 검증 (21~25번). E 점수는 변동시키지 않고 뒷단에서 일괄 정산함.
         }
+
+        setCurrentScore(Math.max(0, Math.min(1000, newScore)));
 
         if (idx < MAX_QUESTIONS - 1) {
             setCurrentIndex(idx + 1);
@@ -120,14 +132,12 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         }
     }, [MAX_QUESTIONS]);
 
-    // 3. 적응형(Adaptive) 문제 생성 엔진 & 매력적인 오답(Distractor) 생성
     const generateNextQuestion = useCallback((estimatedScore) => {
         if (wordPool.length === 0) return null;
 
         const availableWords = wordPool.filter(w => !answers.some(a => a.wordId === w.wordId));
         if (availableWords.length === 0) return null;
 
-        // 타겟 단어 선정 (점수 가장 가까운 단어)
         availableWords.sort((a, b) => 
             Math.abs((a.meanings[0]?.meaningDifficulty || 0) - estimatedScore) - 
             Math.abs((b.meanings[0]?.meaningDifficulty || 0) - estimatedScore)
@@ -135,7 +145,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         const targetWord = availableWords[0];
         const meaning = targetWord.meanings[0];
 
-        // 유형 및 시간 결정
         let type = 'basic';
         let timeLimit = 3;
         
@@ -145,35 +154,27 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             type = 'synonym'; timeLimit = 5;
         }
 
-        // 🚀 [CTO 패치] 1번: 첫 문제 안구 적응 버퍼 (최소 5초 보장)
         if (answers.length === 0) {
             timeLimit = Math.max(timeLimit, 5);
         }
 
-        // 🚀 [CTO 패치] 2번: 지능형 함정 오답 (Distractor) 자동 생성기
         let distractors = [];
 
-        // 1순위 함정: 반의어(Antonyms)가 존재하면 무조건 끌어옴
         if (meaning.antonyms && meaning.antonyms.length > 0) {
             distractors.push(...meaning.antonyms); 
-            // 만약 반의어가 한글 뜻이라면 그냥 푸시, 영어라면 해당 영어의 뜻을 찾아야 함.
-            // 여기서는 반의어의 한글 뜻이 직접 DB에 있다고 가정 (또는 다른 보기로 채움)
         }
 
-        // 2순위 함정: 레벤슈타인 거리 1~2 스펠링 헷갈리는 단어 뜻 끌어오기
         if (distractors.length < 3) {
             const spellTraps = availableWords
                 .filter(w => w.wordId !== targetWord.wordId)
                 .map(w => ({ wordData: w, dist: getLevenshteinDistance(targetWord.word, w.word) }))
-                .filter(item => item.dist >= 1 && item.dist <= 2) // 철자 1~2개 차이나는 단어만! (예: adapt - adopt)
+                .filter(item => item.dist >= 1 && item.dist <= 2) 
                 .sort((a, b) => a.dist - b.dist)
                 .map(item => item.wordData)
                 .slice(0, 3 - distractors.length);
-            
             distractors.push(...spellTraps);
         }
 
-        // 3순위 함정: 스펠링 비슷한 게 없으면 같은 첫 글자 단어
         if (distractors.length < 3) {
             const prefixTraps = availableWords
                 .filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0] && !distractors.includes(w))
@@ -181,7 +182,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             distractors.push(...prefixTraps);
         }
 
-        // 4순위 함정: 그래도 부족하면 남은 거 랜덤
         if (distractors.length < 3) {
             const fillers = availableWords
                 .filter(w => w.wordId !== targetWord.wordId && !distractors.includes(w))
@@ -197,7 +197,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         if (type === 'blank') {
             questionText = meaning.blankSentence[0];
             answerText = targetWord.word;
-            // 빈칸 추론은 영어 단어 자체가 보기로 나와야 함
             options = [targetWord.word, ...distractors.map(d => d.word || d)]; 
             hint = "(빈칸 추론)";
         } else if (type === 'synonym') {
@@ -218,11 +217,12 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             word: questionText,
             answer: answerText,
             options: shuffleArray(options),
-            timeLimit
+            timeLimit,
+            difficulty: meaning.meaningDifficulty || 0, // 🚀 평가 보정을 위한 난이도 패스
+            hint
         };
     }, [wordPool, answers]);
 
-    // 4. 문제 갱신 및 타이머 세팅
     useEffect(() => {
         if (isStarted && !isFinished) {
             const nextQ = generateNextQuestion(currentScore);
@@ -250,16 +250,47 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         return () => clearInterval(timerRef.current);
     }, [currentIndex, isStarted, isFinished, currentScore, generateNextQuestion, handleSelectOption, onComplete]);
 
-    // 5. 평가 종료 처리
+    // 🚀 [핵심 알고리즘 3] 최종 어휘력 점수(Top 5 평균 - 하위 오답 페널티) 결산 로직
     useEffect(() => {
         if (isFinished) {
+            // 1. Stage 3 검증 (21~25번)
+            const stage3Answers = answers.slice(20, 25);
+            const stage3CorrectCount = stage3Answers.filter(a => a.isCorrect).length;
+
+            // 2. 최대 포텐셜 측정 (Top 5 정답 평균)
+            const correctAnswers = answers.filter(a => a.isCorrect).sort((a, b) => b.difficulty - a.difficulty);
+            const top5 = correctAnswers.slice(0, 5);
+            
+            let top5Avg = 150; 
+            if (top5.length > 0) {
+                top5Avg = top5.reduce((sum, a) => sum + a.difficulty, 0) / top5.length;
+            }
+
+            // 3. 스위스 치즈 현상(하위 구멍) 페널티 스캔
+            let lowerErrorPenalty = 0;
+            const incorrectAnswers = answers.filter(a => !a.isCorrect);
+            incorrectAnswers.forEach(a => {
+                if (a.difficulty < top5Avg - 150) {
+                    lowerErrorPenalty += 30; // 쉬운 단어 오답 당 감점
+                }
+            });
+
+            // 4. 최종 루브릭 점수 산출
+            let finalCalculatedScore = top5Avg - lowerErrorPenalty;
+            
+            // 천장 검증 탈락 시 거품 강제 강등 (-150)
+            if (stage3CorrectCount < 3) {
+                finalCalculatedScore -= 150; 
+            }
+
+            const roundedFinalScore = Math.max(0, Math.min(1000, Math.round(finalCalculatedScore)));
+
             setTimeout(() => {
-                if (onComplete) onComplete(Math.round(currentScore)); 
+                if (onComplete) onComplete(roundedFinalScore); 
             }, 2500);
         }
-    }, [isFinished, currentScore, onComplete]);
+    }, [isFinished, answers, onComplete]);
 
-    // UI: 로딩 중
     if (isLoadingPool) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center">
@@ -269,7 +300,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         );
     }
 
-    // UI: 시작 전 화면
     if (!isStarted) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative selection:bg-none">
@@ -299,7 +329,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         );
     }
 
-    // UI: 종료 화면
     if (isFinished) {
         return (
             <div className="min-h-screen bg-emerald-600 flex flex-col items-center justify-center p-6 text-white text-center">
@@ -316,7 +345,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
 
     if (!currentQ) return null;
 
-    // 🚀 [CTO 패치] Test Anxiety(시험 불안)를 없애기 위한 '숫자 없는 컬러 게이지 바'
     const progressPercent = (timeLeft / currentQ.timeLimit) * 100;
     const timerColor = progressPercent > 50 ? 'bg-emerald-500' : progressPercent > 20 ? 'bg-amber-400' : 'bg-rose-500';
 
@@ -326,12 +354,10 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 <X size={24} />
             </button>
 
-            {/* 상단 문항 정보 */}
             <div className="bg-white shadow-sm px-6 py-4 flex justify-center items-center shrink-0 border-b border-gray-100">
                 <div className="font-black text-gray-400 text-lg tracking-widest">Q. {currentIndex + 1} / {MAX_QUESTIONS}</div>
             </div>
 
-            {/* 🚀 무소음 타임어택 컬러 게이지 바 (숫자 숨김 처리) */}
             <div className="w-full h-3 bg-gray-200 relative overflow-hidden">
                 <div className={`absolute top-0 left-0 h-full ${timerColor} transition-all duration-100 ease-linear shadow-[0_0_10px_rgba(0,0,0,0.2)]`} style={{ width: `${progressPercent}%` }} />
             </div>
@@ -365,7 +391,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                     ))}
                 </div>
 
-                {/* 🤷 모르겠습니다 방어 버튼 */}
                 <button 
                     onClick={() => handleSelectOption('TIMEOUT_OR_IDK', false)}
                     className="mt-2 w-full sm:w-2/3 mx-auto bg-gray-800 hover:bg-black text-white font-black text-lg py-5 rounded-2xl transition-colors shadow-md active:scale-95 flex items-center justify-center gap-2"
