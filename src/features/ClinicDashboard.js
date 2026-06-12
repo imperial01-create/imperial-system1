@@ -1,5 +1,5 @@
 /* [서비스 가치] 클리닉 V3.1.2 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 자동 병합(Smart Merge) 엔진
-   (🚀 CTO 패치: 데이터베이스 직관적 네이밍 룰 적용 [날짜_시간_조교명_난수] - 관리자 편의성 및 데이터 증발 완벽 차단) */
+   (🚀 CTO 핫픽스: 동시간대 타 조교 스케줄 증발 버그 해결 및 클리닉 마감 직관적 UI 적용 완료) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -7,7 +7,6 @@ import {
   Send, RefreshCw, ChevronLeft, ChevronRight, Check, Search, Eye, ArrowRight, Loader, RefreshCcw,
   AlertTriangle, BookOpen, Star, Sparkles, X
 } from 'lucide-react';
-// 🚀 [수정] setDoc 라이브러리 추가
 import { collection, doc, addDoc, updateDoc, deleteDoc, writeBatch, query, where, onSnapshot, getDocs, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
@@ -17,7 +16,6 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 [CTO 패치] 데이터베이스 문서 ID 직관적 네이밍 엔진 (날짜_시간_조교명_난수)
 const generateSessionId = (dateStr, timeStr, taName) => {
     const d = (dateStr || '').replace(/-/g, ''); 
     const t = (timeStr || '').replace(/:/g, '');  
@@ -50,7 +48,6 @@ const formatDateKo = (dateStr) => {
 
 const TEMPLATES = {
   confirmParent: (d) => `[클리닉 안내]\n일시 : ${formatDateKo(d.date)} ${formatAmPm(d.startTime)} - ${formatAmPm(d.endTime)}\n장소 : 목동임페리얼학원 본관 ${d.classroom || '미정'}`,
-  
   feedbackParent: (d) => `[목동임페리얼학원]\n${d.studentName} 학생의 클리닉 리포트입니다.\n\n🗓️ 클리닉 일시 : ${formatDateKo(d.date)} ${formatAmPm(d.startTime)} - ${formatAmPm(d.endTime)}\n👨‍🏫 담당 선생님 : ${d.taName}\n\n⭐ 이해도/태도 : ${'★'.repeat(Number(d.rating || 5))}${'☆'.repeat(Math.max(0, 5 - Number(d.rating || 5)))}\n🏷️ 핵심 태그 : ${d.tags || '없음'}\n\n📝 진행 내용 및 피드백 :\n${d.clinicDetails || d.clinicContent || ''}\n\n🎯 다음 과제 (Next Action) :\n${d.nextAction || '수업 시간에 안내됨'}\n\n감사합니다.`
 };
 
@@ -219,19 +216,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
      return safeSessions.filter(s => s.date === selectedDateStr);
   }, [sessions, currentUser, selectedDateStr, isMyScheduleView]);
 
-  const coveredHours = useMemo(() => {
-      const set = new Set();
-      mySessions.forEach(s => {
-          if (Array.isArray(s.originalIds) && s.originalIds.length > 1) {
-              const startH = parseInt((s.startTime || '00:00').split(':')[0]);
-              const endH = parseInt((s.endTime || '00:00').split(':')[0]);
-              for(let h = startH + 1; h < endH; h++) {
-                  set.add(`${String(h).padStart(2,'0')}:00`);
-              }
-          }
-      });
-      return set;
-  }, [mySessions]);
+  // 🚀 [CTO 패치] coveredHours 글로벌 상태 삭제 (동시간대 타 조교 스케줄 증발의 원흉 제거 완료)
 
   const now = new Date();
   const isStudent = currentUser.role === 'student';
@@ -268,6 +253,206 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     if (selectedSessionTimes.includes(time)) return true;
     return false;
   };
+
+  // 🚀 시간대별 렌더링된 슬롯들을 배열로 추출 (마감되었습니다 UI 표시 여부 판단용)
+  const renderedSlots = generateTimeSlots().map((t, i) => {
+    let slots = mySessions.filter(s => s.startTime === t);
+    
+    if (isStudent || isParent) {
+        slots = slots.filter(s => {
+            const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
+            if (workerRole === 'admin_assistant') return false;
+            if (isStudent && s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
+            return true;
+        });
+    }
+
+    const slotDateTime = new Date(`${selectedDateStr}T${t}`);
+    const isSlotPast = slotDateTime < now;
+    
+    if (isStudent) {
+        const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7);
+        const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
+        if (availableSlots.length === 0 || !isSelectedDateAllowed) return null;
+    }
+    if (isLecturer && slots.length === 0) return null;
+
+    // 🚀 [CTO 패치] 동시간대 타 조교 스케줄 보호 로직
+    // 현재 시간(t)이 병합된 스케줄의 중간 시간인지 검증하되, 화면 렌더링을 완전히 꺼버리지 않도록 개선
+    const isCoveredByOngoing = mySessions.some(s => s.startTime < t && s.endTime > t);
+
+    if(slots.length === 0) {
+         // 현재 시간에 시작하는 슬롯은 없지만, 어떤 조교의 긴 스케줄이 이 시간을 덮고 있다면 빈칸 렌더링 생략
+         if (isCoveredByOngoing) return null; 
+
+         return isInteractive ? (
+            <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 group min-h-[80px]">
+                <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
+                <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
+                    <span className="text-sm text-gray-400">등록된 근무 없음</span>
+                    {((isMyScheduleView || isAdminView) && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
+                </div>
+            </div>
+        ) : (
+            !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
+                 <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
+                 <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
+            </div> : null
+        );
+    }
+
+    return (
+      <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start">
+        <div className="w-full md:w-14 text-left md:text-right text-lg md:text-base font-bold text-gray-800 md:text-gray-600 font-mono pl-1 mt-2 md:mt-4">{t}</div>
+        <div className="flex-1 space-y-3 w-full">
+          {slots.map(s => {
+            const isConfirmed = s.status === 'confirmed' || s.status === 'completed';
+            const isSelected = Array.isArray(s.originalIds) ? s.originalIds.some(id => selectedSlots.includes(id)) : selectedSlots.includes(s.id);
+            const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
+            
+            const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
+            const isAsstSlot = workerRole === 'admin_assistant'; 
+            const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
+
+            const stList = Array.isArray(s.students) ? s.students : [];
+            const displayStudentName = stList.length > 0 ? stList.map(st => st.name).join(', ') : s.studentName;
+
+            if (isStudent) {
+                if (s.status !== 'open') return null;
+                if (new Date(`${s.date}T${s.startTime}`) < now) return null;
+                
+                return (
+                     <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'border-gray-200 hover:shadow-md'}`}>
+                        <div className="flex-1 flex flex-col justify-center">
+                            <div className="font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center text-gray-800">
+                                {s.taName} 선생님
+                                {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded font-black border border-indigo-200">{s.targetClassName} 전용</span>}
+                            </div>
+                            <div className="text-xs md:text-sm mt-1 font-bold text-blue-600">
+                                {taSubject} {s.classroom ? `· ${s.classroom}` : ''}
+                            </div>
+                        </div>
+                        <div className="ml-3 shrink-0">
+                          <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus}>
+                              {isSelected ? '선택됨' : '선택'}
+                          </Button>
+                       </div>
+                    </div>
+                );
+            }
+
+            if (isParent) {
+                const isMyChild = (currentUser.linkedChildrenIds && stList.some(st => currentUser.linkedChildrenIds.includes(st.id))) || 
+                                  (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || 
+                                  (stList.some(st => st.name === currentUser.childName)) || 
+                                  (s.studentName === currentUser.childName);
+                const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
+                if (isBooked && !isMyChild) {
+                    return (
+                        <div key={s.id} className="border rounded-2xl p-4 flex flex-col justify-center bg-gray-50 border-gray-200 opacity-70 w-full min-h-[80px]">
+                            <div className="flex justify-between items-center">
+                                <span className="font-bold text-gray-400 text-lg">예약 마감</span>
+                                <div className="bg-gray-200 text-gray-500 text-xs px-2 py-1 rounded">불가</div>
+                            </div>
+                        </div>
+                    );
+                }
+            }
+
+            let cardBgClass = '';
+            if (s.status === 'cancellation_requested') cardBgClass = 'bg-red-50 border-red-200';
+            else if (s.status === 'addition_requested') cardBgClass = 'bg-purple-50 border-purple-200';
+            else if (isConfirmed) cardBgClass = isAsstSlot ? 'bg-indigo-50 border-indigo-200' : 'bg-green-50/50 border-green-200';
+            else cardBgClass = isAsstSlot ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white border-gray-200';
+
+            return (
+              <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm hover:shadow-md transition-all w-full ${cardBgClass}`}>
+                <div className="flex justify-between items-start w-full">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <span className="font-bold text-lg text-gray-900">{displayStudentName || s.taName}</span>
+                        <Badge status={s.status}/>
+                        {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
+                    </div>
+                    
+                    <div className="text-sm text-gray-600 font-medium mt-1">
+                        {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-bold">대상: {s.targetClassName}</span>}
+                        {Array.isArray(s.originalIds) && s.originalIds.length > 1 && <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-black shadow-sm">{formatAmPm(s.startTime)} ~ {formatAmPm(s.endTime)}</span>}
+                        {isAsstSlot ? (
+                            <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
+                        ) : (
+                            <>
+                                {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
+                                {s.topic || (isAdminView ? `${s.taName} 근무` : '예약 대기 중')}
+                            </>
+                        )}
+                    </div>
+
+                    {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && displayStudentName && (
+                      <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
+                        {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
+                        {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
+                      </div>
+                    )}
+
+                    {isAdminView && (
+                      <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
+                        <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
+                        
+                        {!isAsstSlot && (
+                            <select 
+                                className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
+                                value={s.classroom || ''} 
+                                onChange={(e) => onAction('update_classroom', { session: s, val: e.target.value })}
+                            >
+                              <option value="">장소 미지정</option>
+                              {masterClassrooms?.map(r => {
+                                  const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
+                                  return (
+                                      <option 
+                                          key={r} 
+                                          value={r} 
+                                          className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
+                                          disabled={occupiedStatus === 'clinic'}
+                                      >
+                                          {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
+                                      </option>
+                                  );
+                              })}
+                            </select>
+                        )}
+                        
+                        <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
+                        <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
+                        
+                        {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
+                            <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
+                        )}
+                      </div>
+                    )}
+                    {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
+                  </div>
+                  <div className="flex flex-col gap-2 ml-2 shrink-0">
+                    {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
+                    {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                    {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s)}>철회</Button>}
+                    
+                    {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>}
+                    
+                    {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
+                        <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
+                            {s.feedbackStatus==='submitted' ? '수정' : '작성'}
+                        </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    );
+  });
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 w-full">
@@ -343,199 +528,21 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
            </h3>
         </div>
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">
-          {generateTimeSlots().map((t, i) => {
-            if (coveredHours.has(t)) return null;
-
-            let slots = mySessions.filter(s => s.startTime === t);
-            
-            if (isStudent || isParent) {
-                slots = slots.filter(s => {
-                    const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                    if (workerRole === 'admin_assistant') return false;
-                    if (isStudent && s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
-                    return true;
-                });
-            }
-
-            const slotDateTime = new Date(`${selectedDateStr}T${t}`);
-            const isSlotPast = slotDateTime < now;
-            
-            if (isStudent) {
-                const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7);
-                const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
-                if (availableSlots.length === 0 || !isSelectedDateAllowed) return null;
-            }
-            if (isLecturer && slots.length === 0) return null;
-
-            if(slots.length === 0) {
-                 return isInteractive ? (
-                    <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 group min-h-[80px]">
-                        <div className="w-full md:w-14 text-left md:text-right text-base font-bold text-gray-400 font-mono pl-1">{t}</div>
-                        <div className="flex-1 border-2 border-dashed border-gray-200 rounded-xl p-3 flex justify-between items-center hover:bg-gray-50 transition-colors w-full">
-                            <span className="text-sm text-gray-400">등록된 근무 없음</span>
-                            {((isMyScheduleView || isAdminView) && !isSlotPast) && <Button size="sm" variant="ghost" className="text-blue-600 bg-blue-50 hover:bg-blue-100" icon={PlusCircle} onClick={()=>onAction('add_request', {time: t})}>근무 신청</Button>}
-                        </div>
-                    </div>
-                ) : (
-                    !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
-                         <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
-                         <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
-                    </div> : null
-                );
-            }
-
-            return (
-              <div key={i} className="flex flex-col md:flex-row gap-2 md:gap-4 items-start">
-                <div className="w-full md:w-14 text-left md:text-right text-lg md:text-base font-bold text-gray-800 md:text-gray-600 font-mono pl-1 mt-2 md:mt-4">{t}</div>
-                <div className="flex-1 space-y-3 w-full">
-                  {slots.map(s => {
-                    const isConfirmed = s.status === 'confirmed' || s.status === 'completed';
-                    const isSelected = Array.isArray(s.originalIds) ? s.originalIds.some(id => selectedSlots.includes(id)) : selectedSlots.includes(s.id);
-                    const isBlocked = isStudent && !isSelected && isTimeSlotBlockedForStudent(s.startTime);
-                    
-                    const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
-                    const isAsstSlot = workerRole === 'admin_assistant'; 
-                    const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
-
-                    const stList = Array.isArray(s.students) ? s.students : [];
-                    const displayStudentName = stList.length > 0 ? stList.map(st => st.name).join(', ') : s.studentName;
-
-                    if (isStudent) {
-                        if (s.status !== 'open') return null;
-                        if (new Date(`${s.date}T${s.startTime}`) < now) return null;
-                        
-                        return (
-                             <div key={s.id} onClick={()=> !isBlocked && onAction('toggle_slot', s)} className={`border-2 rounded-2xl p-3 md:p-4 flex justify-between items-center transition-all active:scale-[0.98] cursor-pointer w-full ${isSelected ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'border-gray-200 hover:shadow-md'}`}>
-                                <div className="flex-1 flex flex-col justify-center">
-                                    <div className="font-bold text-base md:text-lg leading-tight flex flex-wrap gap-2 items-center text-gray-800">
-                                        {s.taName} 선생님
-                                        {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded font-black border border-indigo-200">{s.targetClassName} 전용</span>}
-                                    </div>
-                                    <div className="text-xs md:text-sm mt-1 font-bold text-blue-600">
-                                        {taSubject} {s.classroom ? `· ${s.classroom}` : ''}
-                                    </div>
-                                </div>
-                                <div className="ml-3 shrink-0">
-                                  <Button size="sm" variant={isSelected ? "selected" : "outline"} onClick={(e)=> { e.stopPropagation(); onAction('toggle_slot', s); }} icon={isSelected ? Check : Plus}>
-                                      {isSelected ? '선택됨' : '선택'}
-                                  </Button>
-                               </div>
-                            </div>
-                        );
-                    }
-
-                    if (isParent) {
-                        const isMyChild = (currentUser.linkedChildrenIds && stList.some(st => currentUser.linkedChildrenIds.includes(st.id))) || 
-                                          (currentUser.linkedChildrenIds && currentUser.linkedChildrenIds.includes(s.studentId)) || 
-                                          (stList.some(st => st.name === currentUser.childName)) || 
-                                          (s.studentName === currentUser.childName);
-                        const isBooked = s.status === 'confirmed' || s.status === 'pending' || s.status === 'completed';
-                        if (isBooked && !isMyChild) {
-                            return (
-                                <div key={s.id} className="border rounded-2xl p-4 flex flex-col justify-center bg-gray-50 border-gray-200 opacity-70 w-full min-h-[80px]">
-                                    <div className="flex justify-between items-center">
-                                        <span className="font-bold text-gray-400 text-lg">예약 마감</span>
-                                        <div className="bg-gray-200 text-gray-500 text-xs px-2 py-1 rounded">불가</div>
-                                    </div>
-                                </div>
-                            );
-                        }
-                    }
-
-                    let cardBgClass = '';
-                    if (s.status === 'cancellation_requested') cardBgClass = 'bg-red-50 border-red-200';
-                    else if (s.status === 'addition_requested') cardBgClass = 'bg-purple-50 border-purple-200';
-                    else if (isConfirmed) cardBgClass = isAsstSlot ? 'bg-indigo-50 border-indigo-200' : 'bg-green-50/50 border-green-200';
-                    else cardBgClass = isAsstSlot ? 'bg-indigo-50/40 border-indigo-100' : 'bg-white border-gray-200';
-
-                    return (
-                      <div key={s.id} className={`border rounded-2xl p-4 flex flex-col justify-center shadow-sm hover:shadow-md transition-all w-full ${cardBgClass}`}>
-                        <div className="flex justify-between items-start w-full">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                                <span className="font-bold text-lg text-gray-900">{displayStudentName || s.taName}</span>
-                                <Badge status={s.status}/>
-                                {isAsstSlot && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded-full font-bold">행정조교</span>}
-                            </div>
-                            
-                            <div className="text-sm text-gray-600 font-medium mt-1">
-                                {s.targetClassName && <span className="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-bold">대상: {s.targetClassName}</span>}
-                                {Array.isArray(s.originalIds) && s.originalIds.length > 1 && <span className="bg-blue-100 text-blue-700 text-[10px] px-1.5 py-0.5 rounded mr-1 font-black shadow-sm">{formatAmPm(s.startTime)} ~ {formatAmPm(s.endTime)}</span>}
-                                {isAsstSlot ? (
-                                    <span className="text-indigo-600">{s.topic || '행정 근무 예정'}</span>
-                                ) : (
-                                    <>
-                                        {taSubject !== '개별 클리닉' && <span className="text-blue-600 font-bold mr-1">[{taSubject}]</span>}
-                                        {s.topic || (isAdminView ? `${s.taName} 근무` : '예약 대기 중')}
-                                    </>
-                                )}
-                            </div>
-
-                            {(isAdminView || isLecturer || isMyScheduleView) && !isAsstSlot && displayStudentName && (
-                              <div className="text-sm text-gray-600 mt-2 p-2.5 bg-gray-50/80 rounded-xl border border-gray-100">
-                                {s.topic && <div className="flex gap-1 mb-1"><span className="font-bold text-gray-500 w-10 shrink-0">과목</span><span>{s.topic}</span></div>}
-                                {s.questionRange && <div className="flex gap-1"><span className="font-bold text-gray-500 w-10 shrink-0">범위</span><span className="whitespace-pre-wrap">{s.questionRange}</span></div>}
-                              </div>
-                            )}
-
-                            {isAdminView && (
-                              <div className="mt-3 flex flex-wrap gap-2 items-center bg-white/50 p-2 rounded-lg border border-gray-100">
-                                <span className="text-xs font-bold text-gray-500 mr-2">담당: {s.taName}</span>
-                                
-                                {!isAsstSlot && (
-                                    <select 
-                                        className={`text-sm border rounded-md p-1.5 focus:ring-2 focus:ring-blue-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white'}`} 
-                                        value={s.classroom || ''} 
-                                        onChange={(e) => onAction('update_classroom', { session: s, val: e.target.value })}
-                                    >
-                                      <option value="">장소 미지정</option>
-                                      {masterClassrooms?.map(r => {
-                                          const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
-                                          return (
-                                              <option 
-                                                  key={r} 
-                                                  value={r} 
-                                                  className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
-                                                  disabled={occupiedStatus === 'clinic'}
-                                              >
-                                                  {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
-                                              </option>
-                                          );
-                                      })}
-                                    </select>
-                                )}
-                                
-                                <button onClick={()=>onAction('admin_edit', s)} className="text-gray-500 hover:text-blue-600 p-2" title="정보 수정"><Edit2 size={18}/></button>
-                                <button onClick={(e)=>{ e.stopPropagation(); onAction('delete', s); }} className="text-gray-500 hover:text-red-600 p-2" title="삭제"><Trash2 size={18}/></button>
-                                
-                                {(s.status === 'confirmed' || s.status === 'completed') && !isAsstSlot && (
-                                    <button onClick={(e)=>{ e.stopPropagation(); onAction('write_feedback', s); }} className="text-gray-500 hover:text-green-600 p-2" title="피드백 작성/수정"><CheckSquare size={18}/></button>
-                                )}
-                              </div>
-                            )}
-                            {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
-                          </div>
-                          <div className="flex flex-col gap-2 ml-2 shrink-0">
-                            {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
-                            {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
-                            {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s)}>철회</Button>}
-                            
-                            {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>}
-                            
-                            {isInteractive && !isParent && (s.status==='confirmed'||s.status==='completed') && !isAsstSlot && (
-                                <Button size="sm" variant={s.feedbackStatus==='submitted'?'secondary':'primary'} icon={CheckSquare} onClick={()=>onAction('write_feedback', s)} disabled={s.feedbackStatus==='submitted' && s.taId !== currentUser.id && s.taName !== currentUser.name}>
-                                    {s.feedbackStatus==='submitted' ? '수정' : '작성'}
-                                </Button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+          {/* 🚀 [CTO 패치] 클리닉 마감 Empty State (마감되었습니다) UI 적용 */}
+          {renderedSlots.filter(Boolean).length > 0 ? (
+              renderedSlots
+          ) : (
+              <div className="flex flex-col items-center justify-center py-16 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 animate-in fade-in">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                      <span className="text-3xl">🚫</span>
+                  </div>
+                  <h3 className="text-xl font-black text-gray-700 mb-2">클리닉 마감</h3>
+                  <p className="text-sm font-bold text-gray-500 text-center">
+                      선택하신 날짜에는 예약 가능한 클리닉이 없거나 모두 마감되었습니다.<br/>
+                      다른 날짜를 선택해 주세요.
+                  </p>
               </div>
-            );
-          })}
+          )}
         </div>
       </Card>
     </div>
@@ -759,7 +766,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
                 status: 'addition_requested', source: 'system', classroom: ''
             };
-            // 🚀 [CTO 패치] 직관적 ID 부여
             const docId = generateSessionId(selectedDateStr, payload.time, currentUser.name);
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', docId), newSession);
             updateLocalAndCacheState(prev => ({ ...prev, [docId]: { id: docId, ...newSession } }));
@@ -909,7 +915,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (h >= 22) break;
             const sT = `${String(h).padStart(2,'0')}:00`, eT = `${String(h+1).padStart(2,'0')}:00`;
             if (!sessions.some(s => (s.taId === targetTa.id || s.taName === targetTa.name) && s.date === dStr && s.startTime === sT)) {
-              // 🚀 [CTO 패치] 직관적 ID 부여 적용
               const docId = generateSessionId(dStr, sT, targetTa.name);
               batch.set(doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', docId), {
                 taId: targetTa.id, taName: targetTa.name, taSubject: targetTa.subject || '', workerRole: targetTa.role,
