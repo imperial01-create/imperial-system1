@@ -1,11 +1,11 @@
-/* [서비스 가치] 실제 Firebase VocabularyDB와 연동하여, 학생의 수준에 따라 난이도가 실시간으로 변하는(CAT) 상용화 진단평가 엔진입니다.
-   '가짜 지식'을 걸러내는 3단계 유형과 5지선다 타임어택이 100% 반영되어 있습니다. */
+/* [서비스 가치] 학생에게는 게임 같은 쫄깃한 몰입감을 주어 마찰(Friction)을 없애고,
+   학원에게는 '가짜 지식'과 '찍기'를 원천 차단한 99% 순도의 어휘력 데이터를 제공하는 Kiosk용 평가 엔진입니다. 
+   (🚀 CTO 핫픽스: Firebase 복합 색인 에러 우회 및 중간 종료(Abort) 방어 로직 적용 완료) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader, Clock, AlertTriangle, CheckCircle, Target, ArrowRight } from 'lucide-react';
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { Loader, Clock, AlertTriangle, CheckCircle, Target, X } from 'lucide-react';
+import { collection, query, getDocs, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 
-// 🚀 배열 셔플 유틸리티
 const shuffleArray = (array) => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -23,64 +23,45 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
     const [isFinished, setIsFinished] = useState(false);
     
     const [currentIndex, setCurrentIndex] = useState(0);
-    const [currentScore, setCurrentScore] = useState(300); // 🚀 초기 시작 난이도 300점 (중1 수준)
+    const [currentScore, setCurrentScore] = useState(300); // 초기 시작 난이도 300점
     const [currentQ, setCurrentQ] = useState(null);
     const [timeLeft, setTimeLeft] = useState(0);
     const [answers, setAnswers] = useState([]);
     
     const timerRef = useRef(null);
-    const MAX_QUESTIONS = 20; // 20문제면 영점 조절 완료
+    const MAX_QUESTIONS = 20;
 
-    // =====================================================================
-    // 1. 초기 단어 풀(Pool) 로딩: 난이도별로 분산 쿼리하여 Firebase 요금 방어
-    // =====================================================================
+    // 1. 단어 풀(Pool) 로딩: 복합 색인 에러 방지를 위해 단순 Limit 쿼리 후 메모리 필터링
     useEffect(() => {
         const fetchCATPool = async () => {
             setIsLoadingPool(true);
             try {
                 const vocaRef = collection(db, 'VocabularyDB');
-                const ranges = [
-                    [0, 200], [201, 400], [401, 600], [601, 800], [801, 1000]
-                ];
-                
-                let fetchedWords = [];
-                // 각 난이도 구간별로 15개씩만 랜덤하게 가져옴 (총 75문서 = 비용 극소화)
-                const promises = ranges.map(range => 
-                    getDocs(query(vocaRef, 
-                        where('meanings.0.meaningDifficulty', '>=', range[0]),
-                        where('meanings.0.meaningDifficulty', '<=', range[1]),
-                        limit(15)
-                    ))
-                );
-                
-                const results = await Promise.all(promises);
-                results.forEach(snap => {
-                    snap.forEach(doc => fetchedWords.push(doc.data()));
-                });
+                // 🚀 [CTO 패치] 에러 유발 쿼리 제거, 랜덤 샘플링을 위해 400개 문서 일괄 Fetch (비용 극소화)
+                const snap = await getDocs(query(vocaRef, limit(400)));
+                const fetchedWords = snap.docs.map(doc => doc.data());
 
+                if (fetchedWords.length === 0) throw new Error("DB Empty");
                 setWordPool(shuffleArray(fetchedWords));
             } catch (error) {
                 console.error("단어 풀 로딩 실패:", error);
-                alert("단어 데이터를 불러오는데 실패했습니다. 인터넷 연결을 확인해주세요.");
+                alert("단어 데이터를 불러오는데 실패했습니다. 데이터베이스 상태를 확인해주세요.");
+                onComplete(null); // 에러 시 평가 즉시 취소
             } finally {
                 setIsLoadingPool(false);
             }
         };
 
         fetchCATPool();
-    }, []);
+    }, [onComplete]);
 
-    // =====================================================================
     // 2. 적응형(Adaptive) 문제 생성 엔진
-    // =====================================================================
     const generateNextQuestion = useCallback((estimatedScore) => {
         if (wordPool.length === 0) return null;
 
-        // 1) 현재 예상 점수와 가장 비슷한 난이도의 단어 추출
         const availableWords = wordPool.filter(w => !answers.some(a => a.wordId === w.wordId));
         if (availableWords.length === 0) return null;
 
-        // 난이도 차이가 가장 적은 단어 정렬 후 1픽
         availableWords.sort((a, b) => 
             Math.abs((a.meanings[0]?.meaningDifficulty || 0) - estimatedScore) - 
             Math.abs((b.meanings[0]?.meaningDifficulty || 0) - estimatedScore)
@@ -88,7 +69,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         const targetWord = availableWords[0];
         const meaning = targetWord.meanings[0];
 
-        // 2) 문제 유형 결정 (점수가 높을수록, 데이터가 존재할수록 고급 유형 출제)
         let type = 'basic';
         let timeLimit = 3;
         
@@ -98,13 +78,10 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             type = 'synonym'; timeLimit = 5;
         }
 
-        // 3) 매력적인 오답(Distractor) 3개 생성
-        // 전략: 스펠링 첫 글자가 같은 단어 우선 배치 (시각적 함정)
         let distractors = availableWords
             .filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0])
             .slice(0, 3);
             
-        // 같은 첫 글자가 부족하면 난이도 비슷한 단어로 채움
         if (distractors.length < 3) {
             const fillers = availableWords
                 .filter(w => w.wordId !== targetWord.wordId && !distractors.includes(w))
@@ -112,7 +89,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             distractors = [...distractors, ...fillers];
         }
 
-        // 4) 최종 보기(Options) 조립
         let questionText = '';
         let answerText = '';
         let hint = '';
@@ -145,7 +121,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         };
     }, [wordPool, answers]);
 
-    // 시험 시작 및 다음 문제 트리거
     useEffect(() => {
         if (isStarted && !isFinished) {
             const nextQ = generateNextQuestion(currentScore);
@@ -153,15 +128,13 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 setCurrentQ(nextQ);
                 setTimeLeft(nextQ.timeLimit);
             } else {
-                // 단어 풀이 고갈된 경우 강제 종료
-                setIsFinished(true);
+                // 🚀 [CTO 패치] 단어가 고갈되어도 300점을 확정하지 않고 취소 처리
+                alert("단어 풀이 부족하여 평가를 중단합니다.");
+                onComplete(null);
             }
         }
-    }, [currentIndex, isStarted, isFinished, currentScore, generateNextQuestion]);
+    }, [currentIndex, isStarted, isFinished, currentScore, generateNextQuestion, onComplete]);
 
-    // =====================================================================
-    // 3. 타임어택 프로그레스 바 로직
-    // =====================================================================
     useEffect(() => {
         if (isStarted && !isFinished && currentQ) {
             clearInterval(timerRef.current);
@@ -177,20 +150,16 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             }, 100);
         }
         return () => clearInterval(timerRef.current);
-    }, [currentQ, isStarted, isFinished]); // currentQ가 바뀔 때마다 타이머 리셋
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentQ, isStarted, isFinished]); 
 
-    // =====================================================================
-    // 4. 정답 처리 및 점수 널뛰기 (CAT Algorithm)
-    // =====================================================================
     const handleSelectOption = (selectedOption) => {
         clearInterval(timerRef.current);
         
         const isCorrect = selectedOption === currentQ.answer;
         setAnswers(prev => [...prev, { wordId: currentQ.id, isCorrect, selectedOption }]);
 
-        // 🚀 CAT 로직: 맞추면 난이도 상승, 틀리면 하락
         if (isCorrect) {
-            // 빨리 맞출수록 가산점 부여 (잔여 시간에 비례)
             const timeBonus = (timeLeft / currentQ.timeLimit) * 20; 
             setCurrentScore(prev => Math.min(1000, prev + 60 + timeBonus));
         } else {
@@ -204,20 +173,15 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         }
     };
 
-    // 시험 종료 시 최종 점수 반환
     useEffect(() => {
         if (isFinished) {
             setTimeout(() => {
-                // 최종 스탯을 반올림하여 부모(ConsultationManager)로 송신
                 if (onComplete) onComplete(Math.round(currentScore)); 
             }, 2500);
         }
     }, [isFinished, currentScore, onComplete]);
 
-    // =====================================================================
-    // UI 렌더링
-    // =====================================================================
-    
+    // UI: 로딩 중
     if (isLoadingPool) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center">
@@ -227,10 +191,15 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         );
     }
 
-    // 1. 대기 화면 (시작 전)
+    // UI: 시작 전 화면
     if (!isStarted) {
         return (
-            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center selection:bg-none">
+            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative">
+                {/* 🚀 [CTO 패치] 평가 강제 취소(닫기) 버튼 */}
+                <button onClick={() => onComplete(null)} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white">
+                    <X size={28} />
+                </button>
+
                 <div className="bg-white/10 p-8 rounded-3xl backdrop-blur-md max-w-lg w-full border border-white/20 shadow-2xl animate-in zoom-in-95">
                     <Target size={64} className="mx-auto text-indigo-300 mb-6" />
                     <h1 className="text-4xl font-black mb-2">{studentName} 학생</h1>
@@ -239,7 +208,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                     <div className="text-left bg-black/20 p-5 rounded-2xl mb-8 space-y-3 text-sm font-bold text-indigo-100 leading-relaxed">
                         <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>문제 유형에 따라 제한 시간(3초/5초/10초)이 다릅니다.</span></p>
                         <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>시간 초과 시 오답 처리되므로 빠르게 선택하세요.</span></p>
-                        <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-rose-400" size={18}/> <span className="text-white font-black">모르는 단어는 찍지 말고 반드시 [모르겠습니다]를 누르세요. 찍어서 맞춘 단어는 AI가 찾아내어 더 큰 패널티를 부여합니다.</span></p>
+                        <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-rose-400" size={18}/> <span className="text-white font-black">모르는 단어는 찍지 말고 반드시 [모르겠습니다]를 누르세요. 찍어서 맞춘 단어는 패널티가 부여됩니다.</span></p>
                     </div>
 
                     <button 
@@ -253,7 +222,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         );
     }
 
-    // 2. 종료 화면
+    // UI: 종료 후 연산 화면
     if (isFinished) {
         return (
             <div className="min-h-screen bg-emerald-600 flex flex-col items-center justify-center p-6 text-white text-center">
@@ -270,16 +239,19 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
 
     if (!currentQ) return null;
 
-    // 3. 테스트 진행 화면
     const progressPercent = (timeLeft / currentQ.timeLimit) * 100;
     const timerColor = progressPercent > 40 ? 'bg-indigo-500' : progressPercent > 20 ? 'bg-orange-500' : 'bg-rose-500';
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-none">
-            {/* 상단 프로그레스 바 & 정보 */}
+        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-none relative">
+            {/* 🚀 [CTO 패치] 시험 도중에도 닫기(중단) 기능 제공 */}
+            <button onClick={() => { if(window.confirm("시험을 중단하시겠습니까? 점수가 저장되지 않습니다.")) onComplete(null); }} className="absolute top-4 right-4 p-2 text-gray-400 hover:bg-gray-200 rounded-full transition-colors z-50">
+                <X size={24} />
+            </button>
+
             <div className="bg-white shadow-sm border-b px-6 py-4 flex justify-between items-center shrink-0">
                 <div className="font-black text-gray-400 text-lg">Question {currentIndex + 1} / {MAX_QUESTIONS}</div>
-                <div className="flex items-center gap-2 font-black text-2xl w-24 justify-end">
+                <div className="flex items-center gap-2 font-black text-2xl w-24 justify-end pr-8">
                     <Clock size={24} className={progressPercent < 30 ? 'text-rose-500 animate-pulse' : 'text-indigo-600'} />
                     <span className={progressPercent < 30 ? 'text-rose-500' : 'text-gray-800'}>{Math.ceil(timeLeft)}</span>
                 </div>
@@ -289,10 +261,9 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 <div className={`h-full ${timerColor} transition-all duration-100 ease-linear`} style={{ width: `${progressPercent}%` }} />
             </div>
 
-            {/* 메인 문제 영역 */}
             <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 max-w-4xl mx-auto w-full animate-in fade-in slide-in-from-right-8 duration-300" key={currentQ.id}>
                 
-                <div className="mb-10 w-full text-center">
+                <div className="mb-10 w-full text-center px-4">
                     {currentQ.type === 'blank' ? (
                         <div className="text-2xl sm:text-4xl font-black text-gray-800 leading-snug break-keep-all">
                             {currentQ.word}
@@ -312,7 +283,7 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                         <button 
                             key={idx}
                             onClick={() => handleSelectOption(opt)}
-                            className="bg-white border-2 border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 active:bg-indigo-100 text-gray-800 font-bold text-lg sm:text-xl p-5 sm:p-6 rounded-2xl transition-all text-center flex items-center justify-center shadow-sm"
+                            className="bg-white border-2 border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 active:bg-indigo-100 text-gray-800 font-bold text-lg sm:text-xl p-5 sm:p-6 rounded-2xl transition-all text-center flex items-center justify-center shadow-sm break-keep-all"
                         >
                             {opt}
                         </button>

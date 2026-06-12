@@ -1,6 +1,5 @@
 /* [서비스 가치] 가망 고객(Lead) 상담 시 과목별 필수 질문을 채워야 등록이 가능한 '유효성 게이트' 아키텍처입니다. 
-   특히 영어 상담 시 [CAT 진단평가] 앱 화면으로 매끄럽게 전환(Transition)되어, 학생이 태블릿으로 시험을 완료하면 
-   그 즉시 데이터가 상담 폼으로 동기화되는 마법 같은 온보딩 파이프라인을 제공합니다. */
+   (🚀 CTO 핫픽스: CAT 진단평가 중간 포기(Abort) 시 비정상적인 점수 기록을 완벽히 차단합니다.) */
 import React, { useState, Suspense } from 'react';
 import { doc, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -8,7 +7,6 @@ import { db, secondaryAuth } from '../firebase';
 import { Button, Card, Toast } from '../components/UI';
 import { CheckCircle, ArrowRight, UserPlus, Phone, BookOpen, Calculator, Languages, FlaskConical, Crosshair, Sparkles, Loader } from 'lucide-react';
 
-// 🚀 [CTO 패치] 완성된 실제 CAT 진단평가 컴포넌트 임포트 (지연 로딩 적용으로 초기 속도 방어)
 const CATAssessment = React.lazy(() => import('./CATAssessment'));
 
 const APP_ID = 'imperial-clinic-v1';
@@ -18,7 +16,6 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [loading, setLoading] = useState(false);
     const [currentTab, setCurrentTab] = useState('basic');
 
-    // 🚀 [CTO 패치] 진단평가 화면 전환을 위한 상태값
     const [isTakingCAT, setIsTakingCAT] = useState(false);
 
     const [leadForm, setLeadForm] = useState({
@@ -39,7 +36,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         }));
     };
 
-    // 🚀 실제 CAT 진단평가 화면으로 전환 트리거
     const startCATAssessment = () => {
         if (!leadForm.name) {
             return showToast("학생 실명(이름)을 먼저 입력해주세요. 진단평가 화면에 사용됩니다.", "error");
@@ -49,13 +45,18 @@ export default function ConsultationManager({ isKiosk = false }) {
         }
     };
 
-    // 🚀 CAT 진단평가 종료 후 점수 수신 콜백
+    // 🚀 [CTO 패치] 중도 포기(null) 반환 시 300점 확정 방지 로직 적용
     const handleCATComplete = (finalScore) => {
+        if (finalScore === null) {
+            setIsTakingCAT(false);
+            return showToast('진단평가가 중간에 취소되었습니다. 점수가 기록되지 않았습니다.', 'info');
+        }
+
         setLeadForm(prev => ({
             ...prev,
             english: { ...prev.english, catScore: finalScore }
         }));
-        setIsTakingCAT(false); // 다시 상담 화면으로 복귀
+        setIsTakingCAT(false); 
         showToast(`🎯 CAT 진단 연산 완료: [${finalScore}점] 측정 데이터가 동기화되었습니다.`, 'success');
     };
 
@@ -105,7 +106,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                 await setDoc(doc(db, `artifacts/${APP_ID}/public/data/english_stats`, targetDocId), {
                     studentId: targetDocId, catScore: score, vocaSession: 1, 
                     studyMode: 'calibration', calibrationSessionsLeft: 10, zones,
-                    vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, vocaBook: '능률VOCA수능고난도', // 엑셀 데이터 기준 기본 교재 매핑
+                    vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, vocaBook: '능률VOCA수능고난도', 
                     vocaRubric: `[상담 연동 세팅] 초기 CAT ${score}점 기준 영점 조절 프리셋 10회가 예약 가동되었습니다.`,
                     updatedAt: serverTimestamp()
                 });
@@ -131,9 +132,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         } catch (e) { showToast(e.message || "등록 처리에 실패했습니다.", "error"); } finally { setLoading(false); }
     };
 
-    // =====================================================================
-    // 🚀 [화면 분기] CAT 시험 진행 중일 경우 Kiosk 화면으로 100% 장악
-    // =====================================================================
     if (isTakingCAT) {
         return (
             <div className="fixed inset-0 z-[100] bg-gray-50 flex flex-col w-full h-full overflow-hidden animate-in fade-in duration-300">
@@ -147,9 +145,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         );
     }
 
-    // =====================================================================
-    // 일반 상담 데스크 화면
-    // =====================================================================
     return (
         <div className="max-w-4xl mx-auto space-y-6">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
@@ -162,7 +157,6 @@ export default function ConsultationManager({ isKiosk = false }) {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                {/* 왼쪽 사이드 탭 스위처 */}
                 <div className="md:col-span-1 flex flex-col gap-2 bg-white p-3 rounded-2xl border shadow-sm h-fit">
                     <button onClick={() => setCurrentTab('basic')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === 'basic' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}>👤 1. 기본 인적사항</button>
                     {leadForm.checkedSubjects["국어"] && <button onClick={() => setCurrentTab('국어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '국어' ? 'bg-orange-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><BookOpen size={14}/> 국어 체크리스트</button>}
@@ -172,7 +166,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                     <button onClick={() => setCurrentTab('final')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 border border-dashed transition-all mt-4 ${currentTab === 'final' ? 'bg-gray-900 text-white shadow-md border-transparent' : 'text-gray-700 hover:bg-gray-50 border-gray-300'}`}><UserPlus size={14}/> 3. 원클릭 학생 전환</button>
                 </div>
 
-                {/* 오른쪽 동적 폼 필드 */}
                 <div className="md:col-span-3">
                     {currentTab === 'basic' && (
                         <Card className="space-y-4 animate-in fade-in">
@@ -265,7 +258,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                                     <h4 className="font-black text-xl text-indigo-950">AI 어휘력 진단(CAT) 연동 게이트</h4>
                                     <p className="text-sm font-bold text-gray-500 mt-1">
                                         실제 학생용 앱으로 전환됩니다. 태블릿을 넘겨주세요.<br/>
-                                        시험이 종료되면 <span className="text-indigo-600">스탯(Z1~Z4) 보정이 자동으로 완료</span>됩니다.
+                                        시험이 중단되면 점수가 기록되지 않습니다.
                                     </p>
                                 </div>
                                 
