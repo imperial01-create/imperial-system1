@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.3 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
-   (🚀 CTO 핫픽스: 연속된 스케줄을 병합해서 보여주되, 수정/취소 시 1시간 단위로 개별 선택할 수 있는 '부분 관리' 아키텍처 적용 완료) */
+/* [서비스 가치] 클리닉 V3.1.4 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
+   (🚀 CTO 핫픽스: 사용자 관리 과목 실시간 동기화 적용 및 이름/주제가 다른 스케줄의 오병합(False Merge) 버그 완벽 해결) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -80,11 +80,10 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 패치] 오리지널 세션 보존을 통한 그룹핑
+// 🚀 [CTO 패치] 오병합(False Merge) 원천 차단 알고리즘 도입
 const groupSessions = (sessionList) => {
     if (!sessionList || !Array.isArray(sessionList)) return [];
     
-    // 예약 확정 및 진행 완료 슬롯만 합침 (빈 슬롯은 학생 신청을 위해 개별로 놔둠)
     const toGroup = sessionList.filter(s => ['pending', 'confirmed', 'completed'].includes(s.status));
     const others = sessionList.filter(s => !['pending', 'confirmed', 'completed'].includes(s.status));
 
@@ -95,13 +94,17 @@ const groupSessions = (sessionList) => {
         const aTa = a.taId || ''; const bTa = b.taId || '';
         if (aTa !== bTa) return aTa.localeCompare(bTa);
         
+        // 🚀 이름 비교 로직 강화 (studentId가 없어도 텍스트 이름 자체를 엄격히 비교)
         const aStList = Array.isArray(a.students) ? a.students : [];
         const bStList = Array.isArray(b.students) ? b.students : [];
-        const aSt = aStList.map(st=>st.id).sort().join() || a.studentId || '';
-        const bSt = bStList.map(st=>st.id).sort().join() || b.studentId || '';
-        
+        const aSt = aStList.map(st=>st.id).sort().join() || a.studentId || a.studentName || '';
+        const bSt = bStList.map(st=>st.id).sort().join() || b.studentId || b.studentName || '';
         if (aSt !== bSt) return aSt.localeCompare(bSt);
         
+        // 🚀 토픽(과목) 비교 추가 (다르면 정렬 분리)
+        const aTopic = a.topic || ''; const bTopic = b.topic || '';
+        if (aTopic !== bTopic) return aTopic.localeCompare(bTopic);
+
         const aStat = a.status || ''; const bStat = b.status || '';
         if (aStat !== bStat) return aStat.localeCompare(bStat);
         
@@ -117,22 +120,24 @@ const groupSessions = (sessionList) => {
         const sEnd = s.endTime || `${String(parseInt(startStr.split(':')[0]) + 1).padStart(2,'0')}:00`;
         
         if (!current) {
-            // 🚀 originalSessions 원본 저장
             current = { ...s, originalIds: [s.id], originalSessions: [{...s, endTime: sEnd}], endTime: sEnd };
         } else {
             const currentStList = Array.isArray(current.students) ? current.students : [];
             const sStList = Array.isArray(s.students) ? s.students : [];
-            const currentSt = currentStList.map(st=>st.id).sort().join() || current.studentId || '';
-            const sSt = sStList.map(st=>st.id).sort().join() || s.studentId || '';
+            // 🚀 ID뿐만 아니라 텍스트 이름까지 추출
+            const currentSt = currentStList.map(st=>st.id).sort().join() || current.studentId || current.studentName || '';
+            const sSt = sStList.map(st=>st.id).sort().join() || s.studentId || s.studentName || '';
             
-            if (current.date === s.date && current.taId === s.taId && currentSt === sSt && current.endTime === s.startTime && current.status === s.status && current.classroom === s.classroom) {
+            // 🚀 과목/주제(Topic) 추출
+            const currentTopic = current.topic || '';
+            const sTopic = s.topic || '';
+            
+            // 🚀 학생명과 과목명이 모두 완벽히 일치해야만 한 블록으로 합침 (오병합 방지)
+            if (current.date === s.date && current.taId === s.taId && currentSt === sSt && currentTopic === sTopic && current.endTime === s.startTime && current.status === s.status && current.classroom === s.classroom) {
                 current.endTime = sEnd;
                 current.originalIds.push(s.id);
-                current.originalSessions.push({...s, endTime: sEnd}); // 원본 개별 저장
-                if (current.topic !== s.topic && s.topic) {
-                    const topics = (current.topic || '').split(' / ');
-                    if (!topics.includes(s.topic)) current.topic = (current.topic ? current.topic + ' / ' : '') + s.topic;
-                }
+                current.originalSessions.push({...s, endTime: sEnd});
+                
                 if (current.questionRange !== s.questionRange && s.questionRange) {
                      const ranges = (current.questionRange || '').split('\n');
                      if (!ranges.includes(s.questionRange)) current.questionRange = (current.questionRange ? current.questionRange + '\n' : '') + s.questionRange;
@@ -312,7 +317,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             
             const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
             const isAsstSlot = workerRole === 'admin_assistant'; 
-            const taSubject = s.taSubject || taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
+            
+            // 🚀 [CTO 패치] 과목 맵핑 1순위를 '사용자 관리의 최신 과목 데이터'로 강제 지정 (과목 미변경 버그 해결)
+            const taSubject = taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || s.taSubject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
             const stList = Array.isArray(s.students) ? s.students : [];
             const displayStudentName = stList.length > 0 ? stList.map(st => st.name).join(', ') : s.studentName;
@@ -745,7 +752,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const handleAction = async (action, payload) => {
       try {
-        // 🚀 [CTO 패치] 부분 관리(드릴다운) 인터셉터
         const partialActions = ['cancel_request', 'delete', 'cancel_booking_admin', 'approve_booking', 'withdraw_cancel', 'withdraw_add', 'admin_edit', 'write_feedback', 'send_feedback_msg'];
         
         if (partialActions.includes(action) && payload?.originalIds?.length > 1 && !payload.isPartialBypassed) {
@@ -1319,8 +1325,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         )}
 
       {/* --- Modals --- */}
-
-      {/* 🚀 [CTO 패치] 개별 시간 선택 (부분 관리) 팝업 추가 */}
+      
       <Modal isOpen={modalState.type === 'partial_action'} onClose={()=>setModalState({type:null})} title="개별 시간 선택 (부분 관리)">
             <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-4">
                 이 일정은 연속된 여러 시간으로 묶여 있습니다.<br/>적용할 특정 시간만 선택하여 진행할 수 있습니다.
@@ -1351,9 +1356,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 disabled={!modalState.partialIds?.length}
                 onClick={() => {
                     const modifiedPayload = { ...selectedSession, originalIds: modalState.partialIds, isPartialBypassed: true };
-                    setModalState({ type: null }); // 현재 팝업 먼저 닫기
+                    setModalState({ type: null }); 
                     setTimeout(() => {
-                        handleAction(modalState.actionType, modifiedPayload); // 원래 호출하려던 액션 이어서 실행
+                        handleAction(modalState.actionType, modifiedPayload); 
                     }, 150);
                 }}
             >
