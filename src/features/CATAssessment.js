@@ -1,11 +1,11 @@
-/* [서비스 가치] 학생에게는 게임 같은 몰입감을, 학부모에게는 AI 알고리즘의 판단 과정과 초정밀 개인화 루브릭을 공개하여 
-   압도적인 등록률을 끌어내는 Kiosk용 CAT 평가 엔진입니다. 
-   (🚀 CTO 핫픽스: 전체화면 기능, 랜덤 오프셋 DB 쿼리, 학년별 연동 초기 점수 등 오류 완벽 해결) */
+/* [서비스 가치] 학생에게는 게임 같은 몰입감을, 학부모에게는 AI 알고리즘의 판단 과정을 100% 투명하게 공개하여 압도적인 등록률을 끌어내는 엔진입니다.
+   (🚀 CTO 핫픽스: DB 원본 데이터 보존을 위한 프론트엔드 실시간 정제(Regex) 탑재, 다의어 오답 풀 오류 수정 완결판) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize } from 'lucide-react';
+import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize, ArrowRight, ChevronRight, ChevronLeft } from 'lucide-react';
 import { collection, query, getDocs, limit, where, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
+// 🚀 배열 셔플 유틸리티
 const shuffleArray = (array) => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -15,6 +15,7 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
+// 🚀 철자 편집 거리 계산 (레벤슈타인)
 const getLevenshteinDistance = (a, b) => {
     const matrix = [];
     for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
@@ -24,20 +25,27 @@ const getLevenshteinDistance = (a, b) => {
             if (b.charAt(i - 1) === a.charAt(j - 1)) {
                 matrix[i][j] = matrix[i - 1][j - 1];
             } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
-                );
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
             }
         }
     }
     return matrix[b.length][a.length];
 };
 
+// 🚀 [CTO 패치] 프론트엔드 전용 텍스트 정제기 (DB 원본 보존용)
+// (비밀을) 등 한글 힌트는 살리고 (struck-struck), ((to-v)) 같은 영어 문법 기호만 핀셋 삭제
+const cleanMeaning = (text) => {
+    if (!text || typeof text !== 'string') return text;
+    return text.replace(/\s*\(+[a-zA-Z0-9\s\-\[\]\,~/\.]+\)+\s*/g, '').trim();
+};
+
 export default function CATAssessment({ studentName = '임페리얼', initialScore = 300, onComplete }) {
     const [isLoadingPool, setIsLoadingPool] = useState(true);
     const [wordPool, setWordPool] = useState([]);
     
+    const [showTutorial, setShowTutorial] = useState(false);
+    const [tutorialStep, setTutorialStep] = useState(1);
+
     const [isStarted, setIsStarted] = useState(false);
     const [isFinished, setIsFinished] = useState(false);
     const [finalStats, setFinalStats] = useState(null); 
@@ -46,7 +54,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
     const [transitionState, setTransitionState] = useState(null); 
 
     const [currentIndex, setCurrentIndex] = useState(0);
-    // 🚀 [CTO 패치] 학년에서 받아온 연동 초기 점수 적용
     const [currentScore, setCurrentScore] = useState(initialScore); 
     const [currentStep, setCurrentStep] = useState(200); 
     const [currentQ, setCurrentQ] = useState(null);
@@ -58,16 +65,11 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
     
     const MAX_QUESTIONS = 25; 
 
-    // 🚀 [CTO 패치] 전체화면 API 토글 함수
     const toggleFullScreen = () => {
         if (!document.fullscreenElement) {
-            document.documentElement.requestFullscreen().catch(err => {
-                alert("이 기기에서는 전체화면이 지원되지 않습니다.");
-            });
+            document.documentElement.requestFullscreen().catch(err => { alert("이 기기에서는 전체화면이 지원되지 않습니다."); });
         } else {
-            if (document.exitFullscreen) {
-                document.exitFullscreen();
-            }
+            if (document.exitFullscreen) { document.exitFullscreen(); }
         }
     };
 
@@ -83,17 +85,12 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                 const prefixes = ['NVE', 'NVM', 'NVH'];
                 let fetchedWords = [];
 
-                // 🚀 [CTO 패치] 랜덤 오프셋 쿼리 - 매 시험마다 완전히 다른 단어들이 쏟아집니다.
                 const promises = prefixes.map(prefix => {
                     const randomDay = String(Math.floor(Math.random() * 40) + 1).padStart(2, '0');
                     const randomPrefix = `${prefix}1_D${randomDay}`; 
-                    
                     return getDocs(query(vocaRef, where(documentId(), '>=', randomPrefix), limit(100)))
                         .then(snap => {
-                            if (snap.empty) {
-                                // 만약 꼬리에 걸려 안 나온다면 원본 프리픽스로 폴백 (방어 로직)
-                                return getDocs(query(vocaRef, where(documentId(), '>=', prefix), limit(100)));
-                            }
+                            if (snap.empty) return getDocs(query(vocaRef, where(documentId(), '>=', prefix), limit(100)));
                             return snap;
                         });
                 });
@@ -184,6 +181,9 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         const targetWord = availableWords[0];
         const meaning = targetWord.meanings[0];
 
+        // 🚀 실시간 정제 처리 적용
+        const cleanTargetKorean = cleanMeaning(meaning.koreanMeaning);
+
         let pBasic = 0, pSyn = 0, pPoly = 0, pBlank = 0;
         if (estimatedScore < 400) { pBasic = 0.8; pSyn = 0.2; }
         else if (estimatedScore < 600) { pBasic = 0.4; pSyn = 0.4; pPoly = 0.2; }
@@ -198,9 +198,10 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         else desiredType = 'blank';
 
         if (desiredType === 'blank' && (!meaning.blankSentence || meaning.blankSentence.length === 0)) desiredType = 'polysemy';
+        
+        // 🚀 다의어 검증 시 한글 뜻만 사용하도록 로직 정제
         if (desiredType === 'polysemy') {
-            let realOpts = targetWord.meanings.map(m => m.koreanMeaning);
-            if (realOpts.length < 3 && meaning.synonyms) realOpts.push(...meaning.synonyms);
+            let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
             realOpts = [...new Set(realOpts)];
             if (realOpts.length < 3) desiredType = 'synonym'; 
         }
@@ -208,7 +209,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
         const type = desiredType;
         let timeLimit = 5; 
-        
         if (type === 'blank') timeLimit = 12;
         else if (type === 'polysemy') timeLimit = 8;
         else if (type === 'synonym') timeLimit = 7;
@@ -223,46 +223,58 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             answerText = targetWord.word;
             options = [targetWord.word, ...distractors.map(d => d.word)]; 
             hint = "수능형 빈칸 추론 (문맥 파악)";
+
         } else if (type === 'polysemy') {
-            let realOpts = targetWord.meanings.map(m => m.koreanMeaning);
-            if (realOpts.length < 3 && meaning.synonyms) realOpts.push(...meaning.synonyms);
+            let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
             realOpts = [...new Set(realOpts)].slice(0, 3);
             
-            const fakeWord = availableWords.find(w => w.wordId !== targetWord.wordId && !realOpts.includes(w.meanings[0].koreanMeaning));
-            answerText = fakeWord ? fakeWord.meanings[0].koreanMeaning : "전혀 무관한 뜻";
+            const fakeWord = availableWords.find(w => w.wordId !== targetWord.wordId && !realOpts.includes(cleanMeaning(w.meanings[0].koreanMeaning)));
+            answerText = fakeWord ? cleanMeaning(fakeWord.meanings[0].koreanMeaning) : "전혀 무관한 뜻";
             options = [...realOpts, answerText];
             questionText = `다음 중 '${targetWord.word}'의 뜻으로 쓰일 수 없는 것은?`;
             hint = "다의어 검증 (오답 소거)";
+
         } else if (type === 'synonym') {
             let distractors = [];
             if (meaning.antonyms && meaning.antonyms.length > 0) distractors.push(...meaning.antonyms); 
-            const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.meanings[0].koreanMeaning);
+            
+            const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.word);
             distractors = [...new Set([...distractors, ...fillers])].slice(0, 3);
 
-            questionText = `${targetWord.word} (유의어: ${meaning.synonyms[0]})`; 
-            answerText = meaning.koreanMeaning;
-            options = [meaning.koreanMeaning, ...distractors]; 
-            hint = "의미망 파악 (유의어 연결)";
+            questionText = `Q. 다음 단어와 유사한 의미(Synonym)를 가진 영단어는?\n\n[ ${targetWord.word} ]`; 
+            answerText = meaning.synonyms[0]; 
+            options = [answerText, ...distractors]; 
+            hint = "영-영 유의어 매칭 (의미망 파악)";
+
         } else {
+            // [Type 1] 기초 뜻: 영어 반의어 철저히 배제 및 실시간 정제
             let distractors = [];
             const spellTraps = availableWords.filter(w => w.wordId !== targetWord.wordId)
                 .map(w => ({ wordData: w, dist: getLevenshteinDistance(targetWord.word, w.word) }))
-                .filter(item => item.dist >= 1 && item.dist <= 2).sort((a, b) => a.dist - b.dist).map(item => item.wordData.meanings[0].koreanMeaning);
+                .filter(item => item.dist >= 1 && item.dist <= 2).sort((a, b) => a.dist - b.dist).map(item => cleanMeaning(item.wordData.meanings[0].koreanMeaning));
             distractors.push(...spellTraps);
 
             if (distractors.length < 3) {
-                const prefixTraps = availableWords.filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0]).map(w => w.meanings[0].koreanMeaning);
+                const prefixTraps = availableWords.filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0]).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
                 distractors.push(...prefixTraps);
             }
             if (distractors.length < 3) {
-                const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.meanings[0].koreanMeaning);
+                const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
                 distractors.push(...fillers);
             }
-            distractors = [...new Set(distractors)].slice(0, 3);
+            
+            // 한글 보기만 남기도록 영문 필터링 강제 적용
+            distractors = [...new Set(distractors)].filter(opt => /[가-힣]/.test(opt)).slice(0, 3);
 
             questionText = targetWord.word; 
-            answerText = meaning.koreanMeaning;
-            options = [meaning.koreanMeaning, ...distractors];
+            answerText = cleanTargetKorean;
+            options = [cleanTargetKorean, ...distractors];
+            
+            while(options.length < 4) {
+                const backup = cleanMeaning(availableWords[Math.floor(Math.random()*availableWords.length)].meanings[0].koreanMeaning);
+                if(!options.includes(backup) && /[가-힣]/.test(backup)) options.push(backup);
+            }
+
             hint = answers.length === 0 ? "⚠️ 첫 문제는 UI 적응용 보너스 시간이 주어집니다" : "기초 의미 반사신경 측정";
         }
 
@@ -371,12 +383,125 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         }
     }, [isFinished, answers, finalStats]);
 
+    // =====================================================================
+    // UI 렌더링 영역
+    // =====================================================================
+
     if (isLoadingPool) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center text-white"><Loader className="animate-spin mb-4" size={48} /><h2 className="text-xl font-bold">AI 진단 엔진용 단어 풀 구축 중...</h2></div>;
+
+    if (showTutorial) {
+        return (
+            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white selection:bg-none relative">
+                <button onClick={() => { setShowTutorial(false); setIsStarted(true); }} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="튜토리얼 건너뛰기"><X size={28} /></button>
+                
+                <div className="bg-white text-gray-800 p-8 rounded-3xl max-w-2xl w-full shadow-2xl animate-in zoom-in-95">
+                    <div className="flex justify-between items-center mb-6 border-b pb-4">
+                        <h2 className="text-2xl font-black text-indigo-900 flex items-center gap-2"><Target size={28}/> 시험 진행 가이드 ({tutorialStep}/4)</h2>
+                        <span className="bg-indigo-100 text-indigo-600 px-3 py-1 rounded-full text-xs font-bold">튜토리얼</span>
+                    </div>
+
+                    <div className="h-64 flex flex-col justify-center">
+                        {tutorialStep === 1 && (
+                            <div className="text-center animate-in fade-in slide-in-from-right-4">
+                                <h3 className="text-xl font-black text-gray-900 mb-3">유형 1: 뜻 찾기 (기본)</h3>
+                                <p className="text-gray-600 mb-6">가장 기본적인 문제입니다. 화면에 영어 단어가 나오면, <br/>제한 시간 내에 알맞은 한국어 뜻을 고르세요.</p>
+                                <div className="bg-gray-100 p-4 rounded-xl inline-block text-left w-full max-w-sm mx-auto shadow-inner border border-gray-200">
+                                    <div className="text-2xl font-black text-center mb-3">adapt</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border-2 border-emerald-400 text-emerald-600">적응하다 (정답)</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">입양하다</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">능숙한</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">추가하다</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {tutorialStep === 2 && (
+                            <div className="text-center animate-in fade-in slide-in-from-right-4">
+                                <h3 className="text-xl font-black text-gray-900 mb-3">유형 2: 영-영 유의어 매칭</h3>
+                                <p className="text-gray-600 mb-6">제시된 단어와 <strong className="text-indigo-600">유사한 의미(Synonym)</strong>를 가진 영단어를 고르세요.<br/>보기 중에 <strong className="text-rose-500">반의어(Antonym) 함정</strong>이 숨어있으니 조심하세요!</p>
+                                <div className="bg-gray-100 p-4 rounded-xl inline-block text-left w-full max-w-sm mx-auto shadow-inner border border-gray-200">
+                                    <div className="text-base font-black text-center mb-3">Q. 다음 단어와 유사한 영단어는?<br/><span className="text-2xl mt-1 block">increase</span></div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border-2 border-emerald-400 text-emerald-600">raise (정답)</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border-2 border-rose-300 text-rose-500">decrease (함정)</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">suggest</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">happen</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {tutorialStep === 3 && (
+                            <div className="text-center animate-in fade-in slide-in-from-right-4">
+                                <h3 className="text-xl font-black text-gray-900 mb-3">유형 3: 다의어 소거</h3>
+                                <p className="text-gray-600 mb-6">단어는 여러 가지 뜻을 가지고 있습니다.<br/>제시된 단어의 뜻으로 <strong className="text-rose-500">쓰일 수 없는 것(가짜 뜻)</strong>을 고르세요.</p>
+                                <div className="bg-gray-100 p-4 rounded-xl inline-block text-left w-full max-w-sm mx-auto shadow-inner border border-gray-200">
+                                    <div className="text-base font-black text-center mb-3">Q. 다음 중 'capital'의 뜻이 아닌 것은?</div>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">자본</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">수도</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">대문자</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border-2 border-emerald-400 text-emerald-600">능력 (정답)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {tutorialStep === 4 && (
+                            <div className="text-center animate-in fade-in slide-in-from-right-4">
+                                <h3 className="text-xl font-black text-gray-900 mb-3">유형 4: 문맥 빈칸 추론</h3>
+                                <p className="text-gray-600 mb-6">최고난도 문제입니다. 영어 문장을 읽고<br/>빈칸 <strong className="text-indigo-600">_______</strong> 에 들어갈 가장 알맞은 단어를 고르세요.</p>
+                                <div className="bg-gray-100 p-4 rounded-xl inline-block text-left w-full max-w-lg mx-auto shadow-inner border border-gray-200">
+                                    <div className="text-lg font-black text-center mb-3 leading-snug">The government decided to <span className="text-indigo-600">_______</span> the new economic policy.</div>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border-2 border-emerald-400 text-emerald-600">adopt</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">adapt</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">admit</div>
+                                        <div className="bg-white p-2 rounded text-center text-sm font-bold border">adjust</div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex justify-between items-center mt-8 pt-6 border-t">
+                        <button 
+                            className={`flex items-center gap-2 px-4 py-2 font-bold rounded-lg transition-colors ${tutorialStep > 1 ? 'text-gray-600 hover:bg-gray-100' : 'text-gray-300 cursor-not-allowed'}`}
+                            onClick={() => tutorialStep > 1 && setTutorialStep(tutorialStep - 1)}
+                            disabled={tutorialStep === 1}
+                        >
+                            <ChevronLeft size={20}/> 이전
+                        </button>
+                        
+                        <div className="flex gap-2">
+                            {[1, 2, 3, 4].map(step => (
+                                <div key={step} className={`w-2 h-2 rounded-full ${tutorialStep === step ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+                            ))}
+                        </div>
+
+                        {tutorialStep < 4 ? (
+                            <button 
+                                className="flex items-center gap-2 px-5 py-2.5 bg-indigo-50 text-indigo-700 font-black rounded-xl hover:bg-indigo-100 transition-colors"
+                                onClick={() => setTutorialStep(tutorialStep + 1)}
+                            >
+                                다음 <ChevronRight size={20}/>
+                            </button>
+                        ) : (
+                            <button 
+                                className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white font-black rounded-xl hover:bg-indigo-700 shadow-md transition-all active:scale-95"
+                                onClick={() => { setShowTutorial(false); setIsStarted(true); }}
+                            >
+                                실전 테스트 시작 <ArrowRight size={20}/>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (!isStarted) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative selection:bg-none">
-                {/* 🚀 전체화면 및 닫기 버튼 */}
                 <div className="absolute top-6 right-6 flex gap-3">
                     <button onClick={toggleFullScreen} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="전체화면 전환"><Maximize size={28} /></button>
                     <button onClick={() => onComplete(null)} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="시험 닫기"><X size={28} /></button>
@@ -390,7 +515,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                         <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>문제 유형(기초 뜻, 다의어, 빈칸추론 등)에 따라 제한 시간이 다르게 주어집니다.</span></p>
                         <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>시간 내에 풀지 못하거나, 찍어서 맞춘 사실이 AI 알고리즘에 발각되면 거품 점수로 간주되어 강력한 강등 페널티가 부여됩니다.</span></p>
                     </div>
-                    <button onClick={() => setIsStarted(true)} className="w-full py-5 bg-white text-indigo-900 text-xl font-black rounded-2xl hover:bg-indigo-50 transition-all shadow-[0_0_40px_rgba(255,255,255,0.3)] active:scale-95">진단평가 시작하기</button>
+                    <button onClick={() => setShowTutorial(true)} className="w-full py-5 bg-white text-indigo-900 text-xl font-black rounded-2xl hover:bg-indigo-50 transition-all shadow-[0_0_40px_rgba(255,255,255,0.3)] active:scale-95">진단평가 시작하기</button>
                 </div>
             </div>
         );
@@ -398,10 +523,10 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     if (isFinished && finalStats && rubricReport) {
         return (
-            <div className="min-h-screen bg-gray-50 flex flex-col items-center p-4 sm:p-8 animate-in slide-in-from-bottom-8 duration-500">
-                <div className="max-w-4xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden border border-gray-100 pb-6">
+            <div className="fixed inset-0 z-[200] overflow-y-auto bg-gray-50 flex flex-col items-center p-4 sm:p-8" style={{ WebkitOverflowScrolling: 'touch' }}>
+                <div className="max-w-4xl w-full bg-white rounded-3xl shadow-2xl border border-gray-100 pb-6 mb-24 flex-shrink-0 animate-in slide-in-from-bottom-8 duration-500">
                     
-                    <div className="bg-indigo-900 text-white p-8 text-center relative overflow-hidden">
+                    <div className="bg-indigo-900 text-white p-8 text-center relative overflow-hidden rounded-t-3xl">
                         <BrainCircuit size={140} className="absolute -bottom-4 -right-4 text-white opacity-10" />
                         <h1 className="text-3xl font-black mb-2">AI 정밀 어휘력 분석 리포트</h1>
                         <p className="text-indigo-200 font-bold">임페리얼의 다차원 평가 알고리즘이 도출한 최종 결과입니다.</p>
@@ -448,7 +573,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
                     <div className="p-6 md:p-8">
                         <h3 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><CheckCircle className="text-emerald-500"/> 전체 문항 상세 트래킹 로그</h3>
-                        <div className="max-h-80 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-white">
+                        <div className="max-h-80 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-white" style={{ WebkitOverflowScrolling: 'touch' }}>
                             <table className="w-full text-left text-sm whitespace-nowrap">
                                 <thead className="bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 text-gray-500 font-black">
                                     <tr>
@@ -557,8 +682,8 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 max-w-4xl mx-auto w-full animate-in fade-in slide-in-from-right-8 duration-300" key={currentQ.id}>
                 
                 <div className="mb-10 w-full text-center px-4">
-                    {currentQ.type === 'blank' ? (
-                        <div className="text-2xl sm:text-4xl font-black text-gray-800 leading-snug break-keep-all">
+                    {currentQ.type === 'blank' || currentQ.type === 'synonym' ? (
+                        <div className="text-2xl sm:text-4xl font-black text-gray-800 leading-snug break-keep-all whitespace-pre-wrap">
                             {currentQ.word}
                         </div>
                     ) : (
