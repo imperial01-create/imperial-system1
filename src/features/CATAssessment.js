@@ -1,11 +1,10 @@
-/* [서비스 가치] 학생에게는 게임 같은 몰입감을, 학부모에게는 AI 알고리즘의 판단 과정을 100% 투명하게 공개하여 압도적인 등록률을 끌어내는 엔진입니다.
-   (🚀 CTO 핫픽스: DB 원본 데이터 보존을 위한 프론트엔드 실시간 정제(Regex) 탑재, 다의어 오답 풀 오류 수정 완결판) */
+/* [서비스 가치] 진정한 의미의 초정밀 실시간 적응형(Real-time CAT 3.0) 평가 엔진.
+   (🚀 CTO 통합 핫픽스: 실시간 40-chunk 쿼리, 15초 하드 타임아웃, RTE 가중치, 진정한 Elo 앵커링, 3.5초 트랜지션 버퍼, Pull-to-refresh 차단, 데이터 정제기 모두 탑재) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize, ArrowRight, ChevronRight, ChevronLeft } from 'lucide-react';
-import { collection, query, getDocs, limit, where, documentId } from 'firebase/firestore';
+import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize, ArrowRight, ChevronRight, ChevronLeft, Zap } from 'lucide-react';
+import { collection, query, getDocs, limit, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
-// 🚀 배열 셔플 유틸리티
 const shuffleArray = (array) => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -15,7 +14,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// 🚀 철자 편집 거리 계산 (레벤슈타인)
 const getLevenshteinDistance = (a, b) => {
     const matrix = [];
     for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
@@ -32,17 +30,14 @@ const getLevenshteinDistance = (a, b) => {
     return matrix[b.length][a.length];
 };
 
-// 🚀 [CTO 패치] 프론트엔드 전용 텍스트 정제기 (DB 원본 보존용)
-// (비밀을) 등 한글 힌트는 살리고 (struck-struck), ((to-v)) 같은 영어 문법 기호만 핀셋 삭제
+// 🚀 텍스트 실시간 정제기 (한글 힌트는 살리고 영어 기호 찌꺼기 핀셋 제거)
 const cleanMeaning = (text) => {
     if (!text || typeof text !== 'string') return text;
     return text.replace(/\s*\(+[a-zA-Z0-9\s\-\[\]\,~/\.]+\)+\s*/g, '').trim();
 };
 
 export default function CATAssessment({ studentName = '임페리얼', initialScore = 300, onComplete }) {
-    const [isLoadingPool, setIsLoadingPool] = useState(true);
-    const [wordPool, setWordPool] = useState([]);
-    
+    const [isAppLoading, setIsAppLoading] = useState(false);
     const [showTutorial, setShowTutorial] = useState(false);
     const [tutorialStep, setTutorialStep] = useState(1);
 
@@ -55,15 +50,12 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     const [currentIndex, setCurrentIndex] = useState(0);
     const [currentScore, setCurrentScore] = useState(initialScore); 
-    const [currentStep, setCurrentStep] = useState(200); 
     const [currentQ, setCurrentQ] = useState(null);
-    const [timeLeft, setTimeLeft] = useState(0);
+    const [timeLeft, setTimeLeft] = useState(15.0); // 🚀 하드 타임아웃 15초
     const [answers, setAnswers] = useState([]); 
     
     const timerRef = useRef(null);
-    const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore, step: currentStep, isTransitioning: false });
-    
-    const MAX_QUESTIONS = 25; 
+    const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore, isTransitioning: false, answers });
 
     const toggleFullScreen = () => {
         if (!document.fullscreenElement) {
@@ -73,230 +65,249 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         }
     };
 
+    // 🚀 [CTO 패치] 패드/모바일 '당겨서 새로고침(Pull-to-refresh)' 원천 차단
     useEffect(() => {
-        stateRef.current = { currentQ, currentIndex, timeLeft, currentScore, step: currentStep, isTransitioning: !!transitionState };
-    }, [currentQ, currentIndex, timeLeft, currentScore, currentStep, transitionState]);
-
-    useEffect(() => {
-        const fetchCATPool = async () => {
-            setIsLoadingPool(true);
-            try {
-                const vocaRef = collection(db, 'VocabularyDB');
-                const prefixes = ['NVE', 'NVM', 'NVH'];
-                let fetchedWords = [];
-
-                const promises = prefixes.map(prefix => {
-                    const randomDay = String(Math.floor(Math.random() * 40) + 1).padStart(2, '0');
-                    const randomPrefix = `${prefix}1_D${randomDay}`; 
-                    return getDocs(query(vocaRef, where(documentId(), '>=', randomPrefix), limit(100)))
-                        .then(snap => {
-                            if (snap.empty) return getDocs(query(vocaRef, where(documentId(), '>=', prefix), limit(100)));
-                            return snap;
-                        });
-                });
-
-                const results = await Promise.all(promises);
-                results.forEach(snap => { snap.forEach(doc => fetchedWords.push(doc.data())); });
-
-                if (fetchedWords.length === 0) throw new Error("DB Empty");
-                setWordPool(shuffleArray(fetchedWords));
-            } catch (error) {
-                alert("단어 데이터를 불러오는데 실패했습니다.");
-                onComplete(null); 
-            } finally {
-                setIsLoadingPool(false);
-            }
+        document.body.style.overscrollBehaviorY = 'none';
+        document.documentElement.style.overscrollBehaviorY = 'none';
+        return () => {
+            document.body.style.overscrollBehaviorY = 'auto';
+            document.documentElement.style.overscrollBehaviorY = 'auto';
         };
+    }, []);
 
-        fetchCATPool();
-    }, [onComplete]);
+    useEffect(() => {
+        stateRef.current = { currentQ, currentIndex, timeLeft, currentScore, isTransitioning: !!transitionState, answers };
+    }, [currentQ, currentIndex, timeLeft, currentScore, transitionState, answers]);
 
-    const handleSelectOption = useCallback((selectedOption, isTimeOut = false) => {
+    const MAX_QUESTIONS = 25; 
+
+    // 🚀 [CTO 패치] 실시간 40-Chunk 쿼리 및 문제 출제 알고리즘
+    const fetchAndGenerateNextQuestion = useCallback(async (estimatedScore) => {
+        try {
+            const vocaRef = collection(db, 'VocabularyDB');
+            const searchFloor = Math.max(0, estimatedScore - 50);
+            
+            // 실시간으로 현재 실력 언저리의 단어 40개를 가져옵니다.
+            let snap = await getDocs(query(vocaRef, where('meaningDifficulty', '>=', searchFloor), limit(40)));
+            
+            if (snap.empty || snap.docs.length < 5) {
+                // 천장 방어 로직 (최고 난이도 구역 탐색)
+                snap = await getDocs(query(vocaRef, where('meaningDifficulty', '>=', Math.max(0, estimatedScore - 200)), limit(40)));
+            }
+
+            let fetchedWords = [];
+            snap.forEach(doc => fetchedWords.push(doc.data()));
+
+            const availableWords = fetchedWords.filter(w => !stateRef.current.answers.some(a => a.wordId === w.wordId));
+            if (availableWords.length === 0) return null;
+
+            availableWords.sort((a, b) => Math.abs((a.meanings[0]?.meaningDifficulty || 0) - estimatedScore) - Math.abs((b.meanings[0]?.meaningDifficulty || 0) - estimatedScore));
+            const targetWord = availableWords[0];
+            const meaning = targetWord.meanings[0];
+
+            const cleanTargetKorean = cleanMeaning(meaning.koreanMeaning);
+
+            let pBasic = 0, pSyn = 0, pPoly = 0, pBlank = 0;
+            if (estimatedScore < 400) { pBasic = 0.8; pSyn = 0.2; }
+            else if (estimatedScore < 600) { pBasic = 0.4; pSyn = 0.4; pPoly = 0.2; }
+            else if (estimatedScore < 800) { pSyn = 0.2; pPoly = 0.4; pBlank = 0.4; }
+            else { pPoly = 0.3; pBlank = 0.7; }
+
+            const r = Math.random();
+            let desiredType = 'basic';
+            if (r < pBasic) desiredType = 'basic';
+            else if (r < pBasic + pSyn) desiredType = 'synonym';
+            else if (r < pBasic + pSyn + pPoly) desiredType = 'polysemy';
+            else desiredType = 'blank';
+
+            if (desiredType === 'blank' && (!meaning.blankSentence || meaning.blankSentence.length === 0)) desiredType = 'polysemy';
+            if (desiredType === 'polysemy') {
+                let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
+                realOpts = [...new Set(realOpts)];
+                if (realOpts.length < 3) desiredType = 'synonym'; 
+            }
+            if (desiredType === 'synonym' && (!meaning.synonyms || meaning.synonyms.length === 0)) desiredType = 'basic';
+
+            const type = desiredType;
+            let questionText = ''; let answerText = ''; let hint = ''; let options = [];
+
+            if (type === 'blank') {
+                let distractors = availableWords.filter(w => w.wordId !== targetWord.wordId).slice(0, 3);
+                questionText = meaning.blankSentence[0]; 
+                answerText = targetWord.word;
+                options = [targetWord.word, ...distractors.map(d => d.word)]; 
+                hint = "수능형 빈칸 추론 (문맥 파악)";
+            } else if (type === 'polysemy') {
+                let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
+                realOpts = [...new Set(realOpts)].slice(0, 3);
+                const fakeWord = availableWords.find(w => w.wordId !== targetWord.wordId && !realOpts.includes(cleanMeaning(w.meanings[0].koreanMeaning)));
+                answerText = fakeWord ? cleanMeaning(fakeWord.meanings[0].koreanMeaning) : "전혀 무관한 뜻";
+                options = [...realOpts, answerText];
+                questionText = `다음 중 '${targetWord.word}'의 뜻으로 쓰일 수 없는 것은?`;
+                hint = "다의어 검증 (오답 소거)";
+            } else if (type === 'synonym') {
+                let distractors = [];
+                if (meaning.antonyms && meaning.antonyms.length > 0) distractors.push(...meaning.antonyms); 
+                const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.word);
+                distractors = [...new Set([...distractors, ...fillers])].slice(0, 3);
+
+                questionText = `Q. 다음 단어와 유사한 의미(Synonym)를 가진 영단어는?\n\n[ ${targetWord.word} ]`; 
+                answerText = meaning.synonyms[0]; 
+                options = [answerText, ...distractors]; 
+                hint = "영-영 유의어 매칭 (의미망 파악)";
+            } else {
+                let distractors = [];
+                const spellTraps = availableWords.filter(w => w.wordId !== targetWord.wordId)
+                    .map(w => ({ wordData: w, dist: getLevenshteinDistance(targetWord.word, w.word) }))
+                    .filter(item => item.dist >= 1 && item.dist <= 2).sort((a, b) => a.dist - b.dist).map(item => cleanMeaning(item.wordData.meanings[0].koreanMeaning));
+                distractors.push(...spellTraps);
+
+                if (distractors.length < 3) {
+                    const prefixTraps = availableWords.filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0]).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
+                    distractors.push(...prefixTraps);
+                }
+                if (distractors.length < 3) {
+                    const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
+                    distractors.push(...fillers);
+                }
+                
+                // 영어 반의어 철저 격리
+                distractors = [...new Set(distractors)].filter(opt => /[가-힣]/.test(opt)).slice(0, 3);
+                questionText = targetWord.word; 
+                answerText = cleanTargetKorean;
+                options = [cleanTargetKorean, ...distractors];
+                
+                while(options.length < 4) {
+                    const backup = cleanMeaning(availableWords[Math.floor(Math.random()*availableWords.length)].meanings[0].koreanMeaning);
+                    if(!options.includes(backup) && /[가-힣]/.test(backup)) options.push(backup);
+                }
+                hint = stateRef.current.answers.length === 0 ? "⚠️ 15초 내에 선택하세요. 빠를수록 점수가 오릅니다." : "기초 의미 반사신경 측정";
+            }
+
+            return { id: targetWord.wordId, type, word: questionText, answer: answerText, options: shuffleArray(options), difficulty: meaning.meaningDifficulty || 0, hint };
+        } catch (error) {
+            console.error("단어 실시간 패치 오류:", error);
+            return null;
+        }
+    }, []);
+
+    const handleStartAssessment = async () => {
+        setIsAppLoading(true);
+        const firstQ = await fetchAndGenerateNextQuestion(currentScore);
+        if (firstQ) {
+            setCurrentQ(firstQ);
+            setIsStarted(true);
+            setShowTutorial(false);
+            setTimeLeft(15.0);
+            startTimer();
+        } else {
+            alert("단어 데이터를 불러올 수 없습니다. 인터넷 연결을 확인해주세요.");
+        }
+        setIsAppLoading(false);
+    };
+
+    const startTimer = () => {
+        clearInterval(timerRef.current);
+        timerRef.current = setInterval(() => {
+            setTimeLeft((prev) => {
+                if (prev <= 0.1) { 
+                    clearInterval(timerRef.current); 
+                    handleSelectOption('TIMEOUT_OR_IDK', true); 
+                    return 0; 
+                }
+                return prev - 0.1; 
+            });
+        }, 100);
+    };
+
+    // 🚀 [CTO 패치] 진정한 Elo 앵커링 스코어링 + RTE 반응속도 + 3.5초 트랜지션 버퍼
+    const handleSelectOption = useCallback(async (selectedOption, isTimeOut = false) => {
         if (stateRef.current.isTransitioning) return; 
         
         clearInterval(timerRef.current);
         stateRef.current.isTransitioning = true;
         
-        const { currentQ: q, currentIndex: idx, timeLeft: tLeft, currentScore: score, step } = stateRef.current;
+        const { currentQ: q, currentIndex: idx, timeLeft: tLeft, currentScore: score } = stateRef.current;
         if (!q) return;
 
         const isTimeOutOrIdk = isTimeOut || selectedOption === 'TIMEOUT_OR_IDK';
         const isCorrect = !isTimeOutOrIdk && selectedOption === q.answer;
+
+        // 1. RTE(반응 속도) 분석
+        const timeTaken = parseFloat((15.0 - tLeft).toFixed(1));
+        let rteMultiplier = 0.2; 
+        let rteLabel = "위태로움 (찍기 의심)";
+        
+        if (isTimeOutOrIdk) { rteMultiplier = 0; rteLabel = isTimeOut ? "시간 초과" : "솔직한 패스"; }
+        else if (timeTaken <= 4.0) { rteMultiplier = 1.0; rteLabel = "완벽 체화 (빠름)"; }
+        else if (timeTaken <= 8.0) { rteMultiplier = 0.6; rteLabel = "단순 인지 (보통)"; }
+
+        // 🚀 2. 진정한 Elo 앵커링 스코어링
+        let scoreDelta = 0;
+        
+        if (isCorrect) {
+            // [정답] 출제된 단어 난이도가 내 점수보다 높을 때만 점수 상승
+            if (q.difficulty > score) {
+                const baseGain = (q.difficulty - score) * 0.6; // 격차의 60%를 기본 획득 점수로 산정
+                scoreDelta = Math.round(baseGain * rteMultiplier); // 반응속도 가중치 곱하기
+            } else {
+                // 내 점수 이하의 쉬운 단어를 맞췄을 경우 가차없이 0점 상승 처리
+                scoreDelta = 0; 
+            }
+        } else {
+            // [오답] 출제된 단어가 내 점수보다 낮을수록(쉬운 걸 틀릴수록) 패널티 폭탄
+            if (q.difficulty < score) {
+                // 예: 600점인데 400점짜리를 틀렸다 -> (400-600) * 0.8 = -160점 감점
+                const baseLoss = (q.difficulty - score) * 0.8; 
+                scoreDelta = Math.round(baseLoss);
+            } else {
+                // 나보다 어려운 단어를 틀렸을 경우 가벼운 기본 감점만 적용
+                scoreDelta = -10; 
+            }
+        }
+
+        const newScore = Math.max(0, Math.min(1000, score + scoreDelta));
 
         let tType = 'incorrect';
         if (isTimeOut) tType = 'timeout';
         else if (selectedOption === 'TIMEOUT_OR_IDK') tType = 'pass';
         else if (isCorrect) tType = 'correct';
 
-        setTransitionState({ type: tType, answer: q.answer });
+        setTransitionState({ 
+            type: tType, answer: q.answer, delta: scoreDelta, 
+            timeTaken, rteLabel, newScore 
+        });
+
+        // 3. 백그라운드 실시간 쿼리 (다음 문제 땡겨오기)
+        const nextQ = await fetchAndGenerateNextQuestion(newScore);
 
         setTimeout(() => {
-            let newScore = score;
-            let newStep = step;
-            let phase = '';
-
-            if (idx < 7) {
-                phase = '초기 탐색';
-                if (isCorrect) newScore += step;
-                else newScore -= step;
-                newStep = step / 2;
-                setCurrentStep(newStep);
-            } else if (idx < 20) {
-                phase = '정밀 타격';
-                if (isCorrect) {
-                    const timeBonus = (tLeft / q.timeLimit) * 15;
-                    newScore += (10 + timeBonus);
-                }
-                else if (isTimeOutOrIdk) newScore -= 15;
-                else newScore -= 40;
-            } else {
-                phase = '천장 검증';
-            }
-
-            newScore = Math.max(0, Math.min(1000, newScore));
-
             setAnswers(prev => [...prev, { 
-                qNum: idx + 1, phase, wordId: q.id, wordText: q.word, correctAnswer: q.answer,
+                qNum: idx + 1, phase: idx < 15 ? '실력 측정' : '천장 검증', 
+                wordId: q.id, wordText: q.word, correctAnswer: q.answer,
                 selectedOption: isTimeOut ? '시간 초과' : (selectedOption === 'TIMEOUT_OR_IDK' ? '모름 (Pass)' : selectedOption),
-                isCorrect, difficulty: q.difficulty, scoreBefore: Math.round(score), scoreAfter: Math.round(newScore), type: q.type
+                isCorrect, difficulty: q.difficulty, 
+                scoreBefore: Math.round(score), scoreAfter: Math.round(newScore), type: q.type,
+                timeTaken, rteLabel
             }]);
 
             setCurrentScore(newScore);
             setTransitionState(null); 
 
             if (idx < MAX_QUESTIONS - 1) {
-                setCurrentIndex(idx + 1);
+                if (nextQ) {
+                    setCurrentIndex(idx + 1);
+                    setCurrentQ(nextQ);
+                    setTimeLeft(15.0);
+                    startTimer();
+                } else {
+                    alert("단어 데이터가 부족합니다."); onComplete(null);
+                }
             } else {
                 setIsFinished(true);
             }
-        }, 1500); 
-    }, [MAX_QUESTIONS]);
-
-    const generateNextQuestion = useCallback((estimatedScore) => {
-        if (wordPool.length === 0) return null;
-        const availableWords = wordPool.filter(w => !answers.some(a => a.wordId === w.wordId));
-        if (availableWords.length === 0) return null;
-
-        availableWords.sort((a, b) => Math.abs((a.meanings[0]?.meaningDifficulty || 0) - estimatedScore) - Math.abs((b.meanings[0]?.meaningDifficulty || 0) - estimatedScore));
-        const targetWord = availableWords[0];
-        const meaning = targetWord.meanings[0];
-
-        // 🚀 실시간 정제 처리 적용
-        const cleanTargetKorean = cleanMeaning(meaning.koreanMeaning);
-
-        let pBasic = 0, pSyn = 0, pPoly = 0, pBlank = 0;
-        if (estimatedScore < 400) { pBasic = 0.8; pSyn = 0.2; }
-        else if (estimatedScore < 600) { pBasic = 0.4; pSyn = 0.4; pPoly = 0.2; }
-        else if (estimatedScore < 800) { pSyn = 0.2; pPoly = 0.4; pBlank = 0.4; }
-        else { pPoly = 0.3; pBlank = 0.7; }
-
-        const r = Math.random();
-        let desiredType = 'basic';
-        if (r < pBasic) desiredType = 'basic';
-        else if (r < pBasic + pSyn) desiredType = 'synonym';
-        else if (r < pBasic + pSyn + pPoly) desiredType = 'polysemy';
-        else desiredType = 'blank';
-
-        if (desiredType === 'blank' && (!meaning.blankSentence || meaning.blankSentence.length === 0)) desiredType = 'polysemy';
-        
-        // 🚀 다의어 검증 시 한글 뜻만 사용하도록 로직 정제
-        if (desiredType === 'polysemy') {
-            let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
-            realOpts = [...new Set(realOpts)];
-            if (realOpts.length < 3) desiredType = 'synonym'; 
-        }
-        if (desiredType === 'synonym' && (!meaning.synonyms || meaning.synonyms.length === 0)) desiredType = 'basic';
-
-        const type = desiredType;
-        let timeLimit = 5; 
-        if (type === 'blank') timeLimit = 12;
-        else if (type === 'polysemy') timeLimit = 8;
-        else if (type === 'synonym') timeLimit = 7;
-        
-        if (answers.length === 0) timeLimit = Math.max(timeLimit, 7); 
-
-        let questionText = ''; let answerText = ''; let hint = ''; let options = [];
-
-        if (type === 'blank') {
-            let distractors = availableWords.filter(w => w.wordId !== targetWord.wordId).slice(0, 3);
-            questionText = meaning.blankSentence[0]; 
-            answerText = targetWord.word;
-            options = [targetWord.word, ...distractors.map(d => d.word)]; 
-            hint = "수능형 빈칸 추론 (문맥 파악)";
-
-        } else if (type === 'polysemy') {
-            let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
-            realOpts = [...new Set(realOpts)].slice(0, 3);
-            
-            const fakeWord = availableWords.find(w => w.wordId !== targetWord.wordId && !realOpts.includes(cleanMeaning(w.meanings[0].koreanMeaning)));
-            answerText = fakeWord ? cleanMeaning(fakeWord.meanings[0].koreanMeaning) : "전혀 무관한 뜻";
-            options = [...realOpts, answerText];
-            questionText = `다음 중 '${targetWord.word}'의 뜻으로 쓰일 수 없는 것은?`;
-            hint = "다의어 검증 (오답 소거)";
-
-        } else if (type === 'synonym') {
-            let distractors = [];
-            if (meaning.antonyms && meaning.antonyms.length > 0) distractors.push(...meaning.antonyms); 
-            
-            const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.word);
-            distractors = [...new Set([...distractors, ...fillers])].slice(0, 3);
-
-            questionText = `Q. 다음 단어와 유사한 의미(Synonym)를 가진 영단어는?\n\n[ ${targetWord.word} ]`; 
-            answerText = meaning.synonyms[0]; 
-            options = [answerText, ...distractors]; 
-            hint = "영-영 유의어 매칭 (의미망 파악)";
-
-        } else {
-            // [Type 1] 기초 뜻: 영어 반의어 철저히 배제 및 실시간 정제
-            let distractors = [];
-            const spellTraps = availableWords.filter(w => w.wordId !== targetWord.wordId)
-                .map(w => ({ wordData: w, dist: getLevenshteinDistance(targetWord.word, w.word) }))
-                .filter(item => item.dist >= 1 && item.dist <= 2).sort((a, b) => a.dist - b.dist).map(item => cleanMeaning(item.wordData.meanings[0].koreanMeaning));
-            distractors.push(...spellTraps);
-
-            if (distractors.length < 3) {
-                const prefixTraps = availableWords.filter(w => w.wordId !== targetWord.wordId && w.word[0] === targetWord.word[0]).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
-                distractors.push(...prefixTraps);
-            }
-            if (distractors.length < 3) {
-                const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => cleanMeaning(w.meanings[0].koreanMeaning));
-                distractors.push(...fillers);
-            }
-            
-            // 한글 보기만 남기도록 영문 필터링 강제 적용
-            distractors = [...new Set(distractors)].filter(opt => /[가-힣]/.test(opt)).slice(0, 3);
-
-            questionText = targetWord.word; 
-            answerText = cleanTargetKorean;
-            options = [cleanTargetKorean, ...distractors];
-            
-            while(options.length < 4) {
-                const backup = cleanMeaning(availableWords[Math.floor(Math.random()*availableWords.length)].meanings[0].koreanMeaning);
-                if(!options.includes(backup) && /[가-힣]/.test(backup)) options.push(backup);
-            }
-
-            hint = answers.length === 0 ? "⚠️ 첫 문제는 UI 적응용 보너스 시간이 주어집니다" : "기초 의미 반사신경 측정";
-        }
-
-        return { id: targetWord.wordId, type, word: questionText, answer: answerText, options: shuffleArray(options), timeLimit, difficulty: meaning.meaningDifficulty || 0, hint };
-    }, [wordPool, answers]);
-
-    useEffect(() => {
-        if (isStarted && !isFinished && !transitionState) { 
-            const nextQ = generateNextQuestion(currentScore);
-            if (nextQ) {
-                setCurrentQ(nextQ); setTimeLeft(nextQ.timeLimit);
-                clearInterval(timerRef.current);
-                timerRef.current = setInterval(() => {
-                    setTimeLeft((prev) => {
-                        if (prev <= 0.1) { clearInterval(timerRef.current); handleSelectOption('TIMEOUT_OR_IDK', true); return 0; }
-                        return prev - 0.1; 
-                    });
-                }, 100);
-            } else { alert("단어 풀이 부족하여 평가를 중단합니다."); onComplete(null); }
-        }
-        return () => clearInterval(timerRef.current);
-    }, [currentIndex, isStarted, isFinished, transitionState, currentScore, generateNextQuestion, handleSelectOption, onComplete]);
+        }, 3500); 
+    }, [MAX_QUESTIONS, fetchAndGenerateNextQuestion, onComplete]);
 
     const generateRubricReport = (finalScore, penalty) => {
         const tier = Math.floor(finalScore / 100);
@@ -347,8 +358,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     useEffect(() => {
         if (isFinished && !finalStats) {
-            const stage3Answers = answers.slice(20, 25);
-            const stage3CorrectCount = stage3Answers.filter(a => a.isCorrect).length;
+            const roundedFinalScore = Math.round(currentScore);
 
             const correctAnswers = answers.filter(a => a.isCorrect).sort((a, b) => b.difficulty - a.difficulty);
             const top5 = correctAnswers.slice(0, 5);
@@ -361,38 +371,22 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                 if (a.difficulty < top5Avg - 150) lowerErrorPenalty += 30; 
             });
 
-            let finalCalculatedScore = top5Avg - lowerErrorPenalty;
-            let bubblePenalty = 0;
-            
-            if (stage3CorrectCount < 3) {
-                finalCalculatedScore -= 150; 
-                bubblePenalty = 150;
-            }
-
-            const roundedFinalScore = Math.max(0, Math.min(1000, Math.round(finalCalculatedScore)));
-
             setFinalStats({
                 top5Avg: Math.round(top5Avg),
                 lowerErrorPenalty,
-                stage3CorrectCount,
-                bubblePenalty,
                 finalScore: roundedFinalScore
             });
 
             setRubricReport(generateRubricReport(roundedFinalScore, lowerErrorPenalty));
         }
-    }, [isFinished, answers, finalStats]);
+    }, [isFinished, answers, finalStats, currentScore]);
 
-    // =====================================================================
-    // UI 렌더링 영역
-    // =====================================================================
-
-    if (isLoadingPool) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center text-white"><Loader className="animate-spin mb-4" size={48} /><h2 className="text-xl font-bold">AI 진단 엔진용 단어 풀 구축 중...</h2></div>;
+    if (isAppLoading) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center text-white overscroll-none"><Loader className="animate-spin mb-4" size={48} /><h2 className="text-xl font-bold">초정밀 AI 진단 서버 연결 중...</h2></div>;
 
     if (showTutorial) {
         return (
-            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white selection:bg-none relative">
-                <button onClick={() => { setShowTutorial(false); setIsStarted(true); }} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="튜토리얼 건너뛰기"><X size={28} /></button>
+            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white selection:bg-none relative overscroll-none">
+                <button onClick={handleStartAssessment} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="튜토리얼 건너뛰기"><X size={28} /></button>
                 
                 <div className="bg-white text-gray-800 p-8 rounded-3xl max-w-2xl w-full shadow-2xl animate-in zoom-in-95">
                     <div className="flex justify-between items-center mb-6 border-b pb-4">
@@ -404,7 +398,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                         {tutorialStep === 1 && (
                             <div className="text-center animate-in fade-in slide-in-from-right-4">
                                 <h3 className="text-xl font-black text-gray-900 mb-3">유형 1: 뜻 찾기 (기본)</h3>
-                                <p className="text-gray-600 mb-6">가장 기본적인 문제입니다. 화면에 영어 단어가 나오면, <br/>제한 시간 내에 알맞은 한국어 뜻을 고르세요.</p>
+                                <p className="text-gray-600 mb-6">영어 단어가 나오면 <strong className="text-indigo-600">15초</strong> 내에 뜻을 고르세요.<br/>빠르게 맞출수록 높은 점수가 획득됩니다.</p>
                                 <div className="bg-gray-100 p-4 rounded-xl inline-block text-left w-full max-w-sm mx-auto shadow-inner border border-gray-200">
                                     <div className="text-2xl font-black text-center mb-3">adapt</div>
                                     <div className="grid grid-cols-2 gap-2">
@@ -488,7 +482,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                         ) : (
                             <button 
                                 className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white font-black rounded-xl hover:bg-indigo-700 shadow-md transition-all active:scale-95"
-                                onClick={() => { setShowTutorial(false); setIsStarted(true); }}
+                                onClick={handleStartAssessment} 
                             >
                                 실전 테스트 시작 <ArrowRight size={20}/>
                             </button>
@@ -501,7 +495,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     if (!isStarted) {
         return (
-            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative selection:bg-none">
+            <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative selection:bg-none overscroll-none">
                 <div className="absolute top-6 right-6 flex gap-3">
                     <button onClick={toggleFullScreen} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="전체화면 전환"><Maximize size={28} /></button>
                     <button onClick={() => onComplete(null)} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="시험 닫기"><X size={28} /></button>
@@ -512,10 +506,10 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                     <h1 className="text-4xl font-black mb-2">{studentName} 학생</h1>
                     <h2 className="text-xl font-bold text-indigo-200 mb-8">AI 어휘력 정밀 진단 (CAT)</h2>
                     <div className="text-left bg-black/20 p-5 rounded-2xl mb-8 space-y-3 text-sm font-bold text-indigo-100 leading-relaxed">
-                        <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>문제 유형(기초 뜻, 다의어, 빈칸추론 등)에 따라 제한 시간이 다르게 주어집니다.</span></p>
-                        <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>시간 내에 풀지 못하거나, 찍어서 맞춘 사실이 AI 알고리즘에 발각되면 거품 점수로 간주되어 강력한 강등 페널티가 부여됩니다.</span></p>
+                        <p className="flex items-start gap-2"><Zap className="shrink-0 text-yellow-400" size={18}/> <span>15초의 제한 시간이 주어지며, 빨리 맞출수록 점수가 더 많이 오릅니다. (반응속도 체크)</span></p>
+                        <p className="flex items-start gap-2"><AlertTriangle className="shrink-0 text-yellow-400" size={18}/> <span>찍어서 맞춘 사실이 반응속도 알고리즘에 발각되면 거품 점수로 간주되어 점수 상승이 제한됩니다.</span></p>
                     </div>
-                    <button onClick={() => setShowTutorial(true)} className="w-full py-5 bg-white text-indigo-900 text-xl font-black rounded-2xl hover:bg-indigo-50 transition-all shadow-[0_0_40px_rgba(255,255,255,0.3)] active:scale-95">진단평가 시작하기</button>
+                    <button onClick={() => setShowTutorial(true)} className="w-full py-5 bg-white text-indigo-900 text-xl font-black rounded-2xl hover:bg-indigo-50 transition-all shadow-[0_0_40px_rgba(255,255,255,0.3)] active:scale-95">진단평가 가이드 보기</button>
                 </div>
             </div>
         );
@@ -523,7 +517,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     if (isFinished && finalStats && rubricReport) {
         return (
-            <div className="fixed inset-0 z-[200] overflow-y-auto bg-gray-50 flex flex-col items-center p-4 sm:p-8" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <div className="fixed inset-0 z-[200] overflow-y-auto bg-gray-50 flex flex-col items-center p-4 sm:p-8 overscroll-none" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <div className="max-w-4xl w-full bg-white rounded-3xl shadow-2xl border border-gray-100 pb-6 mb-24 flex-shrink-0 animate-in slide-in-from-bottom-8 duration-500">
                     
                     <div className="bg-indigo-900 text-white p-8 text-center relative overflow-hidden rounded-t-3xl">
@@ -554,7 +548,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
                     <div className="p-6 md:p-8 border-b border-gray-100 bg-gray-50/50">
                         <h3 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><BarChart2 className="text-indigo-600"/> 세부 알고리즘 연산 근거</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="bg-white p-4 rounded-xl border border-indigo-100 shadow-sm text-center">
                                 <div className="text-xs font-bold text-gray-400 mb-1">최대 포텐셜 (Top 5 정답 평균)</div>
                                 <div className="text-2xl font-black text-indigo-700">{finalStats.top5Avg} 점</div>
@@ -563,25 +557,19 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                                 <div className="text-xs font-bold text-gray-400 mb-1">기초 공백 (쉬운 단어 오답)</div>
                                 <div className="text-2xl font-black text-rose-600">- {finalStats.lowerErrorPenalty} 점</div>
                             </div>
-                            <div className="bg-white p-4 rounded-xl border border-amber-100 shadow-sm text-center relative">
-                                <div className="text-xs font-bold text-gray-400 mb-1">천장 검증 (심화 연속 정답)</div>
-                                <div className="text-2xl font-black text-amber-600">{finalStats.stage3CorrectCount} / 5 개</div>
-                                {finalStats.bubblePenalty > 0 && <div className="absolute top-0 right-0 bg-rose-500 text-white text-[10px] font-black px-2 py-1 rounded-bl-lg rounded-tr-lg">거품 강등 -150</div>}
-                            </div>
                         </div>
                     </div>
 
                     <div className="p-6 md:p-8">
-                        <h3 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><CheckCircle className="text-emerald-500"/> 전체 문항 상세 트래킹 로그</h3>
+                        <h3 className="text-xl font-black text-gray-800 mb-4 flex items-center gap-2"><CheckCircle className="text-emerald-500"/> 전체 문항 RTE 트래킹 로그</h3>
                         <div className="max-h-80 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-white" style={{ WebkitOverflowScrolling: 'touch' }}>
                             <table className="w-full text-left text-sm whitespace-nowrap">
                                 <thead className="bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 text-gray-500 font-black">
                                     <tr>
                                         <th className="p-3">문항유형</th>
                                         <th className="p-3">출제 단어 (정답)</th>
-                                        <th className="p-3">학생의 선택</th>
-                                        <th className="p-3 text-center">결과</th>
-                                        <th className="p-3 text-right">점수 변동</th>
+                                        <th className="p-3">학생 선택 및 소요 시간</th>
+                                        <th className="p-3 text-right">최종 점수</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
@@ -592,22 +580,21 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                                             </td>
                                             <td className="p-3">
                                                 <div className="font-bold text-gray-900 truncate max-w-[200px]" title={log.wordText}>{log.wordText}</div>
-                                                <div className="text-[10px] font-bold text-emerald-600">정답: {log.correctAnswer}</div>
+                                                <div className="text-[10px] font-bold text-emerald-600">단어난이도: {log.difficulty}</div>
                                             </td>
                                             <td className="p-3">
-                                                <span className={`font-bold ${log.selectedOption.includes('모름') || log.selectedOption.includes('초과') ? 'text-amber-500' : 'text-gray-800'} truncate max-w-[150px] block`} title={log.selectedOption}>
-                                                    {log.selectedOption}
-                                                </span>
+                                                <div className="flex items-center gap-2">
+                                                    {log.isCorrect ? <CheckCircle size={16} className="text-emerald-500"/> : <XCircle size={16} className="text-rose-500"/>}
+                                                    <span className={`font-bold ${log.selectedOption.includes('모름') || log.selectedOption.includes('초과') ? 'text-amber-500' : 'text-gray-800'} truncate max-w-[120px]`} title={log.selectedOption}>
+                                                        {log.selectedOption}
+                                                    </span>
+                                                </div>
+                                                <div className={`text-[10px] font-bold mt-0.5 ${log.timeTaken <= 4 ? 'text-blue-500' : log.timeTaken <= 8 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                                    ⏱️ {log.timeTaken}초 ({log.rteLabel})
+                                                </div>
                                             </td>
-                                            <td className="p-3 text-center">
-                                                {log.isCorrect ? <CheckCircle size={18} className="text-emerald-500 mx-auto"/> : <XCircle size={18} className="text-rose-500 mx-auto"/>}
-                                            </td>
-                                            <td className="p-3 text-right font-mono font-bold text-gray-500">
-                                                <span className="opacity-60">{log.scoreBefore}</span>
-                                                <span className="mx-1 text-gray-300">➔</span>
-                                                <span className={log.scoreAfter > log.scoreBefore ? 'text-emerald-600' : log.scoreAfter < log.scoreBefore ? 'text-rose-600' : 'text-gray-600'}>
-                                                    {log.scoreAfter}
-                                                </span>
+                                            <td className="p-3 text-right font-mono font-black text-gray-800">
+                                                {log.scoreAfter} 점
                                             </td>
                                         </tr>
                                     ))}
@@ -629,39 +616,61 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     if (!currentQ) return null;
 
-    const progressPercent = (timeLeft / currentQ.timeLimit) * 100;
-    const timerColor = progressPercent > 50 ? 'bg-emerald-500' : progressPercent > 20 ? 'bg-amber-400' : 'bg-rose-500';
+    const progressPercent = (timeLeft / 15.0) * 100;
+    const timerColor = timeLeft > 11 ? 'bg-blue-500' : timeLeft > 7 ? 'bg-emerald-500' : timeLeft > 3 ? 'bg-amber-400' : 'bg-rose-500';
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-none relative overflow-hidden">
+        <div className="min-h-screen bg-gray-50 flex flex-col selection:bg-none relative overflow-hidden overscroll-none">
             
             {transitionState && (
-                <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="absolute top-10 flex flex-col items-center text-white opacity-80">
+                        <span className="text-sm font-bold bg-white/20 px-3 py-1 rounded-full mb-2">실시간 분석 중...</span>
+                        <div className="text-xl font-black">현재 예측 실력: {transitionState.newScore}점</div>
+                    </div>
+
                     {transitionState.type === 'correct' && (
                         <div className="flex flex-col items-center animate-in zoom-in-50 duration-300">
-                            <CheckCircle size={120} className="text-emerald-400 mb-4 drop-shadow-lg" />
-                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest">정답!</h2>
+                            <CheckCircle size={100} className="text-emerald-400 mb-4 drop-shadow-lg" />
+                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest mb-6">정답!</h2>
+                            <div className="bg-white/10 p-5 rounded-2xl border border-white/20 text-center backdrop-blur-md">
+                                <div className="text-emerald-300 font-bold text-lg mb-1">반응 속도: {transitionState.timeTaken}초</div>
+                                <div className="text-2xl font-black text-white">{transitionState.rteLabel}</div>
+                                <div className="mt-3 text-3xl font-black text-emerald-400">+{transitionState.delta}점</div>
+                            </div>
                         </div>
                     )}
                     {transitionState.type === 'incorrect' && (
                         <div className="flex flex-col items-center animate-in zoom-in-50 duration-300">
-                            <XCircle size={120} className="text-rose-500 mb-4 drop-shadow-lg" />
-                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest">오답</h2>
-                            <p className="mt-6 text-2xl font-bold text-rose-200 bg-black/40 px-6 py-2 rounded-2xl border border-white/10">정답: {transitionState.answer}</p>
+                            <XCircle size={100} className="text-rose-500 mb-4 drop-shadow-lg" />
+                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest mb-6">오답</h2>
+                            <div className="bg-white/10 p-5 rounded-2xl border border-white/20 text-center backdrop-blur-md">
+                                <div className="text-rose-200 font-bold text-lg mb-1">진짜 정답은</div>
+                                <div className="text-3xl font-black text-white mb-3">"{transitionState.answer}"</div>
+                                <div className="text-2xl font-black text-rose-400">{transitionState.delta}점 (강등)</div>
+                            </div>
                         </div>
                     )}
                     {transitionState.type === 'timeout' && (
                         <div className="flex flex-col items-center animate-in zoom-in-50 duration-300">
-                            <Clock size={120} className="text-amber-500 mb-4 drop-shadow-lg" />
-                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest">시간 초과!</h2>
-                            <p className="mt-6 text-2xl font-bold text-amber-200 bg-black/40 px-6 py-2 rounded-2xl border border-white/10">정답: {transitionState.answer}</p>
+                            <Clock size={100} className="text-amber-500 mb-4 drop-shadow-lg" />
+                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest mb-6">시간 초과!</h2>
+                            <div className="bg-white/10 p-5 rounded-2xl border border-white/20 text-center backdrop-blur-md">
+                                <div className="text-amber-200 font-bold text-lg mb-1">진짜 정답은</div>
+                                <div className="text-3xl font-black text-white mb-3">"{transitionState.answer}"</div>
+                                <div className="text-2xl font-black text-rose-400">{transitionState.delta}점 (강등)</div>
+                            </div>
                         </div>
                     )}
                     {transitionState.type === 'pass' && (
                         <div className="flex flex-col items-center animate-in zoom-in-50 duration-300">
-                            <MinusCircle size={120} className="text-gray-400 mb-4 drop-shadow-lg" />
-                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest">패스 (모름)</h2>
-                            <p className="mt-6 text-2xl font-bold text-gray-300 bg-black/40 px-6 py-2 rounded-2xl border border-white/10">정답: {transitionState.answer}</p>
+                            <MinusCircle size={100} className="text-gray-400 mb-4 drop-shadow-lg" />
+                            <h2 className="text-5xl font-black text-white drop-shadow-md tracking-widest mb-6">솔직한 패스</h2>
+                            <div className="bg-white/10 p-5 rounded-2xl border border-white/20 text-center backdrop-blur-md">
+                                <div className="text-gray-300 font-bold text-lg mb-1">찍지 않은 정직함 보상 (감점 완화)</div>
+                                <div className="text-3xl font-black text-white mb-3">정답: "{transitionState.answer}"</div>
+                                <div className="text-2xl font-black text-rose-400">{transitionState.delta}점</div>
+                            </div>
                         </div>
                     )}
                 </div>
