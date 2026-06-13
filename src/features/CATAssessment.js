@@ -1,8 +1,8 @@
 /* [서비스 가치] 학생에게는 게임 같은 몰입감을, 학부모에게는 AI 알고리즘의 판단 과정과 초정밀 개인화 루브릭을 공개하여 
    압도적인 등록률을 끌어내는 Kiosk용 CAT 평가 엔진입니다. 
-   (🚀 CTO 패치: 점수대별 문항 유형 동적 진화(Type 1~4), 다의어 소거 로직, 그리고 10점 단위 레고형 루브릭 제너레이터 탑재 완료) */
+   (🚀 CTO 핫픽스: 전체화면 기능, 랜덤 오프셋 DB 쿼리, 학년별 연동 초기 점수 등 오류 완벽 해결) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit } from 'lucide-react';
+import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize } from 'lucide-react';
 import { collection, query, getDocs, limit, where, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -34,19 +34,20 @@ const getLevenshteinDistance = (a, b) => {
     return matrix[b.length][a.length];
 };
 
-export default function CATAssessment({ studentName = '임페리얼', onComplete }) {
+export default function CATAssessment({ studentName = '임페리얼', initialScore = 300, onComplete }) {
     const [isLoadingPool, setIsLoadingPool] = useState(true);
     const [wordPool, setWordPool] = useState([]);
     
     const [isStarted, setIsStarted] = useState(false);
     const [isFinished, setIsFinished] = useState(false);
     const [finalStats, setFinalStats] = useState(null); 
-    const [rubricReport, setRubricReport] = useState(null); // 🚀 동적 루브릭 리포트 상태 추가
+    const [rubricReport, setRubricReport] = useState(null); 
 
     const [transitionState, setTransitionState] = useState(null); 
 
     const [currentIndex, setCurrentIndex] = useState(0);
-    const [currentScore, setCurrentScore] = useState(300); 
+    // 🚀 [CTO 패치] 학년에서 받아온 연동 초기 점수 적용
+    const [currentScore, setCurrentScore] = useState(initialScore); 
     const [currentStep, setCurrentStep] = useState(200); 
     const [currentQ, setCurrentQ] = useState(null);
     const [timeLeft, setTimeLeft] = useState(0);
@@ -56,6 +57,19 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
     const stateRef = useRef({ currentQ, currentIndex, timeLeft, currentScore, step: currentStep, isTransitioning: false });
     
     const MAX_QUESTIONS = 25; 
+
+    // 🚀 [CTO 패치] 전체화면 API 토글 함수
+    const toggleFullScreen = () => {
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(err => {
+                alert("이 기기에서는 전체화면이 지원되지 않습니다.");
+            });
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            }
+        }
+    };
 
     useEffect(() => {
         stateRef.current = { currentQ, currentIndex, timeLeft, currentScore, step: currentStep, isTransitioning: !!transitionState };
@@ -69,9 +83,20 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 const prefixes = ['NVE', 'NVM', 'NVH'];
                 let fetchedWords = [];
 
-                const promises = prefixes.map(prefix =>
-                    getDocs(query(vocaRef, where(documentId(), '>=', prefix), where(documentId(), '<=', prefix + '\uf8ff'), limit(100)))
-                );
+                // 🚀 [CTO 패치] 랜덤 오프셋 쿼리 - 매 시험마다 완전히 다른 단어들이 쏟아집니다.
+                const promises = prefixes.map(prefix => {
+                    const randomDay = String(Math.floor(Math.random() * 40) + 1).padStart(2, '0');
+                    const randomPrefix = `${prefix}1_D${randomDay}`; 
+                    
+                    return getDocs(query(vocaRef, where(documentId(), '>=', randomPrefix), limit(100)))
+                        .then(snap => {
+                            if (snap.empty) {
+                                // 만약 꼬리에 걸려 안 나온다면 원본 프리픽스로 폴백 (방어 로직)
+                                return getDocs(query(vocaRef, where(documentId(), '>=', prefix), limit(100)));
+                            }
+                            return snap;
+                        });
+                });
 
                 const results = await Promise.all(promises);
                 results.forEach(snap => { snap.forEach(doc => fetchedWords.push(doc.data())); });
@@ -150,7 +175,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         }, 1500); 
     }, [MAX_QUESTIONS]);
 
-    // 🚀 [CTO 패치] 동적 확률 매트릭스 및 다의어 소거(Type 3) 알고리즘
     const generateNextQuestion = useCallback((estimatedScore) => {
         if (wordPool.length === 0) return null;
         const availableWords = wordPool.filter(w => !answers.some(a => a.wordId === w.wordId));
@@ -160,7 +184,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         const targetWord = availableWords[0];
         const meaning = targetWord.meanings[0];
 
-        // 1. 점수대별 문항 등장 확률 세팅 (동적 진화)
         let pBasic = 0, pSyn = 0, pPoly = 0, pBlank = 0;
         if (estimatedScore < 400) { pBasic = 0.8; pSyn = 0.2; }
         else if (estimatedScore < 600) { pBasic = 0.4; pSyn = 0.4; pPoly = 0.2; }
@@ -174,13 +197,12 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         else if (r < pBasic + pSyn + pPoly) desiredType = 'polysemy';
         else desiredType = 'blank';
 
-        // 2. Fallback(데이터 유무) 방어 로직
         if (desiredType === 'blank' && (!meaning.blankSentence || meaning.blankSentence.length === 0)) desiredType = 'polysemy';
         if (desiredType === 'polysemy') {
             let realOpts = targetWord.meanings.map(m => m.koreanMeaning);
             if (realOpts.length < 3 && meaning.synonyms) realOpts.push(...meaning.synonyms);
             realOpts = [...new Set(realOpts)];
-            if (realOpts.length < 3) desiredType = 'synonym'; // 다의어나 유의어가 3개가 안되면 강등
+            if (realOpts.length < 3) desiredType = 'synonym'; 
         }
         if (desiredType === 'synonym' && (!meaning.synonyms || meaning.synonyms.length === 0)) desiredType = 'basic';
 
@@ -191,33 +213,29 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         else if (type === 'polysemy') timeLimit = 8;
         else if (type === 'synonym') timeLimit = 7;
         
-        if (answers.length === 0) timeLimit = Math.max(timeLimit, 7); // 첫 문제 버퍼
+        if (answers.length === 0) timeLimit = Math.max(timeLimit, 7); 
 
         let questionText = ''; let answerText = ''; let hint = ''; let options = [];
 
         if (type === 'blank') {
-            // [Type 4] 예문 빈칸
             let distractors = availableWords.filter(w => w.wordId !== targetWord.wordId).slice(0, 3);
             questionText = meaning.blankSentence[0]; 
             answerText = targetWord.word;
             options = [targetWord.word, ...distractors.map(d => d.word)]; 
             hint = "수능형 빈칸 추론 (문맥 파악)";
         } else if (type === 'polysemy') {
-            // [Type 3] 다의어 소거 (아닌 것 고르기)
             let realOpts = targetWord.meanings.map(m => m.koreanMeaning);
             if (realOpts.length < 3 && meaning.synonyms) realOpts.push(...meaning.synonyms);
             realOpts = [...new Set(realOpts)].slice(0, 3);
             
-            // 전혀 다른 단어의 뜻을 '가짜(정답)'로 세팅
             const fakeWord = availableWords.find(w => w.wordId !== targetWord.wordId && !realOpts.includes(w.meanings[0].koreanMeaning));
             answerText = fakeWord ? fakeWord.meanings[0].koreanMeaning : "전혀 무관한 뜻";
             options = [...realOpts, answerText];
             questionText = `다음 중 '${targetWord.word}'의 뜻으로 쓰일 수 없는 것은?`;
             hint = "다의어 검증 (오답 소거)";
         } else if (type === 'synonym') {
-            // [Type 2] 유의어 매칭
             let distractors = [];
-            if (meaning.antonyms && meaning.antonyms.length > 0) distractors.push(...meaning.antonyms); // 반의어를 1순위 함정으로
+            if (meaning.antonyms && meaning.antonyms.length > 0) distractors.push(...meaning.antonyms); 
             const fillers = availableWords.filter(w => w.wordId !== targetWord.wordId).map(w => w.meanings[0].koreanMeaning);
             distractors = [...new Set([...distractors, ...fillers])].slice(0, 3);
 
@@ -226,7 +244,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
             options = [meaning.koreanMeaning, ...distractors]; 
             hint = "의미망 파악 (유의어 연결)";
         } else {
-            // [Type 1] 기초 뜻 (레벤슈타인 함정)
             let distractors = [];
             const spellTraps = availableWords.filter(w => w.wordId !== targetWord.wordId)
                 .map(w => ({ wordData: w, dist: getLevenshteinDistance(targetWord.word, w.word) }))
@@ -269,7 +286,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
         return () => clearInterval(timerRef.current);
     }, [currentIndex, isStarted, isFinished, transitionState, currentScore, generateNextQuestion, handleSelectOption, onComplete]);
 
-    // 🚀 [CTO 패치] 10점 단위 블록 조립형 루브릭 제너레이터
     const generateRubricReport = (finalScore, penalty) => {
         const tier = Math.floor(finalScore / 100);
         const micro = Math.floor((finalScore % 100) / 10);
@@ -351,22 +367,22 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                 finalScore: roundedFinalScore
             });
 
-            // 생성된 10점 단위 루브릭 저장
             setRubricReport(generateRubricReport(roundedFinalScore, lowerErrorPenalty));
         }
     }, [isFinished, answers, finalStats]);
-
-    // =====================================================================
-    // UI 렌더링
-    // =====================================================================
 
     if (isLoadingPool) return <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center text-white"><Loader className="animate-spin mb-4" size={48} /><h2 className="text-xl font-bold">AI 진단 엔진용 단어 풀 구축 중...</h2></div>;
 
     if (!isStarted) {
         return (
             <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white text-center relative selection:bg-none">
-                <button onClick={() => onComplete(null)} className="absolute top-6 right-6 p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"><X size={28} /></button>
-                <div className="bg-white/10 p-8 rounded-3xl backdrop-blur-md max-w-lg w-full border border-white/20 shadow-2xl animate-in zoom-in-95">
+                {/* 🚀 전체화면 및 닫기 버튼 */}
+                <div className="absolute top-6 right-6 flex gap-3">
+                    <button onClick={toggleFullScreen} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="전체화면 전환"><Maximize size={28} /></button>
+                    <button onClick={() => onComplete(null)} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white" title="시험 닫기"><X size={28} /></button>
+                </div>
+
+                <div className="bg-white/10 p-8 rounded-3xl backdrop-blur-md max-w-lg w-full border border-white/20 shadow-2xl animate-in zoom-in-95 mt-10">
                     <Target size={64} className="mx-auto text-indigo-300 mb-6" />
                     <h1 className="text-4xl font-black mb-2">{studentName} 학생</h1>
                     <h2 className="text-xl font-bold text-indigo-200 mb-8">AI 어휘력 정밀 진단 (CAT)</h2>
@@ -395,7 +411,6 @@ export default function CATAssessment({ studentName = '임페리얼', onComplete
                         </div>
                     </div>
 
-                    {/* 🚀 10점 단위 조립형 루브릭 출력부 */}
                     <div className="p-6 md:p-8 border-b border-gray-100 bg-white space-y-6">
                         <h3 className="text-2xl font-black text-gray-900 flex items-center gap-2"><Target className="text-indigo-600"/> 입체적 어휘력 루브릭 평가</h3>
                         

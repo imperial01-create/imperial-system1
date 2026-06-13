@@ -1,5 +1,3 @@
-/* [서비스 가치] 가망 고객(Lead) 상담 시 과목별 필수 질문을 채워야 등록이 가능한 '유효성 게이트' 아키텍처입니다. 
-   (🚀 CTO 핫픽스: CAT 진단평가 중간 포기(Abort) 시 비정상적인 점수 기록을 완벽히 차단합니다.) */
 import React, { useState, Suspense } from 'react';
 import { doc, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -18,8 +16,10 @@ export default function ConsultationManager({ isKiosk = false }) {
 
     const [isTakingCAT, setIsTakingCAT] = useState(false);
 
+    // 🚀 [CTO 패치] 학교(schoolType)와 학년(gradeLevel)을 분리하여 상태 관리
     const [leadForm, setLeadForm] = useState({
-        name: '', phone: '', schoolName: '', grade: '중2',
+        name: '', phone: '', schoolName: '', 
+        schoolType: '중등', gradeLevel: '2', // 분리된 학년
         checkedSubjects: { "국어": false, "수학": false, "영어": false, "과학": false },
         korean: { lastScore: '', weakType: '', note: '' },
         math: { currentProgress: '', hardestConcept: '', note: '' },
@@ -45,7 +45,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         }
     };
 
-    // 🚀 [CTO 패치] 중도 포기(null) 반환 시 300점 확정 방지 로직 적용
     const handleCATComplete = (finalScore) => {
         if (finalScore === null) {
             setIsTakingCAT(false);
@@ -58,6 +57,16 @@ export default function ConsultationManager({ isKiosk = false }) {
         }));
         setIsTakingCAT(false); 
         showToast(`🎯 CAT 진단 연산 완료: [${finalScore}점] 측정 데이터가 동기화되었습니다.`, 'success');
+    };
+
+    // 🚀 [CTO 패치] 학년에 따른 시작 점수(Initial Score) 자동 계산 로직
+    const calculateInitialScore = () => {
+        const type = leadForm.schoolType;
+        const grade = Number(leadForm.gradeLevel);
+        if (type === '초등') return grade <= 3 ? 100 : 200;
+        if (type === '중등') return 200 + (grade * 100); // 중1:300, 중2:400, 중3:500
+        if (type === '고등') return 500 + (grade * 100); // 고1:600, 고2:700, 고3:800
+        return 300;
     };
 
     const handleConvertAndSubmit = async () => {
@@ -76,6 +85,7 @@ export default function ConsultationManager({ isKiosk = false }) {
             const cleanPhone = leadForm.phone.replace(/[^0-9]/g, '');
             const targetDocId = `imp_${cleanPhone.slice(-8)}`; 
             const generatedPw = cleanPhone.slice(-4) + '00'; 
+            const mergedGrade = `${leadForm.schoolType} ${leadForm.gradeLevel}학년`; // 합쳐서 저장
 
             const email = `${targetDocId}@imperial.com`;
             let authUid = 'legacy_verified_account';
@@ -90,7 +100,7 @@ export default function ConsultationManager({ isKiosk = false }) {
             const userPayload = {
                 id: targetDocId, userId: targetDocId, name: leadForm.name, phone: cleanPhone,
                 role: 'student', status: 'attending', authUid: authUid,
-                schoolName: leadForm.schoolName, grade: leadForm.grade, attendancePin: cleanPhone.slice(-4),
+                schoolName: leadForm.schoolName, grade: mergedGrade, attendancePin: cleanPhone.slice(-4),
                 createdAt: serverTimestamp()
             };
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), userPayload);
@@ -126,7 +136,7 @@ export default function ConsultationManager({ isKiosk = false }) {
 
             alert(`🎉 대성공!\n정식 계정(${targetDocId})이 발급되었으며, 첫 등원 안내 문자가 발송 큐에 적재되었습니다.`);
             
-            setLeadForm({ name: '', phone: '', schoolName: '', grade: '중2', checkedSubjects: { "국어": false, "수학": false, "영어": false, "과학": false }, korean: { lastScore: '', weakType: '', note: '' }, math: { currentProgress: '', hardestConcept: '', note: '' }, english: { catScore: '', readingLevel: '', vocabularyNote: '' }, science: { selectedSubject: '', note: '' } });
+            setLeadForm({ name: '', phone: '', schoolName: '', schoolType: '중등', gradeLevel: '2', checkedSubjects: { "국어": false, "수학": false, "영어": false, "과학": false }, korean: { lastScore: '', weakType: '', note: '' }, math: { currentProgress: '', hardestConcept: '', note: '' }, english: { catScore: '', readingLevel: '', vocabularyNote: '' }, science: { selectedSubject: '', note: '' } });
             setCurrentTab('basic');
 
         } catch (e) { showToast(e.message || "등록 처리에 실패했습니다.", "error"); } finally { setLoading(false); }
@@ -134,10 +144,12 @@ export default function ConsultationManager({ isKiosk = false }) {
 
     if (isTakingCAT) {
         return (
-            <div className="fixed inset-0 z-[100] bg-gray-50 flex flex-col w-full h-full overflow-hidden animate-in fade-in duration-300">
+            // 🚀 [CTO 패치] overflow-hidden 제거 -> overflow-y-auto 적용하여 스크롤 해제
+            <div className="fixed inset-0 z-[100] bg-gray-50 flex flex-col w-full h-full overflow-y-auto animate-in fade-in duration-300">
                 <Suspense fallback={<div className="h-screen flex flex-col items-center justify-center bg-indigo-900 text-white"><Loader className="animate-spin mb-4" size={48} /><h2 className="font-bold">진단 모듈 로딩 중...</h2></div>}>
                     <CATAssessment 
                         studentName={leadForm.name} 
+                        initialScore={calculateInitialScore()} // 🚀 계산된 시작 점수 전달
                         onComplete={handleCATComplete} 
                     />
                 </Suspense>
@@ -180,20 +192,40 @@ export default function ConsultationManager({ isKiosk = false }) {
                                     <input required className="w-full border p-3 rounded-xl outline-none font-bold bg-gray-50 focus:bg-white focus:border-blue-500 transition-all" placeholder="01012345678" value={leadForm.phone} onChange={e=>setLeadForm({...leadForm, phone: e.target.value})}/>
                                 </div>
                             </div>
+                            
+                            {/* 🚀 [CTO 패치] 학교 및 학년 다중 드롭다운 */}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 mb-1">학교명</label>
                                     <input className="w-full border p-3 rounded-xl outline-none font-bold bg-gray-50 focus:bg-white focus:border-blue-500 transition-all" placeholder="목동중학교" value={leadForm.schoolName} onChange={e=>setLeadForm({...leadForm, schoolName: e.target.value})}/>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 mb-1">학년</label>
-                                    <select className="w-full border p-3 rounded-xl font-bold bg-gray-50 transition-all outline-none focus:border-blue-500" value={leadForm.grade} onChange={e=>setLeadForm({...leadForm, grade: e.target.value})}>
-                                        <option value="초6">초등학교 6학년</option>
-                                        <option value="중1">중학교 1학년</option>
-                                        <option value="중2">중학교 2학년</option>
-                                        <option value="중3">중학교 3학년</option>
-                                        <option value="고1">고등학교 1학년</option>
-                                    </select>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">학교급 및 학년 *</label>
+                                    <div className="flex gap-2">
+                                        <select className="w-1/2 border p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-blue-500" value={leadForm.schoolType} onChange={e=>{
+                                            const newType = e.target.value;
+                                            // 초등->중등 전환 시 학년이 4,5,6이면 강제로 1학년으로 변경
+                                            let newGrade = leadForm.gradeLevel;
+                                            if (newType !== '초등' && Number(newGrade) > 3) newGrade = '1';
+                                            setLeadForm({...leadForm, schoolType: newType, gradeLevel: newGrade});
+                                        }}>
+                                            <option value="초등">초등학교</option>
+                                            <option value="중등">중학교</option>
+                                            <option value="고등">고등학교</option>
+                                        </select>
+                                        <select className="w-1/2 border p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-blue-500" value={leadForm.gradeLevel} onChange={e=>setLeadForm({...leadForm, gradeLevel: e.target.value})}>
+                                            <option value="1">1학년</option>
+                                            <option value="2">2학년</option>
+                                            <option value="3">3학년</option>
+                                            {leadForm.schoolType === '초등' && (
+                                                <>
+                                                    <option value="4">4학년</option>
+                                                    <option value="5">5학년</option>
+                                                    <option value="6">6학년</option>
+                                                </>
+                                            )}
+                                        </select>
+                                    </div>
                                 </div>
                             </div>
                             <div className="pt-4 border-t border-gray-100">
@@ -311,7 +343,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                             
                             <div className="max-w-md mx-auto bg-white p-5 rounded-2xl border text-left text-sm font-bold space-y-3 text-gray-600 shadow-sm">
                                 <div className="font-black text-base text-gray-800 border-b pb-2 mb-3 flex items-center gap-2"><CheckCircle size={18} className="text-emerald-500"/> 입력 상태 체크보드</div>
-                                <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg"><span>• 대상 학생</span> <span className="text-gray-900 font-black">{leadForm.name || '미입력'} ({leadForm.grade})</span></div>
+                                <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg"><span>• 대상 학생</span> <span className="text-gray-900 font-black">{leadForm.name || '미입력'} ({leadForm.schoolType} {leadForm.gradeLevel}학년)</span></div>
                                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg"><span>• 안내 연락처</span> <span className="text-gray-900 font-black">{leadForm.phone || '미입력'}</span></div>
                                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg"><span>• 상담 과목</span> <span className="text-blue-600 font-black">{Object.entries(leadForm.checkedSubjects).filter(([_, v]) => v).map(([k]) => k).join(', ') || '없음'}</span></div>
                                 {leadForm.checkedSubjects['영어'] && (
