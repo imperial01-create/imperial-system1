@@ -1,5 +1,5 @@
 /* [서비스 가치] 진정한 의미의 초정밀 실시간 적응형(Real-time CAT 3.0) 평가 엔진.
-   (🚀 CTO 긴급 핫픽스: 동일 단어 연속 출제 버그 해결 및 상향 편향(Upward Bias) 타겟팅으로 Elo 앵커링 중력 함정 완벽 해결) */
+   (🚀 CTO 최종 핫픽스: 0점 지옥 탈출. 탐색 하한선 상승 및 다의어(Meanings) 정밀 타겟팅으로 진짜 상향 편향 출제 완벽 달성) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize, ArrowRight, ChevronRight, ChevronLeft, Zap } from 'lucide-react';
 import { collection, query, getDocs, limit, where } from 'firebase/firestore';
@@ -79,22 +79,23 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     const MAX_QUESTIONS = 25; 
 
-    // 🚀 [CTO 패치] justAnsweredWordId 매개변수를 추가하여 비동기 연속 출제 버그 차단
     const fetchAndGenerateNextQuestion = useCallback(async (estimatedScore, justAnsweredWordId = null) => {
         try {
             const vocaRef = collection(db, 'VocabularyDB');
-            const searchFloor = Math.max(0, estimatedScore - 50); 
+            
+            // 🚀 버그 수정 1: 탐색 하한선을 내 점수로 맞추어 무조건 나보다 높거나 동급인 단어만 가져옴
+            const searchFloor = estimatedScore; 
             
             let snap = await getDocs(query(vocaRef, where('rootDifficulty', '>=', searchFloor), limit(40)));
             
             if (snap.empty || snap.docs.length < 5) {
-                snap = await getDocs(query(vocaRef, where('rootDifficulty', '>=', Math.max(0, estimatedScore - 200)), limit(40)));
+                // 천장에 도달했을 경우 방어 로직
+                snap = await getDocs(query(vocaRef, where('rootDifficulty', '>=', Math.max(0, estimatedScore - 100)), limit(40)));
             }
 
             let fetchedWords = [];
             snap.forEach(doc => fetchedWords.push(doc.data()));
 
-            // 🚀 비동기 딜레이 버그 해결: 기출문제 목록 + '방금 푼 문제'까지 강제 필터링
             const availableWords = fetchedWords.filter(w => 
                 !stateRef.current.answers.some(a => a.wordId === w.wordId) &&
                 w.wordId !== justAnsweredWordId
@@ -102,12 +103,27 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             
             if (availableWords.length === 0) return null;
 
-            // 🚀 상향 편향(Upward Bias) 타겟팅 적용: 내 점수보다 30점 어려운 단어를 목표로 삼음 (+0점 지옥 탈출)
             const targetDifficulty = estimatedScore + 30;
 
-            availableWords.sort((a, b) => Math.abs((a.meanings[0]?.meaningDifficulty || 0) - targetDifficulty) - Math.abs((b.meanings[0]?.meaningDifficulty || 0) - targetDifficulty));
-            const targetWord = availableWords[0];
-            const meaning = targetWord.meanings[0];
+            // 🚀 버그 수정 2: 무조건 1번 뜻(meanings[0])을 내는 게 아니라, 모든 다의어를 싹 다 뒤져서
+            // 내 목표 점수(+30점)에 가장 가까운 '정확한 뜻'을 타겟팅
+            let bestWord = null;
+            let bestMeaning = null;
+            let minDiff = 9999;
+
+            for (const w of availableWords) {
+                for (const m of w.meanings) {
+                    const diff = Math.abs((m.meaningDifficulty || 0) - targetDifficulty);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        bestWord = w;
+                        bestMeaning = m;
+                    }
+                }
+            }
+
+            const targetWord = bestWord;
+            const meaning = bestMeaning; 
 
             const cleanTargetKorean = cleanMeaning(meaning.koreanMeaning);
 
@@ -207,7 +223,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             setTimeLeft(15.0);
             startTimer();
         } else {
-            alert("단어 데이터를 불러올 수 없습니다. 인터넷 연결을 확인해주세요.");
+            alert("단어 데이터를 불러올 수 없습니다. 인터넷 연결 및 DB를 확인해주세요.");
         }
         setIsAppLoading(false);
     };
@@ -249,12 +265,12 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         let scoreDelta = 0;
         
         if (isCorrect) {
-            // 상향 타겟팅으로 인해 q.difficulty가 대체로 score보다 높게 출제됨
             if (q.difficulty > score) {
                 const baseGain = (q.difficulty - score) * 0.6; 
-                scoreDelta = Math.round(Math.max(2, baseGain * rteMultiplier)); // 🚀 최소 +2점 보장
+                // 🚀 최소 1점 보장 방어 코드 (0.4점 같은 수치가 반올림되어 0점이 되는 사태 방지)
+                scoreDelta = Math.round(Math.max(1, baseGain * rteMultiplier)); 
             } else {
-                scoreDelta = 0; 
+                scoreDelta = 0; // 내 점수 이하 쉬운 단어 맞추면 0점 오름
             }
         } else {
             if (q.difficulty < score) {
@@ -277,7 +293,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             timeTaken, rteLabel, newScore 
         });
 
-        // 🚀 다음 문제 땡겨오기 (방금 푼 단어 ID 강제 제외 전달)
         const nextQ = await fetchAndGenerateNextQuestion(newScore, q.id);
 
         setTimeout(() => {

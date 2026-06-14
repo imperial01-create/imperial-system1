@@ -63,10 +63,23 @@ export default function ConsultationManager({ isKiosk = false }) {
     const calculateInitialScore = () => {
         const type = leadForm.schoolType;
         const grade = Number(leadForm.gradeLevel);
-        if (type === '초등') return grade <= 3 ? 100 : 200;
-        if (type === '중등') return 200 + (grade * 100); // 중1:300, 중2:400, 중3:500
-        if (type === '고등') return 500 + (grade * 100); // 고1:600, 고2:700, 고3:800
-        return 300;
+        
+        if (type === '초등') {
+            if (grade <= 4) return 50; // 파닉스/기초
+            if (grade === 5) return 100; // 초등 고학년 기초
+            if (grade === 6) return 150; // 예비 중1 기초
+        }
+        if (type === '중등') {
+            if (grade === 1) return 200; // 중1 교과서 수준
+            if (grade === 2) return 250; // 중2 교과서 수준
+            if (grade === 3) return 300; // 중3 기본 수준 
+        }
+        if (type === '고등') {
+            if (grade === 1) return 400; // 고1 모의고사 기본
+            if (grade === 2) return 500; // 고2 모의고사 수준
+            if (grade === 3) return 600; // 예비 고3 수준
+        }
+        return 300; // 기본값
     };
 
     const handleConvertAndSubmit = async () => {
