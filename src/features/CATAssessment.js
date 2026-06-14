@@ -1,11 +1,10 @@
 /* [서비스 가치] 진정한 의미의 초정밀 실시간 적응형(Real-time CAT 3.0) 평가 엔진.
-   (🚀 CTO 궁극의 최적화: rootDifficulty 단일 쿼리 적용으로 데이터 읽기 비용 66% 절감 및 로딩 딜레이 제로화 달성) */
+   (🚀 CTO 긴급 핫픽스: 동일 단어 연속 출제 버그 해결 및 상향 편향(Upward Bias) 타겟팅으로 Elo 앵커링 중력 함정 완벽 해결) */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Loader, AlertTriangle, CheckCircle, Target, X, BarChart2, Clock, MinusCircle, XCircle, BrainCircuit, Maximize, ArrowRight, ChevronRight, ChevronLeft, Zap } from 'lucide-react';
 import { collection, query, getDocs, limit, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
-// 🚀 배열 셔플 유틸리티
 const shuffleArray = (array) => {
     const shuffled = [...array];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -15,7 +14,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// 🚀 철자 편집 거리 계산 (레벤슈타인) - 스펠링 함정 생성용
 const getLevenshteinDistance = (a, b) => {
     const matrix = [];
     for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
@@ -32,7 +30,6 @@ const getLevenshteinDistance = (a, b) => {
     return matrix[b.length][a.length];
 };
 
-// 🚀 프론트엔드 실시간 정제기 (DB 원본 보존, 화면에서만 영어 찌꺼기 핀셋 제거)
 const cleanMeaning = (text) => {
     if (!text || typeof text !== 'string') return text;
     return text.replace(/\s*\(+[a-zA-Z0-9\s\-\[\]\,~/\.]+\)+\s*/g, '').trim();
@@ -53,7 +50,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
     const [currentIndex, setCurrentIndex] = useState(0);
     const [currentScore, setCurrentScore] = useState(initialScore); 
     const [currentQ, setCurrentQ] = useState(null);
-    const [timeLeft, setTimeLeft] = useState(15.0); // 🚀 하드 타임아웃 15초
+    const [timeLeft, setTimeLeft] = useState(15.0); 
     const [answers, setAnswers] = useState([]); 
     
     const timerRef = useRef(null);
@@ -67,7 +64,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         }
     };
 
-    // 🚀 모바일/패드 '당겨서 새로고침(Pull-to-refresh)' 원천 차단
     useEffect(() => {
         document.body.style.overscrollBehaviorY = 'none';
         document.documentElement.style.overscrollBehaviorY = 'none';
@@ -83,35 +79,38 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     const MAX_QUESTIONS = 25; 
 
-    // 🚀 [궁극의 최적화] rootDifficulty 기반 단일 쿼리 
-    const fetchAndGenerateNextQuestion = useCallback(async (estimatedScore) => {
+    // 🚀 [CTO 패치] justAnsweredWordId 매개변수를 추가하여 비동기 연속 출제 버그 차단
+    const fetchAndGenerateNextQuestion = useCallback(async (estimatedScore, justAnsweredWordId = null) => {
         try {
             const vocaRef = collection(db, 'VocabularyDB');
-            const searchFloor = Math.max(0, estimatedScore - 50); // 내 점수 바로 밑부터 탐색 시작
+            const searchFloor = Math.max(0, estimatedScore - 50); 
             
-            // 🚀 단 1줄의 쿼리! 파이썬으로 세팅한 rootDifficulty를 이용하여 가장 가까운 40개만 순식간에 가져옵니다.
             let snap = await getDocs(query(vocaRef, where('rootDifficulty', '>=', searchFloor), limit(40)));
             
             if (snap.empty || snap.docs.length < 5) {
-                // 초고난도(천장)에 도달하여 데이터가 부족할 경우 방어 로직
                 snap = await getDocs(query(vocaRef, where('rootDifficulty', '>=', Math.max(0, estimatedScore - 200)), limit(40)));
             }
 
             let fetchedWords = [];
             snap.forEach(doc => fetchedWords.push(doc.data()));
 
-            // 이미 출제된 단어 필터링
-            const availableWords = fetchedWords.filter(w => !stateRef.current.answers.some(a => a.wordId === w.wordId));
+            // 🚀 비동기 딜레이 버그 해결: 기출문제 목록 + '방금 푼 문제'까지 강제 필터링
+            const availableWords = fetchedWords.filter(w => 
+                !stateRef.current.answers.some(a => a.wordId === w.wordId) &&
+                w.wordId !== justAnsweredWordId
+            );
+            
             if (availableWords.length === 0) return null;
 
-            // 브라우저 메모리 안에서 내 점수와 가장 정밀하게 매칭되는 단어 1개 추출
-            availableWords.sort((a, b) => Math.abs((a.meanings[0]?.meaningDifficulty || 0) - estimatedScore) - Math.abs((b.meanings[0]?.meaningDifficulty || 0) - estimatedScore));
+            // 🚀 상향 편향(Upward Bias) 타겟팅 적용: 내 점수보다 30점 어려운 단어를 목표로 삼음 (+0점 지옥 탈출)
+            const targetDifficulty = estimatedScore + 30;
+
+            availableWords.sort((a, b) => Math.abs((a.meanings[0]?.meaningDifficulty || 0) - targetDifficulty) - Math.abs((b.meanings[0]?.meaningDifficulty || 0) - targetDifficulty));
             const targetWord = availableWords[0];
             const meaning = targetWord.meanings[0];
 
             const cleanTargetKorean = cleanMeaning(meaning.koreanMeaning);
 
-            // 점수대별 문항 출제 비율 동적 변환
             let pBasic = 0, pSyn = 0, pPoly = 0, pBlank = 0;
             if (estimatedScore < 400) { pBasic = 0.8; pSyn = 0.2; }
             else if (estimatedScore < 600) { pBasic = 0.4; pSyn = 0.4; pPoly = 0.2; }
@@ -125,7 +124,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             else if (r < pBasic + pSyn + pPoly) desiredType = 'polysemy';
             else desiredType = 'blank';
 
-            // 데이터 부재 시 Fallback(강등) 로직
             if (desiredType === 'blank' && (!meaning.blankSentence || meaning.blankSentence.length === 0)) desiredType = 'polysemy';
             if (desiredType === 'polysemy') {
                 let realOpts = targetWord.meanings.map(m => cleanMeaning(m.koreanMeaning));
@@ -180,7 +178,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
                     distractors.push(...fillers);
                 }
                 
-                // 영어 반의어 철저 격리 (한글만 오답 보기에 담김)
                 distractors = [...new Set(distractors)].filter(opt => /[가-힣]/.test(opt)).slice(0, 3);
                 questionText = targetWord.word; 
                 answerText = cleanTargetKorean;
@@ -210,7 +207,7 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             setTimeLeft(15.0);
             startTimer();
         } else {
-            alert("단어 데이터를 불러올 수 없습니다. 인터넷 연결 및 DB를 확인해주세요.");
+            alert("단어 데이터를 불러올 수 없습니다. 인터넷 연결을 확인해주세요.");
         }
         setIsAppLoading(false);
     };
@@ -241,7 +238,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         const isTimeOutOrIdk = isTimeOut || selectedOption === 'TIMEOUT_OR_IDK';
         const isCorrect = !isTimeOutOrIdk && selectedOption === q.answer;
 
-        // 1. RTE(반응 속도) 분석
         const timeTaken = parseFloat((15.0 - tLeft).toFixed(1));
         let rteMultiplier = 0.2; 
         let rteLabel = "위태로움 (찍기 의심)";
@@ -250,25 +246,21 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
         else if (timeTaken <= 4.0) { rteMultiplier = 1.0; rteLabel = "완벽 체화 (빠름)"; }
         else if (timeTaken <= 8.0) { rteMultiplier = 0.6; rteLabel = "단순 인지 (보통)"; }
 
-        // 🚀 2. 진정한 Elo 앵커링 스코어링
         let scoreDelta = 0;
         
         if (isCorrect) {
+            // 상향 타겟팅으로 인해 q.difficulty가 대체로 score보다 높게 출제됨
             if (q.difficulty > score) {
-                // 어려운 단어를 맞췄을 때 쾌속 상승
                 const baseGain = (q.difficulty - score) * 0.6; 
-                scoreDelta = Math.round(baseGain * rteMultiplier); 
+                scoreDelta = Math.round(Math.max(2, baseGain * rteMultiplier)); // 🚀 최소 +2점 보장
             } else {
-                // 내 점수보다 쉬운 단어 맞추면 상승 0점
                 scoreDelta = 0; 
             }
         } else {
             if (q.difficulty < score) {
-                // 쉬운 거 틀릴수록 감점 폭탄
                 const baseLoss = (q.difficulty - score) * 0.8; 
                 scoreDelta = Math.round(baseLoss);
             } else {
-                // 어려운 거 틀리면 가벼운 감점
                 scoreDelta = -10; 
             }
         }
@@ -285,10 +277,9 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
             timeTaken, rteLabel, newScore 
         });
 
-        // 3. 백그라운드 실시간 쿼리 (다음 문제 땡겨오기)
-        const nextQ = await fetchAndGenerateNextQuestion(newScore);
+        // 🚀 다음 문제 땡겨오기 (방금 푼 단어 ID 강제 제외 전달)
+        const nextQ = await fetchAndGenerateNextQuestion(newScore, q.id);
 
-        // 4. 트랜지션 버퍼 후 문제 전환
         setTimeout(() => {
             setAnswers(prev => [...prev, { 
                 qNum: idx + 1, phase: idx < 15 ? '실력 측정' : '천장 검증', 
@@ -366,7 +357,6 @@ export default function CATAssessment({ studentName = '임페리얼', initialSco
 
     useEffect(() => {
         if (isFinished && !finalStats) {
-            // 트래킹 로그에 찍힌 최종 점수가 완벽한 '진짜 실력'입니다.
             const roundedFinalScore = Math.round(currentScore);
 
             const correctAnswers = answers.filter(a => a.isCorrect).sort((a, b) => b.difficulty - a.difficulty);
