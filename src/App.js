@@ -1,12 +1,12 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 대시보드 메뉴 카드가 사용자의 권한(Role)에 맞게 100% 동적으로 자동 생성되도록 아키텍처를 대폭 개선했습니다.) */
+   (🚀 CTO 패치: Voca 출제/관리 기능 복구 및 CAT 시험 UI 완전 제거) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
-  Home, Calendar as CalendarIcon, Settings, PenTool, GraduationCap, 
+  Home, Calendar as CalendarIcon, Settings, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Bell, Video, Users, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, UserPlus, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, HelpCircle, UserPlus2
+  Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
+  Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -34,8 +34,8 @@ const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
-const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const ConsultationManager = React.lazy(() => import('./features/ConsultationManager'));
+const VocaManager = React.lazy(() => import('./features/VocaManager')); // Voca 복구
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -348,12 +348,10 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
-// 🚀 [CTO 패치] 대시보드의 메뉴들을 완벽하게 동적 카드로 렌더링하기 위한 컴포넌트
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
     if (!currentUser) return null;
 
-    // 대시보드에 뿌려질 모든 카드 목록 (권한, 조건 포함)
     const DASHBOARD_CARDS = [
         { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'], desc: '신규 원생 상담 데이터를 입력하고 초기 세팅을 진행합니다.', color: 'text-indigo-600', bg: 'bg-indigo-100', hoverBg: 'group-hover:bg-indigo-600' },
         { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '오늘의 시간표와 학생들의 등원/지각 현황을 실시간으로 추적합니다.', color: 'text-emerald-600', bg: 'bg-emerald-100', hoverBg: 'group-hover:bg-emerald-600' },
@@ -378,7 +376,6 @@ const Dashboard = ({ currentUser }) => {
         { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'], desc: '학원 시스템의 전반적인 환경과 코어 데이터를 설정합니다.', color: 'text-zinc-600', bg: 'bg-zinc-100', hoverBg: 'group-hover:bg-zinc-600' },
     ];
 
-    // 현재 접속한 사용자 권한에 맞는 카드만 필터링
     const visibleCards = DASHBOARD_CARDS.filter(card => 
         card.roles.includes(currentUser.role) && 
         (!card.showCondition || card.showCondition(currentUser))
@@ -398,7 +395,6 @@ const Dashboard = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 🚀 사용자 맞춤형 대시보드 카드 그리드 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {visibleCards.map((card, index) => (
                     <div key={index} onClick={() => navigate(card.path)} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 cursor-pointer group active:scale-95 transition-all flex flex-col h-full">

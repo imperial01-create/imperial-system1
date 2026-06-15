@@ -1,5 +1,6 @@
 /* [서비스 가치] 채점 완료 시 '오답 단어 리스트'와 '회차별 점수'를 영구적인 영수증(Snapshot) 형태로 
-   DB에 박제하여, 추후 학부모가 상세 로그를 열람할 때 과도한 DB 읽기 비용이 발생하지 않도록 극한으로 최적화합니다. */
+   DB에 박제하여, 추후 학부모가 상세 로그를 열람할 때 과도한 DB 읽기 비용이 발생하지 않도록 극한으로 최적화합니다.
+   (🚀 CTO 패치: 클라이언트 로컬 JSON 호출 완전 제거. 100% Firebase 서버 통신으로 해킹 위험 원천 차단) */
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -71,6 +72,7 @@ export const generateDailyVocaSet = async (studentId) => {
         const userHistory = {};
         historySnap.forEach(doc => { userHistory[doc.id] = doc.data(); });
 
+        // 🚀 서버(Firestore)에서 직접 단어장 데이터를 불러옵니다 (로컬 데이터 X)
         const vocaDBRef = collection(db, 'VocabularyDB');
         const bookQuery = query(vocaDBRef, where('tags', 'array-contains', vocaBook || '기본교재'));
         const bookSnap = await getDocs(bookQuery);
@@ -169,7 +171,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         if (isCorrect) {
             sessionCorrect++;
         } else {
-            // 틀린 단어의 상세 정보 저장
             wrongWordsDetails.push({
                 word: q.wordId || q.wordText.split(' ')[0], 
                 question: q.wordText,
@@ -207,6 +208,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         }
     }
 
+    // 🚀 서버(Firestore)에서 직접 단어장 데이터를 불러옵니다
     const vocaDBRef = collection(db, 'VocabularyDB');
     const bookQuery = query(vocaDBRef, where('tags', 'array-contains', statData.vocaBook || '기본교재'));
     const bookSnap = await getDocs(bookQuery);
@@ -258,12 +260,11 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         updatedAt: serverTimestamp()
     });
 
-    // 🚀 [CTO 패치] 추후 상세 로그 조회를 위해 오답 내역과 정답률(Score)을 영구 보존합니다.
     await updateDoc(sessionRef, { 
         status: 'completed', 
         wrongCount: wrongSet.size,
-        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100), // 해당 회차 정답률
-        wrongWordsDetails: wrongWordsDetails, // 오답 단어 상세 내역
+        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100),
+        wrongWordsDetails: wrongWordsDetails, 
         completedAt: serverTimestamp()
     });
 };
