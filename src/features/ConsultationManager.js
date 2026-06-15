@@ -1,11 +1,11 @@
-import React, { useState, Suspense } from 'react';
+/* [서비스 가치] 신규 원생 온보딩 및 자동 계정 생성 시스템
+   (🚀 CTO 패치: 클라이언트 사이드 CAT 모듈 완전 제거 및 수동 점수 입력 방식으로 전환하여 보안 무결성 확보) */
+import React, { useState } from 'react';
 import { doc, setDoc, serverTimestamp, collection, addDoc } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { Button, Card, Toast } from '../components/UI';
-import { CheckCircle, ArrowRight, UserPlus, Phone, BookOpen, Calculator, Languages, FlaskConical, Crosshair, Sparkles, Loader } from 'lucide-react';
-
-const CATAssessment = React.lazy(() => import('./CATAssessment'));
+import { CheckCircle, ArrowRight, UserPlus, Phone, BookOpen, Calculator, Languages, FlaskConical, Sparkles, Loader } from 'lucide-react';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -14,12 +14,9 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [loading, setLoading] = useState(false);
     const [currentTab, setCurrentTab] = useState('basic');
 
-    const [isTakingCAT, setIsTakingCAT] = useState(false);
-
-    // 🚀 [CTO 패치] 학교(schoolType)와 학년(gradeLevel)을 분리하여 상태 관리
     const [leadForm, setLeadForm] = useState({
         name: '', phone: '', schoolName: '', 
-        schoolType: '중등', gradeLevel: '2', // 분리된 학년
+        schoolType: '중등', gradeLevel: '2', 
         checkedSubjects: { "국어": false, "수학": false, "영어": false, "과학": false },
         korean: { lastScore: '', weakType: '', note: '' },
         math: { currentProgress: '', hardestConcept: '', note: '' },
@@ -36,52 +33,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         }));
     };
 
-    const startCATAssessment = () => {
-        if (!leadForm.name) {
-            return showToast("학생 실명(이름)을 먼저 입력해주세요. 진단평가 화면에 사용됩니다.", "error");
-        }
-        if (window.confirm(`[${leadForm.name}] 학생의 AI 진단평가를 시작합니다.\n확인을 누르시면 시험 화면으로 즉시 전환됩니다.\n\n태블릿을 학생에게 전달해 주세요!`)) {
-            setIsTakingCAT(true);
-        }
-    };
-
-    const handleCATComplete = (finalScore) => {
-        if (finalScore === null) {
-            setIsTakingCAT(false);
-            return showToast('진단평가가 중간에 취소되었습니다. 점수가 기록되지 않았습니다.', 'info');
-        }
-
-        setLeadForm(prev => ({
-            ...prev,
-            english: { ...prev.english, catScore: finalScore }
-        }));
-        setIsTakingCAT(false); 
-        showToast(`🎯 CAT 진단 연산 완료: [${finalScore}점] 측정 데이터가 동기화되었습니다.`, 'success');
-    };
-
-    // 🚀 [CTO 패치] 학년에 따른 시작 점수(Initial Score) 자동 계산 로직
-    const calculateInitialScore = () => {
-        const type = leadForm.schoolType;
-        const grade = Number(leadForm.gradeLevel);
-        
-        if (type === '초등') {
-            if (grade <= 4) return 50; // 파닉스/기초
-            if (grade === 5) return 100; // 초등 고학년 기초
-            if (grade === 6) return 150; // 예비 중1 기초
-        }
-        if (type === '중등') {
-            if (grade === 1) return 200; // 중1 교과서 수준
-            if (grade === 2) return 250; // 중2 교과서 수준
-            if (grade === 3) return 300; // 중3 기본 수준 
-        }
-        if (type === '고등') {
-            if (grade === 1) return 400; // 고1 모의고사 기본
-            if (grade === 2) return 500; // 고2 모의고사 수준
-            if (grade === 3) return 600; // 예비 고3 수준
-        }
-        return 300; // 기본값
-    };
-
     const handleConvertAndSubmit = async () => {
         if (!leadForm.name || !leadForm.phone) return showToast("학생 이름과 휴대폰 번호는 필수 항목입니다.", "error");
         
@@ -89,7 +40,7 @@ export default function ConsultationManager({ isKiosk = false }) {
             if (isChecked) {
                 if (sub === '국어' && !leadForm.korean.lastScore) return showToast("국어 점수/등급을 마저 채워주세요.", "error");
                 if (sub === '수학' && !leadForm.math.currentProgress) return showToast("수학 현 진도를 마저 채워주세요.", "error");
-                if (sub === '영어' && !leadForm.english.catScore) return showToast("영어 어휘력 진단(CAT) 평가를 완료해야 마감됩니다.", "error");
+                if (sub === '영어' && !leadForm.english.catScore) return showToast("영어 어휘력 진단 점수를 입력해야 마감됩니다.", "error");
             }
         }
 
@@ -98,7 +49,7 @@ export default function ConsultationManager({ isKiosk = false }) {
             const cleanPhone = leadForm.phone.replace(/[^0-9]/g, '');
             const targetDocId = `imp_${cleanPhone.slice(-8)}`; 
             const generatedPw = cleanPhone.slice(-4) + '00'; 
-            const mergedGrade = `${leadForm.schoolType} ${leadForm.gradeLevel}학년`; // 합쳐서 저장
+            const mergedGrade = `${leadForm.schoolType} ${leadForm.gradeLevel}학년`; 
 
             const email = `${targetDocId}@imperial.com`;
             let authUid = 'legacy_verified_account';
@@ -130,7 +81,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                     studentId: targetDocId, catScore: score, vocaSession: 1, 
                     studyMode: 'calibration', calibrationSessionsLeft: 10, zones,
                     vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, vocaBook: '능률VOCA수능고난도', 
-                    vocaRubric: `[상담 연동 세팅] 초기 CAT ${score}점 기준 영점 조절 프리셋 10회가 예약 가동되었습니다.`,
+                    vocaRubric: `[상담 연동 세팅] 초기 진단평가 ${score}점 기준 영점 조절 프리셋 10회가 예약 가동되었습니다.`,
                     updatedAt: serverTimestamp()
                 });
             }
@@ -155,21 +106,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         } catch (e) { showToast(e.message || "등록 처리에 실패했습니다.", "error"); } finally { setLoading(false); }
     };
 
-    if (isTakingCAT) {
-        return (
-            // 🚀 [CTO 패치] overflow-hidden 제거 -> overflow-y-auto 적용하여 스크롤 해제
-            <div className="fixed inset-0 z-[100] bg-gray-50 flex flex-col w-full h-full overflow-y-auto animate-in fade-in duration-300">
-                <Suspense fallback={<div className="h-screen flex flex-col items-center justify-center bg-indigo-900 text-white"><Loader className="animate-spin mb-4" size={48} /><h2 className="font-bold">진단 모듈 로딩 중...</h2></div>}>
-                    <CATAssessment 
-                        studentName={leadForm.name} 
-                        initialScore={calculateInitialScore()} // 🚀 계산된 시작 점수 전달
-                        onComplete={handleCATComplete} 
-                    />
-                </Suspense>
-            </div>
-        );
-    }
-
     return (
         <div className="max-w-4xl mx-auto space-y-6">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
@@ -186,7 +122,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                     <button onClick={() => setCurrentTab('basic')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === 'basic' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}>👤 1. 기본 인적사항</button>
                     {leadForm.checkedSubjects["국어"] && <button onClick={() => setCurrentTab('국어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '국어' ? 'bg-orange-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><BookOpen size={14}/> 국어 체크리스트</button>}
                     {leadForm.checkedSubjects["수학"] && <button onClick={() => setCurrentTab('수학')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '수학' ? 'bg-emerald-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><Calculator size={14}/> 수학 체크리스트</button>}
-                    {leadForm.checkedSubjects["영어"] && <button onClick={() => setCurrentTab('영어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '영어' ? 'bg-indigo-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><Languages size={14}/> 영어 (CAT 진단)</button>}
+                    {leadForm.checkedSubjects["영어"] && <button onClick={() => setCurrentTab('영어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '영어' ? 'bg-indigo-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><Languages size={14}/> 영어 체크리스트</button>}
                     {leadForm.checkedSubjects["과학"] && <button onClick={() => setCurrentTab('과학')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${currentTab === '과학' ? 'bg-purple-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><FlaskConical size={14}/> 과학 체크리스트</button>}
                     <button onClick={() => setCurrentTab('final')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 border border-dashed transition-all mt-4 ${currentTab === 'final' ? 'bg-gray-900 text-white shadow-md border-transparent' : 'text-gray-700 hover:bg-gray-50 border-gray-300'}`}><UserPlus size={14}/> 3. 원클릭 학생 전환</button>
                 </div>
@@ -206,7 +142,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                                 </div>
                             </div>
                             
-                            {/* 🚀 [CTO 패치] 학교 및 학년 다중 드롭다운 */}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 mb-1">학교명</label>
@@ -217,7 +152,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                                     <div className="flex gap-2">
                                         <select className="w-1/2 border p-3 rounded-xl font-bold bg-gray-50 outline-none focus:border-blue-500" value={leadForm.schoolType} onChange={e=>{
                                             const newType = e.target.value;
-                                            // 초등->중등 전환 시 학년이 4,5,6이면 강제로 1학년으로 변경
                                             let newGrade = leadForm.gradeLevel;
                                             if (newType !== '초등' && Number(newGrade) > 3) newGrade = '1';
                                             setLeadForm({...leadForm, schoolType: newType, gradeLevel: newGrade});
@@ -291,35 +225,24 @@ export default function ConsultationManager({ isKiosk = false }) {
                         </Card>
                     )}
 
+                    {/* 🚀 [CTO 패치] 영어 탭: CAT 진단 모듈 완전 삭제 및 수동 점수 입력 폼으로 변경 */}
                     {currentTab === '영어' && (
                         <Card className="space-y-4 border-2 border-indigo-200 bg-indigo-50/30 animate-in fade-in slide-in-from-right-4">
-                            <h2 className="text-lg font-black text-indigo-900 border-b border-indigo-200 pb-2 flex items-center gap-2"><Languages className="text-indigo-600"/> 영어과 CAT 진단평가 시스템 결합 단면</h2>
+                            <h2 className="text-lg font-black text-indigo-900 border-b border-indigo-200 pb-2 flex items-center gap-2"><Languages className="text-indigo-600"/> 영어과 진단평가 기록지</h2>
                             
-                            <div className="bg-white border border-indigo-200 p-6 rounded-2xl text-center shadow-sm space-y-5 my-4">
-                                <div className="w-14 h-14 bg-indigo-100 rounded-full flex items-center justify-center mx-auto text-indigo-600 shadow-inner">
-                                    <Crosshair size={28}/>
+                            <div className="grid grid-cols-1 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">영어 진단평가 점수 (수동 입력) *</label>
+                                    <input required type="number" className="w-full border p-3 rounded-xl outline-none font-bold bg-white focus:border-indigo-400 transition-all" placeholder="예: 85 (숫자만 입력)" value={leadForm.english.catScore} onChange={e=>setLeadForm({...leadForm, english: { ...leadForm.english, catScore: e.target.value}})}/>
                                 </div>
                                 <div>
-                                    <h4 className="font-black text-xl text-indigo-950">AI 어휘력 진단(CAT) 연동 게이트</h4>
-                                    <p className="text-sm font-bold text-gray-500 mt-1">
-                                        실제 학생용 앱으로 전환됩니다. 태블릿을 넘겨주세요.<br/>
-                                        시험이 중단되면 점수가 기록되지 않습니다.
-                                    </p>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">독해력 지표 수준 (자체 교재 레벨용)</label>
+                                    <input className="w-full border p-3 rounded-xl outline-none font-bold bg-white focus:border-indigo-400 transition-all" placeholder="예: 고1 학평 기준 안정적 2등급" value={leadForm.english.readingLevel} onChange={e=>setLeadForm({...leadForm, english: { ...leadForm.english, readingLevel: e.target.value}})}/>
                                 </div>
-                                
-                                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
-                                    <Button onClick={startCATAssessment} className="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-8 py-4 shadow-lg flex items-center gap-2 active:scale-95 w-full sm:w-auto text-lg">
-                                        🖥️ 태블릿 평가 모드 시작
-                                    </Button>
-                                    <div className="font-mono font-black text-2xl text-indigo-700 bg-white px-6 py-3 rounded-xl border-2 border-indigo-200 w-full sm:w-auto shadow-inner">
-                                        {leadForm.english.catScore ? `${leadForm.english.catScore}점 확정` : '점수 미측정'}
-                                    </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">영어 대면 상담 일지 코멘트</label>
+                                    <textarea className="w-full border p-3 rounded-xl outline-none font-bold h-24 bg-white focus:border-indigo-400 transition-all resize-none" placeholder="단어 암기 시 발음을 전혀 모름 등" value={leadForm.english.vocabularyNote} onChange={e=>setLeadForm({...leadForm, english: { ...leadForm.english, vocabularyNote: e.target.value}})}/>
                                 </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-4 pt-2">
-                                <div><label className="block text-xs font-bold text-gray-600 mb-1">독해력 지표 수준 (자체 교재 레벨용)</label><input className="w-full border p-3 rounded-xl outline-none font-bold bg-white focus:border-indigo-400 transition-all" placeholder="예: 고1 학평 기준 안정적 2등급" value={leadForm.english.readingLevel} onChange={e=>setLeadForm({...leadForm, english: { ...leadForm.english, readingLevel: e.target.value}})}/></div>
-                                <div><label className="block text-xs font-bold text-gray-600 mb-1">영어 대면 상담 일지 코멘트</label><textarea className="w-full border p-3 rounded-xl outline-none font-bold h-20 bg-white focus:border-indigo-400 transition-all resize-none" placeholder="단어 암기 시 발음을 전혀 모름 등" value={leadForm.english.vocabularyNote} onChange={e=>setLeadForm({...leadForm, english: { ...leadForm.english, vocabularyNote: e.target.value}})}/></div>
                             </div>
                         </Card>
                     )}
@@ -361,8 +284,8 @@ export default function ConsultationManager({ isKiosk = false }) {
                                 <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg"><span>• 상담 과목</span> <span className="text-blue-600 font-black">{Object.entries(leadForm.checkedSubjects).filter(([_, v]) => v).map(([k]) => k).join(', ') || '없음'}</span></div>
                                 {leadForm.checkedSubjects['영어'] && (
                                     <div className="flex justify-between items-center bg-indigo-50 p-2 rounded-lg border border-indigo-100">
-                                        <span className="text-indigo-800">• 어휘 진단</span> 
-                                        <span className={leadForm.english.catScore ? 'text-indigo-600 font-black' : 'text-rose-500 font-black'}>{leadForm.english.catScore ? `${leadForm.english.catScore}점 측정완료` : '미진행 (필수)'}</span>
+                                        <span className="text-indigo-800">• 어휘 진단 점수</span> 
+                                        <span className={leadForm.english.catScore ? 'text-indigo-600 font-black' : 'text-rose-500 font-black'}>{leadForm.english.catScore ? `${leadForm.english.catScore}점 측정완료` : '미입력 (필수)'}</span>
                                     </div>
                                 )}
                             </div>
