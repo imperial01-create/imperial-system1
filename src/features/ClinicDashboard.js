@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.5 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
-   (🚀 CTO 핫픽스: 문자 발송 시 학생 이름 특수문자 크래시 방지 및 전화번호 타입 오류 완벽 해결) */
+/* [서비스 가치] 클리닉 V3.1.6 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
+   (🚀 CTO 핫픽스: LocalStorage 캐시 용량 초과로 인한 빈화면(White Screen) 크래시 방지 및 문자 발송 데이터 정합성 보장) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -86,7 +86,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 패치] 오병합(False Merge) 및 데이터 타입 크래시 원천 차단
+// 그룹 배정 처리 로직
 const groupSessions = (sessionList) => {
     if (!sessionList || !Array.isArray(sessionList)) return [];
     
@@ -710,18 +710,32 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             snapshot.forEach(doc => { fetchedData[doc.id] = { id: doc.id, ...doc.data() }; });
 
             setSessionMap(fetchedData);
-            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
+            
+            // 🚀 [CTO 패치] 데이터를 가져온 직후 캐시에 넣을 때 용량 제한으로 인한 에러 방지 처리 (추가 안전망)
+            try {
+                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
+            } catch (cacheError) {
+                console.warn('LocalStorage limit exceeded during initial fetch:', cacheError);
+            }
         } catch (e) { console.error(e); } finally { setAppLoading(false); }
     }, [currentDate, currentUser]);
 
     useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
+    // 🚀 [CTO 패치] 빈 화면(White Screen) 크래시의 근본 원인을 제거한 안전한 로컬 상태 업데이트 함수
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
             const year = currentDate.getFullYear(); const month = currentDate.getMonth() + 1;
             const cacheKey = `imperial_sessions_${year}-${month}`;
-            localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newState }));
+            
+            try {
+                // 상태 업데이트 렌더(Render) 사이클 중에 로컬 스토리지가 터지는(QuotaExceededError) 현상을 try-catch로 완벽 차단.
+                // 이 처리가 없으면 상태 업데이트 도중 React 전체가 죽어버리며 빈 화면이 나옵니다.
+                localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newState }));
+            } catch (error) {
+                console.warn('LocalStorage limit exceeded! Cache skipped to prevent React Crash:', error);
+            }
             return newState;
         });
     };
@@ -1526,15 +1540,16 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     }
 
                     if (targetPhone) {
-                        // 🚀 [CTO 패치 1] 전화번호가 Number 타입일 경우를 대비해 String으로 강제 변환
                         const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
-                        
-                        // 🚀 [CTO 패치 2] 학생 이름에 괄호 등 특수문자가 섞여있을 때 Regex 에러 방지
                         const searchName = selectedSession.studentName || st.name || '';
-                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), st.name) : previewMessage;
                         
+                        // 🚀 [CTO 방어 코드] st.name이 undefined일 경우 Firebase 크래시 방지용 fallback 추가
+                        const safeStudentName = st.name || '알수없음';
+                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), safeStudentName) : previewMessage;
+                        
+                        // Firebase는 undefined 데이터를 필드값으로 허용하지 않으므로 명시적 안전값(safeStudentName) 전달
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: st.name, createdAt: serverTimestamp()
+                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: safeStudentName, createdAt: serverTimestamp()
                         });
                         textSentCount++;
                     }
@@ -1591,15 +1606,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     }
 
                     if (targetPhone) {
-                        // 🚀 [CTO 패치 1] 전화번호 타입 강제 방어
                         const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
-                        
-                        // 🚀 [CTO 패치 2] 학생 이름 Regex 크래시 방어
                         const searchName = selectedSession.studentName || st.name || '';
-                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), st.name) : previewMessage;
+                        
+                        // 🚀 [CTO 방어 코드] Firebase undefined 크래시 방지용
+                        const safeStudentName = st.name || '알수없음';
+                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), safeStudentName) : previewMessage;
                         
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_feedback', studentName: st.name, createdAt: serverTimestamp()
+                            phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_feedback', studentName: safeStudentName, createdAt: serverTimestamp()
                         });
                         textSentCount++;
                     }
