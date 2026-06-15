@@ -1,5 +1,5 @@
-/* [서비스 가치] 클리닉 V3.1.4 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
-   (🚀 CTO 핫픽스: 사용자 관리 과목 실시간 동기화 적용 및 이름/주제가 다른 스케줄의 오병합(False Merge) 버그 완벽 해결) */
+/* [서비스 가치] 클리닉 V3.1.5 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
+   (🚀 CTO 핫픽스: 문자 발송 시 학생 이름 특수문자 크래시 방지 및 전화번호 타입 오류 완벽 해결) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -15,6 +15,12 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+// 🚀 특수기호(괄호 등)가 섞인 학생 이름도 안전하게 치환할 수 있도록 방어하는 함수
+const escapeRegExp = (string) => {
+    if (!string) return '';
+    return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
 
 const generateSessionId = (dateStr, timeStr, taName) => {
     const d = (dateStr || '').replace(/-/g, ''); 
@@ -80,7 +86,7 @@ const getWeekOfMonth = (date) => {
     return Math.ceil((date.getDate() + dayOfWeek) / 7);
 };
 
-// 🚀 [CTO 패치] 오병합(False Merge) 원천 차단 알고리즘 도입
+// 🚀 [CTO 패치] 오병합(False Merge) 및 데이터 타입 크래시 원천 차단
 const groupSessions = (sessionList) => {
     if (!sessionList || !Array.isArray(sessionList)) return [];
     
@@ -88,27 +94,25 @@ const groupSessions = (sessionList) => {
     const others = sessionList.filter(s => !['pending', 'confirmed', 'completed'].includes(s.status));
 
     const sorted = [...toGroup].sort((a, b) => {
-        const aDate = a.date || ''; const bDate = b.date || '';
+        const aDate = String(a.date || ''); const bDate = String(b.date || '');
         if (aDate !== bDate) return aDate.localeCompare(bDate);
         
-        const aTa = a.taId || ''; const bTa = b.taId || '';
+        const aTa = String(a.taId || ''); const bTa = String(b.taId || '');
         if (aTa !== bTa) return aTa.localeCompare(bTa);
         
-        // 🚀 이름 비교 로직 강화 (studentId가 없어도 텍스트 이름 자체를 엄격히 비교)
         const aStList = Array.isArray(a.students) ? a.students : [];
         const bStList = Array.isArray(b.students) ? b.students : [];
-        const aSt = aStList.map(st=>st.id).sort().join() || a.studentId || a.studentName || '';
-        const bSt = bStList.map(st=>st.id).sort().join() || b.studentId || b.studentName || '';
+        const aSt = String(aStList.map(st=>st.id).sort().join() || a.studentId || a.studentName || '');
+        const bSt = String(bStList.map(st=>st.id).sort().join() || b.studentId || b.studentName || '');
         if (aSt !== bSt) return aSt.localeCompare(bSt);
         
-        // 🚀 토픽(과목) 비교 추가 (다르면 정렬 분리)
-        const aTopic = a.topic || ''; const bTopic = b.topic || '';
+        const aTopic = String(a.topic || ''); const bTopic = String(b.topic || '');
         if (aTopic !== bTopic) return aTopic.localeCompare(bTopic);
 
-        const aStat = a.status || ''; const bStat = b.status || '';
+        const aStat = String(a.status || ''); const bStat = String(b.status || '');
         if (aStat !== bStat) return aStat.localeCompare(bStat);
         
-        const aStart = a.startTime || ''; const bStart = b.startTime || '';
+        const aStart = String(a.startTime || ''); const bStart = String(b.startTime || '');
         return aStart.localeCompare(bStart);
     });
 
@@ -124,22 +128,19 @@ const groupSessions = (sessionList) => {
         } else {
             const currentStList = Array.isArray(current.students) ? current.students : [];
             const sStList = Array.isArray(s.students) ? s.students : [];
-            // 🚀 ID뿐만 아니라 텍스트 이름까지 추출
-            const currentSt = currentStList.map(st=>st.id).sort().join() || current.studentId || current.studentName || '';
-            const sSt = sStList.map(st=>st.id).sort().join() || s.studentId || s.studentName || '';
+            const currentSt = String(currentStList.map(st=>st.id).sort().join() || current.studentId || current.studentName || '');
+            const sSt = String(sStList.map(st=>st.id).sort().join() || s.studentId || s.studentName || '');
             
-            // 🚀 과목/주제(Topic) 추출
-            const currentTopic = current.topic || '';
-            const sTopic = s.topic || '';
+            const currentTopic = String(current.topic || '');
+            const sTopic = String(s.topic || '');
             
-            // 🚀 학생명과 과목명이 모두 완벽히 일치해야만 한 블록으로 합침 (오병합 방지)
             if (current.date === s.date && current.taId === s.taId && currentSt === sSt && currentTopic === sTopic && current.endTime === s.startTime && current.status === s.status && current.classroom === s.classroom) {
                 current.endTime = sEnd;
                 current.originalIds.push(s.id);
                 current.originalSessions.push({...s, endTime: sEnd});
                 
                 if (current.questionRange !== s.questionRange && s.questionRange) {
-                     const ranges = (current.questionRange || '').split('\n');
+                     const ranges = String(current.questionRange || '').split('\n');
                      if (!ranges.includes(s.questionRange)) current.questionRange = (current.questionRange ? current.questionRange + '\n' : '') + s.questionRange;
                 }
             } else {
@@ -158,7 +159,7 @@ const groupSessions = (sessionList) => {
         o.endTime = sEnd; 
     });
 
-    return [...grouped, ...others].sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    return [...grouped, ...others].sort((a,b) => String(a.startTime || '').localeCompare(String(b.startTime || '')));
 };
 
 const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) => {
@@ -318,7 +319,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
             const isAsstSlot = workerRole === 'admin_assistant'; 
             
-            // 🚀 [CTO 패치] 과목 맵핑 1순위를 '사용자 관리의 최신 과목 데이터'로 강제 지정 (과목 미변경 버그 해결)
             const taSubject = taSubjectMap.byId?.[s.taId]?.subject || taSubjectMap.byName?.[s.taName]?.subject || s.taSubject || (isAsstSlot ? '행정 업무' : '개별 클리닉');
 
             const stList = Array.isArray(s.students) ? s.students : [];
@@ -626,18 +626,18 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const checkRoomAvailability = useCallback((dateStr, startTime, endTime, clinicRoom, currentSessionIds = []) => {
         if (!dateStr || isNaN(new Date(dateStr).getTime())) return null;
         const dayOfWeek = DAYS[new Date(dateStr).getDay()];
-        const normTargetRoom = (clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
+        const normTargetRoom = String(clinicRoom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
 
         const isOccupiedByClass = activeSchedules.some(s => {
-            const normS = (s.room || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
+            const normS = String(s.room || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
             if (normS !== normTargetRoom) return false;
             if (s.targetDate && s.targetDate !== dateStr) return false;
             if (!s.targetDate && s.day !== dayOfWeek) return false;
             
-            const startA = s.startTime || '00:00'; 
-            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime || '00:00'; 
-            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = String(s.startTime || '00:00'); 
+            const endA = String(s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`);
+            const startB = String(startTime || '00:00'); 
+            const endB = String(endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`);
             return (startA < endB && endA > startB); 
         });
 
@@ -647,14 +647,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         const isOccupiedByClinic = groupedSessionsAll.some(s => {
             if (s.originalIds && s.originalIds.some(id => currentSessionIds.includes(id))) return false;
             if (s.date !== dateStr) return false;
-            const normS = (s.classroom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
+            const normS = String(s.classroom || '').replace(/\s+/g, '').toLowerCase().replace('class', 'classroom');
             if (!normS || normS !== normTargetRoom) return false;
             if (['addition_requested', 'cancellation_requested'].includes(s.status)) return false; 
             
-            const startA = s.startTime || '00:00'; 
-            const endA = s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`;
-            const startB = startTime || '00:00'; 
-            const endB = endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`;
+            const startA = String(s.startTime || '00:00'); 
+            const endA = String(s.endTime || `${String(parseInt(startA.split(':')[0]) + 1).padStart(2,'0')}:00`);
+            const startB = String(startTime || '00:00'); 
+            const endB = String(endTime || `${String(parseInt(startB.split(':')[0]) + 1).padStart(2,'0')}:00`);
             return (startA < endB && endA > startB);
         });
 
@@ -963,7 +963,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
           });
           
           try {
-              const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목: ${formattedTopic}\n📖 범위: ${formattedRange.replace(/\n/g, ' ')}\n⏰ 슬롯: 총 ${studentSelectedSlots.length}건\n\n승인을 진행해 주세요!`;
+              const telegramMsg = `[🔔 클리닉 예약 신청]\n\n👨‍🎓 학생명: ${currentUser?.name}\n📚 과목: ${formattedTopic}\n📖 범위: ${String(formattedRange).replace(/\n/g, ' ')}\n⏰ 슬롯: 총 ${studentSelectedSlots.length}건\n\n승인을 진행해 주세요!`;
               await httpsCallable(functions, 'sendTelegramAlert')({ text: telegramMsg });
           } catch (teleErr) {
                 console.error("텔레그램 발송 실패:", teleErr);
@@ -1495,6 +1495,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
       </Modal>
       
+      {/* 🚀 [핫픽스] 승인 모달 */}
       <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="클리닉 예약 승인 및 학부모 안내문자 발송">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 승인 시 배정된 모든 학생의 학부모에게 개별 맞춤 문자 분할 발송이 요청됩니다.
@@ -1525,8 +1526,12 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     }
 
                     if (targetPhone) {
-                        const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName || st.name, 'g'), st.name);
+                        // 🚀 [CTO 패치 1] 전화번호가 Number 타입일 경우를 대비해 String으로 강제 변환
+                        const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
+                        
+                        // 🚀 [CTO 패치 2] 학생 이름에 괄호 등 특수문자가 섞여있을 때 Regex 에러 방지
+                        const searchName = selectedSession.studentName || st.name || '';
+                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), st.name) : previewMessage;
                         
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                             phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: st.name, createdAt: serverTimestamp()
@@ -1555,6 +1560,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }}>그룹 예약 승인 및 개별 문자 발송하기</Button>
       </Modal>
       
+      {/* 🚀 [핫픽스] 피드백 검수 모달 */}
       <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="학부모 발송용 피드백 검수">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 수정이 필요하면 아래 텍스트 창에서 바로 편집하세요.
@@ -1585,8 +1591,12 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     }
 
                     if (targetPhone) {
-                        const cleanPhone = targetPhone.replace(/[^0-9]/g, '');
-                        const customizedMsg = previewMessage.replace(new RegExp(selectedSession.studentName || st.name, 'g'), st.name);
+                        // 🚀 [CTO 패치 1] 전화번호 타입 강제 방어
+                        const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
+                        
+                        // 🚀 [CTO 패치 2] 학생 이름 Regex 크래시 방어
+                        const searchName = selectedSession.studentName || st.name || '';
+                        const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), st.name) : previewMessage;
                         
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                             phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_feedback', studentName: st.name, createdAt: serverTimestamp()
