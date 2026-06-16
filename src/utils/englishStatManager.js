@@ -40,3 +40,30 @@ export const initializeEnglishStats = async (studentId) => {
     await setDoc(statRef, initialPayload);
     return initialPayload;
 };
+
+/**
+ * [서비스 가치] 강사가 입력한 CAT 1000점 만점 점수를 즉시 DB에 저장합니다.
+ * merge: true 옵션을 통해 기존의 문법 트리나 5대 지표 데이터를 날리지 않고 
+ * 오직 catScore만 안전하게 업데이트합니다.
+ */
+export const updateStudentCatScore = async (studentId, score) => {
+    try {
+        const numScore = Number(score);
+        if (isNaN(numScore) || numScore < 0 || numScore > 1000) {
+            throw new Error("CAT 점수는 0에서 1000점 사이의 숫자여야 합니다.");
+        }
+
+        const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+        
+        // 데이터 업데이트 (기존 데이터 보존)
+        await setDoc(statRef, {
+            catScore: numScore,
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        return true;
+    } catch (error) {
+        console.error("[CAT Score Update Error]:", error);
+        throw error;
+    }
+};

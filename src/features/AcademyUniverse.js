@@ -1,5 +1,5 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 초개인화 통합 패치: 영어과 5대 지표 개편, 3대 Voca 세부 스탯 연동 및 문법 트리/유형 히트맵 공간 완벽 구축) */
+   (🚀 초개인화 통합 패치: 영어과 5대 지표 개편, Voca 1000점 만점 스케일 적용 및 문법 트리 완벽 보존) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
@@ -13,7 +13,6 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// --- 성취 레벨(Tier) 정의 ---
 const TIERS = [
   { name: 'S등급 (최상위)', minScore: 90, color: 'text-cyan-600', border: 'border-cyan-600', shadow: 'shadow-[0_0_20px_rgba(8,145,178,0.2)]', bg: 'bg-gradient-to-br from-cyan-50 to-white' },
   { name: 'A등급 (상위)', minScore: 80, color: 'text-emerald-600', border: 'border-emerald-600', shadow: 'shadow-[0_0_20px_rgba(5,150,105,0.2)]', bg: 'bg-gradient-to-br from-emerald-50 to-white' },
@@ -22,7 +21,6 @@ const TIERS = [
   { name: 'D등급 (기초)', minScore: 0, color: 'text-amber-600', border: 'border-amber-600', shadow: 'shadow-[0_0_15px_rgba(217,119,6,0.1)]', bg: 'bg-gradient-to-br from-amber-50 to-white' }
 ];
 
-// --- 과목별 세부 역량 및 성향 메타데이터 ---
 const SUBJECT_META = {
   '국어': {
     icon: BookOpen, title: '국어 종합 사고력',
@@ -43,17 +41,16 @@ const SUBJECT_META = {
       { id: 'application', name: '응용력', desc: '알고 있는 개념을 낯선 유형의 문제에 자유자재로 변형하여 적용하는 능력' },
       { id: 'reasoning', name: '추론력', desc: '주어진 조건에서 숨겨진 단서를 찾아내어 논리적 연결고리를 만드는 능력' },
       { id: 'problem', name: '문제해결', desc: '고난도 킬러 문항을 마주했을 때 끝까지 파고들어 해답을 찾아내는 끈기' },
-      { id: 'intuition', name: '직관력', desc: '문제의 형태만 보고도 올바른 풀이 방향 tobacco 접근법을 즉각적으로 떠올리는 감각' }
+      { id: 'intuition', name: '직관력', desc: '문제의 형태만 보고도 올바른 풀이 방향 접근법을 즉각적으로 떠올리는 감각' }
     ]
   },
-  // 🚀 [원장님 기획 반영] 영어 과목 5대 혁신 지표로 전면 개편 완료 (펜타곤 레이더 구축용)
   '영어': {
     icon: Globe, title: '영어 텍스트 분석력',
     stats: [
-      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 다의어 파악 및 동반의어 유추 능력.' },
-      { id: 'syntax', name: '문장 해석력 (Syntax)', desc: '감으로 해석하는 것이 아니라, 주어/동사/수식어를 정확히 끊어 읽고 복잡한 구문을 해독하는 능력.' },
+      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 의미 유추 (CAT 1000점 만점 기준)' },
+      { id: 'syntax', name: '문장 해석력 (Syntax)', desc: '감으로 해석하는 것이 아니라, 주어/동사/수식어를 정확히 끊어 읽고 해독하는 능력.' },
       { id: 'theme', name: '언어적 능력 (Theme)', desc: '지문을 읽고 "그래서 필자가 하고 싶은 말이 뭔데?"를 요약해 내는 능력.' },
-      { id: 'logic', name: '논리 추론 (Logic)', desc: '문장과 문장 사이의 연결사나 지시어를 파악하여 글의 순서를 맞추거나 빈칸을 채우는 능력과 왜 이 보기가 아닌지 정확히 집어내는 힘 (논리력).' },
+      { id: 'logic', name: '논리 추론 (Logic)', desc: '문장과 문장 사이의 연결사나 지시어를 파악하여 글의 순서를 맞추거나 빈칸을 채우는 능력.' },
       { id: 'detail', name: '정보 세부 파악 (Detail)', desc: '글의 내용과 일치/불일치하는 팩트를 꼼꼼하게 찾아내는 성실성과 집중력.' }
     ]
   },
@@ -86,7 +83,8 @@ const RadarChart = ({ stats, isDummy = false }) => {
     return <polygon key={level} points={points} fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="1" />;
   });
 
-  const dataPoints = stats.map((s, i) => getPoint(s.value, i, stats.length)).join(' ');
+  // 차트 그리기용 값(chartValue) 우선 사용 (1000점짜리 Voca가 차트를 뚫고 나가지 않도록 보정)
+  const dataPoints = stats.map((s, i) => getPoint(s.chartValue !== undefined ? s.chartValue : s.value, i, stats.length)).join(' ');
 
   return (
     <div className="relative w-full max-w-sm mx-auto aspect-square flex items-center justify-center">
@@ -98,7 +96,7 @@ const RadarChart = ({ stats, isDummy = false }) => {
         })}
         <polygon points={dataPoints} fill="rgba(59,130,246,0.3)" stroke="#3b82f6" strokeWidth="2" strokeLinejoin="round" />
         {stats.map((s, i) => {
-          const [x, y] = getPoint(s.value, i, stats.length).split(',');
+          const [x, y] = getPoint(s.chartValue !== undefined ? s.chartValue : s.value, i, stats.length).split(',');
           return <circle key={i} cx={x} cy={y} r="4" fill="#fff" stroke="#2563eb" strokeWidth="2" />
         })}
         {!isDummy && stats.map((s, i) => {
@@ -115,7 +113,6 @@ const RadarChart = ({ stats, isDummy = false }) => {
 };
 
 const AcademyUniverse = ({ currentUser }) => {
-  // 🚀 [에러 원인 분석 및 해결] useData() 구조분해할당에 실시간 영어 스탯(englishStats) 수혈 완료!
   const { users, classes, enrollments, englishStats } = useData();
   
   const accessibleStudents = useMemo(() => {
@@ -139,7 +136,6 @@ const AcademyUniverse = ({ currentUser }) => {
   const activeStudentId = isStudent ? currentUser.id : selectedStudentId;
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
-  // 실시간 타겟 학생의 영어 스탯 패칭 및 undefined 바인딩 추락 차단 안전망 장착
   const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
 
   const [grades, setGrades] = useState([]);
@@ -184,36 +180,36 @@ const AcademyUniverse = ({ currentUser }) => {
         latestScore = subjectGrades[subjectGrades.length - 1];
         if (subjectGrades.length > 1) prevScore = subjectGrades[subjectGrades.length - 2];
     } else {
-        if (subjectName !== '영어') return null; // 영어는 성적이 없더라도 VocaDB 단독 기동을 위해 통과 허용
+        if (subjectName !== '영어') return null;
     }
 
     const meta = SUBJECT_META[subjectName];
     return meta.stats.map((s, i) => {
-        // 🔥 만약 영어 과목이고 DB에 정산된 실시간 Voca 스탯이 존재한다면 레이더 차트에 실시간 연동 매핑
-        if (subjectName === '영어' && studentEnglishStat && studentEnglishStat.radarChart) {
+        if (subjectName === '영어' && studentEnglishStat) {
             let realValue = 0;
-            if (s.id === 'voca') {
-                // Elo 레이팅 점수(0~1000점)를 레이더 차트의 100점 만점 척도로 비례 조율 환산
-                realValue = Math.round((studentEnglishStat.radarChart.voca || 0) / 10);
-            } else {
-                realValue = Math.round((studentEnglishStat.radarChart[s.id] || 0) / 10);
-            }
+            let chartValue = 0; // 차트 그리기용 100점 만점 환산값
             
-            // 아직 측정되지 않은 기타 지표(Syntax 등)가 0점일 경우 성적 기반 백필 시뮬레이션 적용
-            if (realValue === 0) {
-                const seed = latestScore || 65;
-                const pseudoRandom = (seed * (i + 7)) % 15;
-                realValue = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
+            if (s.id === 'voca') {
+                // Voca는 CAT 1000점 만점 시스템 적용
+                realValue = studentEnglishStat.catScore || 0;
+                chartValue = Math.round(realValue / 10); 
+            } else {
+                realValue = studentEnglishStat.radarChart?.[s.id] || 0;
+                if (realValue === 0) {
+                    const seed = latestScore || 65;
+                    const pseudoRandom = (seed * (i + 7)) % 15;
+                    realValue = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
+                }
+                chartValue = realValue;
             }
-            return { ...s, value: Math.round(realValue), diff: 0 };
+            return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca' };
         }
 
-        // 국어, 수학, 과학 등 일반 과목 역산 시뮬레이션 벨류
         const seed = latestScore;
         const pseudoRandom = (seed * (i + 7)) % 20; 
         const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
         const diff = val - Math.min(100, Math.max(0, prevScore - ((prevScore * (i+3)) % 15)));
-        return { ...s, value: Math.round(val), diff: Math.round(diff) };
+        return { ...s, value: Math.round(val), chartValue: Math.round(val), diff: Math.round(diff) };
     });
   };
 
@@ -232,11 +228,13 @@ const AcademyUniverse = ({ currentUser }) => {
             const rawStats = generateMockStats(sub);
             if (rawStats) {
                 stats = rawStats;
-                avg = Math.round(stats.reduce((acc, cur) => acc + cur.value, 0) / stats.length);
+                // 평균 산출 시 Voca는 100점 기준으로 환산하여 계산 (등급 오류 방지)
+                const normalizedSum = stats.reduce((acc, cur) => acc + (cur.isVoca ? Math.round(cur.value / 10) : cur.value), 0);
+                avg = Math.round(normalizedSum / stats.length);
                 tier = TIERS.find(t => avg >= t.minScore) || TIERS[TIERS.length - 1];
                 hasGradeData = true;
             } else {
-                stats = SUBJECT_META[sub].stats.map(s => ({ ...s, value: 0, diff: 0 }));
+                stats = SUBJECT_META[sub].stats.map(s => ({ ...s, value: 0, chartValue: 0, diff: 0 }));
             }
             result[sub] = { 
                 isUnlocked, stats, avg, tier, meta: SUBJECT_META[sub], 
@@ -247,8 +245,7 @@ const AcademyUniverse = ({ currentUser }) => {
         }
     });
     return result;
-  }, [grades, myActiveClasses, englishStats]); // 스탯 데이터 바뀔 때 갱신 동기화
-
+  }, [grades, myActiveClasses, englishStats]);
 
   if (!isStudent && !activeStudentId) {
       return (
@@ -307,8 +304,7 @@ const AcademyUniverse = ({ currentUser }) => {
                         return (
                             <div key={subName} className="relative bg-slate-50 rounded-[32px] p-6 flex flex-col items-center justify-center text-center overflow-hidden border border-slate-200 h-80 group">
                                 <div className="absolute inset-0 opacity-40 blur-[4px] pointer-events-none flex items-center justify-center scale-125">
-                                    {/* 과목의 실제 축 개수에 맞춰 5각형/6각형 유연하게 더미 렌더링 */}
-                                    <RadarChart stats={data.meta.stats.map(s => ({ value: 60 }))} isDummy={true} />
+                                    <RadarChart stats={data.meta.stats.map(s => ({ value: 60, chartValue: 60 }))} isDummy={true} />
                                 </div>
                                 <div className="absolute inset-0 bg-slate-50/80 z-0"></div>
 
@@ -373,7 +369,6 @@ const AcademyUniverse = ({ currentUser }) => {
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-3 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
                   
-                  {/* 🚀 [원장님 피드백 완벽 이식] 영어 선택 및 데이터 활성화 시 3대 스탯바 및 PDF 출력 복구 버튼 노출 */}
                   {selectedSubject === '영어' && studentEnglishStat && (
                       <div className="mt-3 mb-4 bg-gradient-to-br from-slate-50 to-blue-50/30 p-5 rounded-3xl border border-slate-200 shadow-inner max-w-2xl text-left">
                           <div className="flex justify-between items-center mb-3 border-b border-slate-200 pb-2">
@@ -436,10 +431,8 @@ const AcademyUniverse = ({ currentUser }) => {
                       </div>
                   </Card>
 
-                  {/* 🚀 [원장님 특별 요청] 차기 고도화 모듈 공간 선제적 구축 (문법 트리 & 유형 히트맵 플레이스홀더) */}
                   {selectedSubject === '영어' && (
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                          {/* [문법 트리 카드] */}
                           <Card className="bg-white border-slate-200 rounded-[32px] p-6 shadow-sm border-t-4 border-t-indigo-500 flex flex-col justify-between h-56">
                               <div>
                                   <div className="flex items-center justify-between mb-2">
@@ -455,7 +448,6 @@ const AcademyUniverse = ({ currentUser }) => {
                               </div>
                           </Card>
 
-                          {/* [유형 히트맵 카드] */}
                           <Card className="bg-white border-slate-200 rounded-[32px] p-6 shadow-sm border-t-4 border-t-cyan-500 flex flex-col justify-between h-56">
                               <div>
                                   <div className="flex items-center justify-between mb-2">
@@ -480,20 +472,17 @@ const AcademyUniverse = ({ currentUser }) => {
                           <Card key={stat.id} className="p-4 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col sm:flex-row items-center gap-4 sm:gap-6 bg-white shrink-0 shadow-sm">
                               <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-2 sm:pb-0 shrink-0">
                                   <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-baseline justify-center gap-1">
+                                      {/* Voca인 경우 1000점 만점임을 명시적으로 표기 */}
                                       <span className="text-2xl font-black text-slate-800">{stat.value}</span>
-                                      <div className="flex flex-col">
-                                          {stat.diff > 0 ? <span className="flex items-center text-[10px] font-black text-emerald-500"><TrendingUp size={10}/> {Math.abs(stat.diff)}</span> :
-                                           stat.diff < 0 ? <span className="flex items-center text-[10px] font-black text-rose-500"><TrendingDown size={10}/> {Math.abs(stat.diff)}</span> :
-                                           <span className="flex items-center text-[10px] font-black text-slate-300"><Minus size={10}/> 0</span>}
-                                      </div>
+                                      {stat.isVoca && <span className="text-[10px] font-bold text-slate-400">/ 1000</span>}
                                   </div>
                               </div>
                               
                               <div className="flex-1 w-full">
                                   <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-2 break-keep">{stat.desc}</p>
                                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full transition-all duration-1000 ${stat.value >= 80 ? 'bg-blue-500' : stat.value >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.value}%` }}></div>
+                                      <div className={`h-full rounded-full transition-all duration-1000 ${stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.chartValue}%` }}></div>
                                   </div>
                               </div>
                           </Card>
