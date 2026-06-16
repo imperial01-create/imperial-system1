@@ -1,5 +1,5 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 초개인화 통합 패치: 100단계 정밀 Voca 루브릭 매핑 엔진 탑재. 
+   (🚀 초개인화 통합 패치: 100단계 정밀 Voca 루브릭 매핑 엔진 탑재 및 '진단 대기' Empty State 우아한 처리.
    점수에 따른 '타겟 학년'과 '상태 설명'을 자동 출력하여 학부모 상담 리소스를 0에 수렴시킵니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -81,7 +81,7 @@ const VOCA_RUBRICS = [
   { min: 621, max: 630, target: '예비 고3', desc: '기초는 탄탄하나 EBS 한 페이지당 모르는 단어가 5~7개 정도씩 꾸준히 나옴.' },
   { min: 631, max: 640, target: '예비 고3', desc: '페이지당 등장하는 5~7개의 고난도 어휘 때문에 독해의 호흡이 계속 끊김.' },
   { min: 641, max: 650, target: '예비 고3', desc: '방대한 EBS 수능 연계 어휘량을 소화하기 위해 집중적으로 단어를 주입하는 구간.' },
-  { min: 651, max: 660, target: '수능 3등급 선', desc: '수능 지문을 읽고 대의(주제, 요지)를 파악하는 데 어휘력이 발목을 잡지 않음.' },
+  { min: 651, max: 660, target: '수능 3등급 선', desc: '수능 지문을 읽고 대의(주제, 요지) 파악에 어휘력이 발목을 잡지 않음.' },
   { min: 661, max: 670, target: '수능 3등급 선', desc: '지문의 내용은 다 이해해 놓고 정답을 고르는 선지(1~5번) 독해에서 막힘.' },
   { min: 671, max: 680, target: '수능 3등급 선', desc: '선지에 등장하는 고난도/추상적 단어들을 해석하지 못해 정답률이 떨어짐.' },
   { min: 681, max: 690, target: '수능 3등급 선', desc: '까다로운 선지 단어를 몰라서 지문 내용과 상관없는 매력적인 오답을 자주 고름.' },
@@ -289,15 +289,17 @@ const AcademyUniverse = ({ currentUser }) => {
 
     const meta = SUBJECT_META[subjectName];
     return meta.stats.map((s, i) => {
-        if (subjectName === '영어' && studentEnglishStat) {
+        
+        // 🚀 [Empty State 완벽 제어] 데이터가 아예 없는 신규 학생도 영어 로직을 타도록 보장
+        if (subjectName === '영어') {
             let realValue = 0;
             let chartValue = 0; 
             
             if (s.id === 'voca') {
-                realValue = studentEnglishStat.catScore || 0;
+                realValue = studentEnglishStat?.catScore || 0; 
                 chartValue = Math.round(realValue / 10); 
             } else {
-                realValue = studentEnglishStat.radarChart?.[s.id] || 0;
+                realValue = studentEnglishStat?.radarChart?.[s.id] || 0;
                 if (realValue === 0) {
                     const seed = latestScore || 65;
                     const pseudoRandom = (seed * (i + 7)) % 15;
@@ -308,6 +310,7 @@ const AcademyUniverse = ({ currentUser }) => {
             return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca' };
         }
 
+        // 영어 외 타 과목 로직
         const seed = latestScore;
         const pseudoRandom = (seed * (i + 7)) % 20; 
         const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
@@ -454,10 +457,10 @@ const AcademyUniverse = ({ currentUser }) => {
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
   };
 
-  // 🚀 [신규 엔진 로직] CAT 점수 기반 루브릭 텍스트 산출
+  // 🚀 [신규 엔진 로직] CAT 점수 기반 루브릭 텍스트 산출 (Empty State 방어)
   let currentVocaRubric = null;
   const catScore = studentEnglishStat?.catScore;
-  const hasCatScore = catScore !== undefined && catScore !== null;
+  const hasCatScore = catScore !== undefined && catScore !== null && catScore > 0;
   
   if (hasCatScore) {
       currentVocaRubric = VOCA_RUBRICS.find(r => catScore >= r.min && catScore <= r.max);
@@ -480,7 +483,7 @@ const AcademyUniverse = ({ currentUser }) => {
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-3 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
                   
-                  {selectedSubject === '영어' && studentEnglishStat && (
+                  {selectedSubject === '영어' && (
                       <div className="mt-3 mb-4 bg-gradient-to-br from-slate-50 to-blue-50/30 p-5 rounded-3xl border border-slate-200 shadow-inner max-w-2xl text-left">
                           <div className="flex justify-between items-center mb-3 border-b border-slate-200 pb-2">
                               <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5"><Sparkles size={16} className="text-blue-600"/> 초개인화 Voca 스탯 리포트</h3>
@@ -495,21 +498,21 @@ const AcademyUniverse = ({ currentUser }) => {
                           <div className="space-y-3 mb-4">
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat.vProgress || studentEnglishStat.vocaProgress || 0}%</span>
+                                      <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%</span>
                                   </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vProgress || studentEnglishStat.vocaProgress || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%` }}></div></div>
                               </div>
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat.vComprehension || studentEnglishStat.vocaComprehension || 0}%</span>
+                                      <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%</span>
                                   </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vComprehension || studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%` }}></div></div>
                               </div>
                               <div>
                                   <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat.vRetention || studentEnglishStat.vocaRetention || 0}%</span>
+                                      <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%</span>
                                   </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vRetention || studentEnglishStat.vocaRetention || 0}%` }}></div></div>
+                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%` }}></div></div>
                               </div>
                           </div>
 
@@ -518,7 +521,7 @@ const AcademyUniverse = ({ currentUser }) => {
                               <div className="flex items-center gap-2 mb-1">
                                   <HelpCircle size={16} className="text-blue-500 shrink-0" />
                                   <span className="text-blue-700 font-black">CAT 정밀 진단 결과</span>
-                                  {currentVocaRubric && (
+                                  {hasCatScore && currentVocaRubric && (
                                       <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200 text-[10px] px-2 py-0.5">
                                           🎯 타겟: {currentVocaRubric.target}
                                       </Badge>
@@ -597,15 +600,21 @@ const AcademyUniverse = ({ currentUser }) => {
                               <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-2 sm:pb-0 shrink-0">
                                   <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
                                   <div className="flex items-baseline justify-center gap-1">
-                                      <span className="text-2xl font-black text-slate-800">{stat.value}</span>
-                                      {stat.isVoca && <span className="text-[10px] font-bold text-slate-400">/ 1000</span>}
+                                      {/* 🚀 [UI 심리 최적화] CAT 점수가 아예 없는 경우 0점이 아닌 '진단 대기'로 표시 */}
+                                      <span className="text-2xl font-black text-slate-800">
+                                          {stat.isVoca && !hasCatScore ? '진단 대기' : stat.value}
+                                      </span>
+                                      {stat.isVoca && hasCatScore && (
+                                          <span className="text-[10px] font-bold text-slate-400">/ 1000</span>
+                                      )}
                                   </div>
                               </div>
                               
                               <div className="flex-1 w-full">
                                   <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-2 break-keep">{stat.desc}</p>
                                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full transition-all duration-1000 ${stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.chartValue}%` }}></div>
+                                      {/* 진단 대기 상태일 때는 막대기를 회색으로 비워둠 */}
+                                      <div className={`h-full rounded-full transition-all duration-1000 ${stat.isVoca && !hasCatScore ? 'bg-slate-200' : stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.isVoca && !hasCatScore ? 0 : stat.chartValue}%` }}></div>
                                   </div>
                               </div>
                           </Card>
