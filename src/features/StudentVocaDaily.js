@@ -1,4 +1,4 @@
-/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (UI/UX 뼈대 고정 패치)
+/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (UI/UX 뼈대 고정 및 Import 버그 패치)
    학생이 점수가 없더라도 에러 화면으로 튕기지 않고, '인쇄 버튼'과 '단어장 틀'을 그대로 보여주어
    서비스의 안정감을 줍니다. 데이터가 없는 경우 우아하게(Graceful) 빈 상태(Empty State)를 안내합니다. */
 import React, { useState, useEffect } from 'react';
@@ -6,6 +6,9 @@ import { Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, CheckC
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { generateDailyVocaSet } from '../utils/vocaEngine';
+
+// 🚀 [CTO 버그 픽스] 빈 화면(Crash)의 원인이었던 Badge 컴포넌트 Import 추가 완료!
+import { Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -24,7 +27,7 @@ const StudentVocaDaily = ({ currentUser }) => {
         const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, currentUser.id);
         const statSnap = await getDoc(statRef);
         
-        // 🚀 CAT 점수가 없는 경우 에러로 튕기지 않고 'no_stat' 상태만 부여
+        // CAT 점수가 없는 경우 에러로 튕기지 않고 'no_stat' 상태만 부여
         if (!statSnap.exists() || !statSnap.data().catScore) {
             setSessionInfo({ sessionNumber: 0, status: 'no_stat' });
             return;
@@ -74,7 +77,7 @@ const StudentVocaDaily = ({ currentUser }) => {
       window.print();
   };
 
-  // 🚀 버튼 활성화 조건: 'ready' 상태이고 단어 리스트가 있을 때만 클릭 가능
+  // 버튼 활성화 조건: 'ready' 상태이고 단어 리스트가 있을 때만 클릭 가능
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
 
   return (
@@ -83,6 +86,7 @@ const StudentVocaDaily = ({ currentUser }) => {
       {/* 1. 화면 상단 배너 (항상 고정 노출) */}
       <div className="print:hidden bg-gradient-to-r from-blue-600 to-indigo-700 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-8 relative overflow-hidden">
         <div className="relative z-10">
+          {/* 바로 이 부분이 Badge를 사용하는데 Import가 안 되어 있어서 앱이 터졌던 곳입니다! */}
           <Badge variant="outline" className="bg-white/20 text-white border-white/30 mb-3 px-3 py-1">
               {sessionInfo.sessionNumber > 0 ? `제 ${sessionInfo.sessionNumber} 회차 단어장` : 'Voca 엔진 대기 중'}
           </Badge>
@@ -153,7 +157,7 @@ const StudentVocaDaily = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 🚀 상태별 렌더링 분기 */}
+          {/* 상태별 렌더링 분기 */}
           {sessionInfo.status === 'no_stat' && (
               <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <AlertCircle size={56} className="text-slate-300 mb-4" />
@@ -196,7 +200,7 @@ const StudentVocaDaily = ({ currentUser }) => {
               </div>
           )}
 
-          {/* 🚀 데이터가 생성된 후 표 렌더링 */}
+          {/* 데이터가 생성된 후 표 렌더링 */}
           {sessionInfo.status === 'ready' && wordsList.length > 0 && (
               <table className="w-full text-left border-collapse print:w-full print:text-black">
                   <thead>
