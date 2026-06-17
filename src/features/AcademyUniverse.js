@@ -1,11 +1,11 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 초개인화 통합 패치: 100단계 정밀 Voca 루브릭 매핑 엔진 탑재 및 '진단 대기' Empty State 우아한 처리.
-   점수에 따른 '타겟 학년'과 '상태 설명'을 자동 출력하여 학부모 상담 리소스를 0에 수렴시킵니다.) */
+   (🚀 초개인화 통합 패치: 상단 대시보드 UI 클렌징, 100단계 정밀 Voca 루브릭 동적 설명 탑재,
+   그리고 Voca 3대 상세 스탯을 어휘력 카드로 종속시켜 완벽한 정보 위계(IA)를 달성했습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
-  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Users, Search, ChevronRight, CheckCircle,
-  Printer, Network, LayoutGrid, HelpCircle
+  Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Search, ChevronRight, CheckCircle,
+  Network, LayoutGrid, HelpCircle
 } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -14,7 +14,7 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [신규 엔진] 100단계 초정밀 Voca 진단 루브릭 매트릭스 (O(1) 검색 최적화)
+// 🚀 100단계 초정밀 Voca 진단 루브릭 매트릭스
 const VOCA_RUBRICS = [
   { min: 0, max: 10, target: '파닉스/초저', desc: '알파벳 대소문자를 간신히 구분하며 영어를 그림처럼 인식함.' },
   { min: 11, max: 20, target: '파닉스/초저', desc: '알파벳이 내는 고유의 소리(음가)를 겨우 떼기 시작함.' },
@@ -57,7 +57,7 @@ const VOCA_RUBRICS = [
   { min: 381, max: 390, target: '예비 고1', desc: '지문의 앞뒤 문맥을 고려하지 않고 자신이 외운 뜻만 기계적으로 대입함.' },
   { min: 391, max: 400, target: '예비 고1', desc: '문맥 내에서 필자가 의도한 단어의 정확한 뉘앙스를 잡지 못해 오역이 잦음.' },
   { min: 401, max: 410, target: '고1 모의고사', desc: '고1 전국연합 학력평가 지문을 읽고 대략적인 스토리를 따라갈 수 있음.' },
-  { min: 411, max: 420, target: '고1 모의고사', desc: '전체 고1 학력평가 지문의 약 70% 정도를 무리 없이 해독해 냄.' },
+  { min: 411, max: 420, target: '고1 모의고사', desc: '전체 고1 학력평가 지문을 약 70% 정도 무리 없이 해독해 냄.' },
   { min: 421, max: 430, target: '고1 모의고사', desc: '지문 내 핵심 어휘 몇 개를 통해 글의 전체적인 \'주제 찾기\'는 가능함.' },
   { min: 431, max: 440, target: '고1 모의고사', desc: '정밀한 어휘력이 요구되는 \'빈칸 추론\' 문제에 돌입하면 단어가 막혀 오답을 냄.' },
   { min: 441, max: 450, target: '고1 모의고사', desc: '주제는 맞추나 빈칸 추론 어휘에서 막히는, 전형적인 고1 중위권의 한계를 보임.' },
@@ -81,7 +81,7 @@ const VOCA_RUBRICS = [
   { min: 621, max: 630, target: '예비 고3', desc: '기초는 탄탄하나 EBS 한 페이지당 모르는 단어가 5~7개 정도씩 꾸준히 나옴.' },
   { min: 631, max: 640, target: '예비 고3', desc: '페이지당 등장하는 5~7개의 고난도 어휘 때문에 독해의 호흡이 계속 끊김.' },
   { min: 641, max: 650, target: '예비 고3', desc: '방대한 EBS 수능 연계 어휘량을 소화하기 위해 집중적으로 단어를 주입하는 구간.' },
-  { min: 651, max: 660, target: '수능 3등급 선', desc: '수능 지문을 읽고 대의(주제, 요지) 파악에 어휘력이 발목을 잡지 않음.' },
+  { min: 651, max: 660, target: '수능 3등급 선', desc: '수능 지문을 읽고 대의(주제, 요지)를 파악하는 데 어휘력이 발목을 잡지 않음.' },
   { min: 661, max: 670, target: '수능 3등급 선', desc: '지문의 내용은 다 이해해 놓고 정답을 고르는 선지(1~5번) 독해에서 막힘.' },
   { min: 671, max: 680, target: '수능 3등급 선', desc: '선지에 등장하는 고난도/추상적 단어들을 해석하지 못해 정답률이 떨어짐.' },
   { min: 681, max: 690, target: '수능 3등급 선', desc: '까다로운 선지 단어를 몰라서 지문 내용과 상관없는 매력적인 오답을 자주 고름.' },
@@ -152,7 +152,7 @@ const SUBJECT_META = {
   '영어': {
     icon: Globe, title: '영어 텍스트 분석력',
     stats: [
-      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 의미 유추 (CAT 1000점 만점 기준)' },
+      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 의미 유추 (CAT 1000점 만점 기준)' }, // 이 부분은 아래에서 동적 매핑됨
       { id: 'syntax', name: '문장 해석력 (Syntax)', desc: '감으로 해석하는 것이 아니라, 주어/동사/수식어를 정확히 끊어 읽고 해독하는 능력.' },
       { id: 'theme', name: '언어적 능력 (Theme)', desc: '지문을 읽고 "그래서 필자가 하고 싶은 말이 뭔데?"를 요약해 내는 능력.' },
       { id: 'logic', name: '논리 추론 (Logic)', desc: '문장과 문장 사이의 연결사나 지시어를 파악하여 글의 순서를 맞추거나 빈칸을 채우는 능력.' },
@@ -240,7 +240,16 @@ const AcademyUniverse = ({ currentUser }) => {
   const activeStudentId = isStudent ? currentUser.id : selectedStudentId;
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
+  // 🚀 학생의 영어 스탯과 Voca 루브릭을 최상단에서 확보
   const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
+  const catScore = studentEnglishStat?.catScore;
+  const hasCatScore = catScore !== undefined && catScore !== null;
+  const currentVocaRubric = useMemo(() => {
+      if (hasCatScore) {
+          return VOCA_RUBRICS.find(r => catScore >= r.min && catScore <= r.max);
+      }
+      return null;
+  }, [catScore, hasCatScore]);
 
   const [grades, setGrades] = useState([]);
   const [selectedSubject, setSelectedSubject] = useState(null);
@@ -290,14 +299,21 @@ const AcademyUniverse = ({ currentUser }) => {
     const meta = SUBJECT_META[subjectName];
     return meta.stats.map((s, i) => {
         
-        // 🚀 [Empty State 완벽 제어] 데이터가 아예 없는 신규 학생도 영어 로직을 타도록 보장
         if (subjectName === '영어') {
             let realValue = 0;
             let chartValue = 0; 
+            let dynamicDesc = s.desc; // 🚀 기본 설명(desc) 값
             
             if (s.id === 'voca') {
                 realValue = studentEnglishStat?.catScore || 0; 
                 chartValue = Math.round(realValue / 10); 
+                
+                // 🚀 [루브릭 동적 이식] 100단계 루브릭 텍스트로 설명 덮어쓰기
+                if (hasCatScore && currentVocaRubric) {
+                    dynamicDesc = `🎯 [타겟 학년: ${currentVocaRubric.target}] ${currentVocaRubric.desc}`;
+                } else if (!hasCatScore) {
+                    dynamicDesc = "CAT 초기 진단 점수가 아직 입력되지 않았습니다. 학원에 문의해주세요.";
+                }
             } else {
                 realValue = studentEnglishStat?.radarChart?.[s.id] || 0;
                 if (realValue === 0) {
@@ -307,10 +323,9 @@ const AcademyUniverse = ({ currentUser }) => {
                 }
                 chartValue = realValue;
             }
-            return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca' };
+            return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca', desc: dynamicDesc };
         }
 
-        // 영어 외 타 과목 로직
         const seed = latestScore;
         const pseudoRandom = (seed * (i + 7)) % 20; 
         const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
@@ -457,15 +472,6 @@ const AcademyUniverse = ({ currentUser }) => {
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
   };
 
-  // 🚀 [신규 엔진 로직] CAT 점수 기반 루브릭 텍스트 산출 (Empty State 방어)
-  let currentVocaRubric = null;
-  const catScore = studentEnglishStat?.catScore;
-  const hasCatScore = catScore !== undefined && catScore !== null && catScore > 0;
-  
-  if (hasCatScore) {
-      currentVocaRubric = VOCA_RUBRICS.find(r => catScore >= r.min && catScore <= r.max);
-  }
-
   return (
       <div className="max-w-[1400px] mx-auto space-y-6 animate-in fade-in pb-20 px-2 sm:px-4 pt-6">
           
@@ -473,8 +479,8 @@ const AcademyUniverse = ({ currentUser }) => {
               <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
           </button>
 
+          {/* 🚀 [IA 개선] 상단 메인 카드를 클렌징하여 본연의 요약 기능(Summary)에만 집중하도록 만듭니다. */}
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
-              
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
                   <Icon size={64} />
               </div>
@@ -482,61 +488,7 @@ const AcademyUniverse = ({ currentUser }) => {
               <div className="relative z-10 text-center md:text-left flex-1">
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-3 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
-                  
-                  {selectedSubject === '영어' && (
-                      <div className="mt-3 mb-4 bg-gradient-to-br from-slate-50 to-blue-50/30 p-5 rounded-3xl border border-slate-200 shadow-inner max-w-2xl text-left">
-                          <div className="flex justify-between items-center mb-3 border-b border-slate-200 pb-2">
-                              <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5"><Sparkles size={16} className="text-blue-600"/> 초개인화 Voca 스탯 리포트</h3>
-                              <button 
-                                  onClick={() => window.print()} 
-                                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs px-3 py-2 rounded-xl shadow-md flex items-center gap-1.5 transition-all active:scale-95 shrink-0"
-                              >
-                                  <Printer size={14}/> 오늘의 단어장 인쇄 / PDF 다운로드
-                              </button>
-                          </div>
-                          
-                          <div className="space-y-3 mb-4">
-                              <div>
-                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%</span>
-                                  </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%` }}></div></div>
-                              </div>
-                              <div>
-                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%</span>
-                                  </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%` }}></div></div>
-                              </div>
-                              <div>
-                                  <div className="flex justify-between text-xs font-bold text-slate-600 mb-1">
-                                      <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%</span>
-                                  </div>
-                                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%` }}></div></div>
-                              </div>
-                          </div>
-
-                          {/* 🚀 [신규 엔진 로직 적용 UI] 점수에 맞는 타겟 학년 뱃지와 세부 루브릭 설명 출력 */}
-                          <div className="bg-white p-4 rounded-2xl border border-blue-100 text-sm font-bold text-slate-700 leading-relaxed flex flex-col gap-2 shadow-sm">
-                              <div className="flex items-center gap-2 mb-1">
-                                  <HelpCircle size={16} className="text-blue-500 shrink-0" />
-                                  <span className="text-blue-700 font-black">CAT 정밀 진단 결과</span>
-                                  {hasCatScore && currentVocaRubric && (
-                                      <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200 text-[10px] px-2 py-0.5">
-                                          🎯 타겟: {currentVocaRubric.target}
-                                      </Badge>
-                                  )}
-                              </div>
-                              <p className="break-keep pl-6">
-                                  {hasCatScore && currentVocaRubric 
-                                      ? currentVocaRubric.desc 
-                                      : "CAT 초기 진단 점수가 아직 입력되지 않았습니다. 관리자에게 문의해주세요."}
-                              </p>
-                          </div>
-                      </div>
-                  )}
-
-                  <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep">
+                  <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep mt-4">
                       데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 부족한 세부 역량을 파악하고 전략을 수립하세요.
                   </p>
               </div>
@@ -571,7 +523,7 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </p>
                               </div>
                               <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
-                                  📊 문법 노드 매핑 준비 완료 (Data Core Standby)
+                                  📊 문법 노드 매핑 준비 완료
                               </div>
                           </Card>
 
@@ -582,11 +534,11 @@ const AcademyUniverse = ({ currentUser }) => {
                                       <Badge variant="outline" className="text-[10px] bg-cyan-50 text-cyan-600 border-cyan-200">모의고사 타겟팅</Badge>
                                   </div>
                                   <p className="text-xs font-bold text-slate-400 leading-relaxed break-keep mt-2">
-                                      평가원 및 교육청 모의고사 문제 유형(빈칸추론, 글의 순서, 일치/불일치)을 기준으로 통계를 내어 학생이 특수하게 강하거나 취약한 소포 가공 유형을 입체 파악합니다.
+                                      평가원 및 교육청 모의고사 문제 유형을 기준으로 통계를 내어 학생이 특수하게 강하거나 취약한 소포 가공 유형을 입체 파악합니다.
                                   </p>
                               </div>
                               <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
-                                  🟩 격자 그리드 매핑 준비 완료 (Heatmap Ready)
+                                  🟩 격자 그리드 매핑 준비 완료
                               </div>
                           </Card>
                       </div>
@@ -596,27 +548,57 @@ const AcademyUniverse = ({ currentUser }) => {
               <div className="space-y-6 flex flex-col h-[500px] lg:h-auto overflow-hidden">
                   <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
                       {currData.stats.map(stat => (
-                          <Card key={stat.id} className="p-4 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col sm:flex-row items-center gap-4 sm:gap-6 bg-white shrink-0 shadow-sm">
-                              <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-2 sm:pb-0 shrink-0">
-                                  <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
-                                  <div className="flex items-baseline justify-center gap-1">
-                                      {/* 🚀 [UI 심리 최적화] CAT 점수가 아예 없는 경우 0점이 아닌 '진단 대기'로 표시 */}
-                                      <span className="text-2xl font-black text-slate-800">
-                                          {stat.isVoca && !hasCatScore ? '진단 대기' : stat.value}
-                                      </span>
-                                      {stat.isVoca && hasCatScore && (
-                                          <span className="text-[10px] font-bold text-slate-400">/ 1000</span>
-                                      )}
-                                  </div>
-                              </div>
+                          <Card key={stat.id} className="p-5 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col bg-white shadow-sm">
                               
-                              <div className="flex-1 w-full">
-                                  <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-2 break-keep">{stat.desc}</p>
-                                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                                      {/* 진단 대기 상태일 때는 막대기를 회색으로 비워둠 */}
-                                      <div className={`h-full rounded-full transition-all duration-1000 ${stat.isVoca && !hasCatScore ? 'bg-slate-200' : stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.isVoca && !hasCatScore ? 0 : stat.chartValue}%` }}></div>
+                              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
+                                  <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-3 sm:pb-0 shrink-0">
+                                      <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
+                                      <div className="flex items-baseline justify-center gap-1">
+                                          <span className="text-2xl font-black text-slate-800">
+                                              {stat.isVoca && !hasCatScore ? '진단 대기' : stat.value}
+                                          </span>
+                                          {stat.isVoca && hasCatScore && (
+                                              <span className="text-[10px] font-bold text-slate-400">/ 1000</span>
+                                          )}
+                                      </div>
+                                  </div>
+                                  
+                                  <div className="flex-1 w-full">
+                                      {/* 🚀 루브릭 동적 설명이 들어가는 곳 */}
+                                      <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-3 break-keep">{stat.desc}</p>
+                                      
+                                      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                                          <div className={`h-full rounded-full transition-all duration-1000 ${stat.isVoca && !hasCatScore ? 'bg-slate-200' : stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.isVoca && !hasCatScore ? 0 : stat.chartValue}%` }}></div>
+                                      </div>
                                   </div>
                               </div>
+
+                              {/* 🚀 [IA 개선] Voca 카드인 경우에만 그 아래에 3대 세부 지표를 종속시킵니다. */}
+                              {stat.isVoca && hasCatScore && (
+                                  <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50 p-4 rounded-2xl w-full">
+                                      <h4 className="text-xs font-black text-blue-700 flex items-center gap-1 mb-3"><Sparkles size={14}/> Voca 학습 상세 추적 지표</h4>
+                                      <div className="space-y-3">
+                                          <div>
+                                              <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
+                                                  <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%</span>
+                                              </div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%` }}></div></div>
+                                          </div>
+                                          <div>
+                                              <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
+                                                  <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%</span>
+                                              </div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%` }}></div></div>
+                                          </div>
+                                          <div>
+                                              <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
+                                                  <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%</span>
+                                              </div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%` }}></div></div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              )}
                           </Card>
                       ))}
 
