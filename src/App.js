@@ -35,7 +35,8 @@ const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
 const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
 const ConsultationManager = React.lazy(() => import('./features/ConsultationManager'));
-const VocaManager = React.lazy(() => import('./features/VocaManager')); // Voca 복구
+const VocaManager = React.lazy(() => import('./features/VocaManager'));
+const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -528,7 +529,12 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        <Route path="/voca" element={<VocaManager currentUser={currentUser} />} />
+{/* 🚀 [CTO 패치 2] 학생이 들어오면 StudentVocaDaily를, 강사가 들어오면 VocaManager를 보여주도록 지능형 분기 처리 */}
+<Route path="/voca" element={
+    currentUser.role === 'student' 
+        ? <StudentVocaDaily currentUser={currentUser} /> 
+        : <VocaManager currentUser={currentUser} />
+} />
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
