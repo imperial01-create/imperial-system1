@@ -1,11 +1,11 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
    (🚀 초개인화 통합 패치: 상단 대시보드 UI 클렌징, 100단계 정밀 Voca 루브릭 동적 설명 탑재,
-   그리고 Voca 3대 상세 스탯을 어휘력 카드로 종속시켜 완벽한 정보 위계(IA)를 달성했습니다.) */
+   학부모 뷰(Parent View) 최적화: 자녀가 1명일 경우 1-Depth 즉시 렌더링, 다자녀일 경우 스마트 드롭다운 제공) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
   Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Search, ChevronRight, CheckCircle,
-  Network, LayoutGrid, HelpCircle
+  Network, LayoutGrid, HelpCircle, Users, AlertCircle
 } from 'lucide-react';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -152,7 +152,7 @@ const SUBJECT_META = {
   '영어': {
     icon: Globe, title: '영어 텍스트 분석력',
     stats: [
-      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 의미 유추 (CAT 1000점 만점 기준)' }, // 이 부분은 아래에서 동적 매핑됨
+      { id: 'voca', name: '어휘력 (Voca)', desc: '단순 스펠링 암기를 넘어, 문맥에 맞는 의미 유추 (CAT 1000점 만점 기준)' }, 
       { id: 'syntax', name: '문장 해석력 (Syntax)', desc: '감으로 해석하는 것이 아니라, 주어/동사/수식어를 정확히 끊어 읽고 해독하는 능력.' },
       { id: 'theme', name: '언어적 능력 (Theme)', desc: '지문을 읽고 "그래서 필자가 하고 싶은 말이 뭔데?"를 요약해 내는 능력.' },
       { id: 'logic', name: '논리 추론 (Logic)', desc: '문장과 문장 사이의 연결사나 지시어를 파악하여 글의 순서를 맞추거나 빈칸을 채우는 능력.' },
@@ -218,29 +218,43 @@ const RadarChart = ({ stats, isDummy = false }) => {
 
 const AcademyUniverse = ({ currentUser }) => {
   const { users, classes, enrollments, englishStats } = useData();
-  
+  const isStudent = currentUser.role === 'student';
+  const isParent = currentUser?.role === 'parent';
+
+  // 🚀 [학부모 UX 최적화] 연결된 자녀 리스트 추출 및 기본 타겟팅 자동화
+  const linkedChildren = useMemo(() => {
+      if (!isParent) return [];
+      return (users || []).filter(u => u.role === 'student' && currentUser.linkedChildrenIds?.includes(u.id));
+  }, [users, currentUser, isParent]);
+
+  const [selectedChildId, setSelectedChildId] = useState('');
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+
+  useEffect(() => {
+      if (isParent && linkedChildren.length > 0 && !selectedChildId) {
+          setSelectedChildId(linkedChildren[0].id);
+      }
+  }, [isParent, linkedChildren, selectedChildId]);
+
   const accessibleStudents = useMemo(() => {
       const allStudents = (users || []).filter(u => u.role === 'student');
       if (['admin', 'admin_assistant', 'ta'].includes(currentUser.role)) return allStudents;
-      if (currentUser.role === 'parent') return allStudents.filter(s => (currentUser.linkedChildrenIds || []).includes(s.id));
+      if (isParent) return linkedChildren;
       if (currentUser.role === 'lecturer') {
           const myClasses = (classes || []).filter(c => c.lecturerId === currentUser.id).map(c => c.id);
           const myStudentIds = (enrollments || []).filter(e => myClasses.includes(e.classId) && e.status === 'active').map(e => e.studentId);
           return allStudents.filter(s => myStudentIds.includes(s.id));
       }
       return [];
-  }, [users, classes, enrollments, currentUser]);
+  }, [users, classes, enrollments, currentUser, isParent, linkedChildren]);
 
-  const isStudent = currentUser.role === 'student';
-  const [selectedStudentId, setSelectedStudentId] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [searchResults, setSearchResults] = useState([]);
-
-  const activeStudentId = isStudent ? currentUser.id : selectedStudentId;
+  // 🚀 실제 렌더링 대상(타겟) 설정
+  const activeStudentId = isStudent ? currentUser.id : (isParent ? selectedChildId : selectedStudentId);
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
-  // 🚀 학생의 영어 스탯과 Voca 루브릭을 최상단에서 확보
   const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
   const catScore = studentEnglishStat?.catScore;
   const hasCatScore = catScore !== undefined && catScore !== null;
@@ -302,13 +316,12 @@ const AcademyUniverse = ({ currentUser }) => {
         if (subjectName === '영어') {
             let realValue = 0;
             let chartValue = 0; 
-            let dynamicDesc = s.desc; // 🚀 기본 설명(desc) 값
+            let dynamicDesc = s.desc; 
             
             if (s.id === 'voca') {
                 realValue = studentEnglishStat?.catScore || 0; 
                 chartValue = Math.round(realValue / 10); 
                 
-                // 🚀 [루브릭 동적 이식] 100단계 루브릭 텍스트로 설명 덮어쓰기
                 if (hasCatScore && currentVocaRubric) {
                     dynamicDesc = `🎯 [타겟 학년: ${currentVocaRubric.target}] ${currentVocaRubric.desc}`;
                 } else if (!hasCatScore) {
@@ -367,7 +380,19 @@ const AcademyUniverse = ({ currentUser }) => {
     return result;
   }, [grades, myActiveClasses, englishStats]);
 
-  if (!isStudent && !activeStudentId) {
+  // 🚀 [예외 처리] 학부모인데 연결된 자녀가 없을 경우
+  if (isParent && linkedChildren.length === 0) {
+      return (
+          <div className="p-10 text-center flex flex-col items-center">
+              <AlertCircle size={48} className="text-gray-300 mb-4" />
+              <h2 className="text-xl font-bold text-gray-600">연결된 자녀 정보가 없습니다.</h2>
+              <p className="text-gray-400 mt-2">학원 데스크에 자녀 계정 연결을 요청해주세요.</p>
+          </div>
+      );
+  }
+
+  // 관리자/강사용 학생 검색 뷰
+  if (!isStudent && !isParent && !activeStudentId) {
       return (
           <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4 pt-10">
               <div className="bg-slate-900 text-white p-8 rounded-[40px] shadow-2xl text-center md:text-left">
@@ -401,10 +426,28 @@ const AcademyUniverse = ({ currentUser }) => {
   if (!selectedSubject) {
       return (
         <div className="max-w-[1200px] mx-auto space-y-8 animate-in fade-in pb-20 px-4 pt-6">
-            {!isStudent && (
+            {!isStudent && !isParent && (
                 <button onClick={() => setSelectedStudentId('')} className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-bold mb-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 transition-colors w-fit">
                     <ChevronLeft size={18}/> 학생 검색으로 돌아가기
                 </button>
+            )}
+
+            {/* 🚀 [다자녀 학부모 전용 UI] 2명 이상일 때만 렌더링되는 자녀 전환 드롭다운 */}
+            {isParent && linkedChildren.length > 1 && (
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
+                    <span className="font-bold text-indigo-800 flex items-center gap-2">
+                        <Users size={18} /> 조회할 자녀 선택
+                    </span>
+                    <select 
+                        value={selectedChildId || ''} 
+                        onChange={(e) => setSelectedChildId(e.target.value)}
+                        className="bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold px-4 py-2 rounded-lg outline-none cursor-pointer"
+                    >
+                        {linkedChildren.map(child => (
+                            <option key={child.id} value={child.id}>{child.name} 학생</option>
+                        ))}
+                    </select>
+                </div>
             )}
 
             <div className="text-center mb-10 bg-white p-8 rounded-[32px] shadow-sm border border-slate-100">
@@ -443,9 +486,7 @@ const AcademyUniverse = ({ currentUser }) => {
                              className={`relative bg-white rounded-[32px] p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-all hover:-translate-y-2 group border-2 ${data.tier.border} ${data.tier.shadow} h-80`}>
                             
                             <div className={`absolute inset-0 opacity-10 rounded-[28px] ${data.tier.bg}`}></div>
-                            
                             <Badge variant="outline" className={`absolute top-4 right-4 font-black bg-white shadow-sm ${data.tier.color}`}>{data.tier.name}</Badge>
-                            
                             <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-md bg-white border border-slate-100 ${data.tier.color} relative z-10 group-hover:scale-110 transition-transform`}>
                                 <Icon size={36} />
                             </div>
@@ -479,7 +520,6 @@ const AcademyUniverse = ({ currentUser }) => {
               <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
           </button>
 
-          {/* 🚀 [IA 개선] 상단 메인 카드를 클렌징하여 본연의 요약 기능(Summary)에만 집중하도록 만듭니다. */}
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
                   <Icon size={64} />
@@ -564,7 +604,6 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </div>
                                   
                                   <div className="flex-1 w-full">
-                                      {/* 🚀 루브릭 동적 설명이 들어가는 곳 */}
                                       <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-3 break-keep">{stat.desc}</p>
                                       
                                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -573,7 +612,6 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </div>
                               </div>
 
-                              {/* 🚀 [IA 개선] Voca 카드인 경우에만 그 아래에 3대 세부 지표를 종속시킵니다. */}
                               {stat.isVoca && hasCatScore && (
                                   <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50 p-4 rounded-2xl w-full">
                                       <h4 className="text-xs font-black text-blue-700 flex items-center gap-1 mb-3"><Sparkles size={14}/> Voca 학습 상세 추적 지표</h4>

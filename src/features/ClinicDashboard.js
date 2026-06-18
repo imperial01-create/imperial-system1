@@ -1,5 +1,6 @@
 /* [서비스 가치] 클리닉 V3.1.6 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
-   (🚀 CTO 핫픽스: LocalStorage 캐시 용량 초과로 인한 빈화면(White Screen) 크래시 방지 및 문자 발송 데이터 정합성 보장) */
+   (🚀 학부모 UX/UI 패치: 학부모 역시 학생과 동일하게 '최대 7일 이내'의 일정만 조회 가능하도록
+   캘린더 필터링(isAllowedDate)을 강제 적용하여 인지 부하 감소 및 렌더링을 최적화했습니다.) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -16,7 +17,6 @@ import { useData } from '../contexts/DataContext';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 특수기호(괄호 등)가 섞인 학생 이름도 안전하게 치환할 수 있도록 방어하는 함수
 const escapeRegExp = (string) => {
     if (!string) return '';
     return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -279,10 +279,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     const slotDateTime = new Date(`${selectedDateStr}T${t}`);
     const isSlotPast = slotDateTime < now;
     
-    if (isStudent) {
-        const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7);
+    if (isStudent || isParent) {
+        const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7) && selectedDateStr >= getLocalToday();
         const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
-        if (availableSlots.length === 0 || !isSelectedDateAllowed) return null;
+        // 학생/학부모는 7일 범위를 벗어난 날짜의 슬롯을 볼 수 없음
+        if (!isSelectedDateAllowed) return null;
+        if (isStudent && availableSlots.length === 0) return null;
     }
     if (isLecturer && slots.length === 0) return null;
 
@@ -300,7 +302,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 </div>
             </div>
         ) : (
-            !isStudent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
+            !isStudent && !isParent ? <div key={i} className="flex gap-4 items-start min-h-[60px] opacity-40">
                  <div className="w-14 pt-2 text-right text-sm font-bold text-gray-400 font-mono">{t}</div>
                  <div className="flex-1 border border-gray-100 rounded-xl p-3 bg-gray-50 flex items-center justify-center text-gray-400 text-sm">일정 없음</div>
             </div> : null
@@ -483,17 +485,19 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
             
+            // 🚀 [학부모/학생 권한 제어] 일주일 필터링 강제 적용
             const maxDateStr = getFutureDate(7);
-            const isAllowedDateForStudent = isStudent ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
+            const isAllowedDate = (isStudent || isParent) ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
 
             let hasEvent = false;
             const safeSessions = Array.isArray(sessions) ? sessions : [];
-            if (isStudent) { 
-                if (isAllowedDateForStudent) {
+            
+            if (isStudent || isParent) { 
+                if (isAllowedDate) {
                     hasEvent = safeSessions.some(s => {
                         const workerRole = s.workerRole || taSubjectMap.byId?.[s.taId]?.role || taSubjectMap.byName?.[s.taName]?.role || 'ta';
                         if (workerRole === 'admin_assistant') return false;
-                        if (s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
+                        if (isStudent && s.targetClassId && !myClassIds?.includes(s.targetClassId)) return false;
                         return s.date === dStr && s.status === 'open'; 
                     });
                 } 
@@ -502,7 +506,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             else { hasEvent = safeSessions.some(s => s.date === dStr); }
 
             let dayClass = 'text-gray-700 hover:bg-gray-100';
-            if (isStudent && !isAllowedDateForStudent) {
+            if ((isStudent || isParent) && !isAllowedDate) {
                 dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; 
             } else if (isSel) {
                 dayClass = 'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200';
@@ -515,9 +519,9 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             return (
               <button 
                 key={i} 
-                onClick={() => { if (!(isStudent && !isAllowedDateForStudent)) onDateChange(dStr); }} 
+                onClick={() => { if (isAllowedDate) onDateChange(dStr); }} 
                 className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${dayClass}`}
-                disabled={isStudent && !isAllowedDateForStudent}
+                disabled={(isStudent || isParent) && !isAllowedDate}
               >
                 <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
                 {isToday && !isSel && <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
@@ -699,7 +703,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             let sessionQuery;
 
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
-                const today = getLocalToday(); const endDate = getFutureDate(21);
+                const today = getLocalToday(); const endDate = getFutureDate(7); // 🚀 [학부모/학생 공통 7일 필터 적용]
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), where('date', '<=', endDate));
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -711,7 +715,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
             setSessionMap(fetchedData);
             
-            // 🚀 [CTO 패치] 데이터를 가져온 직후 캐시에 넣을 때 용량 제한으로 인한 에러 방지 처리 (추가 안전망)
             try {
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: fetchedData }));
             } catch (cacheError) {
@@ -722,7 +725,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
-    // 🚀 [CTO 패치] 빈 화면(White Screen) 크래시의 근본 원인을 제거한 안전한 로컬 상태 업데이트 함수
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
@@ -730,8 +732,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             const cacheKey = `imperial_sessions_${year}-${month}`;
             
             try {
-                // 상태 업데이트 렌더(Render) 사이클 중에 로컬 스토리지가 터지는(QuotaExceededError) 현상을 try-catch로 완벽 차단.
-                // 이 처리가 없으면 상태 업데이트 도중 React 전체가 죽어버리며 빈 화면이 나옵니다.
                 localStorage.setItem(cacheKey, JSON.stringify({ timestamp: Date.now(), data: newState }));
             } catch (error) {
                 console.warn('LocalStorage limit exceeded! Cache skipped to prevent React Crash:', error);
@@ -1303,8 +1303,8 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 </Card>
                 <Card className="w-full">
                     <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-2">
-                        <h2 className="text-xl font-bold flex items-center gap-2"><PlusCircle className="text-blue-600"/> 새로운 클리닉 예약하기</h2>
-                        {currentUser.role === 'student' && <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 w-fit">🗓️ 예약 가능 기간: 당일 ~ 7일 후</span>}
+                        <h2 className="text-xl font-bold flex items-center gap-2"><PlusCircle className="text-blue-600"/> {currentUser.role === 'student' ? '새로운 클리닉 예약하기' : '실시간 예약 현황'}</h2>
+                        <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 w-fit">🗓️ 예약 가능 기간: 당일 ~ 7일 후</span>
                     </div>
                     <CalendarView 
                         isInteractive={currentUser.role === 'student'} 
@@ -1509,7 +1509,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         </div>
       </Modal>
       
-      {/* 🚀 [핫픽스] 승인 모달 */}
       <Modal isOpen={modalState.type==='preview_confirm'} onClose={()=>setModalState({type:null})} title="클리닉 예약 승인 및 학부모 안내문자 발송">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 승인 시 배정된 모든 학생의 학부모에게 개별 맞춤 문자 분할 발송이 요청됩니다.
@@ -1543,11 +1542,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
                         const searchName = selectedSession.studentName || st.name || '';
                         
-                        // 🚀 [CTO 방어 코드] st.name이 undefined일 경우 Firebase 크래시 방지용 fallback 추가
                         const safeStudentName = st.name || '알수없음';
                         const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), safeStudentName) : previewMessage;
                         
-                        // Firebase는 undefined 데이터를 필드값으로 허용하지 않으므로 명시적 안전값(safeStudentName) 전달
                         await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
                             phoneNumber: cleanPhone, message: customizedMsg, status: 'pending', type: 'clinic_approval', studentName: safeStudentName, createdAt: serverTimestamp()
                         });
@@ -1575,7 +1572,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         }}>그룹 예약 승인 및 개별 문자 발송하기</Button>
       </Modal>
       
-      {/* 🚀 [핫픽스] 피드백 검수 모달 */}
       <Modal isOpen={modalState.type==='message_preview_feedback'} onClose={()=>setModalState({type:null})} title="학부모 발송용 피드백 검수">
         <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800 font-bold mb-3 flex items-center gap-2">
             <CheckCircle size={18}/> 수정이 필요하면 아래 텍스트 창에서 바로 편집하세요.
@@ -1609,7 +1605,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         const cleanPhone = String(targetPhone).replace(/[^0-9]/g, '');
                         const searchName = selectedSession.studentName || st.name || '';
                         
-                        // 🚀 [CTO 방어 코드] Firebase undefined 크래시 방지용
                         const safeStudentName = st.name || '알수없음';
                         const customizedMsg = searchName ? previewMessage.replace(new RegExp(escapeRegExp(searchName), 'g'), safeStudentName) : previewMessage;
                         

@@ -442,11 +442,18 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
     { 
   path: '/voca', 
+  // 🚀 [UX/UI 최적화] 역할별로 메뉴 이름을 다르게 보여주어 직관성을 높입니다.
   label: currentUser.role === 'student' ? '오늘의 영단어' : 
          currentUser.role === 'parent' ? 'AI 학습 리포트' : 'Voca 출제/관리', 
   icon: BookText, 
-  roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], // parent 추가
-  showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
+  // 🚀 [접근 권한 추가] parent 권한을 명시적으로 추가합니다.
+  roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], 
+  showCondition: (user) => 
+    user.role === 'admin' || 
+    user.role === 'admin_assistant' || 
+    user.role === 'student' || 
+    user.role === 'parent' || 
+    (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
 },
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
@@ -530,12 +537,15 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-{/* 🚀 [CTO 패치 2] 학생이 들어오면 StudentVocaDaily를, 강사가 들어오면 VocaManager를 보여주도록 지능형 분기 처리 */}
-<Route path="/voca" element={
-    currentUser.role === 'student' 
-        ? <StudentVocaDaily currentUser={currentUser} /> 
-        : <VocaManager currentUser={currentUser} />
-} />
+{/* 🚀 [Zero Trust Security] 권한에 따른 컴포넌트 렌더링 강제 분리 */}
+<Route 
+  path="/voca" 
+  element={
+    ['student', 'parent'].includes(currentUser?.role) 
+      ? <StudentVocaDaily currentUser={currentUser} /> 
+      : <VocaManager currentUser={currentUser} />
+  } 
+/>
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
