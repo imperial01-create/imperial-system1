@@ -1,16 +1,17 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.4
-   운영자 관점: 학원의 유연한 운영을 위해, 채점에 반영되지 않고 무한 출력 가능한 '오답 재시험지' 및 '재시험 답안지' 엔진을 신규 탑재했습니다. 
-   또한 인쇄 시 불필요한 노이즈를 모두 제거하고 출판 교재 수준의 고퀄리티 단어장을 0.1초 만에 인쇄합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.5
+   운영자 방어막 구축: 채점 시 휴먼 에러를 방지하는 2중 안전망(제출 전 확인 팝업 + 타임머신 복구 버튼)을 도입했습니다. 
+   채점 실수 발생 시 [채점 취소] 버튼 클릭 한 번으로 모든 데이터를 이전 상태로 완벽히 롤백합니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
-    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown
+    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2
 } from 'lucide-react';
 import { collection, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Badge, Modal, Button } from '../components/UI';
-import { generateDailyVocaSet, processVocaTestResult } from '../utils/vocaEngine';
+// 🚀 롤백 엔진 임포트 추가
+import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } from '../utils/vocaEngine';
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -89,7 +90,7 @@ const VocaManager = ({ currentUser }) => {
     };
 
     // =====================================================================
-    // 🚀 인쇄 로직 (오답 재시험지 기능 추가 및 예문/품사 포맷팅 고도화)
+    // 인쇄 로직 (Native HTML Injection)
     // =====================================================================
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
@@ -122,7 +123,6 @@ const VocaManager = ({ currentUser }) => {
                     wordsList = payload.wordsForPrint;
                 }
 
-                // 🚀 재시험 모드일 경우 오답 필터링
                 if (type.startsWith('retest')) {
                     if (!isSessionCompleted) {
                         alert(`${student.name} 학생의 채점이 완료되지 않아 오답 재시험지를 출력할 수 없습니다.`);
@@ -203,10 +203,8 @@ const VocaManager = ({ currentUser }) => {
                 `;
 
                 if (type === 'wordbook') {
-                    // 🚀 단어장 (1~40번, 품사 및 넘버링, 풀 예문)
                     data.wordsList.slice(0, 40).forEach((w, i) => {
                         const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
-                        
                         let meaningHtml = '';
                         let allSynonyms = [];
                         let allAntonyms = [];
@@ -220,7 +218,6 @@ const VocaManager = ({ currentUser }) => {
                                 if (m.synonyms) allSynonyms.push(...m.synonyms);
                                 if (m.antonyms) allAntonyms.push(...m.antonyms);
                                 
-                                // 🚀 예문 우선, 없으면 blank 문장의 밑줄 복원
                                 if (!fullSentence && m.exampleSentence) {
                                     fullSentence = m.exampleSentence;
                                 } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
@@ -252,9 +249,7 @@ const VocaManager = ({ currentUser }) => {
                         `;
                     });
                 } else {
-                    // 🚀 시험지, 답안지, 재시험지, 재시험답안지 
                     data.questionsList.forEach((q) => {
-                        // 재시험 모드에서는 41번이더라도 구분선을 따로 넣지 않음(원래 번호가 섞여 나오므로)
                         const isAdvanced = (type === 'test' || type === 'answer') && q.questionNumber === 41;
                         const rowClass = isAdvanced ? 'class="advanced-row"' : '';
                         const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
@@ -313,7 +308,7 @@ const VocaManager = ({ currentUser }) => {
     };
 
     // =====================================================================
-    // 채점 및 AI 엔진 모달 로직
+    // 채점 모달 및 🚀 타임머신 복구(Undo) 로직
     // =====================================================================
     const openGradingModal = async (student) => {
         const sessionId = `test_${student.id}_s${student.stat.vocaSession || 1}`;
@@ -338,6 +333,12 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const submitDetailedGrading = async () => {
+        const finalScore = 50 - gradingData.wrongAnswers.length;
+        // 🚀 [1차 방어막] 채점 확정 전 확인 팝업
+        if (!window.confirm(`[${gradingData.name}] 학생의 최종 점수는 ${finalScore}점입니다.\n오답 문항 개수를 정확히 확인하셨습니까?\n이대로 채점을 확정하고 AI 엔진에 전송하시겠습니까?`)) {
+            return;
+        }
+
         setProcessing(true);
         try {
             await processVocaTestResult(gradingData.studentId, gradingData.sessionNumber, gradingData.wrongAnswers);
@@ -346,6 +347,22 @@ const VocaManager = ({ currentUser }) => {
         } catch (error) {
             console.error("Detailed Grading Error:", error);
             alert("채점 처리 중 오류가 발생했습니다.");
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    // 🚀 [2차 방어막] 타임머신 복구 실행 함수
+    const handleRollback = async (studentId, sessionNumber) => {
+        if (!window.confirm(`⚠️ 경고: [제 ${sessionNumber}회차] 채점을 취소하고 데이터를 채점 이전 상태로 완벽히 롤백(복구)하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+        
+        setProcessing(true);
+        try {
+            await rollbackVocaTestResult(studentId, sessionNumber);
+            alert(`${sessionNumber}회차 채점이 성공적으로 취소되고 데이터가 복구되었습니다.`);
+        } catch(error) {
+            console.error("Rollback Error:", error);
+            alert(error.message || "복구 중 오류가 발생했습니다.");
         } finally {
             setProcessing(false);
         }
@@ -595,7 +612,6 @@ const VocaManager = ({ currentUser }) => {
                                             </td>
                                             
                                             <td className="p-4 text-center">
-                                                {/* 🚀 재시험지 포함 5가지 출력 모드 지원 */}
                                                 <div className="flex justify-center gap-1.5 flex-wrap max-w-[200px] mx-auto">
                                                     <button onClick={() => preparePrintData('wordbook', student.id)} className="px-2.5 py-1.5 bg-cyan-50 text-cyan-600 hover:bg-cyan-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-cyan-200 whitespace-nowrap">
                                                         단어장
@@ -619,12 +635,23 @@ const VocaManager = ({ currentUser }) => {
 
                                     {activeTab === 'grading' && (
                                         <td className="p-4 text-center">
-                                            <button 
-                                                onClick={() => openGradingModal(student)}
-                                                className="bg-white border-2 border-emerald-500 hover:bg-emerald-50 text-emerald-700 font-black px-6 py-2.5 rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2 mx-auto"
-                                            >
-                                                <CheckCircle size={18} /> 오답 문항 선택 (채점)
-                                            </button>
+                                            <div className="flex flex-col gap-2 justify-center items-center">
+                                                <button 
+                                                    onClick={() => openGradingModal(student)}
+                                                    className="bg-white border-2 border-emerald-500 hover:bg-emerald-50 text-emerald-700 font-black px-6 py-2.5 rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2"
+                                                >
+                                                    <CheckCircle size={18} /> 오답 문항 선택 (채점)
+                                                </button>
+                                                {/* 🚀 [CTO 패치] 채점 완료된 학생에게 노출되는 '타임머신 롤백' 버튼 */}
+                                                {student.stat.vocaSession > 1 && (
+                                                    <button 
+                                                        onClick={() => handleRollback(student.id, student.stat.vocaSession - 1)}
+                                                        className="text-[11px] text-rose-400 hover:text-rose-600 underline font-bold flex items-center gap-1 mt-1"
+                                                    >
+                                                        <Undo2 size={12} /> {student.stat.vocaSession - 1}회차 채점 취소 (복구)
+                                                    </button>
+                                                )}
+                                            </div>
                                         </td>
                                     )}
 

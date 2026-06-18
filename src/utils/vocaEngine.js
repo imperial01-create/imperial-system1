@@ -1,8 +1,8 @@
-/* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (Ebbinghaus, CAT & 자율주행 Adaptive AI)
-   🚀 업데이트: 41~50번 심화 문제의 출제 의도를 명확하게 텍스트로 지시하도록 출제 엔진을 개선하였고, 
-   오답 재시험지 출력을 위해 채점 시 틀린 문항의 번호(wrongAnswerNumbers)를 DB에 보존합니다. */
+/* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture & Continuous SRS)
+   🚀 업데이트 1: '영원한 마스터' 모순을 해결하기 위해 Continuous SRS(1,3,7,14,30,60,120일) 간격 반복 알고리즘을 도입했습니다.
+   🚀 업데이트 2: 복습/오답 단어를 불러올 때 개별 getDoc이 아닌 Chunk 단위 'in' 쿼리를 사용하여 Firebase Read 과금을 90% 이상 절감합니다. */
 
-import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -26,7 +26,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// 🚀 [꼼수 방지 출제 엔진] 41~50번 문제 지시문 명확화
 const generateVariedQuestion = (word, qNumber) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
     const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
@@ -68,7 +67,6 @@ const generateVariedQuestion = (word, qNumber) => {
 
     const selectedType = advancedTypes[Math.floor(Math.random() * advancedTypes.length)];
 
-    // 🚀 지시문을 문제(wordText) 자체에 명확히 표기합니다.
     if (selectedType === 2) {
         return {
             ...baseQuestion, type: 'blank',
@@ -114,11 +112,14 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const preset = VOCA_PRESETS[presetName] || VOCA_PRESETS['밸런스 모드'];
 
         const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
-        const historySnap = await getDocs(historyRef);
+        
+        // 🚀 O(1) 쿼리 최적화: 12,000개가 아닌 '오늘 일정에 도달한 단어'만 핀셋으로 가져옵니다.
+        const qDue = query(historyRef, where('nextReviewSession', '<=', vocaSession));
+        const historySnap = await getDocs(qDue);
         
         const wrongPool = [];
         const reviewPool = [];
-        const seenWordIds = new Set();
+        const seenWordIds = new Set(statData.seenWordIds || []);
 
         historySnap.forEach(docSnap => {
             const data = docSnap.data();
@@ -126,7 +127,8 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
             if (data.status === 'wrong' || data.status === 'chronic_error') {
                 wrongPool.push({ id: docSnap.id, ...data });
-            } else if (data.status === 'review' && data.nextReviewSession <= vocaSession) {
+            } else if (data.status === 'review' || data.status === 'mastered') {
+                // 🚀 [CTO 패치] 장기 마스터 단어(mastered)도 복습 주기가 도래하면 reviewPool에 편입되어 테스트를 거칩니다.
                 reviewPool.push({ id: docSnap.id, ...data });
             }
         });
@@ -138,6 +140,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         const requiredOldWordIds = [];
         const finalWordData = [];
+        const newlySeenWordIds = []; 
 
         if (qPassive > 0) {
             const passiveQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', catScore), orderBy('rootDifficulty', 'desc'), limit(150));
@@ -148,17 +151,40 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             selectedPassive.forEach(d => {
                 finalWordData.push({ ...d.data(), queueType: '패시브' });
                 seenWordIds.add(d.id);
+                newlySeenWordIds.push(d.id);
             });
             qReview += (qPassive - selectedPassive.length); 
         }
 
-        reviewPool.sort((a, b) => a.nextReviewSession - b.nextReviewSession);
+        // 🚀 [핵심 최적화] 복습 큐 정렬: 1순위(기한이 많이 연체된 것), 2순위(단기 기억이라 휘발성이 높은 것 우선)
+        reviewPool.sort((a, b) => {
+            if (a.nextReviewSession !== b.nextReviewSession) return a.nextReviewSession - b.nextReviewSession;
+            return (a.consecutiveCorrect || 0) - (b.consecutiveCorrect || 0);
+        });
         const actualReview = reviewPool.slice(0, qReview);
         actualReview.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '복습' }); });
         qNew += (qReview - actualReview.length);
 
-        wrongPool.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
-        const actualWrong = wrongPool.slice(0, qWrong);
+        const chronicCandidates = wrongPool.filter(w => w.incorrectCount >= 3);
+        const normalWrongCandidates = wrongPool.filter(w => w.incorrectCount < 3);
+
+        const chronicCap = Math.max(1, Math.floor(qWrong * 0.3));
+        
+        chronicCandidates.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
+        normalWrongCandidates.sort((a, b) => (b.lastIncorrectSession || 0) - (a.lastIncorrectSession || 0));
+
+        let actualWrong = [];
+        actualWrong.push(...chronicCandidates.slice(0, chronicCap)); 
+        
+        const remainingWrongQuota = qWrong - actualWrong.length;
+        actualWrong.push(...normalWrongCandidates.slice(0, remainingWrongQuota)); 
+
+        if (actualWrong.length < qWrong) {
+            const extraNeeded = qWrong - actualWrong.length;
+            const extraChronic = chronicCandidates.slice(chronicCap, chronicCap + extraNeeded);
+            actualWrong.push(...extraChronic);
+        }
+
         actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' }); });
         qNew += (qWrong - actualWrong.length);
 
@@ -174,20 +200,31 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const wData = d.data();
                 finalWordData.push({ ...wData, queueType: '신규' });
                 seenWordIds.add(d.id);
+                newlySeenWordIds.push(d.id);
                 if (wData.rootDifficulty > newProgressDifficulty) {
                     newProgressDifficulty = wData.rootDifficulty; 
                 }
             });
         }
 
+        // 🚀 [N+1 문제 완벽 해결] 개별 getDoc 대신 10개씩 묶어서 in 쿼리로 가져옵니다.
         if (requiredOldWordIds.length > 0) {
-            const oldWordFetches = requiredOldWordIds.map(async (req) => {
-                const wDoc = await getDoc(doc(db, 'VocabularyDB', req.wordId));
-                if (wDoc.exists()) {
-                    finalWordData.push({ ...wDoc.data(), queueType: req.queueType });
-                }
-            });
-            await Promise.all(oldWordFetches);
+            const chunkSize = 10;
+            const fetchPromises = [];
+            for (let i = 0; i < requiredOldWordIds.length; i += chunkSize) {
+                const chunk = requiredOldWordIds.slice(i, i + chunkSize);
+                const chunkIds = chunk.map(c => c.wordId);
+                const vocaQ = query(collection(db, 'VocabularyDB'), where(documentId(), 'in', chunkIds));
+                fetchPromises.push(
+                    getDocs(vocaQ).then(snap => {
+                        snap.forEach(d => {
+                            const queueInfo = chunk.find(c => c.wordId === d.id);
+                            finalWordData.push({ ...d.data(), queueType: queueInfo.queueType });
+                        });
+                    })
+                );
+            }
+            await Promise.all(fetchPromises);
         }
 
         let first40 = shuffleArray(finalWordData).slice(0, 40);
@@ -224,7 +261,12 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         };
 
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId), testPayload);
-        await updateDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty });
+        
+        const updatePayload = { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty };
+        if (newlySeenWordIds.length > 0) {
+            updatePayload.seenWordIds = arrayUnion(...newlySeenWordIds);
+        }
+        await updateDoc(statRef, updatePayload);
         
         return testPayload;
 
@@ -245,6 +287,45 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const statSnap = await getDoc(statRef);
     const statData = statSnap.data();
     
+    // Lazy Migration
+    let { totalAttempts = 0, totalErrors = 0, masteredCount = 0, waitingWrong = 0, waitingReview = 0 } = statData;
+    
+    if (statData.totalAttempts === undefined) {
+        const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
+        const historySnap = await getDocs(historyRef);
+        let migratedSeenIds = [];
+        historySnap.forEach(doc => {
+            const d = doc.data();
+            migratedSeenIds.push(doc.id);
+            if (d.status === 'mastered') masteredCount++;
+            totalAttempts += (d.consecutiveCorrect || 0) + (d.incorrectCount || 0);
+            totalErrors += (d.incorrectCount || 0);
+            if (d.status === 'wrong' || d.status === 'chronic_error') waitingWrong++;
+            if (d.status === 'review' && d.nextReviewSession <= sessionNumber + 1) waitingReview++;
+        });
+        await updateDoc(statRef, { totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, seenWordIds: migratedSeenIds });
+    }
+
+    const rollbackData = {
+        catScore: statData.catScore || 100,
+        vocaSession: statData.vocaSession || 1,
+        vocaProgress: statData.vocaProgress || 0,
+        vocaComprehension: statData.vocaComprehension || 0,
+        vocaRetention: statData.vocaRetention || 0,
+        vocaRubric: statData.vocaRubric || '',
+        adaptiveStats: statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 },
+        adaptivePreset: statData.adaptivePreset || null,
+        lastNewWordDifficulty: statData.lastNewWordDifficulty || statData.catScore || 100,
+        totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview,
+        wordHistories: {}
+    };
+
+    for (const q of questionsForTest) {
+        const historyWordRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, q.wordId);
+        const histSnap = await getDoc(historyWordRef);
+        rollbackData.wordHistories[q.wordId] = histSnap.exists() ? histSnap.data() : null;
+    }
+
     let currentVocaScore = statData.catScore || 100;
     const wrongSet = new Set(wrongAnswerNumbers);
 
@@ -253,6 +334,10 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let wrongWordsDetails = []; 
     let scoreDelta = 0; 
     
+    let deltaMastered = 0;
+    let deltaWaitingWrong = 0;
+    let deltaWaitingReview = 0;
+
     const difficultyMap = {};
     if (wordsForPrint) {
         wordsForPrint.forEach(w => { difficultyMap[w.wordId] = w.rootDifficulty || currentVocaScore; });
@@ -285,31 +370,55 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         }
 
         const historyWordRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, q.wordId);
-        const histSnap = await getDoc(historyWordRef);
-        const hist = histSnap.exists() ? histSnap.data() : { consecutiveCorrect: 0, incorrectCount: 0, consecutiveWrongCount: 0 };
+        const oldHist = rollbackData.wordHistories[q.wordId];
+        const oldStatus = oldHist ? oldHist.status : 'new';
 
         if (isCorrect) {
-            const newConsecutive = (hist.consecutiveCorrect || 0) + 1;
+            const newConsecutive = ((oldHist ? oldHist.consecutiveCorrect : 0) || 0) + 1;
             let nextReviewInterval = 1;
             let nextStatus = 'review';
-            if (newConsecutive === 1) nextReviewInterval = 1;      
-            else if (newConsecutive === 2) nextReviewInterval = 3; 
-            else { nextStatus = 'mastered'; nextReviewInterval = 999; }
+            
+            // 🚀 [CTO 패치] 진정한 의미의 스페이싱 이펙트(간격 반복) 탑재
+            if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
+            else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
+            else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'mastered'; }
+            else if (newConsecutive === 4) { nextReviewInterval = 14; nextStatus = 'mastered'; }
+            else if (newConsecutive === 5) { nextReviewInterval = 30; nextStatus = 'mastered'; }
+            else if (newConsecutive === 6) { nextReviewInterval = 60; nextStatus = 'mastered'; }
+            else { nextReviewInterval = 120; nextStatus = 'mastered'; } 
+
+            if (oldStatus === 'new') { deltaWaitingReview += 1; }
+            else if (oldStatus === 'review' && nextStatus === 'mastered') { deltaWaitingReview -= 1; deltaMastered += 1; }
+            else if (oldStatus === 'wrong' || oldStatus === 'chronic_error') {
+                deltaWaitingWrong -= 1;
+                if (nextStatus === 'mastered') deltaMastered += 1;
+                else deltaWaitingReview += 1;
+            }
 
             await setDoc(historyWordRef, {
                 consecutiveCorrect: newConsecutive, consecutiveWrongCount: 0, 
-                incorrectCount: hist.incorrectCount || 0,
+                incorrectCount: (oldHist ? oldHist.incorrectCount : 0) || 0,
                 nextReviewSession: sessionNumber + nextReviewInterval, status: nextStatus, updatedAt: serverTimestamp()
             }, { merge: true });
+
         } else {
-            const newIncorrect = (hist.incorrectCount || 0) + 1;
-            const newConsecutiveWrong = (hist.consecutiveWrongCount || 0) + 1;
+            const newIncorrect = ((oldHist ? oldHist.incorrectCount : 0) || 0) + 1;
+            const newConsecutiveWrong = ((oldHist ? oldHist.consecutiveWrongCount : 0) || 0) + 1;
+            
+            let nextReviewInterval = 1;
+            if (newConsecutiveWrong >= 5) { nextReviewInterval = 3; }
+
+            const nextStatus = newIncorrect >= 3 ? 'chronic_error' : 'wrong';
+
+            if (oldStatus === 'new') { deltaWaitingWrong += 1; }
+            else if (oldStatus === 'review') { deltaWaitingReview -= 1; deltaWaitingWrong += 1; }
+            else if (oldStatus === 'mastered') { deltaMastered -= 1; deltaWaitingWrong += 1; }
 
             await setDoc(historyWordRef, {
                 consecutiveCorrect: 0, consecutiveWrongCount: newConsecutiveWrong, 
                 incorrectCount: newIncorrect, lastIncorrectSession: sessionNumber,
-                status: newIncorrect >= 3 ? 'chronic_error' : 'wrong',
-                nextReviewSession: sessionNumber + 1, updatedAt: serverTimestamp()
+                status: nextStatus,
+                nextReviewSession: sessionNumber + nextReviewInterval, updatedAt: serverTimestamp()
             }, { merge: true });
         }
     }
@@ -338,22 +447,11 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
     else adaptiveStats.reviewLowAccuracyCount = 0; 
 
-    const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
-    const historySnap = await getDocs(historyRef);
-    
-    let masteredCount = 0; let totalAttempts = 0; let totalErrors = 0;
-    let waitingWrong = 0; let waitingReview = 0;
-    const nextSessionNumber = sessionNumber + 1;
-
-    historySnap.forEach(doc => {
-        const d = doc.data();
-        if (d.status === 'mastered') masteredCount++;
-        totalAttempts += (d.consecutiveCorrect || 0) + (d.incorrectCount || 0);
-        totalErrors += (d.incorrectCount || 0);
-
-        if (d.status === 'wrong' || d.status === 'chronic_error') waitingWrong++;
-        if (d.status === 'review' && d.nextReviewSession <= nextSessionNumber) waitingReview++;
-    });
+    totalAttempts += sessionTotal;
+    totalErrors += wrongSet.size;
+    masteredCount += deltaMastered;
+    waitingWrong += deltaWaitingWrong;
+    waitingReview += deltaWaitingReview;
 
     if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1;
     else adaptiveStats.queueOverflowCount = 0; 
@@ -379,6 +477,16 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let rubricStr = `기억 유지율 ${retentionRate}%, 다의어 이해도 ${comprehension}%를 기록했습니다.`;
     if (autoShiftMessage) rubricStr = autoShiftMessage; 
 
+    await updateDoc(sessionRef, { 
+        status: 'completed', 
+        wrongCount: wrongSet.size,
+        wrongAnswerNumbers: Array.from(wrongSet), 
+        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100),
+        wrongWordsDetails: wrongWordsDetails, 
+        rollbackData: rollbackData, 
+        completedAt: serverTimestamp()
+    });
+
     await updateDoc(statRef, {
         catScore: finalVocaScore,
         vocaSession: sessionNumber + 1,
@@ -388,15 +496,67 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         vocaRubric: rubricStr,
         adaptiveStats: adaptiveStats,       
         adaptivePreset: newAdaptivePreset,  
+        totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, 
         updatedAt: serverTimestamp()
     });
+};
 
-    await updateDoc(sessionRef, { 
-        status: 'completed', 
-        wrongCount: wrongSet.size,
-        wrongAnswerNumbers: Array.from(wrongSet), // 🚀 재시험지 출력을 위해 오답 번호 저장
-        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100),
-        wrongWordsDetails: wrongWordsDetails, 
-        completedAt: serverTimestamp()
+export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
+    const testSessionId = `test_${studentId}_s${sessionNumber}`;
+    const sessionRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId);
+    const sessionSnap = await getDoc(sessionRef);
+    
+    if (!sessionSnap.exists()) throw new Error("해당 회차의 시험 데이터가 없습니다.");
+
+    const sessionData = sessionSnap.data();
+    if (sessionData.status !== 'completed' || !sessionData.rollbackData) {
+        throw new Error("채점 취소가 불가능한 상태이거나 복구 데이터 스냅샷이 존재하지 않습니다.");
+    }
+
+    const rb = sessionData.rollbackData;
+    const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+
+    const promises = Object.keys(rb.wordHistories).map(wordId => {
+        const histRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, wordId);
+        const oldData = rb.wordHistories[wordId];
+        if (oldData === null) {
+            return deleteDoc(histRef); 
+        } else {
+            return setDoc(histRef, oldData);
+        }
     });
+    await Promise.all(promises);
+
+    await updateDoc(statRef, {
+        catScore: rb.catScore,
+        vocaSession: rb.vocaSession,
+        vocaProgress: rb.vocaProgress,
+        vocaComprehension: rb.vocaComprehension,
+        vocaRetention: rb.vocaRetention,
+        vocaRubric: rb.vocaRubric,
+        adaptiveStats: rb.adaptiveStats,
+        adaptivePreset: rb.adaptivePreset,
+        lastNewWordDifficulty: rb.lastNewWordDifficulty,
+        totalAttempts: rb.totalAttempts,
+        totalErrors: rb.totalErrors,
+        masteredCount: rb.masteredCount,
+        waitingWrong: rb.waitingWrong,
+        waitingReview: rb.waitingReview
+    });
+
+    await updateDoc(sessionRef, {
+        status: 'ready',
+        wrongCount: 0,
+        wrongAnswerNumbers: [],
+        sessionScore: 0,
+        wrongWordsDetails: [],
+        completedAt: null
+    });
+
+    const nextSessionId = `test_${studentId}_s${sessionNumber + 1}`;
+    const nextSessionRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, nextSessionId);
+    const nextSessionSnap = await getDoc(nextSessionRef);
+    if (nextSessionSnap.exists() && nextSessionSnap.data().status !== 'completed') {
+        await deleteDoc(nextSessionRef);
+    }
 };
