@@ -1,11 +1,12 @@
-/* [서비스 가치] AI Voca 통합 관제 센터 (운영자/강사/조교용)
-   단순 점수 입력을 넘어 반별 시험지/답지 일괄 출력, 고속 채점, 학생별 어휘력 분석을 원스톱으로 제공합니다.
-   강사의 시험 준비 및 관리 시간을 90% 이상 단축하여 학원의 인건비 효율을 극대화합니다.
-   (🚀 비용 최적화: DataContext의 글로벌 캐시를 활용해 반별 조회 시 추가 과금 0원) */
+/* [서비스 가치] AI Voca 통합 관제 센터 v2.0 (초개인화 제어 및 운영 효율화)
+   1) 영어 클래스 전용 필터링으로 휴먼 에러 원천 차단
+   2) 학생별 개별 인쇄 및 단어 생성 프리셋 제어 기능으로 프리미엄 맞춤형 학습 실현
+   3) 글로벌 데이터 캐시를 활용하여 반을 전환하거나 설정을 바꿀 때 발생하는 Firebase 과금 최소화 */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, CheckSquare, BarChart2, Search, Play, 
-    CheckCircle, AlertCircle, FileText, Download, UserCircle, RefreshCw
+    CheckCircle, AlertCircle, FileText, Download, UserCircle, RefreshCw,
+    Sliders
 } from 'lucide-react';
 import { doc, updateDoc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -19,19 +20,20 @@ const VocaManager = ({ currentUser }) => {
     const { users, classes, enrollments, englishStats } = useData();
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, grading, analytics
+    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, grading, analytics, cat_input
     
     // 채점 및 상태 관리
     const [processing, setProcessing] = useState(false);
     const [gradeInput, setGradeInput] = useState({}); // { studentId: score }
+    const [catInput, setCatInput] = useState({}); // { studentId: catScore }
     const [printMode, setPrintMode] = useState(null); // 'test' or 'answer'
     const [printData, setPrintData] = useState([]); // 출력용 데이터 캐싱
 
-    // 강사/조교용 클래스 필터링 (최적화 적용)
+    // 🚀 [Req 1] 영어 과목 전용 클래스 필터링
     const availableClasses = useMemo(() => {
-        let filtered = classes;
+        let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
         if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
-            filtered = classes.filter(c => c.instructorId === currentUser.userId);
+            filtered = filtered.filter(c => c.instructorId === currentUser.userId);
         }
         return filtered.sort((a, b) => a.name.localeCompare(b.name));
     }, [classes, currentUser]);
@@ -42,7 +44,7 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [availableClasses, selectedClassId]);
 
-    // 선택된 반의 학생 데이터 결합 (Zero-Trust & 반정규화)
+    // 선택된 반의 학생 데이터 결합
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         const enrolledStudentIds = enrollments
@@ -52,20 +54,25 @@ const VocaManager = ({ currentUser }) => {
         return users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.userId))
             .map(student => {
-                const stat = englishStats.find(s => s.id === student.id) || { catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0 };
-                return { ...student, stat };
+                const stat = englishStats.find(s => s.id === student.id) || { 
+                    catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드' 
+                };
+                return { ...student, stat: { ...stat, vocaPreset: stat.vocaPreset || '밸런스 모드' } };
             })
             .filter(student => student.name.includes(searchQuery))
             .sort((a, b) => a.name.localeCompare(b.name));
     }, [selectedClassId, enrollments, users, englishStats, searchQuery]);
 
-    // 1. [Bulk Action] 반 전체 시험지/답지 데이터 준비
-    const preparePrintData = async (type) => {
+    // 🚀 [Req 3] 일괄 및 개별 시험지/답지 데이터 준비 (targetStudentId 파라미터 추가)
+    const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
         try {
             const dataToPrint = [];
-            for (const student of classStudents) {
-                // 이미 생성된 세션이 있는지 확인
+            const targetStudents = targetStudentId 
+                ? classStudents.filter(s => s.id === targetStudentId)
+                : classStudents;
+
+            for (const student of targetStudents) {
                 const sessionId = `test_${student.id}_s${student.stat.vocaSession || 1}`;
                 const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
                 
@@ -73,8 +80,8 @@ const VocaManager = ({ currentUser }) => {
                 if (testSnap.exists() && testSnap.data().wordsForPrint) {
                     wordsList = testSnap.data().wordsForPrint;
                 } else if (student.stat.catScore) {
-                    // 미생성 상태면 즉시 생성 (vocaEngine 활용)
-                    const payload = await generateDailyVocaSet(student.id, '밸런스 모드');
+                    // 미생성 상태면 즉시 생성 (현재 설정된 프리셋 반영)
+                    const payload = await generateDailyVocaSet(student.id, student.stat.vocaPreset);
                     wordsList = payload.wordsForPrint;
                 }
                 
@@ -82,9 +89,16 @@ const VocaManager = ({ currentUser }) => {
                     dataToPrint.push({ student, wordsList, session: student.stat.vocaSession || 1 });
                 }
             }
+            
+            if (dataToPrint.length === 0) {
+                alert("출력할 수 있는 데이터가 없습니다. (CAT 점수가 입력되었는지 확인하세요)");
+                setProcessing(false);
+                return;
+            }
+
             setPrintData(dataToPrint);
             setPrintMode(type);
-            setTimeout(() => { window.print(); setPrintMode(null); }, 500); // 렌더링 후 인쇄 트리거
+            setTimeout(() => { window.print(); setPrintMode(null); }, 500); 
         } catch (error) {
             console.error("Print Data Preparation Error:", error);
             alert("출력 데이터 준비 중 오류가 발생했습니다.");
@@ -93,7 +107,7 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 2. [고속 채점] 개별 학생 점수 반영
+    // [고속 채점] 개별 학생 점수 반영
     const handleGradeSubmit = async (studentId, currentSession, score) => {
         if (score === undefined || score < 0 || score > 40) return alert("정상적인 점수(0~40)를 입력하세요.");
         setProcessing(true);
@@ -102,28 +116,52 @@ const VocaManager = ({ currentUser }) => {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
             const testRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId);
 
-            // 시험 세션 완료 처리
             await updateDoc(testRef, {
-                status: 'completed',
-                score: score,
-                gradedAt: serverTimestamp(),
-                gradedBy: currentUser.name
+                status: 'completed', score: score, gradedAt: serverTimestamp(), gradedBy: currentUser.name
             });
-
-            // 스탯 업데이트 (다음 회차로 증가)
-            await updateDoc(statRef, {
-                vocaSession: currentSession + 1,
-                lastTestScore: score,
-                lastTestDate: serverTimestamp()
-            });
+            await setDoc(statRef, {
+                vocaSession: currentSession + 1, lastTestScore: score, lastTestDate: serverTimestamp()
+            }, { merge: true });
 
             alert("채점이 완료되었습니다.");
-            setGradeInput(prev => ({ ...prev, [studentId]: '' })); // 입력창 초기화
+            setGradeInput(prev => ({ ...prev, [studentId]: '' })); 
         } catch (error) {
             console.error("Grading Error:", error);
             alert("채점 처리 중 오류가 발생했습니다.");
         } finally {
             setProcessing(false);
+        }
+    };
+
+    // 🚀 [Req 2] CAT 초기 진단 점수 반영 로직
+    const handleCatSubmit = async (studentId, score) => {
+        if (score === undefined || score < 0 || score > 100) return alert("정상적인 점수(0~100)를 입력하세요.");
+        setProcessing(true);
+        try {
+            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+            await setDoc(statRef, {
+                catScore: score, updatedAt: serverTimestamp()
+            }, { merge: true });
+            
+            alert("CAT 점수가 반영되었습니다.");
+            setCatInput(prev => ({ ...prev, [studentId]: '' }));
+        } catch (error) {
+            console.error("CAT Input Error:", error);
+            alert("CAT 점수 입력 중 오류가 발생했습니다.");
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    // 🚀 [Req 5] 프리셋 변경 로직
+    const handlePresetChange = async (studentId, newPreset) => {
+        try {
+            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+            await setDoc(statRef, { vocaPreset: newPreset }, { merge: true });
+            // Firestore 리스너가 자동 업데이트하므로 추가 조치 불필요
+        } catch (error) {
+            console.error("Preset Update Error:", error);
+            alert("프리셋 변경 중 오류가 발생했습니다.");
         }
     };
 
@@ -135,7 +173,7 @@ const VocaManager = ({ currentUser }) => {
                     <div key={data.student.id} className="print-page break-after-page mb-10">
                         <div className="flex justify-between border-b-2 border-black pb-4 mb-4">
                             <h2 className="text-2xl font-black">
-                                임페리얼 {printMode === 'answer' ? '강사용 답안지' : '영단어 시험지'} - {data.session}회차
+                                임페리얼 {printMode === 'answer' ? '강사용 답안지' : '영단어 시험지'} 
                             </h2>
                             <div className="text-right text-sm font-bold">
                                 <div>이름: {data.student.name}</div>
@@ -174,18 +212,20 @@ const VocaManager = ({ currentUser }) => {
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             {/* 1. 글로벌 헤더 및 통제 센터 */}
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-center gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                         <BarChart2 className="text-indigo-600" /> Voca 통합 관제 센터
                     </h1>
-                    <p className="text-slate-500 font-bold mt-1">반별 시험지 출력부터 고속 채점, 성취도 분석까지 원스톱 관리</p>
+                    <p className="text-slate-500 font-bold mt-1">영어반 시험지 출력, 고속 채점, 성취도 분석, CAT 진단 원스톱 관리</p>
                 </div>
                 
-                <div className="flex bg-slate-100 p-1 rounded-2xl">
-                    <button onClick={() => setActiveTab('dashboard')} className={`px-6 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>대시보드 & 인쇄</button>
-                    <button onClick={() => setActiveTab('grading')} className={`px-6 py-2 rounded-xl font-bold transition-all ${activeTab === 'grading' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>고속 채점</button>
-                    <button onClick={() => setActiveTab('analytics')} className={`px-6 py-2 rounded-xl font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 분석</button>
+                <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1">
+                    <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>대시보드 & 인쇄</button>
+                    <button onClick={() => setActiveTab('grading')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'grading' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>고속 채점</button>
+                    <button onClick={() => setActiveTab('analytics')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 분석</button>
+                    {/* 🚀 [Req 2] CAT 진단 탭 추가 */}
+                    <button onClick={() => setActiveTab('cat_input')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'cat_input' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>CAT 진단 입력</button>
                 </div>
             </div>
 
@@ -198,7 +238,7 @@ const VocaManager = ({ currentUser }) => {
                         value={selectedClassId}
                         onChange={(e) => setSelectedClassId(e.target.value)}
                     >
-                        {availableClasses.length === 0 && <option value="">배정된 클래스 없음</option>}
+                        {availableClasses.length === 0 && <option value="">배정된 영어 클래스 없음</option>}
                         {availableClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                 </div>
@@ -224,7 +264,7 @@ const VocaManager = ({ currentUser }) => {
                     </div>
                 )}
                 
-                {(activeTab === 'grading' || activeTab === 'analytics') && (
+                {activeTab !== 'dashboard' && (
                     <div className="md:col-span-2 relative">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input 
@@ -239,23 +279,29 @@ const VocaManager = ({ currentUser }) => {
             </div>
 
             {/* 3. 메인 콘텐츠 영역 (Tab에 따른 분기) */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden overflow-x-auto">
                 {classStudents.length === 0 ? (
                     <div className="p-20 text-center flex flex-col items-center justify-center">
                         <AlertCircle size={48} className="text-slate-300 mb-4" />
                         <h3 className="text-xl font-bold text-slate-600">조회할 학생 데이터가 없습니다.</h3>
-                        <p className="text-slate-400 font-semibold mt-2">클래스를 변경하거나 학생을 등록해주세요.</p>
+                        <p className="text-slate-400 font-semibold mt-2">영어 클래스를 변경하거나 학생을 등록해주세요.</p>
                     </div>
                 ) : (
-                    <table className="w-full text-left">
-                        <thead className="bg-slate-50 border-b border-slate-200">
+                    <table className="w-full text-left min-w-[800px]">
+                        <thead className="bg-slate-50 border-b border-slate-200 whitespace-nowrap">
                             <tr>
-                                <th className="p-4 font-black text-slate-600">학생 정보</th>
+                                <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
                                 <th className="p-4 font-black text-slate-600 text-center">초기 진단 (CAT)</th>
-                                <th className="p-4 font-black text-slate-600 text-center">진행 회차</th>
-                                {activeTab === 'dashboard' && <th className="p-4 font-black text-slate-600 text-center">Voca 엔진 상태</th>}
+                                {/* 🚀 [Req 4] 진행 회차 열 삭제 완료 */}
+                                {activeTab === 'dashboard' && (
+                                    <>
+                                        <th className="p-4 font-black text-slate-600 text-center"><Sliders size={16} className="inline mr-1"/> 단어 비중 프리셋</th>
+                                        <th className="p-4 font-black text-slate-600 text-center">개별 인쇄</th>
+                                    </>
+                                )}
                                 {activeTab === 'grading' && <th className="p-4 font-black text-slate-600 w-1/3">고속 채점 입력 (Max 40)</th>}
                                 {activeTab === 'analytics' && <th className="p-4 font-black text-slate-600 text-center">정답률 / 누적 어휘</th>}
+                                {activeTab === 'cat_input' && <th className="p-4 font-black text-slate-600 w-1/3">CAT 점수 직접 입력 (Max 100)</th>}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -263,7 +309,7 @@ const VocaManager = ({ currentUser }) => {
                                 <tr key={student.id} className="hover:bg-slate-50 transition-colors">
                                     <td className="p-4">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black">
+                                            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black shrink-0">
                                                 {student.name[0]}
                                             </div>
                                             <div>
@@ -279,27 +325,49 @@ const VocaManager = ({ currentUser }) => {
                                             : <Badge className="bg-rose-100 text-rose-700 font-black px-3 cursor-pointer hover:bg-rose-200">미응시</Badge>
                                         }
                                     </td>
-                                    
-                                    <td className="p-4 text-center font-black text-indigo-600">
-                                        {student.stat.vocaSession} 회차
-                                    </td>
 
                                     {activeTab === 'dashboard' && (
-                                        <td className="p-4 text-center">
-                                            <span className="text-sm font-bold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
-                                                출력 대기 완료
-                                            </span>
-                                        </td>
+                                        <>
+                                            {/* 🚀 [Req 5] 프리셋 설정 셀렉트 박스 */}
+                                            <td className="p-4 text-center">
+                                                <select 
+                                                    value={student.stat.vocaPreset}
+                                                    onChange={(e) => handlePresetChange(student.id, e.target.value)}
+                                                    className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer"
+                                                >
+                                                    <option value="밸런스 모드">밸런스 (오답+신규)</option>
+                                                    <option value="누적 복습 위주">누적 복습 위주</option>
+                                                    <option value="신규 단어 집중">신규 단어 집중</option>
+                                                    <option value="고난도 어휘">고난도 어휘 위주</option>
+                                                </select>
+                                            </td>
+                                            
+                                            {/* 🚀 [Req 3] 개별 인쇄 액션 버튼 */}
+                                            <td className="p-4 text-center">
+                                                <div className="flex justify-center gap-2">
+                                                    <button 
+                                                        onClick={() => preparePrintData('test', student.id)}
+                                                        className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-md font-bold text-xs transition-colors border border-indigo-200"
+                                                    >
+                                                        시험지
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => preparePrintData('answer', student.id)}
+                                                        className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-md font-bold text-xs transition-colors border border-rose-200"
+                                                    >
+                                                        답안지
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </>
                                     )}
 
                                     {activeTab === 'grading' && (
                                         <td className="p-4">
                                             <div className="flex gap-2 items-center">
                                                 <input 
-                                                    type="number" 
-                                                    max="40" min="0"
-                                                    placeholder="점수 입력"
-                                                    className="w-24 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-indigo-500"
+                                                    type="number" max="40" min="0" placeholder="점수"
+                                                    className="w-20 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-indigo-500"
                                                     value={gradeInput[student.id] || ''}
                                                     onChange={e => setGradeInput({...gradeInput, [student.id]: e.target.value})}
                                                     disabled={processing}
@@ -308,9 +376,9 @@ const VocaManager = ({ currentUser }) => {
                                                 <button 
                                                     onClick={() => handleGradeSubmit(student.id, student.stat.vocaSession, parseInt(gradeInput[student.id]))}
                                                     disabled={processing || !gradeInput[student.id]}
-                                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50"
+                                                    className="bg-emerald-500 hover:bg-emerald-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50"
                                                 >
-                                                    반영
+                                                    저장
                                                 </button>
                                             </div>
                                         </td>
@@ -325,6 +393,29 @@ const VocaManager = ({ currentUser }) => {
                                                 <span className="text-xs font-bold text-slate-500">
                                                     정답률 {student.stat.accuracy || 0}% (누적 {student.stat.totalWords || 0}단어)
                                                 </span>
+                                            </div>
+                                        </td>
+                                    )}
+
+                                    {/* 🚀 [Req 2] CAT 입력 UI */}
+                                    {activeTab === 'cat_input' && (
+                                        <td className="p-4">
+                                            <div className="flex gap-2 items-center">
+                                                <input 
+                                                    type="number" max="100" min="0" placeholder="CAT 점수"
+                                                    className="w-24 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"
+                                                    value={catInput[student.id] || ''}
+                                                    onChange={e => setCatInput({...catInput, [student.id]: e.target.value})}
+                                                    disabled={processing}
+                                                />
+                                                <span className="font-bold text-slate-400 mr-2">/ 100</span>
+                                                <button 
+                                                    onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))}
+                                                    disabled={processing || !catInput[student.id]}
+                                                    className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50"
+                                                >
+                                                    반영
+                                                </button>
                                             </div>
                                         </td>
                                     )}

@@ -1,7 +1,8 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
    (🚀 CTO 패치: 스마트 콤보박스 탑재 및 DB 평문 비밀번호(Password) 저장 보안 취약점 원천 차단 완료) 
-   (🚀 추가 패치: 강사/조교 과목 할당을 드롭다운으로 변경하여 RBAC 권한 제어의 기반을 마련했습니다.) */
+   (🚀 추가 패치: 강사/조교 과목 할당을 드롭다운으로 변경하여 RBAC 권한 제어의 기반을 마련했습니다.) 
+   (🚀 최적화 패치: 학부모-자녀 연결 시 수백 명의 데이터를 불러오지 않고, 검색 기반으로 지연 렌더링하여 성능을 극대화했습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
@@ -97,6 +98,9 @@ const UserManager = ({ currentUser }) => {
     const { users, classes, enrollments, masterData, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
+    // 🚀 [추가됨] 학부모 자녀 연결 전용 검색 쿼리
+    const [childSearchQuery, setChildSearchQuery] = useState(''); 
+    
     const [activeTab, setActiveTab] = useState('student'); 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -140,6 +144,22 @@ const UserManager = ({ currentUser }) => {
 
     const studentList = useMemo(() => users.filter(u => u.role === 'student' && u.status !== 'pending'), [users]);
     const pendingUsers = useMemo(() => users.filter(u => u.status === 'pending'), [users]);
+
+    // 🚀 [추가됨] 자녀 검색 최적화 로직 (렌더링 부하 감소)
+    const displayedStudents = useMemo(() => {
+        return studentList.filter(student => {
+            const isLinked = (formData.linkedChildrenIds || []).includes(student.id);
+            // 이미 연결된 자녀는 검색어 유무와 상관없이 항상 보여줍니다.
+            if (isLinked) return true; 
+            // 검색어가 없다면 연결되지 않은 학생은 보여주지 않습니다.
+            if (!childSearchQuery.trim()) return false; 
+            
+            // 검색어가 있다면 이름, 학교명, 전화번호로 필터링합니다.
+            return student.name.includes(childSearchQuery) || 
+                   (student.schoolName && student.schoolName.includes(childSearchQuery)) ||
+                   (student.phone && student.phone.includes(childSearchQuery));
+        });
+    }, [studentList, formData.linkedChildrenIds, childSearchQuery]);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
 
@@ -224,6 +244,7 @@ const UserManager = ({ currentUser }) => {
         });
         setSchoolType('high');
         setIsCustomSchool(false);
+        setChildSearchQuery(''); // 🚀 검색 쿼리 초기화
         setIsEditMode(false); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
@@ -249,6 +270,7 @@ const UserManager = ({ currentUser }) => {
             setIsCustomSchool(isCustom);
         } else { setSchoolType('high'); setIsCustomSchool(false); }
 
+        setChildSearchQuery(''); // 🚀 검색 쿼리 초기화
         setIsEditMode(true); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
@@ -654,6 +676,7 @@ const UserManager = ({ currentUser }) => {
                                 </>
                             )}
 
+                            {/* 🚀 [CTO 패치] 학부모 자녀 선택 시 검색 기반 지연 렌더링 적용 */}
                             {(activeTab === 'parent' || (activeTab === 'pending' && formData.role === 'parent')) && (
                                 <div className="border-t pt-4">
                                     {activeTab === 'pending' && formData.childName && (
@@ -661,14 +684,35 @@ const UserManager = ({ currentUser }) => {
                                             <span className="text-sm font-bold text-indigo-800 flex items-center gap-1"><BookMarked size={16}/> 가입 시 기재한 자녀 이름: {formData.childName}</span>
                                         </div>
                                     )}
-                                    <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-1"><LinkIcon size={14}/> 내 자녀 선택 (다중 선택 가능)</label>
+                                    
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                                        <label className="block text-sm font-bold text-gray-700 flex items-center gap-1">
+                                            <LinkIcon size={14}/> 내 자녀 연결
+                                        </label>
+                                        <div className="relative w-full sm:w-1/2">
+                                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                            <input 
+                                                type="text" 
+                                                className="w-full border border-gray-300 p-2 pl-8 rounded-lg text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all font-bold" 
+                                                placeholder="학생 이름 검색..." 
+                                                value={childSearchQuery}
+                                                onChange={(e) => setChildSearchQuery(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    
                                     <div className="max-h-48 overflow-y-auto border rounded-xl p-3 bg-gray-50 grid grid-cols-1 sm:grid-cols-2 gap-2 custom-scrollbar">
-                                        {studentList.map(student => (
+                                        {displayedStudents.map(student => (
                                             <label key={student.id} className={`flex items-center gap-2 p-2 border rounded-lg cursor-pointer transition-colors ${formData.linkedChildrenIds.includes(student.id) ? 'bg-blue-50 border-blue-300 shadow-sm' : 'bg-white hover:bg-gray-100'}`}>
                                                 <input type="checkbox" className="accent-blue-600 w-4 h-4" checked={(formData.linkedChildrenIds || []).includes(student.id)} onChange={() => toggleChildLink(student.id)}/>
                                                 <span className="text-sm font-bold text-gray-800">{student.name} <span className="text-xs text-gray-500 font-normal">({student.schoolName})</span></span>
                                             </label>
                                         ))}
+                                        {displayedStudents.length === 0 && (
+                                            <div className="col-span-1 sm:col-span-2 text-center text-xs text-gray-400 py-4 font-bold">
+                                                {childSearchQuery.trim() ? '검색 결과가 없습니다.' : '이름을 검색하여 연결할 자녀를 찾아주세요.'}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}

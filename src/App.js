@@ -441,12 +441,13 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     },
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
     { 
-      path: '/voca', 
-      label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', 
-      icon: BookText, 
-      roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'],
-      showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
-    },
+  path: '/voca', 
+  label: currentUser.role === 'student' ? '오늘의 영단어' : 
+         currentUser.role === 'parent' ? 'AI 학습 리포트' : 'Voca 출제/관리', 
+  icon: BookText, 
+  roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], // parent 추가
+  showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
+},
     { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
     { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
     { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
