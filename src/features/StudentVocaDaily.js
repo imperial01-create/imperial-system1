@@ -1,9 +1,9 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털
-   학부모 관점 (The Payer): 부정적인 어휘(꼼수, 커닝)를 배제하고 '단기 암기 지양', '학습 밀도' 등의 전문적인 에듀테크 용어를 사용하여 학원의 프리미엄 브랜딩을 강화하고 신뢰(Trust)를 굳건히 합니다.
-   비용 효율성: Firestore 조회 시 발생하던 Permission Denied 에러를 보안 규칙과 프론트엔드 예외 처리로 방어하여 불필요한 재렌더링 자원 낭비를 차단합니다. */
+/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털
+   (🚀 인쇄 엔진 전면 교체: React DOM의 CSS 제약을 100% 회피하는 Native HTML Injection 방식을 도입하여, 
+   어떤 브라우저 환경에서도 백지 현상 없이 완벽한 A4 규격의 PDF/종이 시험지를 출력해냅니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
+    BookOpen, Clock, FileText, Download, Play, AlertCircle, 
     CheckCircle, RefreshCw, Brain, Target, Users, ShieldAlert, Activity, Info 
 } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
@@ -13,7 +13,6 @@ import { Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [UX Writing 최적화] 직관성을 극대화한 정량적 프리셋 해설
 const PRESET_DESCRIPTIONS = {
     '밸런스 모드': '신규 50% / 복습 30% / 오답 15% / 패시브 5%',
     '오답 학습': '신규 15% / 복습 20% / 오답 60% / 패시브 5%',
@@ -51,8 +50,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const [studentStats, setStudentStats] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  
-  const [printMode, setPrintMode] = useState(false);
 
   useEffect(() => {
     const fetchVocaData = async () => {
@@ -95,7 +92,6 @@ const StudentVocaDaily = ({ currentUser }) => {
         }
       } catch (error) {
         console.error("Data Fetch Error:", error);
-        // Firebase Security Rules에 의해 거부된 경우의 안내 문구를 더 부드럽게 처리
         setErrorMsg("데이터를 동기화하는 데 문제가 발생했습니다. (권한 대기 중이거나 네트워크를 확인해주세요)");
       }
     };
@@ -122,75 +118,103 @@ const StudentVocaDaily = ({ currentUser }) => {
     }
   };
 
+  // =====================================================================
+  // 🚀 [해결책] 순수 HTML 생성 및 새 창 인쇄 엔진 (Native HTML Injection)
+  // =====================================================================
   const handlePrint = () => {
-      setPrintMode(true);
-      setTimeout(() => {
-          window.print();
-          setPrintMode(false);
-      }, 500); 
+    if (!questionsList || questionsList.length === 0) return alert("인쇄할 데이터가 없습니다.");
+
+    // 순수 HTML 문서 생성
+    let htmlContent = `
+      <html>
+        <head>
+          <title>임페리얼 영단어 시험지 - ${targetStudentName}</title>
+          <style>
+            @page { margin: 15mm; size: A4 portrait; }
+            body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #111; margin: 0; padding: 0; }
+            .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
+            .header h2 { margin: 0; font-size: 24px; font-weight: bold; color: #0f172a; }
+            .header .info { text-align: right; font-size: 14px; font-weight: bold; color: #475569; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
+            th, td { border-bottom: 1px solid #cbd5e1; padding: 12px 8px; text-align: left; }
+            th { background-color: #f8fafc; font-weight: bold; color: #475569; }
+            .text-center { text-align: center; }
+            .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
+            .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
+            .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 24px; display: inline-block; }
+            .advanced-row td { border-top: 3px solid #334155; }
+            .footer { text-align: center; font-size: 12px; font-weight: bold; color: #64748b; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2>임페리얼 영단어 맞춤형 시험지</h2>
+            <div class="info">
+              <div>이름: ${targetStudentName}</div>
+              <div>날짜: ${new Date().toLocaleDateString()} / 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th class="text-center" style="width: 10%;">No.</th>
+                <th style="width: 45%;">Question (문제)</th>
+                <th style="width: 45%;">Answer (정답 기재란)</th>
+              </tr>
+            </thead>
+            <tbody>
+    `;
+
+    // 50문제 데이터 삽입
+    questionsList.forEach((q) => {
+      const isAdvanced = q.questionNumber === 41;
+      const rowClass = isAdvanced ? 'class="advanced-row"' : '';
+      const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
+      
+      htmlContent += `
+        <tr ${rowClass}>
+          <td class="text-center font-bold">${q.questionNumber}</td>
+          <td>
+            <span class="word-text">${q.wordText}</span>
+            ${hintHtml}
+          </td>
+          <td><div class="answer-blank"></div></td>
+        </tr>
+      `;
+    });
+
+    htmlContent += `
+            </tbody>
+          </table>
+          <div class="footer">
+            * 41번부터 50번 문항은 고차원적 인지 능력을 평가하는 심화 문항입니다.
+          </div>
+          <script>
+            // 창이 열리면 자동으로 인쇄 대화상자 호출 후 창 닫기
+            window.onload = function() {
+              window.print();
+              setTimeout(function(){ window.close(); }, 500);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    // 새 창을 열고 HTML 주입
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+    } else {
+        alert("팝업 차단이 설정되어 있습니다. 팝업 차단을 해제해 주세요.");
+    }
   };
 
   const isPrintReady = sessionInfo.status === 'ready' && questionsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
 
-  // =====================================================================
-  // 🚀 인쇄 모드 전용 렌더링 (DOM 격리로 백지 버그 차단)
-  // =====================================================================
-  if (printMode) {
-      return (
-          <div className="bg-white text-black p-8 min-h-screen w-full">
-              <style>{`
-                  @media print {
-                      @page { margin: 0; size: A4 portrait; }
-                      body { margin: 1.5cm !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                      html, body, #root, .h-screen, .overflow-hidden, .overflow-y-auto, .flex-1, main {
-                          height: auto !important; min-height: auto !important; overflow: visible !important; display: block !important;
-                      }
-                      aside, header { display: none !important; }
-                  }
-              `}</style>
-              <div className="print-page break-after-page mb-10">
-                  <div className="flex justify-between border-b-2 border-black pb-4 mb-4">
-                      <h2 className="text-2xl font-black">임페리얼 영단어 맞춤형 시험지</h2>
-                      <div className="text-right text-sm font-bold">
-                          <div>이름: {targetStudentName}</div>
-                          <div>날짜: {new Date().toLocaleDateString()} / 점수: _____ / 50</div>
-                      </div>
-                  </div>
-                  <table className="w-full text-left border-collapse text-sm">
-                      <thead>
-                          <tr className="border-b border-gray-400">
-                              <th className="p-2 w-10 text-center">No.</th>
-                              <th className="p-2 w-5/12">Question (문제)</th>
-                              <th className="p-2 w-7/12">Answer (정답 기재란)</th>
-                          </tr>
-                      </thead>
-                      <tbody>
-                          {questionsList.map((q, i) => (
-                              <tr key={i} className={`border-b border-gray-200 ${q.questionNumber === 41 ? 'border-t-4 border-t-gray-800' : ''}`}>
-                                  <td className="p-2 font-bold text-center">{q.questionNumber}</td>
-                                  <td className="p-2 font-black text-lg">
-                                      {q.wordText}
-                                      {q.hint && <span className="block text-[11px] text-gray-500 font-bold mt-0.5">{q.hint}</span>}
-                                  </td>
-                                  <td className="p-2 font-semibold text-blue-900">
-                                      <div className="border-b border-gray-400 w-full h-7"></div> 
-                                  </td>
-                              </tr>
-                          ))}
-                      </tbody>
-                  </table>
-                  <div className="mt-4 text-center text-xs font-bold text-gray-500">
-                      * 41번부터 50번 문항은 고차원적 인지 능력을 평가하는 심화 문항입니다.
-                  </div>
-              </div>
-          </div>
-      );
-  }
-
-  // =====================================================================
   // 일반 화면 렌더링
-  // =====================================================================
   if (isParent && linkedChildren.length === 0) {
       return (
           <div className="p-10 text-center flex flex-col items-center">
@@ -205,7 +229,7 @@ const StudentVocaDaily = ({ currentUser }) => {
     <div className="max-w-5xl mx-auto p-4 sm:p-8 animate-in fade-in pb-20">
       
       {isParent && linkedChildren.length > 1 && (
-          <div className="print:hidden bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
               <span className="font-bold text-indigo-800 flex items-center gap-2">
                   <Users size={18} /> 조회할 자녀 선택
               </span>
@@ -221,8 +245,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      {/* 🚀 [UX Writing 최적화] 부정적 어휘 제거 및 에듀테크 프리미엄 브랜딩 적용 */}
-      <div className="print:hidden bg-gradient-to-r from-blue-700 to-indigo-800 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-6 relative overflow-hidden">
+      <div className="bg-gradient-to-r from-blue-700 to-indigo-800 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-6 relative overflow-hidden">
         <div className="relative z-10">
           <Badge variant="outline" className="bg-white/20 text-white border-white/30 mb-3 px-3 py-1">
               {isParent ? '자녀 맞춤형 Voca 리포트' : 'Smart Analog Voca Portal'}
@@ -238,13 +261,13 @@ const StudentVocaDaily = ({ currentUser }) => {
       </div>
 
       {errorMsg && (
-          <div className="print:hidden p-4 mb-6 bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold flex items-center gap-2">
+          <div className="p-4 mb-6 bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold flex items-center gap-2">
               <AlertCircle size={20} /> {errorMsg}
           </div>
       )}
 
       {studentStats && sessionInfo.status !== 'no_stat' && (
-        <div className="print:hidden grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             <div className="lg:col-span-2 bg-white rounded-[24px] p-6 shadow-sm border border-slate-200">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
@@ -283,7 +306,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                             <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${Math.min(100, studentStats.catScore / 10)}%` }}></div>
                         </div>
                     </div>
-                    {/* 🚀 [텍스트 교정] '기억 유지율 (Retention)' -> '기억 유지율' */}
                     <div className="mb-5">
                         <div className="flex justify-between text-sm font-bold mb-1">
                             <span className="text-slate-600">기억 유지율</span>
@@ -307,8 +329,9 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
+      {/* 🚀 다운로드 버튼 1개로 통일 */}
       {!isParent && (
-          <div className="print:hidden flex mb-8">
+          <div className="flex mb-8">
             <button 
               onClick={handlePrint}
               disabled={!isPrintReady}
@@ -327,11 +350,11 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 print:shadow-none print:border-none print:p-0 print:m-0 min-h-[400px]">
+      <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 min-h-[400px]">
           
-          <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6 print:mb-4">
+          <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6">
             <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              <FileText className="text-indigo-500 print:hidden" /> 
+              <FileText className="text-indigo-500" /> 
               {sessionInfo.sessionNumber > 0 ? `임페리얼 ${sessionInfo.sessionNumber}회차 맞춤 어휘 진단` : '임페리얼 프리미엄 Voca'}
             </h2>
             <div className="text-right">
@@ -341,7 +364,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
 
           {sessionInfo.status === 'no_stat' && (
-              <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
+              <div className="flex flex-col items-center justify-center py-20 text-center">
                   <AlertCircle size={56} className="text-slate-300 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">초기 어휘 역량 진단 대기 중</h3>
                   <p className="text-slate-500 font-bold max-w-md break-keep">
@@ -351,7 +374,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'completed' && (
-              <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
+              <div className="flex flex-col items-center justify-center py-20 text-center">
                   <CheckCircle size={56} className="text-emerald-400 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 학습 목표 100% 달성!</h3>
                   <p className="text-slate-500 font-bold max-w-md break-keep">
@@ -361,7 +384,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'pending' && !isParent && (
-              <div className="print:hidden flex flex-col items-center justify-center py-10 text-center">
+              <div className="flex flex-col items-center justify-center py-10 text-center">
                   <div className="bg-indigo-50 p-6 rounded-full mb-6 relative">
                       <Clock size={48} className="text-indigo-500" />
                       {isGenerating && <RefreshCw size={24} className="text-indigo-600 absolute bottom-4 right-4 animate-spin" />}
@@ -381,7 +404,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'pending' && isParent && (
-              <div className="print:hidden py-20 text-center flex flex-col items-center justify-center">
+              <div className="py-20 text-center flex flex-col items-center justify-center">
                   <Clock size={56} className="text-slate-300 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">단어장 생성 대기 중</h3>
                   <p className="text-slate-500 font-bold">
@@ -391,26 +414,26 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'ready' && wordsList.length > 0 && (
-              <table className="w-full text-left border-collapse print:w-full print:text-black">
+              <table className="w-full text-left border-collapse">
                   <thead>
-                      <tr className="bg-slate-50 print:bg-transparent">
+                      <tr className="bg-slate-50">
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">No.</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">Target Vocabulary</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">Core Meaning (핵심 의미)</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center print:hidden">AI 배정 사유</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center">AI 배정 사유</th>
                       </tr>
                   </thead>
                   <tbody>
                       {wordsList.map((word, idx) => (
-                          <tr key={word.wordId} className="border-b border-slate-100 print:border-slate-300">
-                              <td className="p-3 text-center font-bold text-slate-400 print:text-black">{idx + 1}</td>
-                              <td className="p-3 font-black text-lg text-slate-800 print:text-black tracking-wide">{word.word}</td>
-                              <td className="p-3 font-bold text-slate-600 print:text-black">
+                          <tr key={word.wordId} className="border-b border-slate-100">
+                              <td className="p-3 text-center font-bold text-slate-400">{idx + 1}</td>
+                              <td className="p-3 font-black text-lg text-slate-800 tracking-wide">{word.word}</td>
+                              <td className="p-3 font-bold text-slate-600">
                                   {word.meanings && word.meanings.length > 0 
                                       ? word.meanings.map(m => m.koreanMeaning).join(', ') 
                                       : '뜻 정보 없음'}
                               </td>
-                              <td className="p-3 text-center print:hidden">
+                              <td className="p-3 text-center">
                                   <span className={`text-[11px] px-2 py-1 rounded-md font-black whitespace-nowrap
                                       ${word.queueType === '만성 오답' ? 'bg-rose-100 text-rose-700' : 
                                         word.queueType === '오답' ? 'bg-orange-100 text-orange-700' :
