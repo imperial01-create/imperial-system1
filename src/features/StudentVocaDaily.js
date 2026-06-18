@@ -1,6 +1,7 @@
-/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (UI/UX 뼈대 고정 및 Import 버그 패치)
+/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (UI/UX 뼈대 고정 및 프리미엄 UX 라이팅 적용)
    학생이 점수가 없더라도 에러 화면으로 튕기지 않고, '인쇄 버튼'과 '단어장 틀'을 그대로 보여주어
-   서비스의 안정감을 줍니다. 데이터가 없는 경우 우아하게(Graceful) 빈 상태(Empty State)를 안내합니다. */
+   서비스의 안정감을 줍니다. 데이터가 없는 경우 우아하게(Graceful) 빈 상태(Empty State)를 안내하며,
+   모든 워딩(Wording)은 학부모와 학생의 신뢰도를 높이는 에듀테크 전문 용어로 구성되었습니다. */
 import React, { useState, useEffect } from 'react';
 import { Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
@@ -67,7 +68,7 @@ const StudentVocaDaily = ({ currentUser }) => {
         setSessionInfo(prev => ({ ...prev, status: 'ready' }));
     } catch (error) {
         console.error(error);
-        setErrorMsg(error.message || "단어장 생성에 실패했습니다. 원장님께 문의하세요.");
+        setErrorMsg(error.message || "단어장 배정에 실패했습니다. 원장님께 문의하세요.");
     } finally {
         setIsGenerating(false);
     }
@@ -86,16 +87,14 @@ const StudentVocaDaily = ({ currentUser }) => {
       {/* 1. 화면 상단 배너 (항상 고정 노출) */}
       <div className="print:hidden bg-gradient-to-r from-blue-600 to-indigo-700 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-8 relative overflow-hidden">
         <div className="relative z-10">
-          {/* 바로 이 부분이 Badge를 사용하는데 Import가 안 되어 있어서 앱이 터졌던 곳입니다! */}
           <Badge variant="outline" className="bg-white/20 text-white border-white/30 mb-3 px-3 py-1">
-              {sessionInfo.sessionNumber > 0 ? `제 ${sessionInfo.sessionNumber} 회차 단어장` : 'Voca 엔진 대기 중'}
+              {sessionInfo.sessionNumber > 0 ? `제 ${sessionInfo.sessionNumber} 회차 어휘 역량 진단` : 'AI Voca 엔진 대기 중'}
           </Badge>
           <h1 className="text-3xl sm:text-4xl font-black mb-3 flex items-center gap-3">
-            <BookOpen size={36} /> 오늘의 맞춤 영단어 미션
+            <BookOpen size={36} /> AI 기반 초개인화 영단어장
           </h1>
           <p className="text-blue-100 font-bold text-sm sm:text-base max-w-xl break-keep">
-            에빙하우스 망각 주기에 맞춰 오늘 반드시 외워야 할 40개의 단어가 준비됩니다. 
-            단어장을 출력하여 스펠링과 뜻을 확실히 암기하세요.
+            에빙하우스 망각 주기와 누적 오답 데이터를 AI가 분석하여, 오늘 반드시 마스터해야 할 최적의 어휘 40개를 배정했습니다. 단어장을 출력하여 스펠링과 뜻을 완벽히 숙지하세요.
           </p>
         </div>
         <BookOpen className="absolute -right-10 -bottom-10 text-white/10 w-64 h-64 rotate-12 pointer-events-none" />
@@ -107,7 +106,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      {/* 2. 다운로드 및 인쇄 버튼 영역 (항상 고정 노출, 조건부 비활성화 처리) */}
+      {/* 2. 다운로드 및 인쇄 버튼 영역 */}
       <div className="print:hidden flex flex-col sm:flex-row gap-6 mb-8">
         <button 
           onClick={handlePrint}
@@ -121,7 +120,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           <div className={`${isPrintReady ? 'bg-indigo-50 group-hover:scale-110' : 'bg-slate-200'} p-4 rounded-full mb-4 transition-transform`}>
             <Printer size={32} />
           </div>
-          <h3 className="text-xl font-black mb-2">오늘의 단어장 인쇄하기</h3>
+          <h3 className="text-xl font-black mb-2">초개인화 단어장 인쇄하기</h3>
           <p className="text-sm font-bold text-slate-500">A4 용지 규격 흑백 최적화</p>
         </button>
 
@@ -137,7 +136,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           <div className={`${isPrintReady ? 'bg-emerald-50 group-hover:scale-110' : 'bg-slate-200'} p-4 rounded-full mb-4 transition-transform`}>
             <Download size={32} />
           </div>
-          <h3 className="text-xl font-black mb-2">PDF로 저장하기</h3>
+          <h3 className="text-xl font-black mb-2">PDF 학습자료 다운로드</h3>
           <p className="text-sm font-bold text-slate-500">태블릿 열람용 (인쇄 메뉴 활용)</p>
         </button>
       </div>
@@ -149,7 +148,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6 print:mb-4">
             <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
               <FileText className="text-indigo-500 print:hidden" /> 
-              {sessionInfo.sessionNumber > 0 ? `임페리얼 ${sessionInfo.sessionNumber}회차 단어장` : '임페리얼 영단어'}
+              {sessionInfo.sessionNumber > 0 ? `임페리얼 ${sessionInfo.sessionNumber}회차 맞춤 어휘 진단` : '임페리얼 프리미엄 Voca'}
             </h2>
             <div className="text-right">
                 <div className="text-sm font-bold text-slate-500">이름: {currentUser.name}</div>
@@ -161,10 +160,9 @@ const StudentVocaDaily = ({ currentUser }) => {
           {sessionInfo.status === 'no_stat' && (
               <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <AlertCircle size={56} className="text-slate-300 mb-4" />
-                  <h3 className="text-2xl font-black text-slate-700 mb-2">아직 어휘력 점수가 평가되지 않았습니다</h3>
+                  <h3 className="text-2xl font-black text-slate-700 mb-2">초기 어휘 역량 진단이 필요합니다</h3>
                   <p className="text-slate-500 font-bold max-w-md break-keep">
-                      강사님이 CAT 초기 진단 점수를 입력하시면, 학생의 수준에 완벽히 맞춰진 
-                      초개인화 단어장이 이곳에 즉시 생성됩니다.
+                      강사님이 레벨 테스트(CAT) 결과를 시스템에 연동하면, 학생의 현재 수준에 완벽히 맞춰진 초개인화 단어장이 즉시 자동 생성됩니다.
                   </p>
               </div>
           )}
@@ -172,10 +170,9 @@ const StudentVocaDaily = ({ currentUser }) => {
           {sessionInfo.status === 'completed' && (
               <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <CheckCircle size={56} className="text-emerald-400 mb-4" />
-                  <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 Voca 미션 완료!</h3>
-                  <p className="text-slate-500 font-bold">
-                      이미 {sessionInfo.sessionNumber}회차 시험을 응시하고 채점을 완료했습니다. 
-                      다음 등원일에 새로운 단어장이 배부됩니다.
+                  <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 권장 학습 목표 100% 달성!</h3>
+                  <p className="text-slate-500 font-bold max-w-md break-keep">
+                      이미 {sessionInfo.sessionNumber}회차 어휘 역량 진단 및 채점을 완료했습니다. 다음 등원일에 새로운 맞춤형 단어장이 배정됩니다.
                   </p>
               </div>
           )}
@@ -186,16 +183,16 @@ const StudentVocaDaily = ({ currentUser }) => {
                       <Clock size={48} className="text-indigo-500" />
                       {isGenerating && <RefreshCw size={24} className="text-indigo-600 absolute bottom-4 right-4 animate-spin" />}
                   </div>
-                  <h3 className="text-2xl font-black text-slate-800 mb-3">단어장 생성 대기 중</h3>
+                  <h3 className="text-2xl font-black text-slate-800 mb-3">맞춤 어휘 배정 대기 중</h3>
                   <p className="text-slate-500 font-bold mb-8 max-w-md break-keep">
-                      학생의 최근 오답 기록과 망각 주기를 분석하여 오늘 외워야 할 완벽한 조합의 40단어를 생성합니다.
+                      학생의 누적 학습 데이터와 취약점을 AI가 분석하여, 가장 학습 효율이 높은 최적의 40단어를 추출합니다.
                   </p>
                   <button 
                       onClick={handleGenerateVoca}
                       disabled={isGenerating}
                       className="bg-indigo-600 hover:bg-indigo-700 text-white text-lg font-black px-8 py-4 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                      {isGenerating ? 'AI가 단어를 분석하는 중...' : '단어장 생성 시작'} <Play size={20} className={isGenerating ? 'hidden' : ''} />
+                      {isGenerating ? 'AI가 최적의 어휘를 배정하는 중...' : '일일 어휘 역량 진단 시작'} <Play size={20} className={isGenerating ? 'hidden' : ''} />
                   </button>
               </div>
           )}
@@ -205,10 +202,10 @@ const StudentVocaDaily = ({ currentUser }) => {
               <table className="w-full text-left border-collapse print:w-full print:text-black">
                   <thead>
                       <tr className="bg-slate-50 print:bg-transparent">
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">번호</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">영단어 (스펠링)</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">한글 뜻 / 설명</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center print:hidden">출제 사유</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">No.</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">Target Vocabulary</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">Core Meaning (핵심 의미)</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center print:hidden">AI 배정 사유</th>
                       </tr>
                   </thead>
                   <tbody>
@@ -227,7 +224,7 @@ const StudentVocaDaily = ({ currentUser }) => {
                                         word.queueType === '오답' ? 'bg-orange-100 text-orange-700' :
                                         word.queueType === '복습' ? 'bg-emerald-100 text-emerald-700' :
                                         word.queueType === '패시브' ? 'bg-slate-100 text-slate-600' :
-                                        'bg-blue-100 text-blue-700' // 신규
+                                        'bg-blue-100 text-blue-700'
                                       }`}
                                   >
                                       {word.queueType}
