@@ -1,7 +1,6 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.2
-   에듀테크 프리미엄 브랜딩: RPG 게임식 티어를 폐지하고, 공교육 과정 기반의 '학년별 어휘 진도 시스템(Grade-Level Equivalency)'을 도입했습니다. 
-   학부모는 자녀의 선행 학습 수준을 직관적으로 체감하며, 학원 시스템에 대한 압도적인 신뢰를 갖게 됩니다.
-   비용 효율성: 오답 리스트 조회 시 Lazy Loading을 적용하고, VocabularyDB 참조 시 in 쿼리를 활용해 N+1 Read 과금 문제를 원천 차단했습니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.3
+   UI/UX 고도화: 단어장의 [유의어], [반의어], [예문] 태그를 색상별로 직관적으로 분리하여 
+   학습자의 시각적 피로도를 낮추고 정보의 흡수율을 극대화했습니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -23,7 +22,6 @@ const PRESET_DESCRIPTIONS = {
     '스퍼트 모드': '신규 70% / 복습 15% / 오답 10% / 패시브 5%'
 };
 
-// 🚀 [CTO 패치] 공교육 교과 과정 기반 학년별 어휘 티어 계산기
 const getTierProgress = (masteredCount = 0) => {
     const TIERS = [
         { name: '초등 기초 (초3~4)', limit: 500, color: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
@@ -79,7 +77,7 @@ const StudentVocaDaily = ({ currentUser }) => {
   const targetStudent = (users || []).find(s => s.id === activeStudentId) || currentUser;
   const targetStudentName = targetStudent?.name || currentUser.name;
 
-  const [activeTab, setActiveTab] = useState('daily'); // 'daily' | 'vulnerable'
+  const [activeTab, setActiveTab] = useState('daily'); 
   const [sessionInfo, setSessionInfo] = useState({ sessionNumber: 1, status: 'loading' });
   const [wordsList, setWordsList] = useState([]); 
   const [questionsList, setQuestionsList] = useState([]); 
@@ -87,7 +85,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 🚀 [CTO 패치] 취약 어휘 리포트 상태 관리 (Lazy Loading 용도)
   const [vulnerableWords, setVulnerableWords] = useState([]);
   const [isVulnerableLoading, setIsVulnerableLoading] = useState(false);
   const [vulnerableLoaded, setVulnerableLoaded] = useState(false);
@@ -104,7 +101,6 @@ const StudentVocaDaily = ({ currentUser }) => {
         }
         if (!activeStudentId) return;
 
-        // 학생이 바뀌면 탭과 취약 어휘 캐시를 초기화합니다.
         setActiveTab('daily');
         setVulnerableLoaded(false);
         setVulnerableWords([]);
@@ -145,12 +141,10 @@ const StudentVocaDaily = ({ currentUser }) => {
     fetchVocaData();
   }, [activeStudentId, isParent, linkedChildren]);
 
-  // 🚀 [CTO 패치] 취약 어휘 30개 고속 추출 로직 (N+1 문제 해결)
   const fetchVulnerableWords = async () => {
       if (vulnerableLoaded || !activeStudentId) return;
       setIsVulnerableLoading(true);
       try {
-          // 1. 오답 히스토리에서 가장 많이 틀린 순으로 30개를 추출합니다. (복합 인덱스 불필요)
           const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${activeStudentId}/word_history`);
           const q = query(historyRef, where('incorrectCount', '>', 0), orderBy('incorrectCount', 'desc'), limit(30));
           const historySnap = await getDocs(q);
@@ -168,7 +162,6 @@ const StudentVocaDaily = ({ currentUser }) => {
               wordIds.push(doc.id);
           });
 
-          // 2. N+1 문제를 막기 위해 배열을 10개 단위로 쪼개어 in 쿼리로 가져옵니다.
           const chunkSize = 10;
           let enrichedWords = [];
           
@@ -181,8 +174,7 @@ const StudentVocaDaily = ({ currentUser }) => {
                   const wData = vDoc.data();
                   const hData = historyDataMap[vDoc.id];
                   enrichedWords.push({
-                      ...wData,
-                      wordId: vDoc.id,
+                      ...wData, wordId: vDoc.id,
                       incorrectCount: hData.incorrectCount,
                       consecutiveWrongCount: hData.consecutiveWrongCount,
                       status: hData.status
@@ -190,9 +182,7 @@ const StudentVocaDaily = ({ currentUser }) => {
               });
           }
 
-          // 틀린 횟수로 다시 정렬 (in 쿼리는 순서를 보장하지 않으므로)
           enrichedWords.sort((a, b) => b.incorrectCount - a.incorrectCount);
-          
           setVulnerableWords(enrichedWords);
           setVulnerableLoaded(true);
       } catch (error) {
@@ -229,7 +219,6 @@ const StudentVocaDaily = ({ currentUser }) => {
     }
   };
 
-  // 🚀 인쇄 로직에 취약 어휘(vulnerable) 모드 추가
   const handlePrint = (type = 'wordbook') => {
     let dataToPrint = type === 'vulnerable' ? vulnerableWords : wordsList.slice(0, 40);
     
@@ -259,7 +248,13 @@ const StudentVocaDaily = ({ currentUser }) => {
             .text-center { text-align: center; }
             .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
             .rich-info { margin-top: 6px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
-            .rich-info span.tag { font-weight: 900; color: #3b82f6; margin-right: 4px; display: inline-block; padding: 2px 6px; background-color: #eff6ff; border-radius: 4px; font-size: 10px; }
+            
+            /* 🚀 [CTO 패치] 태그별 색상 완벽 분리 */
+            .rich-info span.tag { font-weight: 900; margin-right: 4px; display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
+            .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; } /* 유의어: 에메랄드 */
+            .tag.antonym { color: #e11d48; background-color: #ffe4e6; border: 1px solid #fecdd3; } /* 반의어: 로즈 */
+            .tag.example { color: #3b82f6; background-color: #eff6ff; border: 1px solid #bfdbfe; } /* 예문: 블루 */
+            
             .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
             .meaning-line { margin-bottom: 3px; }
             .wrong-badge { display: inline-block; padding: 2px 6px; background-color: #ffe4e6; color: #e11d48; border-radius: 4px; font-size: 10px; font-weight: 900; margin-top: 4px; }
@@ -296,12 +291,8 @@ const StudentVocaDaily = ({ currentUser }) => {
               const pos = m.partOfSpeech ? `<span class="pos-tag">[${m.partOfSpeech}]</span>` : '';
               meaningHtml += `<div class="meaning-line">${pos}${idx + 1}. ${m.koreanMeaning}</div>`;
               
-              if (m.synonyms) {
-                  allSynonyms.push(...m.synonyms);
-              }
-              if (m.antonyms) {
-                  allAntonyms.push(...m.antonyms);
-              }
+              if (m.synonyms) allSynonyms.push(...m.synonyms);
+              if (m.antonyms) allAntonyms.push(...m.antonyms);
               
               if (!fullSentence && m.exampleSentence) {
                   fullSentence = m.exampleSentence;
@@ -318,17 +309,10 @@ const StudentVocaDaily = ({ currentUser }) => {
       allAntonyms = [...new Set(allAntonyms)];
 
       let extraInfoHtml = '';
-      if (allSynonyms.length > 0) {
-          extraInfoHtml += `<div class="rich-info"><span class="tag">유의어</span>${allSynonyms.join(', ')}</div>`;
-      }
-      if (allAntonyms.length > 0) {
-          extraInfoHtml += `<div class="rich-info"><span class="tag">반의어</span>${allAntonyms.join(', ')}</div>`;
-      }
-      if (fullSentence) {
-          extraInfoHtml += `<div class="rich-info"><span class="tag">예문</span>${fullSentence}</div>`;
-      }
+      if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag synonym">[유의어]</span>${allSynonyms.join(', ')}</div>`;
+      if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag antonym">[반의어]</span>${allAntonyms.join(', ')}</div>`;
+      if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag example">[예문]</span>${fullSentence}</div>`;
 
-      // 취약 어휘 리포트일 경우 몇 번 틀렸는지 표기
       const wrongCountHtml = type === 'vulnerable' && w.incorrectCount 
         ? `<div class="wrong-badge">누적 ${w.incorrectCount}회 오답</div>` 
         : '';
@@ -455,7 +439,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                 <div>
                     <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider mb-4">Core Metrics</h3>
                     
-                    {/* 🚀 [에러 수정 완료] 스타일 문자열 결합 방식으로 안전하게 변경 */}
                     {tierInfo && (
                         <div className="mb-5">
                             <div className="flex justify-between items-end mb-1">
@@ -495,7 +478,6 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 🚀 학부모를 위한 투명한 탭 분리 (오늘의 단어장 vs 취약 어휘 리포트) */}
       <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 mb-6 print:hidden">
           <button 
               onClick={() => handleTabChange('daily')} 
@@ -631,15 +613,10 @@ const StudentVocaDaily = ({ currentUser }) => {
                                                       let fullSentence = '';
                                                       
                                                       meanings.forEach(m => {
-                                                          if (m.synonyms) {
-                                                              allSynonyms.push(...m.synonyms);
-                                                          }
-                                                          if (m.antonyms) {
-                                                              allAntonyms.push(...m.antonyms);
-                                                          }
-                                                          if (!fullSentence && m.exampleSentence) {
-                                                              fullSentence = m.exampleSentence;
-                                                          } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                                          if (m.synonyms) allSynonyms.push(...m.synonyms);
+                                                          if (m.antonyms) allAntonyms.push(...m.antonyms);
+                                                          if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
+                                                          else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
                                                               const regex = new RegExp('_+(?:\\s*_+)*', 'g');
                                                               fullSentence = m.blankSentence[0].replace(regex, word.word);
                                                           }
@@ -650,9 +627,9 @@ const StudentVocaDaily = ({ currentUser }) => {
 
                                                       return (
                                                           <>
-                                                              {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
-                                                              {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
-                                                              {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
+                                                              {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
+                                                              {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
+                                                              {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
                                                           </>
                                                       );
                                                   })()}
@@ -743,15 +720,10 @@ const StudentVocaDaily = ({ currentUser }) => {
                                                       let fullSentence = '';
                                                       
                                                       meanings.forEach(m => {
-                                                          if (m.synonyms) {
-                                                              allSynonyms.push(...m.synonyms);
-                                                          }
-                                                          if (m.antonyms) {
-                                                              allAntonyms.push(...m.antonyms);
-                                                          }
-                                                          if (!fullSentence && m.exampleSentence) {
-                                                              fullSentence = m.exampleSentence;
-                                                          } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                                          if (m.synonyms) allSynonyms.push(...m.synonyms);
+                                                          if (m.antonyms) allAntonyms.push(...m.antonyms);
+                                                          if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
+                                                          else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
                                                               const regex = new RegExp('_+(?:\\s*_+)*', 'g');
                                                               fullSentence = m.blankSentence[0].replace(regex, word.word);
                                                           }
@@ -762,9 +734,9 @@ const StudentVocaDaily = ({ currentUser }) => {
 
                                                       return (
                                                           <>
-                                                              {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
-                                                              {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
-                                                              {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
+                                                              {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
+                                                              {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
+                                                              {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
                                                           </>
                                                       );
                                                   })()}

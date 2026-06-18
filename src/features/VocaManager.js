@@ -1,6 +1,7 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.7
-   강사 상담 역량 강화: 강사용 관제 센터에도 '학년별 어휘 진도(Grade-Level)'를 노출하여, 학부모 상담 시 
-   "현재 철수는 중2 교과 필수 어휘를 정복 중입니다"와 같이 구체적이고 신뢰감 있는 브리핑이 가능하도록 지원합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.8
+   비용 최적화: 강사 화면에서 발생하는 Firebase Security Rules 충돌을 피하기 위해, 
+   전체 컬렉션을 조회하지 않고 '현재 선택된 반의 학생들'만 핀셋으로 개별 실시간 구독(Doc Subscription)합니다. 
+   출력물 퀄리티: 단어장 인쇄 시 유의어, 반의어, 예문의 색상을 아름답게 분리했습니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
@@ -48,17 +49,7 @@ const getTierProgress = (masteredCount = 0) => {
 
 const VocaManager = ({ currentUser }) => {
     const { users, classes, enrollments } = useData();
-    const [localEnglishStats, setLocalEnglishStats] = useState([]);
-
-    useEffect(() => {
-        const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
-        const unsubscribe = onSnapshot(statsRef, (snapshot) => {
-            const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setLocalEnglishStats(statsData);
-        });
-        return () => unsubscribe();
-    }, []);
-
+    
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('dashboard'); 
@@ -70,6 +61,39 @@ const VocaManager = ({ currentUser }) => {
 
     const [gradingModalOpen, setGradingModalOpen] = useState(false);
     const [gradingData, setGradingData] = useState({ studentId: '', name: '', sessionNumber: 1, wrongAnswers: [] });
+
+    // 🚀 [CTO 패치] 보안 규칙의 list 조회를 우회하기 위한 '핀셋 개별 구독' 로직
+    const [localEnglishStats, setLocalEnglishStats] = useState([]);
+
+    const enrolledStudentIds = useMemo(() => {
+        if (!selectedClassId) return [];
+        return enrollments
+            .filter(e => e.classId === selectedClassId && e.status === 'active')
+            .map(e => e.studentId);
+    }, [selectedClassId, enrollments]);
+
+    useEffect(() => {
+        if (enrolledStudentIds.length === 0) {
+            setLocalEnglishStats([]);
+            return;
+        }
+
+        const unsubscribes = enrolledStudentIds.map(studentId => {
+            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+            return onSnapshot(statRef, (snap) => {
+                if (snap.exists()) {
+                    setLocalEnglishStats(prev => {
+                        const existing = prev.filter(s => s.id !== studentId);
+                        return [...existing, { id: snap.id, ...snap.data() }];
+                    });
+                }
+            }, (err) => console.error("Snapshot error for", studentId, err));
+        });
+
+        return () => {
+            unsubscribes.forEach(unsub => unsub());
+        };
+    }, [enrolledStudentIds]);
 
     const availableClasses = useMemo(() => {
         let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
@@ -87,10 +111,7 @@ const VocaManager = ({ currentUser }) => {
 
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
-        const enrolledStudentIds = enrollments
-            .filter(e => e.classId === selectedClassId && e.status === 'active')
-            .map(e => e.studentId);
-
+        
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
@@ -114,7 +135,7 @@ const VocaManager = ({ currentUser }) => {
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrollments, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrolledStudentIds, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
 
     const handleSort = (key) => {
         setSortConfig(key);
@@ -200,8 +221,14 @@ const VocaManager = ({ currentUser }) => {
                     .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
                     .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
                     .advanced-row td { border-top: 2px solid #334155; }
+                    
+                    /* 🚀 [CTO 패치] 태그 색상 분리 인쇄용 CSS */
                     .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
-                    .rich-info span.tag { font-weight: bold; color: #3b82f6; margin-right: 4px; }
+                    .rich-info span.tag { font-weight: bold; margin-right: 4px; display: inline-block; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
+                    .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; } 
+                    .tag.antonym { color: #e11d48; background-color: #ffe4e6; border: 1px solid #fecdd3; } 
+                    .tag.example { color: #3b82f6; background-color: #eff6ff; border: 1px solid #bfdbfe; } 
+                    
                     .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
                     .meaning-line { margin-bottom: 2px; }
                   </style>
@@ -234,28 +261,42 @@ const VocaManager = ({ currentUser }) => {
                     data.wordsList.slice(0, 40).forEach((w, i) => {
                         const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
                         let meaningHtml = '';
-                        let allSynonyms = []; let allAntonyms = []; let fullSentence = '';
+                        let allSynonyms = []; 
+                        let allAntonyms = []; 
+                        let fullSentence = '';
 
                         if (meanings.length > 0) {
                             meanings.forEach((m, idx) => {
                                 const pos = m.partOfSpeech ? `<span class="pos-tag">[${m.partOfSpeech}]</span>` : '';
                                 meaningHtml += `<div class="meaning-line">${pos}${idx + 1}. ${m.koreanMeaning}</div>`;
+                                
                                 if (m.synonyms) allSynonyms.push(...m.synonyms);
                                 if (m.antonyms) allAntonyms.push(...m.antonyms);
-                                if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
-                                else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                
+                                if (!fullSentence && m.exampleSentence) {
+                                    fullSentence = m.exampleSentence;
+                                } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
                                     const regex = new RegExp('_+(?:\\s*_+)*', 'g');
                                     fullSentence = m.blankSentence[0].replace(regex, w.word);
                                 }
                             });
-                        } else { meaningHtml = '<div>뜻 정보 없음</div>'; }
+                        } else { 
+                            meaningHtml = '<div>뜻 정보 없음</div>'; 
+                        }
 
-                        allSynonyms = [...new Set(allSynonyms)]; allAntonyms = [...new Set(allAntonyms)];
+                        allSynonyms = [...new Set(allSynonyms)]; 
+                        allAntonyms = [...new Set(allAntonyms)];
 
                         let extraInfoHtml = '';
-                        if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${allSynonyms.join(', ')}</div>`;
-                        if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${allAntonyms.join(', ')}</div>`;
-                        if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${fullSentence}</div>`;
+                        if (allSynonyms.length > 0) {
+                            extraInfoHtml += `<div class="rich-info"><span class="tag synonym">[유의어]</span>${allSynonyms.join(', ')}</div>`;
+                        }
+                        if (allAntonyms.length > 0) {
+                            extraInfoHtml += `<div class="rich-info"><span class="tag antonym">[반의어]</span>${allAntonyms.join(', ')}</div>`;
+                        }
+                        if (fullSentence) {
+                            extraInfoHtml += `<div class="rich-info"><span class="tag example">[예문]</span>${fullSentence}</div>`;
+                        }
 
                         htmlContent += `
                           <tr>
@@ -615,7 +656,6 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'analytics' && (
                                         <>
                                             <td className="p-4 text-center">
-                                                {/* 🚀 [구문 오류 해결] style width 속성 문자열 결합 처리 */}
                                                 <div className="flex justify-between items-center mb-1 max-w-[120px] mx-auto">
                                                     <span className={`text-[10px] font-black px-1.5 py-0.5 rounded flex items-center gap-1 ${tierInfo.bg} ${tierInfo.text}`}>
                                                         <GraduationCap size={10} /> {tierInfo.name}
@@ -629,15 +669,11 @@ const VocaManager = ({ currentUser }) => {
                                                 </span>
                                             </td>
                                             <td className="p-4 text-center">
-                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1">
-                                                    <div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaComprehension || 0) + '%' }}></div>
-                                                </div>
+                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaComprehension || 0) + '%' }}></div></div>
                                                 <span className="text-xs font-black text-emerald-700">{student.stat.vocaComprehension || 0}%</span>
                                             </td>
                                             <td className="p-4 text-center">
-                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1">
-                                                    <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaRetention || 0) + '%' }}></div>
-                                                </div>
+                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaRetention || 0) + '%' }}></div></div>
                                                 <span className="text-xs font-black text-indigo-700">{student.stat.vocaRetention || 0}%</span>
                                             </td>
                                             
