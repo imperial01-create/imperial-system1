@@ -1,23 +1,22 @@
 /* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (Ebbinghaus, CAT & 자율주행 Adaptive AI)
-   폭포수 이월(Rollover) 로직과 큐 내부 정렬(Prioritization)을 통해 하루 40단어를 극한의 효율로 믹스합니다.
-   또한, 밀린 단어량과 정답률을 AI가 감지하여 프리셋을 스스로 변속(Auto-Shift)하며,
-   상태가 호전되면 다시 기본 프리셋으로 복귀하는 완전 자율주행 엔진이 탑재되었습니다. */
+   DB의 다의어/반의어/예문 데이터를 100% 활용하여 꼼수 암기를 원천 차단합니다.
+   1~40번은 기본형(영단어->뜻 쓰기)으로 출제하고, 41~50번은 심화형(빈칸, 파생어, 유의어)으로 출제하여
+   학생들의 장기 기억력과 고차원적 인지 능력을 극대화합니다. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [운영 원칙] 강사 프리셋 설정 (40단어 기준 비중)
 export const VOCA_PRESETS = {
-    '밸런스 모드':  { wrong: 15, review: 30, passive: 5, new: 50 },  // 오답 6, 복습 12, 패시브 2, 신규 20
-    '오답 학습':    { wrong: 60, review: 20, passive: 5, new: 15 },  // 오답 24, 복습 8, 패시브 2, 신규 6
-    '망각 방어':    { wrong: 40, review: 50, passive: 10, new: 0 },  // 오답 16, 복습 20, 패시브 4, 신규 0
-    '기초 수리':    { wrong: 10, review: 20, passive: 40, new: 30 }, // 오답 4, 복습 8, 패시브 16, 신규 12
-    '스퍼트 모드':  { wrong: 10, review: 15, passive: 5, new: 70 }   // 오답 4, 복습 6, 패시브 2, 신규 28
+    '밸런스 모드':  { wrong: 15, review: 30, passive: 5, new: 50 },  
+    '오답 학습':    { wrong: 60, review: 20, passive: 5, new: 15 },  
+    '망각 방어':    { wrong: 40, review: 50, passive: 10, new: 0 },  
+    '기초 수리':    { wrong: 10, review: 20, passive: 40, new: 30 }, 
+    '스퍼트 모드':  { wrong: 10, review: 15, passive: 5, new: 70 }   
 };
 
-const TOTAL_WORDS = 40;
+const TOTAL_WORDS = 40; // 추출할 고유 단어 개수 (출제는 50문제)
 
 const shuffleArray = (array) => {
     const shuffled = [...array];
@@ -28,17 +27,10 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// [셔플링 엔진] 단어 데이터를 분석하여 무작위로 출제 방식을 비틉니다.
+// 🚀 [꼼수 방지 출제 엔진] 1~40번과 41~50번 출제 분기 처리
 const generateVariedQuestion = (word, qNumber) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
-    const hasSynonyms = meaningObj?.synonyms && meaningObj.synonyms.length > 0;
-    const hasBlank = meaningObj?.blankSentence && meaningObj.blankSentence.length > 0;
-    
-    const possibleTypes = [0]; 
-    if (hasSynonyms) possibleTypes.push(1);
-    if (hasBlank) possibleTypes.push(2);
-
-    const selectedType = possibleTypes[Math.floor(Math.random() * possibleTypes.length)];
+    const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
 
     const baseQuestion = {
         questionNumber: qNumber,
@@ -46,32 +38,73 @@ const generateVariedQuestion = (word, qNumber) => {
         queueType: word.queueType || '신규'
     };
 
+    // 🚀 [구간 1] 1~40번: 기본형 (영단어 -> 한글 뜻 쓰기)
+    if (qNumber <= 40) {
+        return {
+            ...baseQuestion, type: 'basic',
+            wordText: word.word,
+            answerText: allMeanings,
+            hint: (word.meanings && word.meanings.length > 1) ? "(다의어 모두 작성)" : ""
+        };
+    }
+
+    // 🚀 [구간 2] 41~50번: 고차원 문제 (유의어, 반의어, 빈칸, 파생어)
+    const hasSynonyms = meaningObj?.synonyms && meaningObj.synonyms.length > 0;
+    const hasAntonyms = meaningObj?.antonyms && meaningObj.antonyms.length > 0;
+    const hasBlank = meaningObj?.blankSentence && meaningObj.blankSentence.length > 0;
+    const hasDerivative = word.derivatives && word.derivatives.length > 0;
+
+    const advancedTypes = [];
+    if (hasSynonyms) advancedTypes.push(1);
+    if (hasBlank) advancedTypes.push(2);
+    if (hasAntonyms) advancedTypes.push(3);
+    if (hasDerivative) advancedTypes.push(4);
+
+    // 만약 DB에 심화 데이터가 부족한 단어라면 기본형으로 방어 출제
+    if (advancedTypes.length === 0) {
+        return {
+            ...baseQuestion, type: 'basic',
+            wordText: word.word,
+            answerText: allMeanings,
+            hint: (word.meanings && word.meanings.length > 1) ? "(다의어 모두 작성)" : "(심화 데이터 없음)"
+        };
+    }
+
+    const selectedType = advancedTypes[Math.floor(Math.random() * advancedTypes.length)];
+
     if (selectedType === 2) {
         return {
             ...baseQuestion, type: 'blank',
             wordText: meaningObj.blankSentence[0], 
-            answerText: word.word, 
-            hint: "(빈칸 추론)"
+            answerText: word.word, // 빈칸 문제는 정답이 영단어임
+            hint: "(빈칸에 알맞은 영어 단어 작성)"
         };
     } else if (selectedType === 1) {
         return {
             ...baseQuestion, type: 'synonym',
-            wordText: `${word.word} (유의어: ${meaningObj.synonyms.join(', ')})`,
-            answerText: word.meanings.map(m => m.koreanMeaning).join(', '),
-            hint: "(다의어 모두 작성)"
-        };
-    } else {
-        return {
-            ...baseQuestion, type: 'basic',
             wordText: word.word,
-            answerText: word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음',
-            hint: (word.meanings && word.meanings.length > 1) ? "(뜻 2개 이상 작성)" : ""
+            answerText: allMeanings,
+            hint: `(유의어 힌트: ${meaningObj.synonyms.join(', ')})`
+        };
+    } else if (selectedType === 3) {
+        return {
+            ...baseQuestion, type: 'antonym',
+            wordText: word.word,
+            answerText: allMeanings,
+            hint: `(반의어 힌트: ${meaningObj.antonyms.join(', ')})`
+        };
+    } else if (selectedType === 4) {
+        return {
+            ...baseQuestion, type: 'derivative',
+            wordText: word.word,
+            answerText: allMeanings,
+            hint: `(파생어 힌트: ${word.derivatives[0].word} - ${word.derivatives[0].meaning})`
         };
     }
 };
 
 /**
- * 🚀 일일 단어 세트 출제기 (폭포수 이월 로직 & 우선순위 정렬)
+ * 🚀 일일 단어 세트 출제기
  */
 export const generateDailyVocaSet = async (studentId, requestedPreset = null) => {
     try {
@@ -81,13 +114,11 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         
         const statData = statSnap.data();
         const vocaSession = statData.vocaSession || 1;
-        const catScore = statData.catScore || 100;
+        const catScore = Math.max(0, Math.min(1000, statData.catScore || 100)); 
         
-        // 🚀 자율주행 엔진이 덮어씌운 프리셋이 있다면 우선 적용 (없으면 강사 설정 프리셋 -> 기본 밸런스 모드)
         const presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
         const preset = VOCA_PRESETS[presetName] || VOCA_PRESETS['밸런스 모드'];
 
-        // 과거 학습 이력 호출
         const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
         const historySnap = await getDocs(historyRef);
         
@@ -106,7 +137,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             }
         });
 
-        // 1. 초기 할당량(Quota) 계산
         let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
         let qReview = Math.round(TOTAL_WORDS * (preset.review / 100));
         let qPassive = Math.round(TOTAL_WORDS * (preset.passive / 100));
@@ -115,9 +145,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const requiredOldWordIds = [];
         const finalWordData = [];
 
-        // ==========================================
-        // 🚀 폭포수 이월 STEP 1: [패시브 큐] -> 남으면 복습으로 이월
-        // ==========================================
+        // STEP 1: 패시브 이월
         if (qPassive > 0) {
             const passiveQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', catScore), orderBy('rootDifficulty', 'desc'), limit(150));
             const passiveSnap = await getDocs(passiveQuery);
@@ -128,49 +156,41 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 finalWordData.push({ ...d.data(), queueType: '패시브' });
                 seenWordIds.add(d.id);
             });
-            qReview += (qPassive - selectedPassive.length); // 잉여분 복습 큐로 이월
+            qReview += (qPassive - selectedPassive.length); 
         }
 
-        // ==========================================
-        // 🚀 폭포수 이월 STEP 2: [복습 큐] -> 남으면 신규로 이월 (우선순위 정렬 적용)
-        // ==========================================
-        // 정렬: 복습 예정일이 가장 오래 지난(숫자가 작은) 단어부터 추출 (Overdue 구출)
+        // STEP 2: 복습 이월
         reviewPool.sort((a, b) => a.nextReviewSession - b.nextReviewSession);
-        
         const actualReview = reviewPool.slice(0, qReview);
-        actualReview.forEach(item => {
-            requiredOldWordIds.push({ wordId: item.id, queueType: '복습' });
-        });
-        qNew += (qReview - actualReview.length); // 잉여분 신규 큐로 이월
+        actualReview.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '복습' }); });
+        qNew += (qReview - actualReview.length);
 
-        // ==========================================
-        // 🚀 폭포수 이월 STEP 3: [오답 큐] -> 남으면 신규로 이월 (우선순위 정렬 적용)
-        // ==========================================
-        // 🚨 [버그 패치] 단순 누적 오답(incorrectCount)이 아닌, 현재 연속해서 틀리고 있는(consecutiveWrongCount) 단어 최우선 추출
+        // STEP 3: 오답 이월 (연속 오답 우선순위)
         wrongPool.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
-        
         const actualWrong = wrongPool.slice(0, qWrong);
-        actualWrong.forEach(item => {
-            requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' });
-        });
-        qNew += (qWrong - actualWrong.length); // 잉여분 신규 큐로 이월
+        actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' }); });
+        qNew += (qWrong - actualWrong.length);
 
-        // ==========================================
-        // STEP 4: [신규 큐] (남은 할당량을 모두 털어넣음)
-        // ==========================================
+        // STEP 4: 신규 큐 (비용 최적화 진도 트래킹 반영)
+        let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
+        
         if (qNew > 0) {
-            const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', catScore), orderBy('rootDifficulty', 'asc'), limit(150));
+            const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(qNew + 20));
             const newSnap = await getDocs(newQuery);
             const newCandidates = newSnap.docs.filter(d => !seenWordIds.has(d.id));
             
-            const selectedNew = newCandidates.slice(0, qNew); // 진도순 정렬 추출
+            const selectedNew = newCandidates.slice(0, qNew);
             selectedNew.forEach(d => {
-                finalWordData.push({ ...d.data(), queueType: '신규' });
+                const wData = d.data();
+                finalWordData.push({ ...wData, queueType: '신규' });
                 seenWordIds.add(d.id);
+                if (wData.rootDifficulty > newProgressDifficulty) {
+                    newProgressDifficulty = wData.rootDifficulty; 
+                }
             });
         }
 
-        // DB 개별 패칭 (오답/복습용 단어 원본)
+        // DB 개별 패칭 (오답/복습)
         if (requiredOldWordIds.length > 0) {
             const oldWordFetches = requiredOldWordIds.map(async (req) => {
                 const wDoc = await getDoc(doc(db, 'VocabularyDB', req.wordId));
@@ -181,35 +201,45 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             await Promise.all(oldWordFetches);
         }
 
-        // 50문제 렌더링 세팅 (40문제 추출 + 10문제는 추출된 단어 중 랜덤 반복 출제)
-        let poolForTest = [...finalWordData];
-        if (poolForTest.length === 0) throw new Error("출제할 단어가 부족합니다. DB를 확인하세요.");
-        
-        while (poolForTest.length < 50) {
-            poolForTest = [...poolForTest, ...shuffleArray(finalWordData).slice(0, 50 - poolForTest.length)];
+        // 🚀 [50문제 렌더링 세팅 고도화]
+        let first40 = shuffleArray(finalWordData).slice(0, 40);
+
+        // 41~50번에 들어갈 10문제는 최대한 고차원 문제 출제가 가능한 단어로 우선 선별
+        const advancedCandidates = finalWordData.filter(word => {
+            const m = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
+            return (m?.synonyms?.length > 0 || m?.antonyms?.length > 0 || m?.blankSentence?.length > 0 || (word.derivatives && word.derivatives.length > 0));
+        });
+
+        let next10 = [];
+        if (advancedCandidates.length >= 10) {
+            next10 = shuffleArray(advancedCandidates).slice(0, 10);
+        } else {
+            const needed = 10 - advancedCandidates.length;
+            const otherCandidates = finalWordData.filter(w => !advancedCandidates.includes(w));
+            next10 = [...advancedCandidates, ...shuffleArray(otherCandidates).slice(0, needed)];
         }
 
-        const full50Questions = shuffleArray(poolForTest).map((word, index) => {
+        let poolForTest = [...first40, ...next10];
+
+        // 부족할 경우 채우기
+        while (poolForTest.length < 50) {
+            poolForTest.push(finalWordData[Math.floor(Math.random() * finalWordData.length)]);
+        }
+
+        const full50Questions = poolForTest.map((word, index) => {
             return generateVariedQuestion(word, index + 1);
         });
 
-        // 시험 세션 생성
         const testSessionId = `test_${studentId}_s${vocaSession}`;
         const testPayload = {
-            testId: testSessionId, 
-            studentId, 
-            sessionNumber: vocaSession, 
-            presetUsed: presetName, // 현재 적용된 프리셋 기록
-            wordsForPrint: finalWordData, 
-            questionsForTest: full50Questions, 
-            status: 'pending', 
-            createdAt: serverTimestamp()
+            testId: testSessionId, studentId, sessionNumber: vocaSession, 
+            presetUsed: presetName, wordsForPrint: finalWordData, questionsForTest: full50Questions, 
+            status: 'pending', createdAt: serverTimestamp()
         };
 
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId), testPayload);
         
-        // 사용된 프리셋 정보 스탯에 기록
-        await updateDoc(statRef, { appliedPreset: presetName });
+        await updateDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty });
         
         return testPayload;
 
@@ -220,7 +250,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 };
 
 /**
- * 🚀 망각 주기 자동 계산 채점기 및 [자율주행 프리셋 변속기]
+ * 🚀 망각 주기 자동 계산 채점기 및 자율주행 엔진
  */
 export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswerNumbers) => {
     const testSessionId = `test_${studentId}_s${sessionNumber}`;
@@ -228,7 +258,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const sessionSnap = await getDoc(sessionRef);
     if (!sessionSnap.exists()) return;
 
-    const { questionsForTest, presetUsed } = sessionSnap.data();
+    const { questionsForTest } = sessionSnap.data();
     const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
     const statSnap = await getDoc(statRef);
     const statData = statSnap.data();
@@ -237,7 +267,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const wrongSet = new Set(wrongAnswerNumbers);
 
     let sessionTotal = 0; let sessionCorrect = 0;
-    let reviewTotal = 0; let reviewCorrect = 0; // 자율주행 변속용 복습 정답률 측정
+    let reviewTotal = 0; let reviewCorrect = 0; 
     let wrongWordsDetails = []; 
 
     for (const q of questionsForTest) {
@@ -254,7 +284,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             });
         }
 
-        // 복습 큐 정답률 별도 추적
         if (q.queueType === '복습') {
             reviewTotal++;
             if (isCorrect) reviewCorrect++;
@@ -271,12 +300,8 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
 
             if (newConsecutive === 1) nextReviewInterval = 1;      
             else if (newConsecutive === 2) nextReviewInterval = 3; 
-            else { 
-                nextStatus = 'mastered'; 
-                nextReviewInterval = 999;
-            }
+            else { nextStatus = 'mastered'; nextReviewInterval = 999; }
 
-            // 🚨 [버그 패치] 정답을 맞추면 연속 오답 횟수(consecutiveWrongCount)를 0으로 초기화합니다.
             await setDoc(historyWordRef, {
                 consecutiveCorrect: newConsecutive,
                 consecutiveWrongCount: 0, 
@@ -286,10 +311,10 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
                 updatedAt: serverTimestamp()
             }, { merge: true });
 
-            currentVocaScore += 1;
+            currentVocaScore += 1; // 1000점 만점 체계 상승
         } else {
             const newIncorrect = (hist.incorrectCount || 0) + 1;
-            const newConsecutiveWrong = (hist.consecutiveWrongCount || 0) + 1; // 🚨 [버그 패치] 연속 오답 누적
+            const newConsecutiveWrong = (hist.consecutiveWrongCount || 0) + 1;
 
             await setDoc(historyWordRef, {
                 consecutiveCorrect: 0, 
@@ -301,26 +326,19 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
                 updatedAt: serverTimestamp()
             }, { merge: true });
 
-            currentVocaScore = Math.max(0, currentVocaScore - 1);
+            currentVocaScore -= 1; // 1000점 만점 체계 하락
         }
     }
 
-    // ==========================================
-    // 🚀 자율주행 엔진 (Adaptive Auto-Shifter) 분석 
-    // ==========================================
+    // AI 엔진 분석
     const adaptiveStats = statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 };
     let newAdaptivePreset = statData.adaptivePreset || null; 
     let autoShiftMessage = '';
 
-    // 1. 망각 방어 변속: 복습 정답률이 60% 미만인지 체크
     const reviewAccuracy = reviewTotal > 0 ? (reviewCorrect / reviewTotal) : 1; 
-    if (reviewTotal > 0 && reviewAccuracy < 0.6) {
-        adaptiveStats.reviewLowAccuracyCount += 1;
-    } else {
-        adaptiveStats.reviewLowAccuracyCount = 0; 
-    }
+    if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
+    else adaptiveStats.reviewLowAccuracyCount = 0; 
 
-    // 2. 대기 큐 오버플로우 변속: 다음 시험에 출제될 오답+복습 큐의 크기 측정
     const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
     const historySnap = await getDocs(historyRef);
     
@@ -338,48 +356,39 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         if (d.status === 'review' && d.nextReviewSession <= nextSessionNumber) waitingReview++;
     });
 
-    // 오답+복습 대기열이 하루 할당량(40)의 50%(20개)를 초과하는지 확인
-    if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) {
-        adaptiveStats.queueOverflowCount += 1;
-    } else {
-        adaptiveStats.queueOverflowCount = 0; 
-    }
+    if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1;
+    else adaptiveStats.queueOverflowCount = 0; 
 
-    // 3. 자율주행 기어 변속 실행 및 복귀 로직
+    // 변속기 실행
     if (adaptiveStats.reviewLowAccuracyCount >= 3) {
         newAdaptivePreset = '망각 방어';
         autoShiftMessage = '🚨 복습 정답률 3회 연속 60% 미만 감지 -> [망각 방어] 모드 자동 가동';
-        adaptiveStats.reviewLowAccuracyCount = 0; // 실행 후 리셋
+        adaptiveStats.reviewLowAccuracyCount = 0;
     } else if (adaptiveStats.queueOverflowCount >= 2 && newAdaptivePreset !== '망각 방어') {
         newAdaptivePreset = '오답 학습';
         autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) 2회 연속 감지 -> [오답 학습] 모드 자동 가동';
-        adaptiveStats.queueOverflowCount = 0; // 실행 후 리셋
+        adaptiveStats.queueOverflowCount = 0;
     } else if (adaptiveStats.reviewLowAccuracyCount === 0 && adaptiveStats.queueOverflowCount === 0) {
-        // 🚨 [버그 패치] 학생의 학습 상태가 완전히 정상화되었다면 자율주행 모드를 끄고 강사 설정으로 복귀
-        if (newAdaptivePreset !== null) {
-            autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
-        }
+        if (newAdaptivePreset !== null) autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
         newAdaptivePreset = null;
     }
 
-    // ==========================================
-    // 스탯 및 리포트 최종 정리
-    // ==========================================
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
-
     let rubricStr = `기억 유지율 ${retentionRate}%, 다의어 이해도 ${comprehension}%를 기록했습니다.`;
     if (autoShiftMessage) rubricStr = autoShiftMessage; 
 
+    const safeCatScore = Math.max(0, Math.min(1000, currentVocaScore));
+
     await updateDoc(statRef, {
-        catScore: Math.min(1000, currentVocaScore),
+        catScore: safeCatScore,
         vocaSession: sessionNumber + 1,
-        vocaProgress: Math.min(100, Math.round((masteredCount / 2000) * 100)), // 임시 모수 2000
+        vocaProgress: Math.min(100, Math.round((masteredCount / 2000) * 100)), 
         vocaComprehension: comprehension,
         vocaRetention: retentionRate,
         vocaRubric: rubricStr,
-        adaptiveStats: adaptiveStats,       // AI 상태 메모리 저장
-        adaptivePreset: newAdaptivePreset,  // AI가 덮어씌운 프리셋 저장 (null 이면 해제됨)
+        adaptiveStats: adaptiveStats,       
+        adaptivePreset: newAdaptivePreset,  
         updatedAt: serverTimestamp()
     });
 
