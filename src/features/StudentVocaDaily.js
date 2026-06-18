@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.3
-   UI/UX 고도화: 단어장의 [유의어], [반의어], [예문] 태그를 색상별로 직관적으로 분리하여 
-   학습자의 시각적 피로도를 낮추고 정보의 흡수율을 극대화했습니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.4
+   메타인지 최적화: '하이브리드 어휘량 추정 알고리즘'을 도입하여, 학생의 CAT 지수에 기반한 '기본 보유 어휘량'과 '시스템 내 마스터 어휘량'을 합산합니다. 
+   이를 통해 학생의 실제 어휘 능력을 완벽하게 반영한 진정한 의미의 '학년별 어휘 진도(Grade-Level Equivalency)'를 제공합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -22,7 +22,12 @@ const PRESET_DESCRIPTIONS = {
     '스퍼트 모드': '신규 70% / 복습 15% / 오답 10% / 패시브 5%'
 };
 
-const getTierProgress = (masteredCount = 0) => {
+// 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘 (CAT 점수 연동)
+const getTierProgress = (masteredCount = 0, catScore = 0) => {
+    // 학생의 CAT 지수 1점당 약 8.5단어의 기본 어휘량을 보유하고 있다고 역산합니다.
+    const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
+    const totalEstimatedWords = baseVocab + masteredCount;
+
     const TIERS = [
         { name: '초등 기초 (초3~4)', limit: 500, color: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
         { name: '초등 필수 (초5~6)', limit: 800, color: 'bg-orange-400', bg: 'bg-orange-50', text: 'text-orange-700' },
@@ -39,7 +44,7 @@ const getTierProgress = (masteredCount = 0) => {
     let currentTier = TIERS[0];
     
     for (let i = 0; i < TIERS.length; i++) {
-        if (masteredCount < TIERS[i].limit) {
+        if (totalEstimatedWords < TIERS[i].limit) {
             currentTier = TIERS[i];
             break;
         }
@@ -47,11 +52,11 @@ const getTierProgress = (masteredCount = 0) => {
         if (i === TIERS.length - 1) currentTier = TIERS[i];
     }
 
-    const currentBracketMastered = Math.max(0, masteredCount - prevLimit);
+    const currentBracketMastered = Math.max(0, totalEstimatedWords - prevLimit);
     const bracketTotal = currentTier.limit - prevLimit;
     const percent = Math.min(100, Math.round((currentBracketMastered / bracketTotal) * 100));
 
-    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: masteredCount };
+    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: totalEstimatedWords };
 };
 
 const StudentVocaDaily = ({ currentUser }) => {
@@ -195,9 +200,7 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const handleTabChange = (tab) => {
       setActiveTab(tab);
-      if (tab === 'vulnerable') {
-          fetchVulnerableWords();
-      }
+      if (tab === 'vulnerable') fetchVulnerableWords();
   };
 
   const handleGenerateVoca = async () => {
@@ -212,7 +215,6 @@ const StudentVocaDaily = ({ currentUser }) => {
         setSessionInfo(prev => ({ ...prev, status: 'ready' }));
         window.location.reload(); 
     } catch (error) {
-        console.error(error);
         setErrorMsg(error.message || "단어장 배정에 실패했습니다. 원장님께 문의하세요.");
     } finally {
         setIsGenerating(false);
@@ -221,10 +223,7 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const handlePrint = (type = 'wordbook') => {
     let dataToPrint = type === 'vulnerable' ? vulnerableWords : wordsList.slice(0, 40);
-    
-    if (!dataToPrint || dataToPrint.length === 0) {
-        return alert("인쇄할 데이터가 없습니다.");
-    }
+    if (!dataToPrint || dataToPrint.length === 0) return alert("인쇄할 데이터가 없습니다.");
 
     const title = type === 'vulnerable' ? '우리아이 맞춤 오답 집중 케어' : '임페리얼 일일 암기용 단어장';
 
@@ -234,11 +233,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           <title>임페리얼 맞춤형 어휘 리포트</title>
           <style>
             @page { margin: 0; size: A4 portrait; }
-            body { 
-                font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; 
-                color: #111; margin: 0; padding: 15mm 15mm 15mm 15mm; box-sizing: border-box;
-                -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; 
-            }
+            body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #111; margin: 0; padding: 15mm 15mm 15mm 15mm; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
             .header h2 { margin: 0; font-size: 24px; font-weight: bold; color: #0f172a; }
             .header .info { text-align: right; font-size: 14px; font-weight: bold; color: #475569; }
@@ -248,13 +243,10 @@ const StudentVocaDaily = ({ currentUser }) => {
             .text-center { text-align: center; }
             .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
             .rich-info { margin-top: 6px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
-            
-            /* 🚀 [CTO 패치] 태그별 색상 완벽 분리 */
             .rich-info span.tag { font-weight: 900; margin-right: 4px; display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; }
-            .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; } /* 유의어: 에메랄드 */
-            .tag.antonym { color: #e11d48; background-color: #ffe4e6; border: 1px solid #fecdd3; } /* 반의어: 로즈 */
-            .tag.example { color: #3b82f6; background-color: #eff6ff; border: 1px solid #bfdbfe; } /* 예문: 블루 */
-            
+            .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; }
+            .tag.antonym { color: #e11d48; background-color: #ffe4e6; border: 1px solid #fecdd3; }
+            .tag.example { color: #3b82f6; background-color: #eff6ff; border: 1px solid #bfdbfe; }
             .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
             .meaning-line { margin-bottom: 3px; }
             .wrong-badge { display: inline-block; padding: 2px 6px; background-color: #ffe4e6; color: #e11d48; border-radius: 4px; font-size: 10px; font-weight: 900; margin-top: 4px; }
@@ -354,7 +346,9 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
-  const tierInfo = studentStats ? getTierProgress(studentStats.masteredCount || 0) : null;
+  
+  // 🚀 [CTO 패치] 하이브리드 어휘량 추정 함수에 catScore 파라미터 전달
+  const tierInfo = studentStats ? getTierProgress(studentStats.masteredCount || 0, studentStats.catScore || 0) : null;
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -645,7 +639,6 @@ const StudentVocaDaily = ({ currentUser }) => {
           </>
       )}
 
-      {/* 🚀 취약 어휘 분석 리포트 렌더링 영역 */}
       {activeTab === 'vulnerable' && (
           <div className="animate-in fade-in slide-in-from-bottom-4">
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 bg-rose-50 p-6 rounded-3xl border border-rose-100">

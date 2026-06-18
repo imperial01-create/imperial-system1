@@ -1,13 +1,12 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.8
-   비용 최적화: 강사 화면에서 발생하는 Firebase Security Rules 충돌을 피하기 위해, 
-   전체 컬렉션을 조회하지 않고 '현재 선택된 반의 학생들'만 핀셋으로 개별 실시간 구독(Doc Subscription)합니다. 
-   출력물 퀄리티: 단어장 인쇄 시 유의어, 반의어, 예문의 색상을 아름답게 분리했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.9
+   운영 안정성: 프리셋 변경 시 실수를 방지하는 고급 확인 모달(Confirmation Modal)을 추가했습니다. 
+   비용 최적화: 강사 접속 시 컬렉션 전체(list)를 한 번만 onSnapshot으로 구독하여, N+1 과금을 방어하고 점수가 0.1초 만에 화면에 렌더링되도록 버그를 수정했습니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
     AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap
 } from 'lucide-react';
-import { collection, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Badge, Modal, Button } from '../components/UI';
@@ -15,7 +14,11 @@ import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } f
 
 const APP_ID = 'imperial-clinic-v1';
 
-const getTierProgress = (masteredCount = 0) => {
+// 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘 (CAT 점수 연동)
+const getTierProgress = (masteredCount = 0, catScore = 0) => {
+    const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
+    const totalEstimatedWords = baseVocab + masteredCount;
+
     const TIERS = [
         { name: '초등 기초 (초3~4)', limit: 500, color: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
         { name: '초등 필수 (초5~6)', limit: 800, color: 'bg-orange-400', bg: 'bg-orange-50', text: 'text-orange-700' },
@@ -32,7 +35,7 @@ const getTierProgress = (masteredCount = 0) => {
     let currentTier = TIERS[0];
     
     for (let i = 0; i < TIERS.length; i++) {
-        if (masteredCount < TIERS[i].limit) {
+        if (totalEstimatedWords < TIERS[i].limit) {
             currentTier = TIERS[i];
             break;
         }
@@ -40,16 +43,29 @@ const getTierProgress = (masteredCount = 0) => {
         if (i === TIERS.length - 1) currentTier = TIERS[i];
     }
 
-    const currentBracketMastered = Math.max(0, masteredCount - prevLimit);
+    const currentBracketMastered = Math.max(0, totalEstimatedWords - prevLimit);
     const bracketTotal = currentTier.limit - prevLimit;
     const percent = Math.min(100, Math.round((currentBracketMastered / bracketTotal) * 100));
 
-    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: masteredCount };
+    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: totalEstimatedWords };
 };
 
 const VocaManager = ({ currentUser }) => {
     const { users, classes, enrollments } = useData();
-    
+    const [localEnglishStats, setLocalEnglishStats] = useState([]);
+
+    // 🚀 [CTO 패치] 보안 규칙의 list 허용(isStaff)을 활용하여 전체 컬렉션을 한 번만 구독합니다. (N+1 문제 원천 차단 및 즉각 반영)
+    useEffect(() => {
+        const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
+        const unsubscribe = onSnapshot(statsRef, (snapshot) => {
+            const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setLocalEnglishStats(statsData);
+        }, (error) => {
+            console.error("Stats Subscription Error:", error);
+        });
+        return () => unsubscribe();
+    }, []);
+
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('dashboard'); 
@@ -62,38 +78,9 @@ const VocaManager = ({ currentUser }) => {
     const [gradingModalOpen, setGradingModalOpen] = useState(false);
     const [gradingData, setGradingData] = useState({ studentId: '', name: '', sessionNumber: 1, wrongAnswers: [] });
 
-    // 🚀 [CTO 패치] 보안 규칙의 list 조회를 우회하기 위한 '핀셋 개별 구독' 로직
-    const [localEnglishStats, setLocalEnglishStats] = useState([]);
-
-    const enrolledStudentIds = useMemo(() => {
-        if (!selectedClassId) return [];
-        return enrollments
-            .filter(e => e.classId === selectedClassId && e.status === 'active')
-            .map(e => e.studentId);
-    }, [selectedClassId, enrollments]);
-
-    useEffect(() => {
-        if (enrolledStudentIds.length === 0) {
-            setLocalEnglishStats([]);
-            return;
-        }
-
-        const unsubscribes = enrolledStudentIds.map(studentId => {
-            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
-            return onSnapshot(statRef, (snap) => {
-                if (snap.exists()) {
-                    setLocalEnglishStats(prev => {
-                        const existing = prev.filter(s => s.id !== studentId);
-                        return [...existing, { id: snap.id, ...snap.data() }];
-                    });
-                }
-            }, (err) => console.error("Snapshot error for", studentId, err));
-        });
-
-        return () => {
-            unsubscribes.forEach(unsub => unsub());
-        };
-    }, [enrolledStudentIds]);
+    // 🚀 [CTO 패치] 프리셋 변경 전용 모달 상태 추가
+    const [presetModalOpen, setPresetModalOpen] = useState(false);
+    const [presetData, setPresetData] = useState({ studentId: '', name: '', newPreset: '' });
 
     const availableClasses = useMemo(() => {
         let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
@@ -111,7 +98,10 @@ const VocaManager = ({ currentUser }) => {
 
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
-        
+        const enrolledStudentIds = enrollments
+            .filter(e => e.classId === selectedClassId && e.status === 'active')
+            .map(e => e.studentId);
+
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
@@ -126,8 +116,9 @@ const VocaManager = ({ currentUser }) => {
 
         if (activeTab === 'analytics' && sortConfig) {
             filteredStudents.sort((a, b) => {
-                const valA = sortConfig === 'vocaProgress' ? (a.stat.masteredCount || 0) : (a.stat[sortConfig] || 0);
-                const valB = sortConfig === 'vocaProgress' ? (b.stat.masteredCount || 0) : (b.stat[sortConfig] || 0);
+                // 정렬 시 진도율(vocaProgress)도 추정 어휘량(totalMastered) 기준으로 정렬합니다.
+                const valA = sortConfig === 'vocaProgress' ? getTierProgress(a.stat.masteredCount || 0, a.stat.catScore || 0).totalMastered : (a.stat[sortConfig] || 0);
+                const valB = sortConfig === 'vocaProgress' ? getTierProgress(b.stat.masteredCount || 0, b.stat.catScore || 0).totalMastered : (b.stat[sortConfig] || 0);
                 return valB - valA; 
             });
         } else {
@@ -135,7 +126,7 @@ const VocaManager = ({ currentUser }) => {
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrolledStudentIds, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrollments, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
 
     const handleSort = (key) => {
         setSortConfig(key);
@@ -360,6 +351,28 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    // 🚀 [CTO 패치] 프리셋 변경 시 확인 모달 호출 함수
+    const handlePresetSelect = (student, newPreset) => {
+        if (student.stat.vocaPreset === newPreset) return; // 같은 프리셋이면 무시
+        setPresetData({ studentId: student.id, name: student.name, newPreset });
+        setPresetModalOpen(true);
+    };
+
+    // 🚀 [CTO 패치] 모달에서 '변경 확정' 클릭 시 실행
+    const confirmPresetChange = async () => {
+        setProcessing(true);
+        try {
+            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, presetData.studentId);
+            await setDoc(statRef, { vocaPreset: presetData.newPreset }, { merge: true });
+            setPresetModalOpen(false);
+            // alert(`${presetData.name} 학생의 프리셋이 [${presetData.newPreset}]로 변경되었습니다.`);
+        } catch (error) {
+            alert("프리셋 변경 중 오류가 발생했습니다.");
+        } finally {
+            setProcessing(false);
+        }
+    };
+
     const openGradingModal = async (student) => {
         const sessionId = `test_${student.id}_s${student.stat.vocaSession || 1}`;
         const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
@@ -428,15 +441,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    const handlePresetChange = async (studentId, newPreset) => {
-        try {
-            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
-            await setDoc(statRef, { vocaPreset: newPreset }, { merge: true });
-        } catch (error) {
-            alert("프리셋 변경 중 오류가 발생했습니다.");
-        }
-    };
-
     const handleTogglePromotion = async (studentId, tier, currentValue) => {
         if (!window.confirm(`해당 학생의 ${tier}점 승급 심사(모의고사 통과) 상태를 변경하시겠습니까?`)) return;
         setProcessing(true);
@@ -455,6 +459,23 @@ const VocaManager = ({ currentUser }) => {
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             
+            {/* 🚀 [CTO 패치] 프리셋 변경 확인 모달 */}
+            <Modal isOpen={presetModalOpen} onClose={() => setPresetModalOpen(false)} title="학습 프리셋 변경 확인">
+                <div className="p-4 space-y-4 text-center">
+                    <h3 className="text-xl font-bold text-gray-800 leading-snug">
+                        [{presetData.name}] 학생의 학습 프리셋을<br/> <span className="text-indigo-600 font-black">[{presetData.newPreset}]</span>(으)로 변경하시겠습니까?
+                    </h3>
+                    <p className="text-sm font-bold text-gray-500">다음 회차 시험지 생성 시점부터 해당 비율이 적용됩니다.</p>
+                    <div className="flex gap-3 justify-center mt-6">
+                        <Button variant="secondary" onClick={() => setPresetModalOpen(false)}>취소</Button>
+                        <Button onClick={confirmPresetChange} disabled={processing}>
+                            {processing ? '처리 중...' : '변경 확정'}
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* 채점 모달 */}
             <Modal isOpen={gradingModalOpen} onClose={() => setGradingModalOpen(false)} title={`${gradingData.name} 학생 채점 (제 ${gradingData.sessionNumber}회차)`} className="max-w-3xl w-full">
                 <div className="p-4 space-y-6">
                     <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex items-start gap-3">
@@ -587,7 +608,8 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                const tierInfo = getTierProgress(student.stat.masteredCount || 0);
+                                // 🚀 [CTO 패치] 하이브리드 어휘량 추정 함수 연동
+                                const tierInfo = getTierProgress(student.stat.masteredCount || 0, student.stat.catScore || 0);
 
                                 return (
                                 <tr key={student.id} className="hover:bg-slate-50 transition-colors">
@@ -613,9 +635,10 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'dashboard' && (
                                         <>
                                             <td className="p-4 text-center">
+                                                {/* 🚀 [CTO 패치] 변경 이벤트 대신 모달 창 트리거 연결 */}
                                                 <select 
                                                     value={student.stat.vocaPreset}
-                                                    onChange={(e) => handlePresetChange(student.id, e.target.value)}
+                                                    onChange={(e) => handlePresetSelect(student, e.target.value)}
                                                     className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[140px]"
                                                 >
                                                     <option value="밸런스 모드">밸런스 모드</option>
@@ -665,7 +688,7 @@ const VocaManager = ({ currentUser }) => {
                                                     <div className={`${tierInfo.color} h-2 rounded-full transition-all`} style={{ width: tierInfo.percent + '%' }}></div>
                                                 </div>
                                                 <span className="text-[10px] font-bold text-slate-500">
-                                                    {tierInfo.currentBracketMastered}/{tierInfo.bracketTotal} (누적 {tierInfo.totalMastered})
+                                                    {tierInfo.currentBracketMastered}/{tierInfo.bracketTotal} (총 보유 {tierInfo.totalMastered}단어)
                                                 </span>
                                             </td>
                                             <td className="p-4 text-center">

@@ -1,30 +1,56 @@
 /* [서비스 가치] 학생/학부모 전용 수강 강의 대시보드
-   - 학생이 수강 중인 과목과 진도율을 직관적으로 확인하고 강의를 시청할 수 있는 공간입니다. */
+   - 학생이 수강 중인 과목과 진도율을 직관적으로 확인하고 강의를 시청할 수 있는 공간입니다.
+   - 🚀 업데이트: 학부모 계정 접속 시 연결된 자녀(linkedChildrenIds)의 수강 데이터를 완벽히 불러오며 다중 자녀 선택 기능을 지원합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-import { BookOpen, Video, PlayCircle, Lock, Loader, ChevronRight, CheckCircle } from 'lucide-react';
-import { Button, Card, Modal } from '../components/UI';
+import { BookOpen, Video, PlayCircle, Lock, Loader, ChevronRight, CheckCircle, Users, AlertCircle } from 'lucide-react';
+import { Button, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const StudentClassroom = ({ currentUser }) => {
-    const { enrollments, classes, loadingData } = useData();
+    // 🚀 [CTO 패치] 자녀 정보를 가져오기 위해 users 데이터를 추가로 불러옵니다.
+    const { enrollments, classes, users, loadingData } = useData();
     const [loading, setLoading] = useState(true);
     const [lectures, setLectures] = useState({});
     const [selectedClass, setSelectedClass] = useState(null);
     const [selectedVideo, setSelectedVideo] = useState(null);
 
-    // 1. 내 수강 반 목록 가져오기
+    // =========================================================================
+    // 🚀 [CTO 패치] 학부모 자녀 연동 로직 (StudentVocaDaily와 동일한 아키텍처)
+    // =========================================================================
+    const isParent = currentUser?.role === 'parent';
+    const isStudent = currentUser?.role === 'student';
+
+    const linkedChildren = useMemo(() => {
+        if (!isParent) return [];
+        return (users || []).filter(u => u.role === 'student' && (currentUser.linkedChildrenIds || []).includes(u.id));
+    }, [users, currentUser, isParent]);
+
+    const [selectedChildId, setSelectedChildId] = useState('');
+    
+    useEffect(() => {
+        if (isParent && linkedChildren.length > 0 && !selectedChildId) {
+            setSelectedChildId(linkedChildren[0].id);
+        }
+    }, [isParent, linkedChildren, selectedChildId]);
+
+    // 최종적으로 데이터를 조회할 학생의 ID
+    const activeStudentId = isStudent ? currentUser.id : (isParent ? selectedChildId : null);
+    const targetStudent = (users || []).find(s => s.id === activeStudentId) || currentUser;
+
+    // 1. 내(또는 자녀의) 수강 반 목록 가져오기
     const myClasses = useMemo(() => {
-        if (!currentUser) return [];
-        const studentId = currentUser.role === 'parent' ? currentUser.childId : currentUser.id;
-        const myEnrollments = enrollments.filter(e => e.studentId === studentId && e.status === 'active');
+        if (!activeStudentId) return [];
+        
+        // 🚀 childId가 아닌 activeStudentId(연동된 자녀 ID)를 기반으로 검색합니다.
+        const myEnrollments = enrollments.filter(e => e.studentId === activeStudentId && e.status === 'active');
         const classIds = myEnrollments.map(e => e.classId);
         
         return classes.filter(c => classIds.includes(c.id));
-    }, [currentUser, enrollments, classes]);
+    }, [activeStudentId, enrollments, classes]);
 
     // 2. 수강 반의 강의 목록 가져오기
     useEffect(() => {
@@ -61,11 +87,41 @@ const StudentClassroom = ({ currentUser }) => {
 
     if (loading || loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
 
+    // 학부모인데 연동된 자녀가 아예 없을 경우 예외 처리
+    if (isParent && linkedChildren.length === 0) {
+        return (
+            <div className="p-10 text-center flex flex-col items-center">
+                <AlertCircle size={48} className="text-gray-300 mb-4" />
+                <h2 className="text-xl font-bold text-gray-600">연결된 자녀 정보가 없습니다.</h2>
+                <p className="text-gray-400 mt-2">학원 데스크에 자녀 계정 연결을 요청해주세요.</p>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6 animate-in fade-in max-w-6xl mx-auto pb-20">
+            
+            {/* 🚀 다둥이 학부모를 위한 자녀 선택 UI */}
+            {isParent && linkedChildren.length > 1 && (
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-blue-100 flex items-center justify-between mb-2">
+                    <span className="font-bold text-blue-800 flex items-center gap-2">
+                        <Users size={18} /> 조회할 자녀 선택
+                    </span>
+                    <select 
+                        value={selectedChildId || ''} 
+                        onChange={(e) => setSelectedChildId(e.target.value)}
+                        className="bg-blue-50 border border-blue-200 text-blue-700 font-bold px-4 py-2 rounded-lg outline-none cursor-pointer"
+                    >
+                        {linkedChildren.map(child => (
+                            <option key={child.id} value={child.id}>{child.name} 학생</option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
             <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-6 md:p-8 rounded-3xl shadow-lg">
                 <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-2">
-                    <BookOpen size={28} /> 나의 수강 강의
+                    <BookOpen size={28} /> {isParent ? `${targetStudent?.name} 학생의 수강 강의` : '나의 수강 강의'}
                 </h1>
                 <p className="opacity-90">선생님이 업로드한 지난 수업 영상과 숙제를 확인할 수 있습니다.</p>
             </div>
