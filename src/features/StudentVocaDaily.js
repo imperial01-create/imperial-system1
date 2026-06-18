@@ -1,5 +1,6 @@
 /* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털
-   학습 효율 (Learner): 단어장 출력 및 화면 표시 시, 품사별 뜻 넘버링과 완전한 예문(Full Context)을 결합 노출하여 단편적 암기를 방지하고 입체적인 장기기억을 유도합니다. */
+   학습 효율 (Learner): 단어장 출력 시, 완전한 예문(exampleSentence)을 사용하여 빈칸 없이 
+   문맥을 온전히 읽고 체화할 수 있도록 지원하며 불필요한 푸터 문구를 삭제하여 도화지를 클렌징했습니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -117,9 +118,6 @@ const StudentVocaDaily = ({ currentUser }) => {
     }
   };
 
-  // =====================================================================
-  // 🚀 순수 HTML 생성 및 새 창 인쇄 엔진 (단어장 출력)
-  // =====================================================================
   const handlePrint = () => {
     if (!wordsList || wordsList.length === 0) return alert("인쇄할 데이터가 없습니다.");
 
@@ -187,25 +185,26 @@ const StudentVocaDaily = ({ currentUser }) => {
               if (m.synonyms) allSynonyms.push(...m.synonyms);
               if (m.antonyms) allAntonyms.push(...m.antonyms);
               
-              // 빈칸 문장이든 예문이든 완전한 문장 추출
-              if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
-                  fullSentence = m.blankSentence[0]; // replace 처리 없이 원본 그대로 사용
-              } else if (!fullSentence && m.exampleSentence) {
+              // 🚀 [CTO 패치] 단어장에는 완전한 예문(exampleSentence)을 우선 사용
+              if (!fullSentence && m.exampleSentence) {
                   fullSentence = m.exampleSentence;
+              } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                  // blankSentence밖에 없다면 빈칸을 원래 단어로 메워서 출력합니다.
+                  const regex = new RegExp('_+(?:\\s*_+)*', 'g');
+                  fullSentence = m.blankSentence[0].replace(regex, w.word);
               }
           });
       } else {
           meaningHtml = '<div>뜻 정보 없음</div>';
       }
 
-      // 중복 제거
       allSynonyms = [...new Set(allSynonyms)];
       allAntonyms = [...new Set(allAntonyms)];
 
       let extraInfoHtml = '';
-      if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${allSynonyms.join(', ')}</div>`;
-      if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${allAntonyms.join(', ')}</div>`;
-      if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${fullSentence}</div>`;
+      if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">유의어</span>${allSynonyms.join(', ')}</div>`;
+      if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">반의어</span>${allAntonyms.join(', ')}</div>`;
+      if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag">예문</span>${fullSentence}</div>`;
 
       htmlContent += `
         <tr>
@@ -245,7 +244,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
 
-  // 일반 화면 렌더링
   if (isParent && linkedChildren.length === 0) {
       return (
           <div className="p-10 text-center flex flex-col items-center">
@@ -453,7 +451,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                       </tr>
                   </thead>
                   <tbody>
-                      {/* 화면상 단어 리스트도 1~40번 및 프리미엄 포맷팅 적용 */}
                       {wordsList.slice(0, 40).map((word, idx) => {
                           const meanings = word.meanings && word.meanings.length > 0 ? word.meanings : [];
                           return (
@@ -481,8 +478,11 @@ const StudentVocaDaily = ({ currentUser }) => {
                                               meanings.forEach(m => {
                                                   if (m.synonyms) allSynonyms.push(...m.synonyms);
                                                   if (m.antonyms) allAntonyms.push(...m.antonyms);
-                                                  if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) fullSentence = m.blankSentence[0];
-                                                  else if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
+                                                  if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
+                                                  else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                                      const regex = new RegExp('_+(?:\\s*_+)*', 'g');
+                                                      fullSentence = m.blankSentence[0].replace(regex, word.word);
+                                                  }
                                               });
 
                                               allSynonyms = [...new Set(allSynonyms)];

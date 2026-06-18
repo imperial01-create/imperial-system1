@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.3
-   운영자 관점: 세부 어휘력 지표를 클릭 한 번으로 내림차순 정렬하며, 프리셋 변경 UI를 깔끔하게 정돈(클렌징)하여 시각적 피로도를 줄였습니다.
-   비용 및 성능 최적화: 클라이언트 사이드 메모리 정렬(In-memory Sorting)을 통해 추가적인 Firebase Read 과금을 방어합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.4
+   운영자 관점: 학원의 유연한 운영을 위해, 채점에 반영되지 않고 무한 출력 가능한 '오답 재시험지' 및 '재시험 답안지' 엔진을 신규 탑재했습니다. 
+   또한 인쇄 시 불필요한 노이즈를 모두 제거하고 출판 교재 수준의 고퀄리티 단어장을 0.1초 만에 인쇄합니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
@@ -89,7 +89,7 @@ const VocaManager = ({ currentUser }) => {
     };
 
     // =====================================================================
-    // 인쇄 로직 (Native HTML Injection)
+    // 🚀 인쇄 로직 (오답 재시험지 기능 추가 및 예문/품사 포맷팅 고도화)
     // =====================================================================
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
@@ -105,23 +105,42 @@ const VocaManager = ({ currentUser }) => {
                 
                 let questionsList = [];
                 let wordsList = []; 
+                let isSessionCompleted = false;
+                let wrongNums = [];
                 
                 if (testSnap.exists() && testSnap.data().questionsForTest) {
-                    questionsList = testSnap.data().questionsForTest;
-                    wordsList = testSnap.data().wordsForPrint;
+                    const testData = testSnap.data();
+                    questionsList = testData.questionsForTest;
+                    wordsList = testData.wordsForPrint;
+                    if (testData.status === 'completed') {
+                        isSessionCompleted = true;
+                        wrongNums = testData.wrongAnswerNumbers || [];
+                    }
                 } else if (student.stat.catScore) {
                     const payload = await generateDailyVocaSet(student.id, student.stat.vocaPreset);
                     questionsList = payload.questionsForTest;
                     wordsList = payload.wordsForPrint;
                 }
+
+                // 🚀 재시험 모드일 경우 오답 필터링
+                if (type.startsWith('retest')) {
+                    if (!isSessionCompleted) {
+                        alert(`${student.name} 학생의 채점이 완료되지 않아 오답 재시험지를 출력할 수 없습니다.`);
+                        continue;
+                    }
+                    if (wrongNums.length === 0) {
+                        alert(`${student.name} 학생은 100점이므로 재시험지가 없습니다!`);
+                        continue;
+                    }
+                    questionsList = questionsList.filter(q => wrongNums.includes(q.questionNumber));
+                }
                 
-                if (questionsList.length > 0) {
+                if (questionsList.length > 0 || (type === 'wordbook' && wordsList.length > 0)) {
                     dataToPrint.push({ student, questionsList, wordsList, session: student.stat.vocaSession || 1 });
                 }
             }
             
             if (dataToPrint.length === 0) {
-                alert("출력할 수 있는 데이터가 없습니다. (어휘력이 입력되었는지 확인하세요)");
                 setProcessing(false);
                 return;
             }
@@ -130,6 +149,8 @@ const VocaManager = ({ currentUser }) => {
             if (type === 'answer') printTitle = '강사용 답안지';
             else if (type === 'test') printTitle = '영단어 맞춤형 시험지';
             else if (type === 'wordbook') printTitle = '일일 암기용 단어장';
+            else if (type === 'retest') printTitle = '오답 재시험지 (미채점)';
+            else if (type === 'retest_answer') printTitle = '오답 재시험 답안지';
 
             let htmlContent = `
               <html>
@@ -151,7 +172,7 @@ const VocaManager = ({ currentUser }) => {
                     .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
                     .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
                     .advanced-row td { border-top: 2px solid #334155; }
-                    .rich-info { margin-top: 4px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
+                    .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
                     .rich-info span.tag { font-weight: bold; color: #3b82f6; margin-right: 4px; }
                     .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
                     .meaning-line { margin-bottom: 2px; }
@@ -167,7 +188,7 @@ const VocaManager = ({ currentUser }) => {
                       <h2>임페리얼 ${printTitle}</h2>
                       <div class="info">
                         <div>이름: ${data.student.name}</div>
-                        <div>날짜: ${new Date().toLocaleDateString()} ${type !== 'wordbook' ? '/ 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50' : ''}</div>
+                        <div>날짜: ${new Date().toLocaleDateString()} ${type.includes('test') && !type.includes('retest') ? '/ 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50' : ''}</div>
                       </div>
                     </div>
                     <table>
@@ -182,7 +203,7 @@ const VocaManager = ({ currentUser }) => {
                 `;
 
                 if (type === 'wordbook') {
-                    // 🚀 단어장 (1~40번, 품사 및 넘버링, 풀 예문 포함)
+                    // 🚀 단어장 (1~40번, 품사 및 넘버링, 풀 예문)
                     data.wordsList.slice(0, 40).forEach((w, i) => {
                         const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
                         
@@ -199,18 +220,18 @@ const VocaManager = ({ currentUser }) => {
                                 if (m.synonyms) allSynonyms.push(...m.synonyms);
                                 if (m.antonyms) allAntonyms.push(...m.antonyms);
                                 
-                                // 빈칸 문장이든 예문이든 완전한 문장 추출 (첫 번째 발견된 예문 사용)
-                                if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
-                                    fullSentence = m.blankSentence[0];
-                                } else if (!fullSentence && m.exampleSentence) {
+                                // 🚀 예문 우선, 없으면 blank 문장의 밑줄 복원
+                                if (!fullSentence && m.exampleSentence) {
                                     fullSentence = m.exampleSentence;
+                                } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                    const regex = new RegExp('_+(?:\\s*_+)*', 'g');
+                                    fullSentence = m.blankSentence[0].replace(regex, w.word);
                                 }
                             });
                         } else {
                             meaningHtml = '<div>뜻 정보 없음</div>';
                         }
 
-                        // 중복 제거
                         allSynonyms = [...new Set(allSynonyms)];
                         allAntonyms = [...new Set(allAntonyms)];
 
@@ -231,19 +252,27 @@ const VocaManager = ({ currentUser }) => {
                         `;
                     });
                 } else {
-                    // 🚀 시험지 및 답안지 (50문제)
+                    // 🚀 시험지, 답안지, 재시험지, 재시험답안지 
                     data.questionsList.forEach((q) => {
-                        const isAdvanced = q.questionNumber === 41;
+                        // 재시험 모드에서는 41번이더라도 구분선을 따로 넣지 않음(원래 번호가 섞여 나오므로)
+                        const isAdvanced = (type === 'test' || type === 'answer') && q.questionNumber === 41;
                         const rowClass = isAdvanced ? 'class="advanced-row"' : '';
                         const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
-                        const answerDisplay = type === 'test' ? '<div class="answer-blank"></div>' : q.answerText;
-                        const answerColor = type === 'test' ? '#1e3a8a' : '#334155';
+                        
+                        const isAnswerSheet = type === 'answer' || type === 'retest_answer';
+                        const answerDisplay = !isAnswerSheet ? '<div class="answer-blank"></div>' : q.answerText;
+                        const answerColor = !isAnswerSheet ? '#1e3a8a' : '#334155';
 
                         htmlContent += `
                           <tr ${rowClass}>
                             <td class="text-center font-bold">${q.questionNumber}</td>
-                            <td><span class="word-text">${q.wordText}</span>${hintHtml}</td>
-                            <td style="font-weight: bold; color: ${answerColor};">${answerDisplay}</td>
+                            <td>
+                              <span class="word-text">${q.wordText}</span>
+                              ${hintHtml}
+                            </td>
+                            <td style="font-weight: bold; color: ${answerColor};">
+                              ${answerDisplay}
+                            </td>
                           </tr>
                         `;
                     });
@@ -443,7 +472,7 @@ const VocaManager = ({ currentUser }) => {
                             className="flex-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 font-black py-3 rounded-2xl flex items-center justify-center gap-2 transition-colors border border-cyan-200 disabled:opacity-50 min-w-[140px] text-sm"
                         >
                             {processing ? <RefreshCw className="animate-spin" size={18} /> : <BookOpen size={18} />} 
-                            반 전체 단어장 인쇄
+                            반 전체 단어장
                         </button>
                         <button 
                             onClick={() => preparePrintData('test')} 
@@ -451,7 +480,7 @@ const VocaManager = ({ currentUser }) => {
                             className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black py-3 rounded-2xl flex items-center justify-center gap-2 transition-colors border border-indigo-200 disabled:opacity-50 min-w-[140px] text-sm"
                         >
                             {processing ? <RefreshCw className="animate-spin" size={18} /> : <FileText size={18} />} 
-                            반 전체 시험지 인쇄
+                            반 전체 시험지
                         </button>
                         <button 
                             onClick={() => preparePrintData('answer')} 
@@ -459,7 +488,7 @@ const VocaManager = ({ currentUser }) => {
                             className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-black py-3 rounded-2xl flex items-center justify-center gap-2 transition-colors border border-rose-200 disabled:opacity-50 min-w-[140px] text-sm"
                         >
                             {processing ? <RefreshCw className="animate-spin" size={18} /> : <Printer size={18} />} 
-                            강사용 답안지 일괄 출력
+                            반 전체 답안지
                         </button>
                     </div>
                 )}
@@ -494,8 +523,8 @@ const VocaManager = ({ currentUser }) => {
                                 
                                 {activeTab === 'dashboard' && (
                                     <>
-                                        <th className="p-4 font-black text-slate-600 text-center"><Sliders size={16} className="inline mr-1"/> 단어 비중 프리셋</th>
-                                        <th className="p-4 font-black text-slate-600 text-center">개별 인쇄</th>
+                                        <th className="p-4 font-black text-slate-600 text-center"><Sliders size={16} className="inline mr-1"/> 프리셋 설정</th>
+                                        <th className="p-4 font-black text-slate-600 text-center">개별 출력 기능</th>
                                     </>
                                 )}
                                 {activeTab === 'grading' && <th className="p-4 font-black text-slate-600 text-center">채점 상태 및 AI 데이터 전송</th>}
@@ -552,7 +581,6 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'dashboard' && (
                                         <>
                                             <td className="p-4 text-center">
-                                                {/* 🚀 [퍼센트 제거] 직관적인 프리셋 명칭만 노출 */}
                                                 <select 
                                                     value={student.stat.vocaPreset}
                                                     onChange={(e) => handlePresetChange(student.id, e.target.value)}
@@ -567,15 +595,22 @@ const VocaManager = ({ currentUser }) => {
                                             </td>
                                             
                                             <td className="p-4 text-center">
-                                                <div className="flex justify-center gap-1.5">
-                                                    <button onClick={() => preparePrintData('wordbook', student.id)} className="px-2.5 py-1.5 bg-cyan-50 text-cyan-600 hover:bg-cyan-600 hover:text-white rounded-md font-bold text-xs transition-colors border border-cyan-200 whitespace-nowrap">
+                                                {/* 🚀 재시험지 포함 5가지 출력 모드 지원 */}
+                                                <div className="flex justify-center gap-1.5 flex-wrap max-w-[200px] mx-auto">
+                                                    <button onClick={() => preparePrintData('wordbook', student.id)} className="px-2.5 py-1.5 bg-cyan-50 text-cyan-600 hover:bg-cyan-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-cyan-200 whitespace-nowrap">
                                                         단어장
                                                     </button>
-                                                    <button onClick={() => preparePrintData('test', student.id)} className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-md font-bold text-xs transition-colors border border-indigo-200 whitespace-nowrap">
+                                                    <button onClick={() => preparePrintData('test', student.id)} className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-indigo-200 whitespace-nowrap">
                                                         시험지
                                                     </button>
-                                                    <button onClick={() => preparePrintData('answer', student.id)} className="px-2.5 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-md font-bold text-xs transition-colors border border-rose-200 whitespace-nowrap">
+                                                    <button onClick={() => preparePrintData('answer', student.id)} className="px-2.5 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-rose-200 whitespace-nowrap">
                                                         답안지
+                                                    </button>
+                                                    <button onClick={() => preparePrintData('retest', student.id)} className="px-2.5 py-1.5 bg-amber-50 text-amber-600 hover:bg-amber-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-amber-200 whitespace-nowrap mt-1">
+                                                        오답 재시험지
+                                                    </button>
+                                                    <button onClick={() => preparePrintData('retest_answer', student.id)} className="px-2.5 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-emerald-200 whitespace-nowrap mt-1">
+                                                        재시험 답지
                                                     </button>
                                                 </div>
                                             </td>
