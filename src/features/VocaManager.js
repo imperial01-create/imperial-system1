@@ -1,12 +1,12 @@
-/* [서비스 가치] AI Voca 통합 관제 센터 v2.1 (초개인화 제어 및 운영 효율화)
+/* [서비스 가치] AI Voca 통합 관제 센터 v2.2 (승급 심사 제어 탑재)
    1) 영어 클래스 전용 필터링 및 강사 배정 로직 버그 픽스 (lecturerId 매핑)
    2) 학생별 개별 인쇄, 50문항(심화 10문항 포함) 꼼수 방지형 시험지 출력 지원
-   3) 글로벌 데이터 캐시를 활용하여 반을 전환하거나 설정을 바꿀 때 발생하는 Firebase 과금 최소화 */
+   3) 400점, 700점 결계 해제를 위한 [승급 심사 관리] 토글 버튼 탑재 */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, CheckSquare, BarChart2, Search, Play, 
     CheckCircle, AlertCircle, FileText, Download, UserCircle, RefreshCw,
-    Sliders
+    Sliders, Trophy
 } from 'lucide-react';
 import { doc, updateDoc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -24,16 +24,14 @@ const VocaManager = ({ currentUser }) => {
     
     // 채점 및 상태 관리
     const [processing, setProcessing] = useState(false);
-    const [gradeInput, setGradeInput] = useState({}); // { studentId: score }
-    const [catInput, setCatInput] = useState({}); // { studentId: catScore }
-    const [printMode, setPrintMode] = useState(null); // 'test' or 'answer'
-    const [printData, setPrintData] = useState([]); // 출력용 데이터 캐싱
+    const [gradeInput, setGradeInput] = useState({}); 
+    const [catInput, setCatInput] = useState({}); 
+    const [printMode, setPrintMode] = useState(null); 
+    const [printData, setPrintData] = useState([]); 
 
-    // 🚀 [버그 픽스 완료] 영어 과목 전용 클래스 필터링 & 정확한 강사 매핑
     const availableClasses = useMemo(() => {
         let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
         if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
-            // DB 구조에 맞춰 instructorId 가 아닌 lecturerId 로 매핑하고, currentUser.id 를 사용합니다.
             filtered = filtered.filter(c => c.lecturerId === currentUser.id);
         }
         return filtered.sort((a, b) => a.name.localeCompare(b.name));
@@ -45,7 +43,6 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [availableClasses, selectedClassId]);
 
-    // 선택된 반의 학생 데이터 결합
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         const enrolledStudentIds = enrollments
@@ -56,7 +53,8 @@ const VocaManager = ({ currentUser }) => {
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.userId))
             .map(student => {
                 const stat = englishStats.find(s => s.id === student.id) || { 
-                    catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드' 
+                    catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
+                    passedMockExam400: false, passedMockExam700: false
                 };
                 return { ...student, stat: { ...stat, vocaPreset: stat.vocaPreset || '밸런스 모드' } };
             })
@@ -64,7 +62,6 @@ const VocaManager = ({ currentUser }) => {
             .sort((a, b) => a.name.localeCompare(b.name));
     }, [selectedClassId, enrollments, users, englishStats, searchQuery]);
 
-    // 일괄 및 개별 시험지/답지 데이터 준비
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
         try {
@@ -81,7 +78,6 @@ const VocaManager = ({ currentUser }) => {
                 if (testSnap.exists() && testSnap.data().questionsForTest) {
                     questionsList = testSnap.data().questionsForTest;
                 } else if (student.stat.catScore) {
-                    // 미생성 상태면 즉시 생성 (현재 설정된 프리셋 반영)
                     const payload = await generateDailyVocaSet(student.id, student.stat.vocaPreset);
                     questionsList = payload.questionsForTest;
                 }
@@ -108,7 +104,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // [고속 채점] 개별 학생 점수 반영 (50점 만점 기준)
     const handleGradeSubmit = async (studentId, currentSession, score) => {
         if (score === undefined || score < 0 || score > 50) return alert("정상적인 점수(0~50)를 입력하세요.");
         setProcessing(true);
@@ -134,7 +129,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // CAT 초기 진단 점수 반영 로직 (1000점 만점)
     const handleCatSubmit = async (studentId, score) => {
         if (score === undefined || score < 0 || score > 1000) return alert("정상적인 점수(0~1000)를 입력하세요.");
         setProcessing(true);
@@ -154,7 +148,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 프리셋 변경 로직
     const handlePresetChange = async (studentId, newPreset) => {
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
@@ -165,10 +158,46 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    // 🚀 [신규 추가] 티어 승급 심사 토글 로직
+    const handleTogglePromotion = async (studentId, tier, currentValue) => {
+        if (!window.confirm(`해당 학생의 ${tier}점 승급 심사(모의고사 통과) 상태를 변경하시겠습니까?`)) return;
+        setProcessing(true);
+        try {
+            const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+            const fieldName = `passedMockExam${tier}`;
+            await setDoc(statRef, { [fieldName]: !currentValue }, { merge: true });
+            alert(`${tier}점 승급 심사 상태가 변경되었습니다.`);
+        } catch (error) {
+            console.error("Promotion Toggle Error:", error);
+            alert("상태 변경 중 오류가 발생했습니다.");
+        } finally {
+            setProcessing(false);
+        }
+    };
+
     // --- 렌더링 영역 (인쇄 모드 분리) ---
     if (printMode) {
         return (
             <div className="bg-white text-black p-8 min-h-screen">
+                {/* 🚀 [프린트 최적화 CSS 추가] 강사용 화면도 백지 짤림 없이, 헤더/푸터 없이 깔끔하게! */}
+                <style>{`
+                    @media print {
+                        @page { margin: 0; size: A4 portrait; }
+                        body { 
+                            margin: 1.5cm !important; 
+                            -webkit-print-color-adjust: exact !important; 
+                            print-color-adjust: exact !important; 
+                        }
+                        html, body, #root, .h-screen, .overflow-hidden, .overflow-y-auto, .flex-1, main {
+                            height: auto !important;
+                            min-height: auto !important;
+                            overflow: visible !important;
+                            display: block !important;
+                        }
+                        aside, header { display: none !important; }
+                    }
+                `}</style>
+                
                 {printData.map((data, idx) => (
                     <div key={data.student.id} className="print-page break-after-page mb-10">
                         <div className="flex justify-between border-b-2 border-black pb-4 mb-4">
@@ -217,13 +246,11 @@ const VocaManager = ({ currentUser }) => {
 
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
-            {/* 1. 글로벌 헤더 및 통제 센터 */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-center gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                         <BarChart2 className="text-indigo-600" /> Voca 통합 관제 센터
                     </h1>
-                    {/* 🚀 사용자 요청으로 부제목 제거 완료 */}
                 </div>
                 
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1">
@@ -234,7 +261,6 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* 2. 컨트롤 패널 (클래스 선택 및 일괄 출력) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3 md:col-span-1">
                     <Users className="text-slate-400" />
@@ -283,7 +309,6 @@ const VocaManager = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 3. 메인 콘텐츠 영역 (Tab에 따른 분기) */}
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden overflow-x-auto">
                 {classStudents.length === 0 ? (
                     <div className="p-20 text-center flex flex-col items-center justify-center">
@@ -296,7 +321,7 @@ const VocaManager = ({ currentUser }) => {
                         <thead className="bg-slate-50 border-b border-slate-200 whitespace-nowrap">
                             <tr>
                                 <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
-                                <th className="p-4 font-black text-slate-600 text-center">초기 진단 (CAT)</th>
+                                <th className="p-4 font-black text-slate-600 text-center">어휘력 (CAT)</th>
                                 {activeTab === 'dashboard' && (
                                     <>
                                         <th className="p-4 font-black text-slate-600 text-center"><Sliders size={16} className="inline mr-1"/> 단어 비중 프리셋</th>
@@ -304,7 +329,13 @@ const VocaManager = ({ currentUser }) => {
                                     </>
                                 )}
                                 {activeTab === 'grading' && <th className="p-4 font-black text-slate-600 w-1/3">고속 채점 입력 (Max 50)</th>}
-                                {activeTab === 'analytics' && <th className="p-4 font-black text-slate-600 text-center">정답률 / 누적 어휘</th>}
+                                {activeTab === 'analytics' && (
+                                    <>
+                                        <th className="p-4 font-black text-slate-600 text-center">정답률 / 누적 어휘</th>
+                                        {/* 🚀 승급 심사 헤더 신설 */}
+                                        <th className="p-4 font-black text-slate-600 text-center"><Trophy size={16} className="inline mr-1 text-amber-500"/> 승급 심사 관리</th>
+                                    </>
+                                )}
                                 {activeTab === 'cat_input' && <th className="p-4 font-black text-slate-600 w-1/3">CAT 점수 직접 입력 (Max 1000)</th>}
                             </tr>
                         </thead>
@@ -387,16 +418,44 @@ const VocaManager = ({ currentUser }) => {
                                     )}
 
                                     {activeTab === 'analytics' && (
-                                        <td className="p-4 text-center">
-                                            <div className="flex flex-col items-center gap-1">
-                                                <div className="w-full bg-slate-200 rounded-full h-2 max-w-[150px]">
-                                                    <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${student.stat.accuracy || 0}%` }}></div>
+                                        <>
+                                            <td className="p-4 text-center">
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <div className="w-full bg-slate-200 rounded-full h-2 max-w-[150px]">
+                                                        <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${student.stat.accuracy || 0}%` }}></div>
+                                                    </div>
+                                                    <span className="text-xs font-bold text-slate-500">
+                                                        정답률 {student.stat.accuracy || 0}% (누적 {student.stat.totalWords || 0}단어)
+                                                    </span>
                                                 </div>
-                                                <span className="text-xs font-bold text-slate-500">
-                                                    정답률 {student.stat.accuracy || 0}% (누적 {student.stat.totalWords || 0}단어)
-                                                </span>
-                                            </div>
-                                        </td>
+                                            </td>
+                                            
+                                            {/* 🚀 [신규 탑재] 승급 심사 토글 버튼 영역 */}
+                                            <td className="p-4 text-center">
+                                                <div className="flex justify-center gap-2">
+                                                    <button 
+                                                        onClick={() => handleTogglePromotion(student.id, 400, student.stat.passedMockExam400)}
+                                                        className={`px-3 py-1.5 rounded-md font-bold text-xs transition-colors border ${
+                                                            student.stat.passedMockExam400 
+                                                                ? 'bg-amber-100 text-amber-700 border-amber-200 shadow-sm' 
+                                                                : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
+                                                        }`}
+                                                    >
+                                                        400점 심사 {student.stat.passedMockExam400 ? '완료' : '대기'}
+                                                    </button>
+                                                    <button 
+                                                        onClick={() => handleTogglePromotion(student.id, 700, student.stat.passedMockExam700)}
+                                                        className={`px-3 py-1.5 rounded-md font-bold text-xs transition-colors border ${
+                                                            student.stat.passedMockExam700 
+                                                                ? 'bg-purple-100 text-purple-700 border-purple-200 shadow-sm' 
+                                                                : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
+                                                        }`}
+                                                    >
+                                                        700점 심사 {student.stat.passedMockExam700 ? '완료' : '대기'}
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </>
                                     )}
 
                                     {activeTab === 'cat_input' && (

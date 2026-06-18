@@ -1,7 +1,6 @@
 /* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (학생/학부모용 통합 뷰)
    100% 종이 시험의 아날로그적 꼼수 차단 효과와, AI의 디지털 데이터 분석 리포트를 결합했습니다.
-   학부모에게 "현재 어떤 프리셋으로, 왜 학습이 진행되고 있는지(변속 로그)"를 투명하게 공개하여
-   학원의 관리에 대한 압도적인 신뢰도(Retention)를 확보합니다. */
+   (🚀 CTO 프린트 패치: 인쇄/PDF 저장 시 내용이 잘리는 현상 해결 및 브라우저 URL, 날짜 헤더 완벽 제거) */
 import React, { useState, useEffect } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -15,7 +14,6 @@ import { Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 프리셋에 대한 학부모용 친절한 해설 딕셔너리
 const PRESET_DESCRIPTIONS = {
     '밸런스 모드': '신규 단어 진도(50%)와 누적 복습(30%)을 가장 이상적인 비율로 혼합하여 진행하는 표준 모드입니다.',
     '오답 학습': '학생의 오답 대기열이 포화 상태입니다. 진도보다는 취약점(오답 60%)을 집중 공략하여 학습 결손을 메웁니다.',
@@ -32,7 +30,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 🚀 학부모 계정 접속 시 자녀 데이터를 동적으로 매핑
   const targetStudent = currentUser.role === 'parent' 
       ? users.find(u => u.name === currentUser.childName && u.role === 'student') 
       : currentUser;
@@ -41,7 +38,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const targetStudentName = targetStudent?.name || currentUser.name;
   const isParentView = currentUser.role === 'parent';
 
-  // 1. 데이터 및 오늘의 상태 동기화
   useEffect(() => {
     const fetchVocaData = async () => {
       try {
@@ -60,7 +56,7 @@ const StudentVocaDaily = ({ currentUser }) => {
         }
 
         const stats = statSnap.data();
-        setStudentStats(stats); // 대시보드 렌더링용 스탯 저장
+        setStudentStats(stats); 
 
         const currentSession = stats.vocaSession || 1;
         const testSessionId = `test_${targetStudentId}_s${currentSession}`;
@@ -86,7 +82,6 @@ const StudentVocaDaily = ({ currentUser }) => {
     fetchVocaData();
   }, [targetStudentId]);
 
-  // 2. 단어장 생성 엔진 (학부모는 생성 불가)
   const handleGenerateVoca = async () => {
     if (isParentView) return alert("단어장 생성은 학생 본인만 가능합니다.");
     setIsGenerating(true);
@@ -95,7 +90,6 @@ const StudentVocaDaily = ({ currentUser }) => {
         const payload = await generateDailyVocaSet(targetStudentId);
         setWordsList(payload.wordsForPrint);
         setSessionInfo(prev => ({ ...prev, status: 'ready' }));
-        // 생성 후 스탯 갱신을 위해 페이지 리로드 유도 또는 상태 업데이트
         window.location.reload(); 
     } catch (error) {
         console.error(error);
@@ -107,13 +101,41 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const handlePrint = () => window.print();
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
-
-  // 현재 프리셋 도출 (AI 자동 프리셋 우선, 없으면 강사 프리셋, 없으면 밸런스)
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
 
   return (
     <div className="max-w-5xl mx-auto p-4 sm:p-8 animate-in fade-in pb-20">
       
+      {/* 🚀 [프린트 최적화 CSS] 브라우저 헤더/푸터 제거 및 레이아웃 잘림 방지 */}
+      <style>{`
+        @media print {
+            /* 브라우저 상하단 URL, 시간, 페이지 번호 제거 */
+            @page { margin: 0; }
+            
+            /* 프린트 여백 생성 및 색상 강제 유지 */
+            body { 
+                margin: 1.5cm !important; 
+                -webkit-print-color-adjust: exact !important; 
+                print-color-adjust: exact !important; 
+            }
+
+            /* React 레이아웃의 overflow-hidden 때문에 데이터가 안 나오는 현상 완전 해결 */
+            html, body, #root, .h-screen, .overflow-hidden, .overflow-y-auto {
+                height: auto !important;
+                min-height: auto !important;
+                overflow: visible !important;
+            }
+            
+            /* 스크롤 영역을 block으로 풀어주어 모든 페이지가 출력되게 함 */
+            .flex.h-screen, main.flex-1 {
+                display: block !important;
+            }
+
+            /* 사이드바 및 헤더 강제 숨김 */
+            aside, header { display: none !important; }
+        }
+      `}</style>
+
       {/* 1. 글로벌 배너 */}
       <div className="print:hidden bg-gradient-to-r from-blue-700 to-indigo-800 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-6 relative overflow-hidden">
         <div className="relative z-10">
@@ -137,11 +159,9 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      {/* 🚀 2. 투명한 데이터 공유 대시보드 (학부모 어필 포인트) */}
+      {/* 2. 투명한 데이터 공유 대시보드 */}
       {studentStats && sessionInfo.status !== 'no_stat' && (
         <div className="print:hidden grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            
-            {/* 좌측: 현재 AI 구동 상태 및 프리셋 해설 */}
             <div className="lg:col-span-2 bg-white rounded-[24px] p-6 shadow-sm border border-slate-200">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
@@ -159,7 +179,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                     </p>
                 </div>
 
-                {/* AI 변속 로그 (vocaRubric) 노출 */}
                 {studentStats.vocaRubric && (
                     <div className={`p-4 rounded-xl text-sm font-bold flex items-start gap-3 
                         ${studentStats.vocaRubric.includes('🚨') ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-blue-50 text-blue-700 border border-blue-100'}`}>
@@ -169,11 +188,9 @@ const StudentVocaDaily = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 우측: 핵심 지표 요약 */}
             <div className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-200 flex flex-col justify-between">
                 <div>
                     <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider mb-4">Core Metrics</h3>
-                    
                     <div className="mb-5">
                         <div className="flex justify-between text-sm font-bold mb-1">
                             <span className="text-slate-600">초기 진단 (CAT) 레벨</span>
@@ -183,7 +200,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                             <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${Math.min(100, studentStats.catScore / 10)}%` }}></div>
                         </div>
                     </div>
-
                     <div className="mb-5">
                         <div className="flex justify-between text-sm font-bold mb-1">
                             <span className="text-slate-600">기억 유지율 (Retention)</span>
@@ -193,7 +209,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                             <div className="bg-emerald-400 h-2.5 rounded-full" style={{ width: `${studentStats.vocaRetention || 0}%` }}></div>
                         </div>
                     </div>
-
                     <div>
                         <div className="flex justify-between text-sm font-bold mb-1">
                             <span className="text-slate-600">다의어 이해도</span>
@@ -208,44 +223,28 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 3. 다운로드 및 인쇄 버튼 영역 (학생 전용) */}
+      {/* 🚀 3. 버튼 1개로 통일 (PDF 다운로드 전용) */}
       {!isParentView && (
-          <div className="print:hidden flex flex-col sm:flex-row gap-6 mb-8">
+          <div className="print:hidden flex mb-8">
             <button 
               onClick={handlePrint}
               disabled={!isPrintReady}
-              className={`flex-1 border-2 p-5 rounded-[24px] shadow-sm transition-all flex flex-col items-center justify-center group ${
+              className={`w-full border-2 p-6 rounded-[24px] shadow-sm transition-all flex flex-col items-center justify-center group ${
                 isPrintReady 
-                  ? 'bg-white border-indigo-100 text-indigo-600 hover:border-indigo-400 hover:shadow-md cursor-pointer' 
+                  ? 'bg-white border-blue-100 text-blue-600 hover:border-blue-400 hover:shadow-md cursor-pointer' 
                   : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
               }`}
             >
-              <div className={`${isPrintReady ? 'bg-indigo-50 group-hover:scale-110' : 'bg-slate-200'} p-3 rounded-full mb-3 transition-transform`}>
-                <Printer size={28} />
+              <div className={`${isPrintReady ? 'bg-blue-50 group-hover:scale-110' : 'bg-slate-200'} p-4 rounded-full mb-3 transition-transform`}>
+                <Download size={32} />
               </div>
-              <h3 className="text-lg font-black mb-1">오늘의 종이 시험지 인쇄</h3>
-              <p className="text-xs font-bold text-slate-500">전자기기 커닝 원천 차단</p>
-            </button>
-
-            <button 
-              onClick={handlePrint}
-              disabled={!isPrintReady}
-              className={`flex-1 border-2 p-5 rounded-[24px] shadow-sm transition-all flex flex-col items-center justify-center group ${
-                isPrintReady 
-                  ? 'bg-white border-emerald-100 text-emerald-600 hover:border-emerald-400 hover:shadow-md cursor-pointer' 
-                  : 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed opacity-70'
-              }`}
-            >
-              <div className={`${isPrintReady ? 'bg-emerald-50 group-hover:scale-110' : 'bg-slate-200'} p-3 rounded-full mb-3 transition-transform`}>
-                <Download size={28} />
-              </div>
-              <h3 className="text-lg font-black mb-1">PDF 학습자료 다운로드</h3>
-              <p className="text-xs font-bold text-slate-500">스마트 아날로그 열람용</p>
+              <h3 className="text-xl font-black mb-1">단어장 PDF 저장 및 인쇄</h3>
+              <p className="text-sm font-bold text-slate-500">대화창이 뜨면 대상을 'PDF로 저장' 또는 '프린터'로 선택하세요</p>
             </button>
           </div>
       )}
 
-      {/* 4. 본문 컨텐츠 영역 (학생: 단어장 렌더링 / 학부모: 열람 제한 또는 내역 표시) */}
+      {/* 4. 본문 컨텐츠 영역 */}
       <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 print:shadow-none print:border-none print:p-0 print:m-0 min-h-[400px]">
           
           <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6 print:mb-4">
@@ -259,7 +258,6 @@ const StudentVocaDaily = ({ currentUser }) => {
             </div>
           </div>
 
-          {/* 상태별 분기 */}
           {sessionInfo.status === 'no_stat' && (
               <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <AlertCircle size={56} className="text-slate-300 mb-4" />
@@ -300,14 +298,12 @@ const StudentVocaDaily = ({ currentUser }) => {
               </div>
           )}
 
-          {/* 학부모에게는 미생성 상태 안내 */}
           {sessionInfo.status === 'pending' && isParentView && (
               <div className="print:hidden py-20 text-center text-slate-500 font-bold">
                   자녀가 아직 오늘의 단어장을 생성하지 않았습니다.
               </div>
           )}
 
-          {/* 데이터 표 렌더링 (학부모에게도 단어 리스트 공개하여 투명성 보장) */}
           {sessionInfo.status === 'ready' && wordsList.length > 0 && (
               <table className="w-full text-left border-collapse print:w-full print:text-black">
                   <thead>
