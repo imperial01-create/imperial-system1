@@ -1,7 +1,6 @@
-/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털 (학생/학부모용 통합 뷰)
-   (🚀 인쇄 렌더링 패치: 상위 DOM의 CSS 제약을 피하기 위해 인쇄 전용 렌더링 트리(printMode)를 구성하여 
-   PDF 다운로드 시 백지 현상 및 잘림 버그를 원천 차단했습니다.)
-   (🚀 UX/UI 패치: 학부모가 직관적으로 비율을 파악할 수 있도록 텍스트 데이터를 정량화(%)했습니다.) */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털
+   학부모 관점 (The Payer): 부정적인 어휘(꼼수, 커닝)를 배제하고 '단기 암기 지양', '학습 밀도' 등의 전문적인 에듀테크 용어를 사용하여 학원의 프리미엄 브랜딩을 강화하고 신뢰(Trust)를 굳건히 합니다.
+   비용 효율성: Firestore 조회 시 발생하던 Permission Denied 에러를 보안 규칙과 프론트엔드 예외 처리로 방어하여 불필요한 재렌더링 자원 낭비를 차단합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -14,7 +13,7 @@ import { Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 직관성을 극대화한 정량적 프리셋 해설
+// 🚀 [UX Writing 최적화] 직관성을 극대화한 정량적 프리셋 해설
 const PRESET_DESCRIPTIONS = {
     '밸런스 모드': '신규 50% / 복습 30% / 오답 15% / 패시브 5%',
     '오답 학습': '신규 15% / 복습 20% / 오답 60% / 패시브 5%',
@@ -48,12 +47,11 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const [sessionInfo, setSessionInfo] = useState({ sessionNumber: 1, status: 'loading' });
   const [wordsList, setWordsList] = useState([]);
-  const [questionsList, setQuestionsList] = useState([]); // 🚀 시험지 출력용 50문제 데이터 상태 추가
+  const [questionsList, setQuestionsList] = useState([]); 
   const [studentStats, setStudentStats] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
-  // 🚀 인쇄 전용 뷰 렌더링 상태
   const [printMode, setPrintMode] = useState(false);
 
   useEffect(() => {
@@ -90,14 +88,15 @@ const StudentVocaDaily = ({ currentUser }) => {
             } else {
                 setSessionInfo({ sessionNumber: currentSession, status: 'ready' });
                 setWordsList(testData.wordsForPrint || []);
-                setQuestionsList(testData.questionsForTest || []); // 🚀 50문제 데이터 셋업
+                setQuestionsList(testData.questionsForTest || []); 
             }
         } else {
             setSessionInfo({ sessionNumber: currentSession, status: 'pending' });
         }
       } catch (error) {
         console.error("Data Fetch Error:", error);
-        setErrorMsg("데이터를 불러오는 중 오류가 발생했습니다.");
+        // Firebase Security Rules에 의해 거부된 경우의 안내 문구를 더 부드럽게 처리
+        setErrorMsg("데이터를 동기화하는 데 문제가 발생했습니다. (권한 대기 중이거나 네트워크를 확인해주세요)");
       }
     };
 
@@ -123,7 +122,6 @@ const StudentVocaDaily = ({ currentUser }) => {
     }
   };
 
-  // 🚀 [인쇄 로직 패치] CSS 충돌을 피해 컴포넌트를 완전히 새로 그리는 로직
   const handlePrint = () => {
       setPrintMode(true);
       setTimeout(() => {
@@ -136,7 +134,7 @@ const StudentVocaDaily = ({ currentUser }) => {
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
 
   // =====================================================================
-  // 🚀 인쇄 모드 전용 렌더링 (일반 컴포넌트 레이아웃 제약 완전 해제)
+  // 🚀 인쇄 모드 전용 렌더링 (DOM 격리로 백지 버그 차단)
   // =====================================================================
   if (printMode) {
       return (
@@ -207,7 +205,7 @@ const StudentVocaDaily = ({ currentUser }) => {
     <div className="max-w-5xl mx-auto p-4 sm:p-8 animate-in fade-in pb-20">
       
       {isParent && linkedChildren.length > 1 && (
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
+          <div className="print:hidden bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
               <span className="font-bold text-indigo-800 flex items-center gap-2">
                   <Users size={18} /> 조회할 자녀 선택
               </span>
@@ -223,30 +221,30 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      <div className="bg-gradient-to-r from-blue-700 to-indigo-800 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-6 relative overflow-hidden">
+      {/* 🚀 [UX Writing 최적화] 부정적 어휘 제거 및 에듀테크 프리미엄 브랜딩 적용 */}
+      <div className="print:hidden bg-gradient-to-r from-blue-700 to-indigo-800 rounded-[32px] p-8 sm:p-10 text-white shadow-lg mb-6 relative overflow-hidden">
         <div className="relative z-10">
           <Badge variant="outline" className="bg-white/20 text-white border-white/30 mb-3 px-3 py-1">
-              {isParent ? '자녀 맞춤형 Voca' : 'Smart Analog Voca Portal'}
+              {isParent ? '자녀 맞춤형 Voca 리포트' : 'Smart Analog Voca Portal'}
           </Badge>
           <h1 className="text-3xl sm:text-4xl font-black mb-3 flex items-center gap-3">
             <Brain size={36} /> {targetStudentName} 학생의 AI 단어장
           </h1>
           <p className="text-blue-100 font-bold text-sm sm:text-base max-w-2xl break-keep">
-            단기 기억에 의존하는 꼼수 암기를 원천 차단합니다. 100% 종이 시험으로 커닝을 방지하고, 
-            채점된 결과는 AI가 즉시 분석하여 매일 가장 완벽한 비율의 초개인화 단어장을 배정합니다.
+            표면적인 단기 암기를 지양하고, 본질적인 장기 기억력 향상에 집중합니다. 오프라인 지필 고사를 통해 학습의 밀도를 높이며, 채점 결과는 AI가 즉각적으로 분석하여 매일 학생의 인지 주기에 맞춘 최적의 어휘를 배정합니다.
           </p>
         </div>
         <Target className="absolute -right-10 -bottom-10 text-white/10 w-64 h-64 rotate-12 pointer-events-none" />
       </div>
 
       {errorMsg && (
-          <div className="p-4 mb-6 bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold flex items-center gap-2">
+          <div className="print:hidden p-4 mb-6 bg-rose-50 text-rose-700 border border-rose-200 rounded-2xl font-bold flex items-center gap-2">
               <AlertCircle size={20} /> {errorMsg}
           </div>
       )}
 
       {studentStats && sessionInfo.status !== 'no_stat' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div className="print:hidden grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
             <div className="lg:col-span-2 bg-white rounded-[24px] p-6 shadow-sm border border-slate-200">
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
@@ -285,6 +283,7 @@ const StudentVocaDaily = ({ currentUser }) => {
                             <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${Math.min(100, studentStats.catScore / 10)}%` }}></div>
                         </div>
                     </div>
+                    {/* 🚀 [텍스트 교정] '기억 유지율 (Retention)' -> '기억 유지율' */}
                     <div className="mb-5">
                         <div className="flex justify-between text-sm font-bold mb-1">
                             <span className="text-slate-600">기억 유지율</span>
@@ -309,7 +308,7 @@ const StudentVocaDaily = ({ currentUser }) => {
       )}
 
       {!isParent && (
-          <div className="flex mb-8">
+          <div className="print:hidden flex mb-8">
             <button 
               onClick={handlePrint}
               disabled={!isPrintReady}
@@ -328,11 +327,11 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
       )}
 
-      <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 min-h-[400px]">
+      <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 print:shadow-none print:border-none print:p-0 print:m-0 min-h-[400px]">
           
-          <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6">
+          <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6 print:mb-4">
             <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
-              <FileText className="text-indigo-500" /> 
+              <FileText className="text-indigo-500 print:hidden" /> 
               {sessionInfo.sessionNumber > 0 ? `임페리얼 ${sessionInfo.sessionNumber}회차 맞춤 어휘 진단` : '임페리얼 프리미엄 Voca'}
             </h2>
             <div className="text-right">
@@ -342,7 +341,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           </div>
 
           {sessionInfo.status === 'no_stat' && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
+              <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <AlertCircle size={56} className="text-slate-300 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">초기 어휘 역량 진단 대기 중</h3>
                   <p className="text-slate-500 font-bold max-w-md break-keep">
@@ -352,17 +351,17 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'completed' && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
+              <div className="print:hidden flex flex-col items-center justify-center py-20 text-center">
                   <CheckCircle size={56} className="text-emerald-400 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 학습 목표 100% 달성!</h3>
                   <p className="text-slate-500 font-bold max-w-md break-keep">
-                      이미 {sessionInfo.sessionNumber}회차 어휘 시험 응시 및 채점을 완료했습니다.
+                      이미 {sessionInfo.sessionNumber}회차 어휘 시험 응시 및 채점을 완료했습니다. 위 대시보드에서 학습 결과를 확인하세요.
                   </p>
               </div>
           )}
 
           {sessionInfo.status === 'pending' && !isParent && (
-              <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="print:hidden flex flex-col items-center justify-center py-10 text-center">
                   <div className="bg-indigo-50 p-6 rounded-full mb-6 relative">
                       <Clock size={48} className="text-indigo-500" />
                       {isGenerating && <RefreshCw size={24} className="text-indigo-600 absolute bottom-4 right-4 animate-spin" />}
@@ -382,36 +381,36 @@ const StudentVocaDaily = ({ currentUser }) => {
           )}
 
           {sessionInfo.status === 'pending' && isParent && (
-              <div className="py-20 text-center flex flex-col items-center justify-center">
+              <div className="print:hidden py-20 text-center flex flex-col items-center justify-center">
                   <Clock size={56} className="text-slate-300 mb-4" />
                   <h3 className="text-2xl font-black text-slate-700 mb-2">단어장 생성 대기 중</h3>
                   <p className="text-slate-500 font-bold">
-                      자녀가 아직 오늘의 단어장을 생성하지 않았습니다.
+                      학생이 아직 오늘의 학습 세션을 생성하지 않았습니다.
                   </p>
               </div>
           )}
 
           {sessionInfo.status === 'ready' && wordsList.length > 0 && (
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left border-collapse print:w-full print:text-black">
                   <thead>
-                      <tr className="bg-slate-50">
+                      <tr className="bg-slate-50 print:bg-transparent">
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">No.</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">Target Vocabulary</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">Core Meaning (핵심 의미)</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center">AI 배정 사유</th>
+                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center print:hidden">AI 배정 사유</th>
                       </tr>
                   </thead>
                   <tbody>
                       {wordsList.map((word, idx) => (
-                          <tr key={word.wordId} className="border-b border-slate-100">
-                              <td className="p-3 text-center font-bold text-slate-400">{idx + 1}</td>
-                              <td className="p-3 font-black text-lg text-slate-800 tracking-wide">{word.word}</td>
-                              <td className="p-3 font-bold text-slate-600">
+                          <tr key={word.wordId} className="border-b border-slate-100 print:border-slate-300">
+                              <td className="p-3 text-center font-bold text-slate-400 print:text-black">{idx + 1}</td>
+                              <td className="p-3 font-black text-lg text-slate-800 print:text-black tracking-wide">{word.word}</td>
+                              <td className="p-3 font-bold text-slate-600 print:text-black">
                                   {word.meanings && word.meanings.length > 0 
                                       ? word.meanings.map(m => m.koreanMeaning).join(', ') 
                                       : '뜻 정보 없음'}
                               </td>
-                              <td className="p-3 text-center">
+                              <td className="p-3 text-center print:hidden">
                                   <span className={`text-[11px] px-2 py-1 rounded-md font-black whitespace-nowrap
                                       ${word.queueType === '만성 오답' ? 'bg-rose-100 text-rose-700' : 
                                         word.queueType === '오답' ? 'bg-orange-100 text-orange-700' :

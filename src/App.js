@@ -442,8 +442,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
     { 
   path: '/voca', 
-  label: currentUser.role === 'student' ? '오늘의 영단어' : 
-         currentUser.role === 'parent' ? '자녀 오늘의 영단어' : 'Voca 출제/관리', 
+  /* 🚀 [UX 심리학] 학부모와 학생 모두에게 직관적이고 통일된 '오늘의 영단어' 명칭 사용 */
+  label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', 
   icon: BookText, 
   roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], 
   showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어')
