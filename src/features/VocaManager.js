@@ -1,7 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v3.2
-   운영자 관점: 단순 점수 입력을 넘어 반별 시험지 일괄 출력, 고속 채점, 학생별 어휘력 분석을 원스톱으로 제공합니다.
-   비용 및 성능 최적화: DataContext에 누락된 english_stats 데이터를 컴포넌트 내부에서 직접 실시간(Real-time) 구독하여, 
-   점수 입력 즉시 화면에 렌더링되도록 결함을 완벽히 패치했습니다. 강사의 중복 입력 실수를 원천 차단합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v3.3
+   운영자 관점: 단순 점수 입력을 넘어 반별 시험지/답지/단어장 일괄 출력, 고속 채점, 학생별 어휘력 분석을 원스톱으로 제공합니다.
+   프린트 최적화: 브라우저 헤더/푸터 차단 및 단어장 예문/유의어 출력 기능을 완벽 탑재하여 교재 퀄리티를 극대화했습니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
@@ -18,7 +17,6 @@ const APP_ID = 'imperial-clinic-v1';
 const VocaManager = ({ currentUser }) => {
     const { users, classes, enrollments } = useData();
     
-    // 🚀 [CTO 핵심 패치] DataContext에 누락된 english_stats를 로컬에서 실시간으로 직접 가져옵니다.
     const [localEnglishStats, setLocalEnglishStats] = useState([]);
 
     useEffect(() => {
@@ -27,20 +25,17 @@ const VocaManager = ({ currentUser }) => {
             const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setLocalEnglishStats(statsData);
         });
-        
-        // 컴포넌트 언마운트 시 메모리 누수 방지
         return () => unsubscribe();
     }, []);
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, grading, analytics, cat_input
+    const [activeTab, setActiveTab] = useState('dashboard');
     
     const [processing, setProcessing] = useState(false);
     const [gradeInput, setGradeInput] = useState({}); 
     const [catInput, setCatInput] = useState({}); 
 
-    // 영어 과목 전용 클래스 필터링 & 정확한 강사 매핑
     const availableClasses = useMemo(() => {
         let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
         if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
@@ -55,7 +50,6 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [availableClasses, selectedClassId]);
 
-    // 선택된 반의 학생 데이터 결합 (실시간 스탯 연동)
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         const enrolledStudentIds = enrollments
@@ -63,7 +57,7 @@ const VocaManager = ({ currentUser }) => {
             .map(e => e.studentId);
 
         return users
-            .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id)) // userId 대신 id 매핑으로 안전성 보장
+            .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
                 const stat = localEnglishStats.find(s => s.id === student.id) || { 
                     catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
@@ -76,7 +70,7 @@ const VocaManager = ({ currentUser }) => {
     }, [selectedClassId, enrollments, users, localEnglishStats, searchQuery]);
 
     // =====================================================================
-    // 🚀 [인쇄 최적화 엔진] Native HTML Injection 방식 (+ 단어장 모드 추가)
+    // 🚀 [인쇄 최적화 엔진] Native HTML Injection 방식 
     // =====================================================================
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
@@ -91,15 +85,19 @@ const VocaManager = ({ currentUser }) => {
                 const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
                 
                 let questionsList = [];
+                let wordsList = []; // 단어장용
+                
                 if (testSnap.exists() && testSnap.data().questionsForTest) {
                     questionsList = testSnap.data().questionsForTest;
+                    wordsList = testSnap.data().wordsForPrint;
                 } else if (student.stat.catScore) {
                     const payload = await generateDailyVocaSet(student.id, student.stat.vocaPreset);
                     questionsList = payload.questionsForTest;
+                    wordsList = payload.wordsForPrint;
                 }
                 
                 if (questionsList.length > 0) {
-                    dataToPrint.push({ student, questionsList, session: student.stat.vocaSession || 1 });
+                    dataToPrint.push({ student, questionsList, wordsList, session: student.stat.vocaSession || 1 });
                 }
             }
             
@@ -117,23 +115,26 @@ const VocaManager = ({ currentUser }) => {
             let htmlContent = `
               <html>
                 <head>
-                  <title>임페리얼 영단어 일괄 출력</title>
+                  <title>임페리얼 영단어 출력</title>
                   <style>
-                    @page { margin: 15mm; size: A4 portrait; }
-                    body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #111; margin: 0; padding: 0; }
+                    /* 브라우저 헤더/푸터 강제 삭제 */
+                    @page { margin: 0; size: A4 portrait; }
+                    body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #111; margin: 0; padding: 15mm; box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                     .print-page { page-break-after: always; margin-bottom: 20px; }
+                    .print-page:last-child { page-break-after: auto; }
                     .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
                     .header h2 { margin: 0; font-size: 24px; font-weight: bold; color: #0f172a; }
                     .header .info { text-align: right; font-size: 14px; font-weight: bold; color: #475569; }
-                    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
-                    th, td { border-bottom: 1px solid #cbd5e1; padding: 12px 8px; text-align: left; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; table-layout: fixed; }
+                    th, td { border-bottom: 1px solid #cbd5e1; padding: 10px 6px; text-align: left; vertical-align: middle; word-wrap: break-word; }
                     th { background-color: #f8fafc; font-weight: bold; color: #475569; }
                     .text-center { text-align: center; }
                     .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
                     .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
-                    .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 24px; display: inline-block; }
-                    .advanced-row td { border-top: 3px solid #334155; }
-                    .footer { text-align: center; font-size: 12px; font-weight: bold; color: #64748b; margin-top: 20px; }
+                    .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
+                    .advanced-row td { border-top: 2px solid #334155; }
+                    .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
+                    .rich-info span.tag { font-weight: bold; color: #3b82f6; margin-right: 4px; }
                   </style>
                 </head>
                 <body>
@@ -152,42 +153,71 @@ const VocaManager = ({ currentUser }) => {
                     <table>
                       <thead>
                         <tr>
-                          <th class="text-center" style="width: 10%;">No.</th>
-                          <th style="width: 45%;">${type === 'test' ? 'Question (문제)' : 'Target Vocabulary'}</th>
-                          <th style="width: 45%;">${type === 'test' ? 'Answer (정답 기재란)' : 'Core Meaning (핵심 의미)'}</th>
+                          <th class="text-center" style="width: 8%;">No.</th>
+                          <th style="width: ${type === 'wordbook' ? '32%' : '45%'};">${type === 'wordbook' ? 'Target Vocabulary' : 'Question (문제)'}</th>
+                          <th style="width: ${type === 'wordbook' ? '60%' : '47%'};">${type === 'wordbook' ? 'Core Meaning & Context' : 'Answer (정답 기재란)'}</th>
                         </tr>
                       </thead>
                       <tbody>
                 `;
 
-                data.questionsList.forEach((q) => {
-                  const isAdvanced = q.questionNumber === 41;
-                  const rowClass = isAdvanced ? 'class="advanced-row"' : '';
-                  const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
-                  
-                  const answerDisplay = type === 'test' ? '<div class="answer-blank"></div>' : q.answerText;
-                  const answerColor = type === 'test' ? '#1e3a8a' : '#334155';
+                if (type === 'wordbook') {
+                    // 🚀 단어장 (1~40번 및 예문 표시)
+                    data.wordsList.slice(0, 40).forEach((w, i) => {
+                        const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
+                        const allMeanings = meanings.map(m => m.koreanMeaning).join(', ') || '뜻 없음';
+                        
+                        let extraInfoHtml = '';
+                        if (meanings.length > 0) {
+                            const m = meanings[0]; 
+                            if (m.synonyms && m.synonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${m.synonyms.join(', ')}</div>`;
+                            if (m.antonyms && m.antonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${m.antonyms.join(', ')}</div>`;
+                            if (m.blankSentence && m.blankSentence.length > 0) {
+                                const regex = new RegExp(w.word, 'gi');
+                                const sentence = m.blankSentence[0].replace(regex, '____________');
+                                extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${sentence}</div>`;
+                            }
+                        }
 
-                  htmlContent += `
-                    <tr ${rowClass}>
-                      <td class="text-center font-bold">${q.questionNumber}</td>
-                      <td>
-                        <span class="word-text">${q.wordText}</span>
-                        ${hintHtml}
-                      </td>
-                      <td style="font-weight: bold; color: ${answerColor};">
-                        ${answerDisplay}
-                      </td>
-                    </tr>
-                  `;
-                });
+                        htmlContent += `
+                          <tr>
+                            <td class="text-center font-bold">${i + 1}</td>
+                            <td><div class="word-text">${w.word}</div></td>
+                            <td>
+                              <div style="font-weight: 800; color: #1e3a8a; font-size: 14px;">${allMeanings}</div>
+                              ${extraInfoHtml}
+                            </td>
+                          </tr>
+                        `;
+                    });
+                } else {
+                    // 🚀 시험지 및 답안지 (50문제)
+                    data.questionsList.forEach((q) => {
+                        const isAdvanced = q.questionNumber === 41;
+                        const rowClass = isAdvanced ? 'class="advanced-row"' : '';
+                        const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
+                        
+                        const answerDisplay = type === 'test' ? '<div class="answer-blank"></div>' : q.answerText;
+                        const answerColor = type === 'test' ? '#1e3a8a' : '#334155';
+
+                        htmlContent += `
+                          <tr ${rowClass}>
+                            <td class="text-center font-bold">${q.questionNumber}</td>
+                            <td>
+                              <span class="word-text">${q.wordText}</span>
+                              ${hintHtml}
+                            </td>
+                            <td style="font-weight: bold; color: ${answerColor};">
+                              ${answerDisplay}
+                            </td>
+                          </tr>
+                        `;
+                    });
+                }
 
                 htmlContent += `
                       </tbody>
                     </table>
-                    <div class="footer">
-                      * 41번부터 50번 문항은 고차원적 인지 능력을 평가하는 심화 문항입니다.
-                    </div>
                   </div>
                 `;
             });
@@ -374,8 +404,8 @@ const VocaManager = ({ currentUser }) => {
                         <thead className="bg-slate-50 border-b border-slate-200 whitespace-nowrap">
                             <tr>
                                 <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
-                                {/* 🚀 [텍스트 교정 완료] */}
-                                <th className="p-4 font-black text-slate-600 text-center">어휘력</th>
+                                {/* 🚀 [UX/UI 교정] 혼란을 줄이는 직관적인 네이밍 */}
+                                <th className="p-4 font-black text-slate-600 text-center">종합 어휘력 지수</th>
                                 
                                 {activeTab === 'dashboard' && (
                                     <>
@@ -390,7 +420,7 @@ const VocaManager = ({ currentUser }) => {
                                         <th className="p-4 font-black text-slate-600 text-center"><Trophy size={16} className="inline mr-1 text-amber-500"/> 승급 심사 관리</th>
                                     </>
                                 )}
-                                {/* 🚀 [텍스트 교정 완료] */}
+                                {/* 🚀 [UX/UI 교정] */}
                                 {activeTab === 'cat_input' && <th className="p-4 font-black text-slate-600 w-1/3">어휘력 강제 조정 (Max 1000)</th>}
                             </tr>
                         </thead>
@@ -424,7 +454,7 @@ const VocaManager = ({ currentUser }) => {
                                                     onChange={(e) => handlePresetChange(student.id, e.target.value)}
                                                     className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer"
                                                 >
-                                                    <option value="밸런스 모드">밸런스 (오답+신규)</option>
+                                                    <option value="밸런스 모드">밸런스 모드</option>
                                                     <option value="누적 복습 위주">누적 복습 위주</option>
                                                     <option value="신규 단어 집중">신규 단어 집중</option>
                                                     <option value="고난도 어휘">고난도 어휘 위주</option>

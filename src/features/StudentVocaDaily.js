@@ -1,9 +1,10 @@
-/* [서비스 가치] 스마트 아날로그 Voca 클라이언트 포털
-   (🚀 인쇄 엔진 전면 교체: React DOM의 CSS 제약을 100% 회피하는 Native HTML Injection 방식을 도입하여, 
-   어떤 브라우저 환경에서도 백지 현상 없이 완벽한 A4 규격의 PDF/종이 시험지를 출력해냅니다.) */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털
+   학부모 관점 (The Payer): '단기 암기 지양', '학습 밀도' 등의 전문적인 용어로 학원의 프리미엄 브랜딩을 강화합니다.
+   프린트 최적화 (UX): 브라우저 기본 헤더/푸터(URL, 날짜)를 @page margin:0 제어로 완벽히 삭제하여 출판 교재 수준의 출력물을 제공합니다.
+   학습 효율 (Learner): 단어장 출력 시 예문, 유의어, 반의어를 함께 노출하여 입체적인 장기기억을 유도합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-    BookOpen, Clock, FileText, Download, Play, AlertCircle, 
+    Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
     CheckCircle, RefreshCw, Brain, Target, Users, ShieldAlert, Activity, Info 
 } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
@@ -45,8 +46,8 @@ const StudentVocaDaily = ({ currentUser }) => {
   const targetStudentName = targetStudent?.name || currentUser.name;
 
   const [sessionInfo, setSessionInfo] = useState({ sessionNumber: 1, status: 'loading' });
-  const [wordsList, setWordsList] = useState([]);
-  const [questionsList, setQuestionsList] = useState([]); 
+  const [wordsList, setWordsList] = useState([]); // 단어장 1~40번 원본 데이터
+  const [questionsList, setQuestionsList] = useState([]); // 시험용 50번 변형 데이터
   const [studentStats, setStudentStats] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -119,66 +120,89 @@ const StudentVocaDaily = ({ currentUser }) => {
   };
 
   // =====================================================================
-  // 🚀 [해결책] 순수 HTML 생성 및 새 창 인쇄 엔진 (Native HTML Injection)
+  // 🚀 [해결책] 순수 HTML 생성 및 새 창 인쇄 엔진 (브라우저 헤더/푸터 완벽 제거)
   // =====================================================================
-  const handlePrint = () => {
-    if (!questionsList || questionsList.length === 0) return alert("인쇄할 데이터가 없습니다.");
+  const handlePrint = (type = 'wordbook') => {
+    if (!wordsList || wordsList.length === 0) return alert("인쇄할 데이터가 없습니다.");
 
-    // 순수 HTML 문서 생성
     let htmlContent = `
       <html>
         <head>
-          <title>임페리얼 영단어 시험지 - ${targetStudentName}</title>
+          <title>임페리얼 맞춤형 어휘 리포트</title>
           <style>
-            @page { margin: 15mm; size: A4 portrait; }
-            body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #111; margin: 0; padding: 0; }
+            /* 🚀 @page margin: 0 으로 브라우저가 찍어내는 URL과 날짜를 원천 차단합니다. */
+            @page { margin: 0; size: A4 portrait; }
+            body { 
+                font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; 
+                color: #111; 
+                margin: 0; 
+                padding: 15mm 15mm 15mm 15mm; /* 종이 여백을 padding으로 대체하여 내용 잘림 방지 */
+                box-sizing: border-box;
+                -webkit-print-color-adjust: exact !important; 
+                print-color-adjust: exact !important; 
+            }
             .header { display: flex; justify-content: space-between; border-bottom: 2px solid #1e293b; padding-bottom: 15px; margin-bottom: 20px; align-items: flex-end; }
             .header h2 { margin: 0; font-size: 24px; font-weight: bold; color: #0f172a; }
             .header .info { text-align: right; font-size: 14px; font-weight: bold; color: #475569; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; }
-            th, td { border-bottom: 1px solid #cbd5e1; padding: 12px 8px; text-align: left; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px; table-layout: fixed; }
+            th, td { border-bottom: 1px solid #cbd5e1; padding: 12px 8px; text-align: left; vertical-align: top; word-break: break-word; }
             th { background-color: #f8fafc; font-weight: bold; color: #475569; }
             .text-center { text-align: center; }
             .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
-            .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
-            .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 24px; display: inline-block; }
-            .advanced-row td { border-top: 3px solid #334155; }
-            .footer { text-align: center; font-size: 12px; font-weight: bold; color: #64748b; margin-top: 20px; }
+            /* 🚀 단어장 전용 프리미엄 디자인 클래스 추가 */
+            .rich-info { margin-top: 6px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
+            .rich-info span.tag { font-weight: 900; color: #3b82f6; margin-right: 4px; display: inline-block; padding: 2px 6px; background-color: #eff6ff; border-radius: 4px; font-size: 10px; }
           </style>
         </head>
         <body>
           <div class="header">
-            <h2>임페리얼 영단어 맞춤형 시험지</h2>
+            <h2>임페리얼 일일 암기용 단어장</h2>
             <div class="info">
               <div>이름: ${targetStudentName}</div>
-              <div>날짜: ${new Date().toLocaleDateString()} / 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50</div>
+              <div>날짜: ${new Date().toLocaleDateString()}</div>
             </div>
           </div>
           <table>
             <thead>
               <tr>
-                <th class="text-center" style="width: 10%;">No.</th>
-                <th style="width: 45%;">Question (문제)</th>
-                <th style="width: 45%;">Answer (정답 기재란)</th>
+                <th class="text-center" style="width: 8%;">No.</th>
+                <th style="width: 32%;">Target Vocabulary</th>
+                <th style="width: 60%;">Core Meaning & Context</th>
               </tr>
             </thead>
             <tbody>
     `;
 
-    // 50문제 데이터 삽입
-    questionsList.forEach((q) => {
-      const isAdvanced = q.questionNumber === 41;
-      const rowClass = isAdvanced ? 'class="advanced-row"' : '';
-      const hintHtml = q.hint ? `<span class="hint-text">${q.hint}</span>` : '';
+    // 🚀 단어장은 1~40번까지만 출력, 예문 및 유의어 정보 포함
+    wordsList.slice(0, 40).forEach((w, i) => {
+      const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
+      const allMeanings = meanings.map(m => m.koreanMeaning).join(', ') || '뜻 없음';
       
+      let extraInfoHtml = '';
+      if (meanings.length > 0) {
+          const m = meanings[0]; // 첫 번째 대표 뜻 기준 데이터 추출
+          if (m.synonyms && m.synonyms.length > 0) {
+              extraInfoHtml += `<div class="rich-info"><span class="tag">유의어</span>${m.synonyms.join(', ')}</div>`;
+          }
+          if (m.antonyms && m.antonyms.length > 0) {
+              extraInfoHtml += `<div class="rich-info"><span class="tag">반의어</span>${m.antonyms.join(', ')}</div>`;
+          }
+          if (m.blankSentence && m.blankSentence.length > 0) {
+              // 예문에 단어가 포함되어 있다면 빈칸으로 뚫어서 제공
+              const regex = new RegExp(w.word, 'gi');
+              const sentence = m.blankSentence[0].replace(regex, '____________');
+              extraInfoHtml += `<div class="rich-info"><span class="tag">예문</span>${sentence}</div>`;
+          }
+      }
+
       htmlContent += `
-        <tr ${rowClass}>
-          <td class="text-center font-bold">${q.questionNumber}</td>
+        <tr>
+          <td class="text-center font-bold">${i + 1}</td>
+          <td><span class="word-text">${w.word}</span></td>
           <td>
-            <span class="word-text">${q.wordText}</span>
-            ${hintHtml}
+            <div style="font-weight: 800; color: #1e3a8a; font-size: 15px;">${allMeanings}</div>
+            ${extraInfoHtml}
           </td>
-          <td><div class="answer-blank"></div></td>
         </tr>
       `;
     });
@@ -186,11 +210,7 @@ const StudentVocaDaily = ({ currentUser }) => {
     htmlContent += `
             </tbody>
           </table>
-          <div class="footer">
-            * 41번부터 50번 문항은 고차원적 인지 능력을 평가하는 심화 문항입니다.
-          </div>
           <script>
-            // 창이 열리면 자동으로 인쇄 대화상자 호출 후 창 닫기
             window.onload = function() {
               window.print();
               setTimeout(function(){ window.close(); }, 500);
@@ -200,7 +220,6 @@ const StudentVocaDaily = ({ currentUser }) => {
       </html>
     `;
 
-    // 새 창을 열고 HTML 주입
     const printWindow = window.open('', '_blank');
     if (printWindow) {
         printWindow.document.open();
@@ -211,7 +230,7 @@ const StudentVocaDaily = ({ currentUser }) => {
     }
   };
 
-  const isPrintReady = sessionInfo.status === 'ready' && questionsList.length > 0;
+  const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
 
   // 일반 화면 렌더링
@@ -329,11 +348,11 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 🚀 다운로드 버튼 1개로 통일 */}
+      {/* 🚀 단일 버튼으로 통합 */}
       {!isParent && (
           <div className="flex mb-8">
             <button 
-              onClick={handlePrint}
+              onClick={() => handlePrint('wordbook')}
               disabled={!isPrintReady}
               className={`w-full border-2 p-6 rounded-[24px] shadow-sm transition-all flex flex-col items-center justify-center group ${
                 isPrintReady 
@@ -424,7 +443,8 @@ const StudentVocaDaily = ({ currentUser }) => {
                       </tr>
                   </thead>
                   <tbody>
-                      {wordsList.map((word, idx) => (
+                      {/* 화면상 단어 리스트도 40번까지만 보여주어 혼란을 방지합니다. */}
+                      {wordsList.slice(0, 40).map((word, idx) => (
                           <tr key={word.wordId} className="border-b border-slate-100">
                               <td className="p-3 text-center font-bold text-slate-400">{idx + 1}</td>
                               <td className="p-3 font-black text-lg text-slate-800 tracking-wide">{word.word}</td>
