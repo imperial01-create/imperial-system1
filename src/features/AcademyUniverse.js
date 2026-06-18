@@ -1,6 +1,6 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 초개인화 통합 패치: 상단 대시보드 UI 클렌징, 100단계 정밀 Voca 루브릭 동적 설명 탑재,
-   학부모 뷰(Parent View) 최적화: 자녀가 1명일 경우 1-Depth 즉시 렌더링, 다자녀일 경우 스마트 드롭다운 제공) */
+   (🚀 데이터 동기화 핫픽스: english_stats의 Document ID 매핑 버그를 해결하여, 
+   CAT 점수 및 일일 Voca 시험 결과(Elo 레이팅)가 유니버스 어휘력 스탯에 실시간으로 완벽하게 연동됩니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
@@ -221,7 +221,6 @@ const AcademyUniverse = ({ currentUser }) => {
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser?.role === 'parent';
 
-  // 🚀 [학부모 UX 최적화] 연결된 자녀 리스트 추출 및 기본 타겟팅 자동화
   const linkedChildren = useMemo(() => {
       if (!isParent) return [];
       return (users || []).filter(u => u.role === 'student' && currentUser.linkedChildrenIds?.includes(u.id));
@@ -251,13 +250,16 @@ const AcademyUniverse = ({ currentUser }) => {
       return [];
   }, [users, classes, enrollments, currentUser, isParent, linkedChildren]);
 
-  // 🚀 실제 렌더링 대상(타겟) 설정
+  // 🚀 [CTO 패치] activeStudentId를 찾은 후 studentEnglishStat을 불러올 때 Document ID 매핑 버그 수정
   const activeStudentId = isStudent ? currentUser.id : (isParent ? selectedChildId : selectedStudentId);
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
-  const studentEnglishStat = (englishStats || []).find(s => s.studentId === activeStudentId);
+  // s.studentId 가 아닌 문서 자체의 고유 ID(s.id)를 비교하여 데이터를 완벽하게 찾아옵니다.
+  const studentEnglishStat = (englishStats || []).find(s => s.id === activeStudentId);
+  
   const catScore = studentEnglishStat?.catScore;
   const hasCatScore = catScore !== undefined && catScore !== null;
+  
   const currentVocaRubric = useMemo(() => {
       if (hasCatScore) {
           return VOCA_RUBRICS.find(r => catScore >= r.min && catScore <= r.max);
@@ -378,9 +380,8 @@ const AcademyUniverse = ({ currentUser }) => {
         }
     });
     return result;
-  }, [grades, myActiveClasses, englishStats]);
+  }, [grades, myActiveClasses, englishStats, generateMockStats]);
 
-  // 🚀 [예외 처리] 학부모인데 연결된 자녀가 없을 경우
   if (isParent && linkedChildren.length === 0) {
       return (
           <div className="p-10 text-center flex flex-col items-center">
@@ -391,7 +392,6 @@ const AcademyUniverse = ({ currentUser }) => {
       );
   }
 
-  // 관리자/강사용 학생 검색 뷰
   if (!isStudent && !isParent && !activeStudentId) {
       return (
           <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4 pt-10">
@@ -432,7 +432,6 @@ const AcademyUniverse = ({ currentUser }) => {
                 </button>
             )}
 
-            {/* 🚀 [다자녀 학부모 전용 UI] 2명 이상일 때만 렌더링되는 자녀 전환 드롭다운 */}
             {isParent && linkedChildren.length > 1 && (
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-indigo-100 flex items-center justify-between mb-4">
                     <span className="font-bold text-indigo-800 flex items-center gap-2">
