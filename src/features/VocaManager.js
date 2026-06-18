@@ -1,12 +1,10 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.2
-   운영자 관점: 단순 총점 입력이 가진 데이터 무결성 결함을 해결했습니다. 
-   50문항 토글 그리드 UI를 도입하여 강사가 틀린 문항만 직관적으로 클릭하면, 
-   자동으로 점수가 산출되고 백엔드 AI 엔진(Elo 레이팅 및 망각 주기 큐)으로 데이터가 완벽하게 전달됩니다.
-   프리셋 UI 개선: 강사가 직관적인 퍼센트(%) 비율을 보며 학생의 상태에 맞는 프리셋을 즉시 지정할 수 있습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.3
+   운영자 관점: 세부 어휘력 지표를 클릭 한 번으로 내림차순 정렬하며, 프리셋 변경 UI를 깔끔하게 정돈(클렌징)하여 시각적 피로도를 줄였습니다.
+   비용 및 성능 최적화: 클라이언트 사이드 메모리 정렬(In-memory Sorting)을 통해 추가적인 Firebase Read 과금을 방어합니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
-    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, XCircle, ChevronDown
+    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown
 } from 'lucide-react';
 import { collection, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -153,8 +151,10 @@ const VocaManager = ({ currentUser }) => {
                     .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
                     .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
                     .advanced-row td { border-top: 2px solid #334155; }
-                    .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
+                    .rich-info { margin-top: 4px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
                     .rich-info span.tag { font-weight: bold; color: #3b82f6; margin-right: 4px; }
+                    .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
+                    .meaning-line { margin-bottom: 2px; }
                   </style>
                 </head>
                 <body>
@@ -182,29 +182,56 @@ const VocaManager = ({ currentUser }) => {
                 `;
 
                 if (type === 'wordbook') {
+                    // 🚀 단어장 (1~40번, 품사 및 넘버링, 풀 예문 포함)
                     data.wordsList.slice(0, 40).forEach((w, i) => {
                         const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
-                        const allMeanings = meanings.map(m => m.koreanMeaning).join(', ') || '뜻 없음';
-                        let extraInfoHtml = '';
+                        
+                        let meaningHtml = '';
+                        let allSynonyms = [];
+                        let allAntonyms = [];
+                        let fullSentence = '';
+
                         if (meanings.length > 0) {
-                            const m = meanings[0]; 
-                            if (m.synonyms && m.synonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${m.synonyms.join(', ')}</div>`;
-                            if (m.antonyms && m.antonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${m.antonyms.join(', ')}</div>`;
-                            if (m.blankSentence && m.blankSentence.length > 0) {
-                                const regex = new RegExp(w.word, 'gi');
-                                const sentence = m.blankSentence[0].replace(regex, '____________');
-                                extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${sentence}</div>`;
-                            }
+                            meanings.forEach((m, idx) => {
+                                const pos = m.partOfSpeech ? `<span class="pos-tag">[${m.partOfSpeech}]</span>` : '';
+                                meaningHtml += `<div class="meaning-line">${pos}${idx + 1}. ${m.koreanMeaning}</div>`;
+                                
+                                if (m.synonyms) allSynonyms.push(...m.synonyms);
+                                if (m.antonyms) allAntonyms.push(...m.antonyms);
+                                
+                                // 빈칸 문장이든 예문이든 완전한 문장 추출 (첫 번째 발견된 예문 사용)
+                                if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                                    fullSentence = m.blankSentence[0];
+                                } else if (!fullSentence && m.exampleSentence) {
+                                    fullSentence = m.exampleSentence;
+                                }
+                            });
+                        } else {
+                            meaningHtml = '<div>뜻 정보 없음</div>';
                         }
+
+                        // 중복 제거
+                        allSynonyms = [...new Set(allSynonyms)];
+                        allAntonyms = [...new Set(allAntonyms)];
+
+                        let extraInfoHtml = '';
+                        if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${allSynonyms.join(', ')}</div>`;
+                        if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${allAntonyms.join(', ')}</div>`;
+                        if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${fullSentence}</div>`;
+
                         htmlContent += `
                           <tr>
                             <td class="text-center font-bold">${i + 1}</td>
                             <td><div class="word-text">${w.word}</div></td>
-                            <td><div style="font-weight: 800; color: #1e3a8a; font-size: 14px;">${allMeanings}</div>${extraInfoHtml}</td>
+                            <td>
+                              <div style="font-weight: 800; color: #1e3a8a; font-size: 14px;">${meaningHtml}</div>
+                              ${extraInfoHtml}
+                            </td>
                           </tr>
                         `;
                     });
                 } else {
+                    // 🚀 시험지 및 답안지 (50문제)
                     data.questionsList.forEach((q) => {
                         const isAdvanced = q.questionNumber === 41;
                         const rowClass = isAdvanced ? 'class="advanced-row"' : '';
@@ -525,17 +552,17 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'dashboard' && (
                                         <>
                                             <td className="p-4 text-center">
-                                                {/* 🚀 프리셋 이름 직관적 백분율 적용 */}
+                                                {/* 🚀 [퍼센트 제거] 직관적인 프리셋 명칭만 노출 */}
                                                 <select 
                                                     value={student.stat.vocaPreset}
                                                     onChange={(e) => handlePresetChange(student.id, e.target.value)}
-                                                    className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-[11px] rounded-lg px-1.5 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[200px]"
+                                                    className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[140px]"
                                                 >
-                                                    <option value="밸런스 모드">[밸런스] 신규50/복습30/오답15/패시브5</option>
-                                                    <option value="오답 학습">[오답위주] 신규15/복습20/오답60/패시브5</option>
-                                                    <option value="망각 방어">[망각방어] 신규0/복습50/오답40/패시브10</option>
-                                                    <option value="기초 수리">[기초수리] 신규30/복습20/오답10/패시브40</option>
-                                                    <option value="스퍼트 모드">[스퍼트] 신규70/복습15/오답10/패시브5</option>
+                                                    <option value="밸런스 모드">밸런스 모드</option>
+                                                    <option value="오답 학습">오답 학습</option>
+                                                    <option value="망각 방어">망각 방어</option>
+                                                    <option value="기초 수리">기초 수리</option>
+                                                    <option value="스퍼트 모드">스퍼트 모드</option>
                                                 </select>
                                             </td>
                                             

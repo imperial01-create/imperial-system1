@@ -1,7 +1,5 @@
 /* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털
-   학부모 관점 (The Payer): '단기 암기 지양', '학습 밀도' 등의 전문적인 용어로 학원의 프리미엄 브랜딩을 강화합니다.
-   프린트 최적화 (UX): 브라우저 기본 헤더/푸터(URL, 날짜)를 @page margin:0 제어로 완벽히 삭제하여 출판 교재 수준의 출력물을 제공합니다.
-   학습 효율 (Learner): 단어장 출력 시 예문, 유의어, 반의어를 함께 노출하여 입체적인 장기기억을 유도합니다. */
+   학습 효율 (Learner): 단어장 출력 및 화면 표시 시, 품사별 뜻 넘버링과 완전한 예문(Full Context)을 결합 노출하여 단편적 암기를 방지하고 입체적인 장기기억을 유도합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
@@ -46,8 +44,8 @@ const StudentVocaDaily = ({ currentUser }) => {
   const targetStudentName = targetStudent?.name || currentUser.name;
 
   const [sessionInfo, setSessionInfo] = useState({ sessionNumber: 1, status: 'loading' });
-  const [wordsList, setWordsList] = useState([]); // 단어장 1~40번 원본 데이터
-  const [questionsList, setQuestionsList] = useState([]); // 시험용 50번 변형 데이터
+  const [wordsList, setWordsList] = useState([]); 
+  const [questionsList, setQuestionsList] = useState([]); 
   const [studentStats, setStudentStats] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -120,9 +118,9 @@ const StudentVocaDaily = ({ currentUser }) => {
   };
 
   // =====================================================================
-  // 🚀 [해결책] 순수 HTML 생성 및 새 창 인쇄 엔진 (브라우저 헤더/푸터 완벽 제거)
+  // 🚀 순수 HTML 생성 및 새 창 인쇄 엔진 (단어장 출력)
   // =====================================================================
-  const handlePrint = (type = 'wordbook') => {
+  const handlePrint = () => {
     if (!wordsList || wordsList.length === 0) return alert("인쇄할 데이터가 없습니다.");
 
     let htmlContent = `
@@ -130,13 +128,12 @@ const StudentVocaDaily = ({ currentUser }) => {
         <head>
           <title>임페리얼 맞춤형 어휘 리포트</title>
           <style>
-            /* 🚀 @page margin: 0 으로 브라우저가 찍어내는 URL과 날짜를 원천 차단합니다. */
             @page { margin: 0; size: A4 portrait; }
             body { 
                 font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; 
                 color: #111; 
                 margin: 0; 
-                padding: 15mm 15mm 15mm 15mm; /* 종이 여백을 padding으로 대체하여 내용 잘림 방지 */
+                padding: 15mm 15mm 15mm 15mm; 
                 box-sizing: border-box;
                 -webkit-print-color-adjust: exact !important; 
                 print-color-adjust: exact !important; 
@@ -149,9 +146,10 @@ const StudentVocaDaily = ({ currentUser }) => {
             th { background-color: #f8fafc; font-weight: bold; color: #475569; }
             .text-center { text-align: center; }
             .word-text { font-size: 16px; font-weight: bold; color: #0f172a; }
-            /* 🚀 단어장 전용 프리미엄 디자인 클래스 추가 */
             .rich-info { margin-top: 6px; font-size: 12px; color: #475569; line-height: 1.5; font-weight: 500; }
             .rich-info span.tag { font-weight: 900; color: #3b82f6; margin-right: 4px; display: inline-block; padding: 2px 6px; background-color: #eff6ff; border-radius: 4px; font-size: 10px; }
+            .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
+            .meaning-line { margin-bottom: 3px; }
           </style>
         </head>
         <body>
@@ -173,34 +171,48 @@ const StudentVocaDaily = ({ currentUser }) => {
             <tbody>
     `;
 
-    // 🚀 단어장은 1~40번까지만 출력, 예문 및 유의어 정보 포함
     wordsList.slice(0, 40).forEach((w, i) => {
       const meanings = w.meanings && w.meanings.length > 0 ? w.meanings : [];
-      const allMeanings = meanings.map(m => m.koreanMeaning).join(', ') || '뜻 없음';
       
-      let extraInfoHtml = '';
+      let meaningHtml = '';
+      let allSynonyms = [];
+      let allAntonyms = [];
+      let fullSentence = '';
+
       if (meanings.length > 0) {
-          const m = meanings[0]; // 첫 번째 대표 뜻 기준 데이터 추출
-          if (m.synonyms && m.synonyms.length > 0) {
-              extraInfoHtml += `<div class="rich-info"><span class="tag">유의어</span>${m.synonyms.join(', ')}</div>`;
-          }
-          if (m.antonyms && m.antonyms.length > 0) {
-              extraInfoHtml += `<div class="rich-info"><span class="tag">반의어</span>${m.antonyms.join(', ')}</div>`;
-          }
-          if (m.blankSentence && m.blankSentence.length > 0) {
-              // 예문에 단어가 포함되어 있다면 빈칸으로 뚫어서 제공
-              const regex = new RegExp(w.word, 'gi');
-              const sentence = m.blankSentence[0].replace(regex, '____________');
-              extraInfoHtml += `<div class="rich-info"><span class="tag">예문</span>${sentence}</div>`;
-          }
+          meanings.forEach((m, idx) => {
+              const pos = m.partOfSpeech ? `<span class="pos-tag">[${m.partOfSpeech}]</span>` : '';
+              meaningHtml += `<div class="meaning-line">${pos}${idx + 1}. ${m.koreanMeaning}</div>`;
+              
+              if (m.synonyms) allSynonyms.push(...m.synonyms);
+              if (m.antonyms) allAntonyms.push(...m.antonyms);
+              
+              // 빈칸 문장이든 예문이든 완전한 문장 추출
+              if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
+                  fullSentence = m.blankSentence[0]; // replace 처리 없이 원본 그대로 사용
+              } else if (!fullSentence && m.exampleSentence) {
+                  fullSentence = m.exampleSentence;
+              }
+          });
+      } else {
+          meaningHtml = '<div>뜻 정보 없음</div>';
       }
+
+      // 중복 제거
+      allSynonyms = [...new Set(allSynonyms)];
+      allAntonyms = [...new Set(allAntonyms)];
+
+      let extraInfoHtml = '';
+      if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[유의어]</span>${allSynonyms.join(', ')}</div>`;
+      if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag">[반의어]</span>${allAntonyms.join(', ')}</div>`;
+      if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag">[예문]</span>${fullSentence}</div>`;
 
       htmlContent += `
         <tr>
           <td class="text-center font-bold">${i + 1}</td>
           <td><span class="word-text">${w.word}</span></td>
           <td>
-            <div style="font-weight: 800; color: #1e3a8a; font-size: 15px;">${allMeanings}</div>
+            <div style="font-weight: 800; color: #1e3a8a; font-size: 15px;">${meaningHtml}</div>
             ${extraInfoHtml}
           </td>
         </tr>
@@ -348,11 +360,10 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
-      {/* 🚀 단일 버튼으로 통합 */}
       {!isParent && (
           <div className="flex mb-8">
             <button 
-              onClick={() => handlePrint('wordbook')}
+              onClick={() => handlePrint()}
               disabled={!isPrintReady}
               className={`w-full border-2 p-6 rounded-[24px] shadow-sm transition-all flex flex-col items-center justify-center group ${
                 isPrintReady 
@@ -439,34 +450,57 @@ const StudentVocaDaily = ({ currentUser }) => {
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">No.</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">Target Vocabulary</th>
                           <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">Core Meaning (핵심 의미)</th>
-                          <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center">AI 배정 사유</th>
                       </tr>
                   </thead>
                   <tbody>
-                      {/* 화면상 단어 리스트도 40번까지만 보여주어 혼란을 방지합니다. */}
-                      {wordsList.slice(0, 40).map((word, idx) => (
-                          <tr key={word.wordId} className="border-b border-slate-100">
-                              <td className="p-3 text-center font-bold text-slate-400">{idx + 1}</td>
-                              <td className="p-3 font-black text-lg text-slate-800 tracking-wide">{word.word}</td>
-                              <td className="p-3 font-bold text-slate-600">
-                                  {word.meanings && word.meanings.length > 0 
-                                      ? word.meanings.map(m => m.koreanMeaning).join(', ') 
-                                      : '뜻 정보 없음'}
-                              </td>
-                              <td className="p-3 text-center">
-                                  <span className={`text-[11px] px-2 py-1 rounded-md font-black whitespace-nowrap
-                                      ${word.queueType === '만성 오답' ? 'bg-rose-100 text-rose-700' : 
-                                        word.queueType === '오답' ? 'bg-orange-100 text-orange-700' :
-                                        word.queueType === '복습' ? 'bg-emerald-100 text-emerald-700' :
-                                        word.queueType === '패시브' ? 'bg-slate-100 text-slate-600' :
-                                        'bg-blue-100 text-blue-700'
-                                      }`}
-                                  >
-                                      {word.queueType}
-                                  </span>
-                              </td>
-                          </tr>
-                      ))}
+                      {/* 화면상 단어 리스트도 1~40번 및 프리미엄 포맷팅 적용 */}
+                      {wordsList.slice(0, 40).map((word, idx) => {
+                          const meanings = word.meanings && word.meanings.length > 0 ? word.meanings : [];
+                          return (
+                              <tr key={word.wordId} className="border-b border-slate-100">
+                                  <td className="p-3 text-center font-bold text-slate-400 align-top">{idx + 1}</td>
+                                  <td className="p-3 font-black text-lg text-slate-800 tracking-wide align-top">{word.word}</td>
+                                  <td className="p-3 font-bold text-slate-600 align-top">
+                                      {meanings.length > 0 ? (
+                                          <div className="space-y-1">
+                                              {meanings.map((m, i) => (
+                                                  <div key={i} className="text-[15px] font-black text-blue-900">
+                                                      {m.partOfSpeech && <span className="text-slate-400 font-normal mr-1">[{m.partOfSpeech}]</span>}
+                                                      {i + 1}. {m.koreanMeaning}
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      ) : '뜻 정보 없음'}
+                                      
+                                      <div className="mt-2 space-y-1">
+                                          {(() => {
+                                              let allSynonyms = [];
+                                              let allAntonyms = [];
+                                              let fullSentence = '';
+                                              
+                                              meanings.forEach(m => {
+                                                  if (m.synonyms) allSynonyms.push(...m.synonyms);
+                                                  if (m.antonyms) allAntonyms.push(...m.antonyms);
+                                                  if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) fullSentence = m.blankSentence[0];
+                                                  else if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
+                                              });
+
+                                              allSynonyms = [...new Set(allSynonyms)];
+                                              allAntonyms = [...new Set(allAntonyms)];
+
+                                              return (
+                                                  <>
+                                                      {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
+                                                      {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
+                                                      {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
+                                                  </>
+                                              );
+                                          })()}
+                                      </div>
+                                  </td>
+                              </tr>
+                          );
+                      })}
                   </tbody>
               </table>
           )}
