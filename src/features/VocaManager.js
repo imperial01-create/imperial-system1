@@ -88,7 +88,7 @@ const VocaManager = ({ currentUser }) => {
             }
             
             if (dataToPrint.length === 0) {
-                alert("출력할 수 있는 데이터가 없습니다. (CAT 점수가 입력되었는지 확인하세요)");
+                alert("출력할 수 있는 데이터가 없습니다. (어휘력 점수가 입력되었는지 확인하세요)");
                 setProcessing(false);
                 return;
             }
@@ -138,11 +138,11 @@ const VocaManager = ({ currentUser }) => {
                 catScore: score, updatedAt: serverTimestamp()
             }, { merge: true });
             
-            alert("CAT 점수가 반영되었습니다.");
+            alert("어휘력 점수가 반영되었습니다.");
             setCatInput(prev => ({ ...prev, [studentId]: '' }));
         } catch (error) {
             console.error("CAT Input Error:", error);
-            alert("CAT 점수 입력 중 오류가 발생했습니다.");
+            alert("어휘력 점수 입력 중 오류가 발생했습니다.");
         } finally {
             setProcessing(false);
         }
@@ -257,7 +257,7 @@ const VocaManager = ({ currentUser }) => {
                     <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>대시보드 & 인쇄</button>
                     <button onClick={() => setActiveTab('grading')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'grading' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>고속 채점</button>
                     <button onClick={() => setActiveTab('analytics')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'analytics' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 분석</button>
-                    <button onClick={() => setActiveTab('cat_input')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'cat_input' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>CAT 진단 입력</button>
+                    <button onClick={() => setActiveTab('cat_input')} className={`px-5 py-2 rounded-xl font-bold transition-all ${activeTab === 'cat_input' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 진단 입력</button>
                 </div>
             </div>
 
@@ -336,7 +336,7 @@ const VocaManager = ({ currentUser }) => {
                                         <th className="p-4 font-black text-slate-600 text-center"><Trophy size={16} className="inline mr-1 text-amber-500"/> 승급 심사 관리</th>
                                     </>
                                 )}
-                                {activeTab === 'cat_input' && <th className="p-4 font-black text-slate-600 w-1/3">CAT 점수 직접 입력 (Max 1000)</th>}
+                                {activeTab === 'cat_input' && <th className="p-4 font-black text-slate-600 w-1/3">어휘력 점수 조정 (Max 1000)</th>}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -462,7 +462,7 @@ const VocaManager = ({ currentUser }) => {
                                         <td className="p-4">
                                             <div className="flex gap-2 items-center">
                                                 <input 
-                                                    type="number" max="1000" min="0" placeholder="CAT 점수"
+                                                    type="number" max="1000" min="0" placeholder="어휘력 점수"
                                                     className="w-24 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"
                                                     value={catInput[student.id] || ''}
                                                     onChange={e => setCatInput({...catInput, [student.id]: e.target.value})}
