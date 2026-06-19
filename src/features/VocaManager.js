@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.5 (Final Rendering Fix)
-   렌더링 무결성: DataContext의 글로벌 스탯을 매핑할 때, 아카데미 유니버스와 100% 동일한 Number 강제 변환 및 
-   렌더링 조건(catScore > 0)을 적용하여, 타입 충돌로 인해 점수 박스가 투명해지거나 증발하는 UI 버그를 완벽하게 차단했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.0 (Bulletproof Render)
+   렌더링 무결성: useMemo 캐싱(Stale Closure)으로 인해 점수 데이터가 업데이트되지 않던 치명적 버그를 원천 차단했습니다. 
+   아카데미 유니버스와 동일하게 렌더링 시점에 글로벌 englishStats를 직접 실시간 참조(Inline Lookup)하여 오차율 0%를 달성합니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -10,11 +10,12 @@ import {
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-import { Badge, Modal, Button } from '../components/UI';
+import { Modal, Button } from '../components/UI';
 import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } from '../utils/vocaEngine';
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 프리셋 비율 가이드 정보
 const PRESET_GUIDE = [
     { name: '밸런스 모드', desc: '신규 50% / 복습 30% / 오답 15% / 패시브 5%', color: 'text-indigo-600', bg: 'bg-indigo-50' },
     { name: '오답 학습', desc: '신규 15% / 복습 20% / 오답 60% / 패시브 5%', color: 'text-rose-600', bg: 'bg-rose-50' },
@@ -60,7 +61,6 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // DataContext에서 글로벌 데이터를 정확하게 수신합니다.
     const { users, classes, enrollments, englishStats } = useData();
 
     const [selectedClassId, setSelectedClassId] = useState('');
@@ -96,26 +96,22 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [availableClasses, selectedClassId]);
 
+    // 🚀 [CTO 패치] 데이터를 stat에 가둬두는(캐싱하는) 로직을 완전히 폐기하고 순수하게 학생 필터링만 수행합니다!
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
-            .map(student => {
-                // 🚀 글로벌 englishStats 매핑
-                const stat = (englishStats || []).find(s => s.id === student.id) || { 
-                    catScore: 0, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
-                    vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, masteredCount: 0,
-                    promotionPending: null, maxApprovedPromotion: 0, adaptivePreset: null
-                };
-                return { ...student, stat };
-            })
             .filter(student => student.name.includes(searchQuery));
 
         if (activeTab === 'analytics' && sortConfig) {
             filteredStudents.sort((a, b) => {
-                const valA = sortConfig === 'vocaProgress' ? getTierProgress(a.stat.masteredCount || 0, a.stat.catScore || 0).totalMastered : (a.stat[sortConfig] || 0);
-                const valB = sortConfig === 'vocaProgress' ? getTierProgress(b.stat.masteredCount || 0, b.stat.catScore || 0).totalMastered : (b.stat[sortConfig] || 0);
+                // 정렬 시에도 글로벌 데이터를 즉시 참조하여 오차를 없앱니다.
+                const statA = (englishStats || []).find(s => s.id === a.id) || {};
+                const statB = (englishStats || []).find(s => s.id === b.id) || {};
+                
+                const valA = sortConfig === 'vocaProgress' ? getTierProgress(Number(statA.masteredCount)||0, Number(statA.catScore)||0).totalMastered : (Number(statA[sortConfig]) || 0);
+                const valB = sortConfig === 'vocaProgress' ? getTierProgress(Number(statB.masteredCount)||0, Number(statB.catScore)||0).totalMastered : (Number(statB[sortConfig]) || 0);
                 return valB - valA; 
             });
         } else {
@@ -138,7 +134,11 @@ const VocaManager = ({ currentUser }) => {
                 : classStudents;
 
             for (const student of targetStudents) {
-                const sessionId = `test_${student.id}_s${student.stat.vocaSession || 1}`;
+                // 🚀 인쇄 시점에도 글로벌 데이터를 실시간으로 읽어옵니다.
+                const stat = (englishStats || []).find(s => s.id === student.id) || {};
+                const sessionNum = stat.vocaSession || 1;
+                const sessionId = `test_${student.id}_s${sessionNum}`;
+                
                 const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
                 
                 let questionsList = [];
@@ -154,8 +154,9 @@ const VocaManager = ({ currentUser }) => {
                         isSessionCompleted = true;
                         wrongNums = testData.wrongAnswerNumbers || [];
                     }
-                } else if (student.stat.catScore > 0) {
-                    const payload = await generateDailyVocaSet(student.id, student.stat.adaptivePreset || student.stat.vocaPreset);
+                } else if (Number(stat.catScore) > 0) {
+                    const activePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
+                    const payload = await generateDailyVocaSet(student.id, activePreset);
                     questionsList = payload.questionsForTest;
                     wordsList = payload.wordsForPrint;
                 }
@@ -173,7 +174,7 @@ const VocaManager = ({ currentUser }) => {
                 }
                 
                 if (questionsList.length > 0 || (type === 'wordbook' && wordsList.length > 0)) {
-                    dataToPrint.push({ student, questionsList, wordsList, session: student.stat.vocaSession || 1 });
+                    dataToPrint.push({ student, questionsList, wordsList, session: sessionNum });
                 }
             }
             
@@ -337,8 +338,8 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    const handlePresetSelect = (student, newPreset) => {
-        const oldPreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
+    const handlePresetSelect = (student, stat, newPreset) => {
+        const oldPreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
         if (oldPreset === newPreset) return;
         setPresetData({ studentId: student.id, name: student.name, oldPreset, newPreset });
         setPresetModalOpen(true);
@@ -361,13 +362,14 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    const openGradingModal = async (student) => {
-        const sessionId = `test_${student.id}_s${student.stat.vocaSession || 1}`;
+    const openGradingModal = async (student, stat) => {
+        const sessionNum = stat.vocaSession || 1;
+        const sessionId = `test_${student.id}_s${sessionNum}`;
         const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
         if (!testSnap.exists()) return alert("해당 회차의 단어장이 아직 생성되지 않았습니다.");
         
         setGradingData({
-            studentId: student.id, name: student.name, sessionNumber: student.stat.vocaSession || 1, wrongAnswers: []
+            studentId: student.id, name: student.name, sessionNumber: sessionNum, wrongAnswers: []
         });
         setGradingModalOpen(true);
     };
@@ -619,11 +621,12 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                // 🚀 [CTO 패치] 무결점 숫자 변환 로직 적용
-                                const catScore = Number(student.stat.catScore) || 0;
-                                const masteredCount = Number(student.stat.masteredCount) || 0;
+                                // 🚀 [CTO 패치] useMemo 캐시를 우회하고 렌더링 순간에 글로벌 데이터를 즉각 수혈(Lookup)합니다!
+                                const stat = (englishStats || []).find(s => s.id === student.id) || {};
+                                const catScore = Number(stat.catScore) || 0;
+                                const masteredCount = Number(stat.masteredCount) || 0;
                                 const tierInfo = getTierProgress(masteredCount, catScore);
-                                const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
+                                const currentActivePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
 
                                 return (
                                 <tr key={student.id} className="hover:bg-slate-50 transition-colors">
@@ -639,14 +642,18 @@ const VocaManager = ({ currentUser }) => {
                                         </div>
                                     </td>
                                     
-                                    <td className="p-4 text-center relative">
-                                        {/* 🚀 [CTO 패치] 아카데미 유니버스와 100% 동일한 안전한 렌더링 로직 적용 */}
+                                    <td className="p-4 text-center align-middle">
+                                        {/* 🚀 [CTO 패치] 외부 UI 라이브러리의 렌더링 오류를 막기 위해 100% 순수 HTML 방탄 태그(Span)로 직접 렌더링합니다! */}
                                         {catScore > 0 ? (
-                                            <Badge className="bg-emerald-100 text-emerald-700 font-black px-3 py-1 text-sm shadow-sm">{catScore}점</Badge> 
+                                            <span className="inline-flex bg-emerald-100 text-emerald-700 font-black px-3 py-1.5 text-[13px] rounded-lg shadow-sm border border-emerald-200">
+                                                {catScore}점
+                                            </span>
                                         ) : (
-                                            <Badge className="bg-rose-100 text-rose-700 font-black px-3 py-1 text-sm cursor-pointer hover:bg-rose-200">미응시</Badge>
+                                            <span className="inline-flex bg-rose-100 text-rose-700 font-black px-3 py-1.5 text-[13px] rounded-lg border border-rose-200 cursor-pointer hover:bg-rose-200">
+                                                미응시
+                                            </span>
                                         )}
-                                        {student.stat.promotionPending && (
+                                        {stat.promotionPending && (
                                             <div className="text-[10px] text-rose-600 font-black mt-1.5 animate-pulse flex items-center justify-center gap-0.5">
                                                 <AlertCircle size={10}/> 심사 대기 중
                                             </div>
@@ -657,7 +664,7 @@ const VocaManager = ({ currentUser }) => {
                                         <>
                                             <td className="p-4 text-center">
                                                 <div className="flex flex-col items-center justify-center gap-1">
-                                                    {student.stat.adaptivePreset === '초기 영점 조절' && (
+                                                    {stat.adaptivePreset === '초기 영점 조절' && (
                                                         <div className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-100 animate-pulse flex items-center justify-center gap-1 mb-1 shadow-sm">
                                                             <Search size={10} /> AI 영점 조절 스캔 중
                                                         </div>
@@ -665,8 +672,8 @@ const VocaManager = ({ currentUser }) => {
                                                     
                                                     <select 
                                                         value={currentActivePreset}
-                                                        onChange={(e) => handlePresetSelect(student, e.target.value)}
-                                                        className={`border font-bold text-sm rounded-lg px-2 py-1.5 outline-none transition-colors cursor-pointer w-full max-w-[140px] text-center ${student.stat.adaptivePreset === '초기 영점 조절' ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-100 border-slate-200 text-slate-700 focus:border-indigo-400'}`}
+                                                        onChange={(e) => handlePresetSelect(student, stat, e.target.value)}
+                                                        className={`border font-bold text-sm rounded-lg px-2 py-1.5 outline-none transition-colors cursor-pointer w-full max-w-[140px] text-center ${stat.adaptivePreset === '초기 영점 조절' ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-100 border-slate-200 text-slate-700 focus:border-indigo-400'}`}
                                                     >
                                                         <option value="밸런스 모드">밸런스 모드</option>
                                                         <option value="오답 학습">오답 학습</option>
@@ -693,12 +700,12 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'grading' && (
                                         <td className="p-4 text-center">
                                             <div className="flex flex-col gap-2 justify-center items-center">
-                                                <button onClick={() => openGradingModal(student)} className="bg-white border-2 border-emerald-500 hover:bg-emerald-50 text-emerald-700 font-black px-6 py-2.5 rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2">
+                                                <button onClick={() => openGradingModal(student, stat)} className="bg-white border-2 border-emerald-500 hover:bg-emerald-50 text-emerald-700 font-black px-6 py-2.5 rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2">
                                                     <CheckCircle size={18} /> 오답 문항 선택 (채점)
                                                 </button>
-                                                {student.stat.vocaSession > 1 && (
-                                                    <button onClick={() => handleRollback(student.id, student.stat.vocaSession - 1)} className="text-[11px] text-rose-400 hover:text-rose-600 underline font-bold flex items-center gap-1 mt-1">
-                                                        <Undo2 size={12} /> {student.stat.vocaSession - 1}회차 채점 취소 (복구)
+                                                {stat.vocaSession > 1 && (
+                                                    <button onClick={() => handleRollback(student.id, stat.vocaSession - 1)} className="text-[11px] text-rose-400 hover:text-rose-600 underline font-bold flex items-center gap-1 mt-1">
+                                                        <Undo2 size={12} /> {stat.vocaSession - 1}회차 채점 취소 (복구)
                                                     </button>
                                                 )}
                                             </div>
@@ -721,21 +728,21 @@ const VocaManager = ({ currentUser }) => {
                                                 </span>
                                             </td>
                                             <td className="p-4 text-center">
-                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaComprehension || 0) + '%' }}></div></div>
-                                                <span className="text-xs font-black text-emerald-700">{student.stat.vocaComprehension || 0}%</span>
+                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: (stat.vocaComprehension || 0) + '%' }}></div></div>
+                                                <span className="text-xs font-black text-emerald-700">{stat.vocaComprehension || 0}%</span>
                                             </td>
                                             <td className="p-4 text-center">
-                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: (student.stat.vocaRetention || 0) + '%' }}></div></div>
-                                                <span className="text-xs font-black text-indigo-700">{student.stat.vocaRetention || 0}%</span>
+                                                <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[100px] mx-auto mb-1"><div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: (stat.vocaRetention || 0) + '%' }}></div></div>
+                                                <span className="text-xs font-black text-indigo-700">{stat.vocaRetention || 0}%</span>
                                             </td>
                                             
                                             <td className="p-4 text-center">
-                                                {student.stat.promotionPending ? (
+                                                {stat.promotionPending ? (
                                                     <button 
-                                                        onClick={() => handleApprovePromotion(student.id, student.stat.promotionPending, student.name)} 
+                                                        onClick={() => handleApprovePromotion(student.id, stat.promotionPending, student.name)} 
                                                         className="bg-rose-100 text-rose-700 hover:bg-rose-600 hover:text-white border border-rose-200 px-4 py-2 rounded-xl font-black text-xs transition-all shadow-sm mx-auto flex items-center justify-center gap-1 animate-pulse"
                                                     >
-                                                        <AlertCircle size={14} /> {student.stat.promotionPending}점 승급 승인
+                                                        <AlertCircle size={14} /> {stat.promotionPending}점 승급 승인
                                                     </button>
                                                 ) : (
                                                     <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 inline-block">
