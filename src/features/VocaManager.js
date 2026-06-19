@@ -1,18 +1,30 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.1
-   운영자 가시성(Visibility) 극대화: AI가 백엔드에서 '초기 영점 조절' 스캔을 진행 중일 때, 강사 대시보드에 직관적인 
-   [AI 영점 조절 스캔 중 🔍] 애니메이션 배지를 띄우고 드롭다운 상태를 즉각 동기화하여 시스템에 대한 절대적 신뢰를 구축합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.2
+   운영 효율성: 프리셋별 출제 비율 가이드를 상단에 시각화하여 강사의 인지적 과부하를 없앴습니다.
+   비용 최적화: 개별 리스너를 삭제하고 DataContext의 englishStats를 공유받도록 설계하여(Single Source of Truth),
+   Firebase 과금을 차단하고 종합 어휘력 지수 누락 버그를 완벽하게 해결했습니다. */
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
-    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap
+    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info
 } from 'lucide-react';
-import { collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Badge, Modal, Button } from '../components/UI';
 import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } from '../utils/vocaEngine';
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 프리셋 비율 가이드 정보
+const PRESET_GUIDE = [
+    { name: '밸런스 모드', desc: '신규 50% / 복습 30% / 오답 15% / 패시브 5%', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+    { name: '오답 학습', desc: '신규 15% / 복습 20% / 오답 60% / 패시브 5%', color: 'text-rose-600', bg: 'bg-rose-50' },
+    { name: '망각 방어', desc: '신규 0% / 복습 50% / 오답 40% / 패시브 10%', color: 'text-amber-600', bg: 'bg-amber-50' },
+    { name: '기초 수리', desc: '신규 30% / 복습 20% / 오답 10% / 패시브 40%', color: 'text-emerald-600', bg: 'bg-emerald-50' },
+    { name: '스퍼트 모드', desc: '신규 70% / 복습 15% / 오답 10% / 패시브 5%', color: 'text-purple-600', bg: 'bg-purple-50' },
+    { name: '초기 영점 조절', desc: '타겟 50% / 의심스캔 45% / 딥스캔 5%', color: 'text-slate-600', bg: 'bg-slate-100' }
+];
 
 const getTierProgress = (masteredCount = 0, catScore = 0) => {
     const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
@@ -50,34 +62,20 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    const { users, classes, enrollments } = useData();
-    const [localEnglishStats, setLocalEnglishStats] = useState([]);
-
-    useEffect(() => {
-        const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
-        const unsubscribe = onSnapshot(statsRef, (snapshot) => {
-            const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setLocalEnglishStats(statsData);
-        }, (error) => {
-            console.error("Stats Subscription Error:", error);
-        });
-        return () => unsubscribe();
-    }, []);
+    // 🚀 [CTO 패치] DataContext에서 전역 englishStats를 가져옵니다. (Firebase 읽기 과금 방어 및 데이터 누락 해결)
+    const { users, classes, enrollments, englishStats } = useData();
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('dashboard'); 
-    
     const [sortConfig, setSortConfig] = useState(null); 
-
     const [processing, setProcessing] = useState(false);
     const [catInput, setCatInput] = useState({}); 
-
     const [gradingModalOpen, setGradingModalOpen] = useState(false);
     const [gradingData, setGradingData] = useState({ studentId: '', name: '', sessionNumber: 1, wrongAnswers: [] });
-
+    
     const [presetModalOpen, setPresetModalOpen] = useState(false);
-    const [presetData, setPresetData] = useState({ studentId: '', name: '', newPreset: '' });
+    const [presetData, setPresetData] = useState({ studentId: '', name: '', oldPreset: '', newPreset: '' });
 
     const enrolledStudentIds = useMemo(() => {
         if (!selectedClassId) return [];
@@ -106,7 +104,8 @@ const VocaManager = ({ currentUser }) => {
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
-                const stat = localEnglishStats.find(s => s.id === student.id) || { 
+                // 🚀 전역 englishStats와 완벽 매핑
+                const stat = (englishStats || []).find(s => s.id === student.id) || { 
                     catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
                     vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, masteredCount: 0,
                     promotionPending: null, maxApprovedPromotion: 0, adaptivePreset: null
@@ -126,7 +125,7 @@ const VocaManager = ({ currentUser }) => {
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrolledStudentIds, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrolledStudentIds, users, englishStats, searchQuery, activeTab, sortConfig]);
 
     const handleSort = (key) => {
         setSortConfig(key);
@@ -212,13 +211,11 @@ const VocaManager = ({ currentUser }) => {
                     .hint-text { display: block; font-size: 11px; color: #64748b; margin-top: 4px; font-weight: bold; }
                     .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
                     .advanced-row td { border-top: 2px solid #334155; }
-                    
                     .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
                     .rich-info span.tag { font-weight: bold; margin-right: 4px; display: inline-block; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
                     .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; } 
                     .tag.antonym { color: #e11d48; background-color: #ffe4e6; border: 1px solid #fecdd3; } 
                     .tag.example { color: #3b82f6; background-color: #eff6ff; border: 1px solid #bfdbfe; } 
-                    
                     .pos-tag { color: #64748b; font-weight: normal; margin-right: 4px; }
                     .meaning-line { margin-bottom: 2px; }
                   </style>
@@ -259,10 +256,8 @@ const VocaManager = ({ currentUser }) => {
                             meanings.forEach((m, idx) => {
                                 const pos = m.partOfSpeech ? `<span class="pos-tag">[${m.partOfSpeech}]</span>` : '';
                                 meaningHtml += `<div class="meaning-line">${pos}${idx + 1}. ${m.koreanMeaning}</div>`;
-                                
                                 if (m.synonyms) allSynonyms.push(...m.synonyms);
                                 if (m.antonyms) allAntonyms.push(...m.antonyms);
-                                
                                 if (!fullSentence && m.exampleSentence) {
                                     fullSentence = m.exampleSentence;
                                 } else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
@@ -278,15 +273,9 @@ const VocaManager = ({ currentUser }) => {
                         allAntonyms = [...new Set(allAntonyms)];
 
                         let extraInfoHtml = '';
-                        if (allSynonyms.length > 0) {
-                            extraInfoHtml += `<div class="rich-info"><span class="tag synonym">[유의어]</span>${allSynonyms.join(', ')}</div>`;
-                        }
-                        if (allAntonyms.length > 0) {
-                            extraInfoHtml += `<div class="rich-info"><span class="tag antonym">[반의어]</span>${allAntonyms.join(', ')}</div>`;
-                        }
-                        if (fullSentence) {
-                            extraInfoHtml += `<div class="rich-info"><span class="tag example">[예문]</span>${fullSentence}</div>`;
-                        }
+                        if (allSynonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag synonym">[유의어]</span>${allSynonyms.join(', ')}</div>`;
+                        if (allAntonyms.length > 0) extraInfoHtml += `<div class="rich-info"><span class="tag antonym">[반의어]</span>${allAntonyms.join(', ')}</div>`;
+                        if (fullSentence) extraInfoHtml += `<div class="rich-info"><span class="tag example">[예문]</span>${fullSentence}</div>`;
 
                         htmlContent += `
                           <tr>
@@ -350,10 +339,11 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    // 🚀 [CTO 패치] 이전 프리셋 기록을 포함하여 명확한 확인 모달 띄우기
     const handlePresetSelect = (student, newPreset) => {
-        const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
-        if (currentActivePreset === newPreset) return;
-        setPresetData({ studentId: student.id, name: student.name, newPreset });
+        const oldPreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
+        if (oldPreset === newPreset) return;
+        setPresetData({ studentId: student.id, name: student.name, oldPreset, newPreset });
         setPresetModalOpen(true);
     };
 
@@ -361,7 +351,6 @@ const VocaManager = ({ currentUser }) => {
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, presetData.studentId);
-            // 🚀 [CTO 패치] 강사가 수동 개입 시, AI의 adaptivePreset(자율주행) 상태를 해제하고 강사의 설정을 최우선으로 반영
             await setDoc(statRef, { 
                 vocaPreset: presetData.newPreset,
                 adaptivePreset: null,
@@ -433,12 +422,11 @@ const VocaManager = ({ currentUser }) => {
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
-            // 🚀 [CTO 패치] 점수 강제 조정 시, 즉각적으로 초기 영점 조절 모드를 활성화하여 UI에 바로 반영되도록 설정
             await setDoc(statRef, { 
                 catScore: score, 
                 maxApprovedPromotion: Math.floor(score / 50) * 50, 
                 promotionPending: null,
-                adaptivePreset: '초기 영점 조절', // DB에 직접 쏴서 화면에 즉각 표시
+                adaptivePreset: '초기 영점 조절', 
                 updatedAt: serverTimestamp() 
             }, { merge: true });
             alert("어휘력이 성공적으로 반영되었습니다.");
@@ -471,15 +459,15 @@ const VocaManager = ({ currentUser }) => {
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             
+            {/* 🚀 [CTO 패치] 강사 확인용 프리셋 변경 모달의 직관성 향상 */}
             <Modal isOpen={presetModalOpen} onClose={() => setPresetModalOpen(false)} title="학습 프리셋 변경 확인">
                 <div className="p-4 space-y-4 text-center">
                     <h3 className="text-xl font-bold text-gray-800 leading-snug">
-                        [{presetData.name}] 학생의 학습 프리셋을<br/> 
-                        <span className={`font-black ${presetData.newPreset === '초기 영점 조절' ? 'text-rose-600 bg-rose-50 px-2 py-1 rounded' : 'text-indigo-600'}`}>
-                            [{presetData.newPreset}]
-                        </span>(으)로 변경하시겠습니까?
+                        <span className="text-indigo-600 font-black">[{presetData.name}]</span> 학생의 프리셋을<br/> 
+                        <span className="text-slate-400 line-through">[{presetData.oldPreset}]</span> 에서 <br/>
+                        <span className="text-rose-600 font-black text-2xl">[{presetData.newPreset}]</span> (으)로<br/>바꾸시겠습니까?
                     </h3>
-                    <p className="text-sm font-bold text-gray-500">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모드는 해제됩니다.</p>
+                    <p className="text-sm font-bold text-gray-500 bg-slate-50 p-3 rounded-xl">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모드는 해제됩니다.</p>
                     <div className="flex gap-3 justify-center mt-6">
                         <Button variant="secondary" onClick={() => setPresetModalOpen(false)}>취소</Button>
                         <Button onClick={confirmPresetChange} disabled={processing}>
@@ -580,6 +568,21 @@ const VocaManager = ({ currentUser }) => {
                 )}
             </div>
 
+            {/* 🚀 [CTO 패치] 각 프리셋에 대한 문항 비율 가이드라인 UI 추가 */}
+            {activeTab === 'dashboard' && (
+                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+                    <h3 className="text-sm font-black text-slate-800 mb-3 flex items-center gap-1.5"><Info size={16} className="text-indigo-500"/> 프리셋별 문항 출제 비율 가이드</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+                        {PRESET_GUIDE.map(guide => (
+                            <div key={guide.name} className={`${guide.bg} border border-white/50 p-3 rounded-xl flex flex-col justify-center items-center text-center shadow-sm`}>
+                                <span className={`text-[11px] font-black ${guide.color} mb-1`}>{guide.name}</span>
+                                <span className="text-[9px] font-bold text-slate-500 leading-tight break-keep">{guide.desc}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden overflow-x-auto">
                 {classStudents.length === 0 ? (
                     <div className="p-20 text-center flex flex-col items-center justify-center">
@@ -622,7 +625,6 @@ const VocaManager = ({ currentUser }) => {
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
                                 const tierInfo = getTierProgress(student.stat.masteredCount || 0, student.stat.catScore || 0);
-                                // 🚀 [CTO 패치] 화면에 표시할 현재 활성 프리셋 결정 로직
                                 const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
 
                                 return (
@@ -640,6 +642,7 @@ const VocaManager = ({ currentUser }) => {
                                     </td>
                                     
                                     <td className="p-4 text-center relative">
+                                        {/* 🚀 [CTO 패치] DataContext 동기화로 인해 이제 어떤 권한에서든 CAT 점수가 정상적으로 출력됩니다. */}
                                         {student.stat.catScore !== null && student.stat.catScore !== undefined
                                             ? <Badge className="bg-emerald-100 text-emerald-700 font-black px-3">{student.stat.catScore}점</Badge> 
                                             : <Badge className="bg-rose-100 text-rose-700 font-black px-3 cursor-pointer hover:bg-rose-200">미응시</Badge>
@@ -655,9 +658,8 @@ const VocaManager = ({ currentUser }) => {
                                         <>
                                             <td className="p-4 text-center">
                                                 <div className="flex flex-col items-center justify-center gap-1">
-                                                    {/* 🚀 [CTO 패치] AI가 스캔 중임을 알려주는 강력한 시각적 알림 (가시성 극대화) */}
                                                     {student.stat.adaptivePreset === '초기 영점 조절' && (
-                                                        <div className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-100 animate-pulse flex items-center justify-center gap-1 mb-1">
+                                                        <div className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-100 animate-pulse flex items-center justify-center gap-1 mb-1 shadow-sm">
                                                             <Search size={10} /> AI 영점 조절 스캔 중
                                                         </div>
                                                     )}
@@ -665,7 +667,7 @@ const VocaManager = ({ currentUser }) => {
                                                     <select 
                                                         value={currentActivePreset}
                                                         onChange={(e) => handlePresetSelect(student, e.target.value)}
-                                                        className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[140px]"
+                                                        className={`border font-bold text-sm rounded-lg px-2 py-1.5 outline-none transition-colors cursor-pointer w-full max-w-[140px] text-center ${student.stat.adaptivePreset === '초기 영점 조절' ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-slate-100 border-slate-200 text-slate-700 focus:border-indigo-400'}`}
                                                     >
                                                         <option value="밸런스 모드">밸런스 모드</option>
                                                         <option value="오답 학습">오답 학습</option>
@@ -748,9 +750,9 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'cat_input' && (
                                         <td className="p-4">
                                             <div className="flex gap-2 items-center">
-                                                <input type="number" max="1000" min="0" placeholder="점수 입력" value={catInput[student.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-24 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
+                                                <input type="number" max="1000" min="0" placeholder="점수" value={catInput[student.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-20 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
                                                 <span className="font-bold text-slate-400 mr-2">/ 1000</span>
-                                                <button onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">반영</button>
+                                                <button onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">초기화 반영</button>
                                             </div>
                                         </td>
                                     )}
