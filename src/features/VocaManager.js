@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.1 (Interactive Sorting)
-   데이터 관제 최적화: '종합 어휘력 지수' 헤더 클릭 시 즉각적으로 점수 내림차순 정렬을 수행하는 O(n log n) 알고리즘을 추가했습니다. 
-   어떤 메뉴 탭에서든 우수 학생과 취약 학생을 직관적으로 분류(Filtering)하여 밀착 관리가 가능해집니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.2 (UI/UX 픽스)
+   사용자 경험(UX) 최적화: 정렬 헤더를 클릭할 때 화살표 아이콘이 나타나며 테이블 너비가 흔들리는 현상(Layout Shift)을 방지하기 위해, 
+   아이콘을 상시 렌더링하고 투명도로 상태를 구분하는 방탄(Bulletproof) UI 레이아웃을 적용했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -103,7 +103,6 @@ const VocaManager = ({ currentUser }) => {
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .filter(student => student.name.includes(searchQuery));
 
-        // 🚀 [CTO 패치] 특정 탭(analytics) 제한을 풀고, 어휘력 지수 클릭 시 모든 탭에서 정렬이 작동하도록 수정
         if (sortConfig) {
             filteredStudents.sort((a, b) => {
                 const statA = (englishStats || []).find(s => s.id === a.id) || {};
@@ -114,14 +113,12 @@ const VocaManager = ({ currentUser }) => {
                 return valB - valA; 
             });
         } else {
-            // 정렬이 해제되면 기본 가나다순 정렬로 복귀
             filteredStudents.sort((a, b) => a.name.localeCompare(b.name));
         }
 
         return filteredStudents;
     }, [selectedClassId, enrolledStudentIds, users, englishStats, searchQuery, sortConfig]);
 
-    // 🚀 [CTO 패치] 정렬 토글(Toggle) 기능 추가 (내림차순 <-> 기본 이름순)
     const handleSort = (key) => {
         if (sortConfig === key) {
             setSortConfig(null); 
@@ -596,12 +593,15 @@ const VocaManager = ({ currentUser }) => {
                             <tr>
                                 <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
                                 
-                                {/* 🚀 [CTO 패치] 클릭 가능한 정렬 헤더 UI 적용 */}
+                                {/* 🚀 [CTO 패치] 흔들림 없는(Layout Shift 방지) 상시 렌더링 화살표 UI */}
                                 <th 
-                                    className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" 
+                                    className="p-4 font-black text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors group select-none" 
                                     onClick={() => handleSort('catScore')}
                                 >
-                                    종합 어휘력 지수 {sortConfig === 'catScore' && <ChevronDown size={14} className="inline text-blue-600" />}
+                                    <div className="flex items-center justify-center gap-1">
+                                        종합 어휘력 지수 
+                                        <ChevronDown size={14} className={`transition-all duration-200 ${sortConfig === 'catScore' ? 'text-blue-600 opacity-100' : 'text-slate-400 opacity-20 group-hover:opacity-100'}`} />
+                                    </div>
                                 </th>
                                 
                                 {activeTab === 'dashboard' && (
@@ -614,14 +614,20 @@ const VocaManager = ({ currentUser }) => {
                                 
                                 {activeTab === 'analytics' && (
                                     <>
-                                        <th className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('vocaProgress')}>
-                                            어휘 진도 {sortConfig === 'vocaProgress' && <ChevronDown size={14} className="inline text-blue-600" />}
+                                        <th className="p-4 font-black text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors group select-none" onClick={() => handleSort('vocaProgress')}>
+                                            <div className="flex items-center justify-center gap-1">
+                                                어휘 진도 <ChevronDown size={14} className={`transition-all duration-200 ${sortConfig === 'vocaProgress' ? 'text-blue-600 opacity-100' : 'text-slate-400 opacity-20 group-hover:opacity-100'}`} />
+                                            </div>
                                         </th>
-                                        <th className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('vocaComprehension')}>
-                                            뜻 이해도 {sortConfig === 'vocaComprehension' && <ChevronDown size={14} className="inline text-blue-600" />}
+                                        <th className="p-4 font-black text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors group select-none" onClick={() => handleSort('vocaComprehension')}>
+                                            <div className="flex items-center justify-center gap-1">
+                                                뜻 이해도 <ChevronDown size={14} className={`transition-all duration-200 ${sortConfig === 'vocaComprehension' ? 'text-blue-600 opacity-100' : 'text-slate-400 opacity-20 group-hover:opacity-100'}`} />
+                                            </div>
                                         </th>
-                                        <th className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('vocaRetention')}>
-                                            장기 기억력 {sortConfig === 'vocaRetention' && <ChevronDown size={14} className="inline text-blue-600" />}
+                                        <th className="p-4 font-black text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors group select-none" onClick={() => handleSort('vocaRetention')}>
+                                            <div className="flex items-center justify-center gap-1">
+                                                장기 기억력 <ChevronDown size={14} className={`transition-all duration-200 ${sortConfig === 'vocaRetention' ? 'text-blue-600 opacity-100' : 'text-slate-400 opacity-20 group-hover:opacity-100'}`} />
+                                            </div>
                                         </th>
                                         <th className="p-4 font-black text-slate-600 text-center"><Trophy size={16} className="inline mr-1 text-amber-500"/> 구간 돌파 승인</th>
                                     </>
@@ -686,7 +692,7 @@ const VocaManager = ({ currentUser }) => {
                                                     >
                                                         <option value="밸런스 모드">밸런스 모드</option>
                                                         <option value="오답 학습">오답 학습</option>
-                                                        <option value="망각 방어">망각 방어</option>
+                                                        <option value="망 방어">망각 방어</option>
                                                         <option value="기초 수리">기초 수리</option>
                                                         <option value="스퍼트 모드">스퍼트 모드</option>
                                                         <option value="초기 영점 조절">초기 영점 조절</option>
