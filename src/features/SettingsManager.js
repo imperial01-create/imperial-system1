@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제합니다.
-   (🚀 CTO 패치: 시험기간 다중 교실 배정(Resource Allocation) 알고리즘 도입을 위한 
-   '강의실별 수용 인원(Capacity)' 데이터베이스 마이그레이션 및 UI 탑재 완료) */
+   (🚀 CTO 패치: 긴 강의실 이름이 잘리지 않도록 UI 레이아웃을 Grid로 최적화하고, 
+   기존 등록된 강의실의 수용 인원을 원클릭으로 즉시 수정할 수 있는 Inline Edit 기능을 도입했습니다.) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -57,7 +57,6 @@ const SettingsManager = ({ currentUser }) => {
         academyName: '', businessNumber: '', phone: '', address: '', classrooms: [], subjects: []
     });
 
-    // 🚀 [CTO 패치] 강의실명 + 수용 인원 분리 상태 관리
     const [newClassroomName, setNewClassroomName] = useState('');
     const [newClassroomCapacity, setNewClassroomCapacity] = useState('');
     
@@ -81,7 +80,7 @@ const SettingsManager = ({ currentUser }) => {
                     setSettings({
                         academyName: data.academyName || '', businessNumber: data.businessNumber || '',
                         phone: data.phone || '', address: data.address || '',
-                        // 🚀 [CTO 패치] 기존 단순 문자열 데이터를 객체(Object) 포맷으로 하위 호환 자동 마이그레이션
+                        // 🚀 하위 호환 자동 마이그레이션 적용
                         classrooms: (data.classrooms || []).map(c => typeof c === 'string' ? { name: c, capacity: 10 } : c), 
                         subjects: data.subjects || []
                     });
@@ -129,7 +128,6 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 새로운 강의실 등록 로직 (수용인원 포함)
     const addClassroom = () => {
         const name = newClassroomName.trim();
         const cap = parseInt(newClassroomCapacity) || 0;
@@ -137,7 +135,6 @@ const SettingsManager = ({ currentUser }) => {
         if (!name) return alert("강의실 이름을 입력해주세요.");
         if (cap <= 0) return alert("올바른 수용 인원(명)을 숫자로 입력해주세요.");
         
-        // 중복 검사 (문자열 호환)
         if (settings.classrooms.some(c => (typeof c === 'string' ? c : c.name) === name)) {
             return alert("이미 등록된 강의실 이름입니다.");
         }
@@ -157,6 +154,18 @@ const SettingsManager = ({ currentUser }) => {
             const arr = [...prev.classrooms]; 
             arr.splice(index, 1); 
             return { ...prev, classrooms: arr }; 
+        });
+    };
+
+    // 🚀 [CTO 패치] 인라인 수용 인원 수정 핸들러
+    const handleUpdateCapacity = (index, value) => {
+        setSettings(prev => {
+            const arr = [...prev.classrooms];
+            const current = arr[index];
+            const rName = typeof current === 'string' ? current : current.name;
+            // 빈 문자열 허용 (수정 도중을 위해), 숫자로 파싱
+            arr[index] = { name: rName, capacity: value === '' ? '' : (parseInt(value, 10) || 0) };
+            return { ...prev, classrooms: arr };
         });
     };
 
@@ -379,7 +388,6 @@ const SettingsManager = ({ currentUser }) => {
                                     <DoorOpen className="text-emerald-600"/> 강의실 및 수용 인원 관리
                                 </h2>
                                 
-                                {/* 🚀 [CTO 패치] 수용 인원 입력을 위한 복합 폼 UI */}
                                 <div className="flex flex-col sm:flex-row gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100">
                                     <input 
                                         type="text" 
@@ -406,26 +414,36 @@ const SettingsManager = ({ currentUser }) => {
                                     </div>
                                 </div>
                                 
-                                <div className="flex flex-wrap gap-2.5 max-h-48 overflow-y-auto custom-scrollbar p-1">
-                                    {settings.classrooms.length === 0 && <div className="text-sm text-gray-400 font-bold w-full text-center py-4 border-2 border-dashed rounded-xl">등록된 강의실이 없습니다.</div>}
+                                {/* 🚀 [CTO 패치] Grid 레이아웃 & Inline Edit Input 적용 */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-64 overflow-y-auto custom-scrollbar p-1">
+                                    {settings.classrooms.length === 0 && <div className="col-span-full text-sm text-gray-400 font-bold text-center py-4 border-2 border-dashed rounded-xl">등록된 강의실이 없습니다.</div>}
                                     {settings.classrooms.map((room, idx) => {
                                         const rName = typeof room === 'string' ? room : room.name;
-                                        const rCap = typeof room === 'string' ? '미설정' : (room.capacity || 0);
+                                        const rCap = typeof room === 'string' ? '' : (room.capacity || '');
                                         return (
-                                        <div key={idx} className="bg-emerald-50 border border-emerald-200 pl-3 pr-1 py-1.5 rounded-xl flex items-center justify-between gap-3 shadow-sm flex-1 min-w-[200px] max-w-[250px]">
-                                            <span className="text-sm font-black text-gray-800 truncate">{rName}</span>
+                                        <div key={idx} className="bg-emerald-50 border border-emerald-200 pl-3 pr-2 py-2 rounded-xl flex items-center justify-between gap-2 shadow-sm">
+                                            <span className="text-sm font-black text-gray-800 break-keep leading-tight">{rName}</span>
+                                            
                                             <div className="flex items-center gap-1 shrink-0">
-                                                <span className="bg-white text-emerald-700 border border-emerald-100 px-2 py-1 rounded-md text-[11px] font-black shadow-sm">
-                                                    최대 {rCap}명
-                                                </span>
-                                                <button onClick={() => removeClassroom(idx)} className="text-gray-400 hover:bg-rose-100 hover:text-rose-500 p-1.5 rounded-lg transition-colors"><Trash2 size={14}/></button>
+                                                <div className="flex items-center bg-white border border-emerald-200 rounded-md overflow-hidden shadow-sm focus-within:ring-2 focus-within:ring-emerald-400 transition-shadow">
+                                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-1.5 py-1">최대</span>
+                                                    <input 
+                                                        type="number" 
+                                                        className="w-10 text-center text-[11px] font-black text-emerald-800 outline-none py-1 bg-transparent"
+                                                        value={rCap}
+                                                        onChange={(e) => handleUpdateCapacity(idx, e.target.value)}
+                                                        placeholder="인원"
+                                                    />
+                                                    <span className="text-[10px] font-bold text-emerald-600 pr-1.5 py-1">명</span>
+                                                </div>
+                                                <button onClick={() => removeClassroom(idx)} className="text-gray-400 hover:bg-rose-100 hover:text-rose-500 p-1.5 rounded-lg transition-colors"><Trash2 size={16}/></button>
                                             </div>
                                         </div>
                                     )})}
                                 </div>
                             </div>
 
-                            {/* 1-3. 계층형 부서(대과목) 관리 UI - 세부과목 가시화 */}
+                            {/* 1-3. 계층형 부서(대과목) 관리 UI */}
                             <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
                                 <div className="border-b pb-4">
                                     <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
@@ -448,7 +466,6 @@ const SettingsManager = ({ currentUser }) => {
                                                     {isActive ? <ToggleRight size={32} className={`text-${dept.color}-600`} /> : <ToggleLeft size={32} className="text-gray-300" />}
                                                 </div>
                                                 
-                                                {/* 세부 과목 목록 노출 */}
                                                 <div className={`flex flex-wrap gap-1.5 ${isActive ? 'opacity-100' : 'opacity-40 grayscale'}`}>
                                                     {dept.subjects.map(subj => (
                                                         <span key={subj} className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded-md border ${isActive ? `bg-white text-${dept.color}-700 border-${dept.color}-200` : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
