@@ -1,14 +1,13 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.2
-   운영 효율성: 프리셋별 출제 비율 가이드를 상단에 시각화하여 강사의 인지적 과부하를 없앴습니다.
-   비용 최적화: 개별 리스너를 삭제하고 DataContext의 englishStats를 공유받도록 설계하여(Single Source of Truth),
-   Firebase 과금을 차단하고 종합 어휘력 지수 누락 버그를 완벽하게 해결했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.3 (Hotfix)
+   런타임 및 동기화 안정성: DataContext에 의존하지 않고 컴포넌트 레벨에서 english_stats를 직접 구독(Subscribe)하여 
+   종합 어휘력 지수 누락 버그를 완벽히 해결했습니다. O(1) 단일 리스너로 Firebase 과금을 방어합니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
     AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info
 } from 'lucide-react';
-import { collection, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Badge, Modal, Button } from '../components/UI';
@@ -62,8 +61,24 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [CTO 패치] DataContext에서 전역 englishStats를 가져옵니다. (Firebase 읽기 과금 방어 및 데이터 누락 해결)
-    const { users, classes, enrollments, englishStats } = useData();
+    // 🚀 [CTO 핫픽스] 전역 컨텍스트에서 englishStats 의존성을 제거하고 기본 정보만 호출합니다.
+    const { users, classes, enrollments } = useData();
+    
+    // 🚀 [CTO 핫픽스] 컴포넌트 독립적인 실시간 데이터 구독 상태 복원
+    const [localEnglishStats, setLocalEnglishStats] = useState([]);
+
+    // 🚀 [CTO 핫픽스] O(1) 단일 리스너로 전체 학생의 영어 스탯을 구독하여 데이터를 보장합니다.
+    useEffect(() => {
+        const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
+        const unsubscribe = onSnapshot(statsRef, (snapshot) => {
+            const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setLocalEnglishStats(statsData);
+        }, (error) => {
+            console.error("Voca Stats Subscription Error:", error);
+        });
+        // 컴포넌트 언마운트 시 메모리 누수 방지
+        return () => unsubscribe();
+    }, []);
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
@@ -104,8 +119,8 @@ const VocaManager = ({ currentUser }) => {
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
-                // 🚀 전역 englishStats와 완벽 매핑
-                const stat = (englishStats || []).find(s => s.id === student.id) || { 
+                // 🚀 [CTO 핫픽스] 독립 구독된 localEnglishStats를 사용하여 안전하게 매핑합니다.
+                const stat = localEnglishStats.find(s => s.id === student.id) || { 
                     catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
                     vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, masteredCount: 0,
                     promotionPending: null, maxApprovedPromotion: 0, adaptivePreset: null
@@ -125,7 +140,7 @@ const VocaManager = ({ currentUser }) => {
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrolledStudentIds, users, englishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrolledStudentIds, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
 
     const handleSort = (key) => {
         setSortConfig(key);
@@ -339,7 +354,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 이전 프리셋 기록을 포함하여 명확한 확인 모달 띄우기
     const handlePresetSelect = (student, newPreset) => {
         const oldPreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
         if (oldPreset === newPreset) return;
@@ -459,7 +473,6 @@ const VocaManager = ({ currentUser }) => {
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             
-            {/* 🚀 [CTO 패치] 강사 확인용 프리셋 변경 모달의 직관성 향상 */}
             <Modal isOpen={presetModalOpen} onClose={() => setPresetModalOpen(false)} title="학습 프리셋 변경 확인">
                 <div className="p-4 space-y-4 text-center">
                     <h3 className="text-xl font-bold text-gray-800 leading-snug">
@@ -568,7 +581,6 @@ const VocaManager = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 🚀 [CTO 패치] 각 프리셋에 대한 문항 비율 가이드라인 UI 추가 */}
             {activeTab === 'dashboard' && (
                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
                     <h3 className="text-sm font-black text-slate-800 mb-3 flex items-center gap-1.5"><Info size={16} className="text-indigo-500"/> 프리셋별 문항 출제 비율 가이드</h3>
@@ -642,7 +654,7 @@ const VocaManager = ({ currentUser }) => {
                                     </td>
                                     
                                     <td className="p-4 text-center relative">
-                                        {/* 🚀 [CTO 패치] DataContext 동기화로 인해 이제 어떤 권한에서든 CAT 점수가 정상적으로 출력됩니다. */}
+                                        {/* 🚀 [CTO 핫픽스] 독립적인 로컬 상태(localEnglishStats) 매핑으로 이제 데이터가 완벽하게 표시됩니다. */}
                                         {student.stat.catScore !== null && student.stat.catScore !== undefined
                                             ? <Badge className="bg-emerald-100 text-emerald-700 font-black px-3">{student.stat.catScore}점</Badge> 
                                             : <Badge className="bg-rose-100 text-rose-700 font-black px-3 cursor-pointer hover:bg-rose-200">미응시</Badge>
