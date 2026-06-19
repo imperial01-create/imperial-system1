@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.0
-   동적 승급 관리: 학생의 점수가 50점 단위의 허들(Hard-Cap)에 도달하면, 강사 화면에 빨간색 경고 알림과 함께 [승인 버튼]이 활성화됩니다.
-   복잡한 다중 버튼을 모두 없애고, 상황에 맞춰 '동적(Dynamic)'으로 반응하는 단일 스마트 버튼 UI를 도입했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.1
+   운영자 가시성(Visibility) 극대화: AI가 백엔드에서 '초기 영점 조절' 스캔을 진행 중일 때, 강사 대시보드에 직관적인 
+   [AI 영점 조절 스캔 중 🔍] 애니메이션 배지를 띄우고 드롭다운 상태를 즉각 동기화하여 시스템에 대한 절대적 신뢰를 구축합니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
@@ -109,9 +109,9 @@ const VocaManager = ({ currentUser }) => {
                 const stat = localEnglishStats.find(s => s.id === student.id) || { 
                     catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
                     vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, masteredCount: 0,
-                    promotionPending: null, maxApprovedPromotion: 0
+                    promotionPending: null, maxApprovedPromotion: 0, adaptivePreset: null
                 };
-                return { ...student, stat: { ...stat, vocaPreset: stat.vocaPreset || '밸런스 모드' } };
+                return { ...student, stat };
             })
             .filter(student => student.name.includes(searchQuery));
 
@@ -158,7 +158,7 @@ const VocaManager = ({ currentUser }) => {
                         wrongNums = testData.wrongAnswerNumbers || [];
                     }
                 } else if (student.stat.catScore) {
-                    const payload = await generateDailyVocaSet(student.id, student.stat.vocaPreset);
+                    const payload = await generateDailyVocaSet(student.id, student.stat.adaptivePreset || student.stat.vocaPreset);
                     questionsList = payload.questionsForTest;
                     wordsList = payload.wordsForPrint;
                 }
@@ -351,7 +351,8 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const handlePresetSelect = (student, newPreset) => {
-        if (student.stat.vocaPreset === newPreset) return;
+        const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
+        if (currentActivePreset === newPreset) return;
         setPresetData({ studentId: student.id, name: student.name, newPreset });
         setPresetModalOpen(true);
     };
@@ -360,7 +361,12 @@ const VocaManager = ({ currentUser }) => {
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, presetData.studentId);
-            await setDoc(statRef, { vocaPreset: presetData.newPreset }, { merge: true });
+            // 🚀 [CTO 패치] 강사가 수동 개입 시, AI의 adaptivePreset(자율주행) 상태를 해제하고 강사의 설정을 최우선으로 반영
+            await setDoc(statRef, { 
+                vocaPreset: presetData.newPreset,
+                adaptivePreset: null,
+                updatedAt: serverTimestamp()
+            }, { merge: true });
             setPresetModalOpen(false);
         } catch (error) {
             alert("프리셋 변경 중 오류가 발생했습니다.");
@@ -422,16 +428,17 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 강제 조정 시, 입력한 점수까지의 모든 승급 심사를 자동으로 통과(Approve) 처리
     const handleCatSubmit = async (studentId, score) => {
         if (score === undefined || score < 0 || score > 1000) return alert("정상적인 점수(0~1000)를 입력하세요.");
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
+            // 🚀 [CTO 패치] 점수 강제 조정 시, 즉각적으로 초기 영점 조절 모드를 활성화하여 UI에 바로 반영되도록 설정
             await setDoc(statRef, { 
                 catScore: score, 
                 maxApprovedPromotion: Math.floor(score / 50) * 50, 
                 promotionPending: null,
+                adaptivePreset: '초기 영점 조절', // DB에 직접 쏴서 화면에 즉각 표시
                 updatedAt: serverTimestamp() 
             }, { merge: true });
             alert("어휘력이 성공적으로 반영되었습니다.");
@@ -443,7 +450,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 동적 승급 심사 승인 로직
     const handleApprovePromotion = async (studentId, targetScore, studentName) => {
         if (!window.confirm(`[${studentName}] 학생의 ${targetScore}점 승급 심사를 통과 처리하시겠습니까?\n이제 ${targetScore + 49}점 구간까지 자유롭게 어휘력이 상승합니다.`)) return;
         setProcessing(true);
@@ -473,7 +479,7 @@ const VocaManager = ({ currentUser }) => {
                             [{presetData.newPreset}]
                         </span>(으)로 변경하시겠습니까?
                     </h3>
-                    <p className="text-sm font-bold text-gray-500">다음 회차 시험지 생성 시점부터 해당 비율이 적용됩니다.</p>
+                    <p className="text-sm font-bold text-gray-500">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모드는 해제됩니다.</p>
                     <div className="flex gap-3 justify-center mt-6">
                         <Button variant="secondary" onClick={() => setPresetModalOpen(false)}>취소</Button>
                         <Button onClick={confirmPresetChange} disabled={processing}>
@@ -606,7 +612,6 @@ const VocaManager = ({ currentUser }) => {
                                         <th className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('vocaRetention')}>
                                             장기 기억력 {sortConfig === 'vocaRetention' && <ChevronDown size={14} className="inline text-blue-600" />}
                                         </th>
-                                        {/* 🚀 [CTO 패치] 승급 심사 관리 헤더명 변경 */}
                                         <th className="p-4 font-black text-slate-600 text-center"><Trophy size={16} className="inline mr-1 text-amber-500"/> 구간 돌파 승인</th>
                                     </>
                                 )}
@@ -617,6 +622,8 @@ const VocaManager = ({ currentUser }) => {
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
                                 const tierInfo = getTierProgress(student.stat.masteredCount || 0, student.stat.catScore || 0);
+                                // 🚀 [CTO 패치] 화면에 표시할 현재 활성 프리셋 결정 로직
+                                const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
 
                                 return (
                                 <tr key={student.id} className="hover:bg-slate-50 transition-colors">
@@ -637,7 +644,6 @@ const VocaManager = ({ currentUser }) => {
                                             ? <Badge className="bg-emerald-100 text-emerald-700 font-black px-3">{student.stat.catScore}점</Badge> 
                                             : <Badge className="bg-rose-100 text-rose-700 font-black px-3 cursor-pointer hover:bg-rose-200">미응시</Badge>
                                         }
-                                        {/* 🚀 [CTO 패치] 승급 심사에 걸린 경우 강력한 경고 UI 노출 */}
                                         {student.stat.promotionPending && (
                                             <div className="text-[10px] text-rose-600 font-black mt-1 animate-pulse flex items-center justify-center gap-0.5">
                                                 <AlertCircle size={10}/> 심사 대기 중
@@ -648,18 +654,27 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'dashboard' && (
                                         <>
                                             <td className="p-4 text-center">
-                                                <select 
-                                                    value={student.stat.vocaPreset}
-                                                    onChange={(e) => handlePresetSelect(student, e.target.value)}
-                                                    className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[140px]"
-                                                >
-                                                    <option value="밸런스 모드">밸런스 모드</option>
-                                                    <option value="오답 학습">오답 학습</option>
-                                                    <option value="망각 방어">망각 방어</option>
-                                                    <option value="기초 수리">기초 수리</option>
-                                                    <option value="스퍼트 모드">스퍼트 모드</option>
-                                                    <option value="초기 영점 조절">초기 영점 조절</option>
-                                                </select>
+                                                <div className="flex flex-col items-center justify-center gap-1">
+                                                    {/* 🚀 [CTO 패치] AI가 스캔 중임을 알려주는 강력한 시각적 알림 (가시성 극대화) */}
+                                                    {student.stat.adaptivePreset === '초기 영점 조절' && (
+                                                        <div className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-100 animate-pulse flex items-center justify-center gap-1 mb-1">
+                                                            <Search size={10} /> AI 영점 조절 스캔 중
+                                                        </div>
+                                                    )}
+                                                    
+                                                    <select 
+                                                        value={currentActivePreset}
+                                                        onChange={(e) => handlePresetSelect(student, e.target.value)}
+                                                        className="bg-slate-100 border border-slate-200 text-slate-700 font-bold text-sm rounded-lg px-2 py-1.5 outline-none focus:border-indigo-400 transition-colors cursor-pointer w-full max-w-[140px]"
+                                                    >
+                                                        <option value="밸런스 모드">밸런스 모드</option>
+                                                        <option value="오답 학습">오답 학습</option>
+                                                        <option value="망각 방어">망각 방어</option>
+                                                        <option value="기초 수리">기초 수리</option>
+                                                        <option value="스퍼트 모드">스퍼트 모드</option>
+                                                        <option value="초기 영점 조절">초기 영점 조절</option>
+                                                    </select>
+                                                </div>
                                             </td>
                                             
                                             <td className="p-4 text-center">
@@ -713,7 +728,6 @@ const VocaManager = ({ currentUser }) => {
                                                 <span className="text-xs font-black text-indigo-700">{student.stat.vocaRetention || 0}%</span>
                                             </td>
                                             
-                                            {/* 🚀 [CTO 패치] 단일 스마트 버튼으로 동적 승급 심사 처리 */}
                                             <td className="p-4 text-center">
                                                 {student.stat.promotionPending ? (
                                                     <button 
@@ -734,9 +748,9 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'cat_input' && (
                                         <td className="p-4">
                                             <div className="flex gap-2 items-center">
-                                                <input type="number" max="1000" min="0" placeholder="점수" value={catInput[student.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-20 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
+                                                <input type="number" max="1000" min="0" placeholder="점수 입력" value={catInput[student.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-24 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
                                                 <span className="font-bold text-slate-400 mr-2">/ 1000</span>
-                                                <button onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">초기화 반영</button>
+                                                <button onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">반영</button>
                                             </div>
                                         </td>
                                     )}
