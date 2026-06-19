@@ -1,5 +1,6 @@
 /* [서비스 가치] 학원의 오늘 하루 스케줄과 출결을 관제하는 상황실입니다.
-   (🚀 CTO 패치: 한국 시간(KST) 자정 리셋 동기화, 강사 권한별 뷰어 분리, 클래스 단위 UI 그룹화 적용) */
+   (🚀 CTO 패치: 한국 시간(KST) 자정 리셋 동기화, 강사 권한별 뷰어 분리, 클래스 단위 UI 그룹화 적용.
+   더불어 삭제된 학생의 찌꺼기 데이터가 '알수없음'으로 뜨는 현상을 막기 위한 방탄 필터링(Bulletproof Filtering)이 적용되었습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
@@ -46,7 +47,7 @@ const ScheduleControlTower = ({ currentUser }) => {
         return () => unsubAtt();
     }, [todayDateStr]);
 
-    // 🚀 [CTO 패치] 데이터를 '반(Class)' 단위로 그룹화하고, 권한에 맞게 필터링
+    // 🚀 [CTO 패치] 데이터를 '반(Class)' 단위로 그룹화하고, 권한 및 무결성에 맞게 필터링
     const radarData = useMemo(() => {
         const classGroups = {};
         const emergencyList = [];
@@ -65,10 +66,15 @@ const ScheduleControlTower = ({ currentUser }) => {
             if (!todaySch) return;
 
             const student = users.find(u => u.id === enroll.studentId);
+            
+            // 🚀 [CTO 패치] 방탄 필터링 (Bulletproof Filtering)
+            // users DB에 존재하지 않는 학생(연쇄 삭제 전의 유령 데이터)은 즉시 스킵하여 '알수없음' 카드를 원천 차단합니다.
+            if (!student) return;
+
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             
             // 3. 검색어 필터링
-            if (searchQuery && !student?.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
+            if (searchQuery && !student.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
 
             // 4. 출결 상태 계산
             const hasAttended = attendances.some(a => a.studentId === enroll.studentId);
@@ -82,8 +88,8 @@ const ScheduleControlTower = ({ currentUser }) => {
 
             const studentData = {
                 studentId: enroll.studentId,
-                studentName: student?.name || '알수없음',
-                phone: student?.phone || '-',
+                studentName: student.name, // 방어 로직 덕분에 이제 무조건 실제 이름이 보장됩니다.
+                phone: student.phone || '-',
                 status: status,
                 enrollId: enroll.id
             };

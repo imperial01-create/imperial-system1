@@ -1,6 +1,6 @@
-/* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제하고, 
-   최고 관리자 전용 보안 및 시스템 데이터 마이그레이션 스크립트를 안전하게 보호합니다. 
-   (🚀 CTO 패치: 국/영/과 대통합에 따른 UI 텍스트 간소화 반영) */
+/* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제합니다.
+   (🚀 CTO 패치: 시험기간 다중 교실 배정(Resource Allocation) 알고리즘 도입을 위한 
+   '강의실별 수용 인원(Capacity)' 데이터베이스 마이그레이션 및 UI 탑재 완료) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -9,14 +9,14 @@ import {
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
   AlertTriangle, Database, School, Trash2, Star, Search,
-  ToggleRight, ToggleLeft, Layers
+  ToggleRight, ToggleLeft, Layers, Users
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [대분류 및 포함 세부 과목 안내용 데이터 (통합 버전)]
+// 대분류 및 포함 세부 과목 안내용 데이터
 const DEPT_INFO = [
     { 
         id: 'DEPT_KOR', label: '국어과', color: 'rose',
@@ -57,9 +57,11 @@ const SettingsManager = ({ currentUser }) => {
         academyName: '', businessNumber: '', phone: '', address: '', classrooms: [], subjects: []
     });
 
-    const [newClassroom, setNewClassroom] = useState('');
+    // 🚀 [CTO 패치] 강의실명 + 수용 인원 분리 상태 관리
+    const [newClassroomName, setNewClassroomName] = useState('');
+    const [newClassroomCapacity, setNewClassroomCapacity] = useState('');
     
-    // 🚀 부서(대분류) 활성화 상태
+    // 부서(대분류) 활성화 상태
     const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -79,7 +81,9 @@ const SettingsManager = ({ currentUser }) => {
                     setSettings({
                         academyName: data.academyName || '', businessNumber: data.businessNumber || '',
                         phone: data.phone || '', address: data.address || '',
-                        classrooms: data.classrooms || [], subjects: data.subjects || []
+                        // 🚀 [CTO 패치] 기존 단순 문자열 데이터를 객체(Object) 포맷으로 하위 호환 자동 마이그레이션
+                        classrooms: (data.classrooms || []).map(c => typeof c === 'string' ? { name: c, capacity: 10 } : c), 
+                        subjects: data.subjects || []
                     });
                 }
                 
@@ -117,7 +121,7 @@ const SettingsManager = ({ currentUser }) => {
             batch.set(deptRef, { active: activeDepartments, updatedAt: serverTimestamp() }, { merge: true });
             
             await batch.commit();
-            alert("✅ 학원 환경설정이 성공적으로 저장되었습니다.\n\n등록하신 강의실 및 부서(과목) 리스트는 이제 전체 시스템의 드롭다운 메뉴로 자동 연동됩니다.");
+            alert("✅ 학원 환경설정이 성공적으로 저장되었습니다.\n\n등록하신 강의실(인원 포함) 및 부서 리스트는 이제 전체 시스템으로 자동 연동됩니다.");
         } catch (error) { 
             alert("저장 중 오류가 발생했습니다: " + error.message); 
         } finally { 
@@ -125,20 +129,34 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
-    const addArrayItem = (field, value, setter) => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        if (settings[field].includes(trimmed)) return alert("이미 등록된 항목입니다.");
-        setSettings(prev => ({ ...prev, [field]: [...prev[field], trimmed] }));
-        setter('');
+    // 🚀 [CTO 패치] 새로운 강의실 등록 로직 (수용인원 포함)
+    const addClassroom = () => {
+        const name = newClassroomName.trim();
+        const cap = parseInt(newClassroomCapacity) || 0;
+        
+        if (!name) return alert("강의실 이름을 입력해주세요.");
+        if (cap <= 0) return alert("올바른 수용 인원(명)을 숫자로 입력해주세요.");
+        
+        // 중복 검사 (문자열 호환)
+        if (settings.classrooms.some(c => (typeof c === 'string' ? c : c.name) === name)) {
+            return alert("이미 등록된 강의실 이름입니다.");
+        }
+        
+        setSettings(prev => ({
+            ...prev,
+            classrooms: [...prev.classrooms, { name: name, capacity: cap }]
+        }));
+        
+        setNewClassroomName('');
+        setNewClassroomCapacity('');
     };
 
-    const removeArrayItem = (field, index) => {
-        if (!window.confirm("항목을 삭제하시겠습니까?\n이미 이 항목을 사용 중인 기존 데이터에는 영향을 주지 않습니다.")) return;
+    const removeClassroom = (index) => {
+        if (!window.confirm("이 강의실을 목록에서 삭제하시겠습니까?")) return;
         setSettings(prev => { 
-            const arr = [...prev[field]]; 
+            const arr = [...prev.classrooms]; 
             arr.splice(index, 1); 
-            return { ...prev, [field]: arr }; 
+            return { ...prev, classrooms: arr }; 
         });
     };
 
@@ -354,27 +372,60 @@ const SettingsManager = ({ currentUser }) => {
                             </div>
                         </div>
 
-                        {/* 1-2. 강의실 및 부서 목록 관리 */}
+                        {/* 1-2. 강의실 및 수용 인원 목록 관리 */}
                         <div className="space-y-6">
                             <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
                                 <h2 className="text-xl font-bold text-gray-900 border-b pb-4 flex items-center gap-2">
-                                    <DoorOpen className="text-emerald-600"/> 강의실 목록 관리
+                                    <DoorOpen className="text-emerald-600"/> 강의실 및 수용 인원 관리
                                 </h2>
-                                <div className="flex gap-2">
-                                    <input type="text" className="flex-1 border-2 border-gray-200 p-3 rounded-xl focus:border-emerald-500 outline-none font-bold" value={newClassroom} onChange={e => setNewClassroom(e.target.value)} onKeyDown={e => e.key === 'Enter' && addArrayItem('classrooms', newClassroom, setNewClassroom)} placeholder="예: 301호, 대강의실" />
-                                    <Button onClick={() => addArrayItem('classrooms', newClassroom, setNewClassroom)} className="bg-emerald-600 hover:bg-emerald-700 border-0"><Plus size={20}/></Button>
-                                </div>
-                                <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto custom-scrollbar">
-                                    {settings.classrooms.length === 0 && <span className="text-sm text-gray-400 font-bold">등록된 강의실이 없습니다.</span>}
-                                    {settings.classrooms.map((room, idx) => (
-                                        <div key={idx} className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-3 py-1.5 rounded-lg flex items-center gap-2 text-sm font-bold">
-                                            {room} <button onClick={() => removeArrayItem('classrooms', idx)} className="text-emerald-400 hover:text-emerald-700 transition-colors"><X size={14}/></button>
+                                
+                                {/* 🚀 [CTO 패치] 수용 인원 입력을 위한 복합 폼 UI */}
+                                <div className="flex flex-col sm:flex-row gap-2 bg-gray-50 p-3 rounded-xl border border-gray-100">
+                                    <input 
+                                        type="text" 
+                                        className="flex-1 border-2 border-gray-200 p-2.5 rounded-lg focus:border-emerald-500 outline-none font-bold text-sm" 
+                                        value={newClassroomName} 
+                                        onChange={e => setNewClassroomName(e.target.value)} 
+                                        placeholder="강의실명 (예: 1관 301호)" 
+                                    />
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center bg-white border-2 border-gray-200 rounded-lg overflow-hidden focus-within:border-emerald-500 transition-colors">
+                                            <Users size={16} className="text-gray-400 ml-3" />
+                                            <input 
+                                                type="number" 
+                                                min="1"
+                                                className="w-20 p-2.5 outline-none font-black text-sm text-center text-emerald-700 bg-transparent" 
+                                                value={newClassroomCapacity} 
+                                                onChange={e => setNewClassroomCapacity(e.target.value)} 
+                                                placeholder="인원수" 
+                                                onKeyDown={e => e.key === 'Enter' && addClassroom()}
+                                            />
+                                            <span className="text-xs font-bold text-gray-400 pr-3">명</span>
                                         </div>
-                                    ))}
+                                        <Button onClick={addClassroom} className="bg-emerald-600 hover:bg-emerald-700 border-0 h-[42px] px-4"><Plus size={18}/></Button>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex flex-wrap gap-2.5 max-h-48 overflow-y-auto custom-scrollbar p-1">
+                                    {settings.classrooms.length === 0 && <div className="text-sm text-gray-400 font-bold w-full text-center py-4 border-2 border-dashed rounded-xl">등록된 강의실이 없습니다.</div>}
+                                    {settings.classrooms.map((room, idx) => {
+                                        const rName = typeof room === 'string' ? room : room.name;
+                                        const rCap = typeof room === 'string' ? '미설정' : (room.capacity || 0);
+                                        return (
+                                        <div key={idx} className="bg-emerald-50 border border-emerald-200 pl-3 pr-1 py-1.5 rounded-xl flex items-center justify-between gap-3 shadow-sm flex-1 min-w-[200px] max-w-[250px]">
+                                            <span className="text-sm font-black text-gray-800 truncate">{rName}</span>
+                                            <div className="flex items-center gap-1 shrink-0">
+                                                <span className="bg-white text-emerald-700 border border-emerald-100 px-2 py-1 rounded-md text-[11px] font-black shadow-sm">
+                                                    최대 {rCap}명
+                                                </span>
+                                                <button onClick={() => removeClassroom(idx)} className="text-gray-400 hover:bg-rose-100 hover:text-rose-500 p-1.5 rounded-lg transition-colors"><Trash2 size={14}/></button>
+                                            </div>
+                                        </div>
+                                    )})}
                                 </div>
                             </div>
 
-                            {/* 🚀 1-3. 계층형 부서(대과목) 관리 UI - 세부과목 가시화 */}
+                            {/* 1-3. 계층형 부서(대과목) 관리 UI - 세부과목 가시화 */}
                             <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-gray-200 space-y-6">
                                 <div className="border-b pb-4">
                                     <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2 mb-2">
@@ -397,7 +448,7 @@ const SettingsManager = ({ currentUser }) => {
                                                     {isActive ? <ToggleRight size={32} className={`text-${dept.color}-600`} /> : <ToggleLeft size={32} className="text-gray-300" />}
                                                 </div>
                                                 
-                                                {/* 🚀 세부 과목 목록 노출 */}
+                                                {/* 세부 과목 목록 노출 */}
                                                 <div className={`flex flex-wrap gap-1.5 ${isActive ? 'opacity-100' : 'opacity-40 grayscale'}`}>
                                                     {dept.subjects.map(subj => (
                                                         <span key={subj} className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded-md border ${isActive ? `bg-white text-${dept.color}-700 border-${dept.color}-200` : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
