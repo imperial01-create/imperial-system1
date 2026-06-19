@@ -1,17 +1,18 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: Voca 출제/관리 기능 복구 및 CAT 시험 UI 완전 제거) */
+   (🚀 CTO 패치: Voca 출제/관리 기능 복구, CAT 시험 UI 완전 제거 및 
+   '실시간 운영 현황'을 '출결 관리(AttendanceManager)'로 통합 격상) */
 import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2
+  Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2, UserCheck
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
- 
+
 import { DataProvider, useData } from './contexts/DataContext';
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -29,7 +30,10 @@ const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticR
 const StudentExamList = React.lazy(() => import('./features/StudentExamList'));
 const ExpenseManager = React.lazy(() => import('./features/ExpenseManager'));
 const FinancialDashboard = React.lazy(() => import('./features/FinancialDashboard'));
-const ScheduleControlTower = React.lazy(() => import('./features/ScheduleControlTower'));
+
+// 🚀 [CTO 패치] ScheduleControlTower ➔ AttendanceManager 로 격상 교체
+const AttendanceManager = React.lazy(() => import('./features/AttendanceManager'));
+
 const SettingsManager = React.lazy(() => import('./features/SettingsManager'));
 const MessageCenter = React.lazy(() => import('./features/MessageCenter'));
 const CollegeNavigator = React.lazy(() => import('./features/CollegeNavigator'));
@@ -355,7 +359,10 @@ const Dashboard = ({ currentUser }) => {
 
     const DASHBOARD_CARDS = [
         { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'], desc: '신규 원생 상담 데이터를 입력하고 초기 세팅을 진행합니다.', color: 'text-indigo-600', bg: 'bg-indigo-100', hoverBg: 'group-hover:bg-indigo-600' },
-        { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '오늘의 시간표와 학생들의 등원/지각 현황을 실시간으로 추적합니다.', color: 'text-emerald-600', bg: 'bg-emerald-100', hoverBg: 'group-hover:bg-emerald-600' },
+        
+        // 🚀 [CTO 패치] 출결 관리(AttendanceManager)로 격상 및 아이콘, 설명 업데이트
+        { path: '/attendance', label: '출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '일별 운영 관제와 원생별 출결 통계 및 시험결석을 통합 관리합니다.', color: 'text-emerald-600', bg: 'bg-emerald-100', hoverBg: 'group-hover:bg-emerald-600' },
+        
         { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'], desc: '학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.', color: 'text-blue-600', bg: 'bg-blue-100', hoverBg: 'group-hover:bg-blue-600' },
         { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '법인카드 및 개인 지출 내역을 등록하고 증빙을 업로드합니다.', color: 'text-teal-600', bg: 'bg-teal-100', hoverBg: 'group-hover:bg-teal-600' },
         { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'], desc: '학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.', color: 'text-purple-600', bg: 'bg-purple-100', hoverBg: 'group-hover:bg-purple-600' },
@@ -422,7 +429,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const menuItems = [
     { path: '/dashboard', label: '대시보드', icon: Home, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
-    { path: '/schedule', label: '실시간 운영 현황', icon: Activity, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
+    
+    // 🚀 [CTO 패치] 메뉴 아이콘 및 URL 업데이트
+    { path: '/attendance', label: '출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
+    
     { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
     { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
     { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
@@ -442,7 +452,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
     { 
   path: '/voca', 
-  /* 🚀 [UX 심리학] 학부모와 학생 모두에게 직관적이고 통일된 '오늘의 영단어' 명칭 사용 */
   label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', 
   icon: BookText, 
   roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], 
@@ -512,7 +521,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
-                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/schedule" element={<ScheduleControlTower currentUser={currentUser} />} />}
+                        
+                        {/* 🚀 [CTO 패치] 출결 관리 라우팅 반영 */}
+                        {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/attendance" element={<AttendanceManager currentUser={currentUser} />} />}
+                        
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
                         <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -530,7 +542,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-{/* 🚀 [Zero Trust Security] 권한에 따른 컴포넌트 렌더링 강제 분리 */}
+
 <Route path="/voca" element={
     ['student', 'parent'].includes(currentUser.role) 
         ? <StudentVocaDaily currentUser={currentUser} /> 
