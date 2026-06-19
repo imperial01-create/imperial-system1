@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.0 (Bulletproof Render)
-   렌더링 무결성: useMemo 캐싱(Stale Closure)으로 인해 점수 데이터가 업데이트되지 않던 치명적 버그를 원천 차단했습니다. 
-   아카데미 유니버스와 동일하게 렌더링 시점에 글로벌 englishStats를 직접 실시간 참조(Inline Lookup)하여 오차율 0%를 달성합니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.1 (Interactive Sorting)
+   데이터 관제 최적화: '종합 어휘력 지수' 헤더 클릭 시 즉각적으로 점수 내림차순 정렬을 수행하는 O(n log n) 알고리즘을 추가했습니다. 
+   어떤 메뉴 탭에서든 우수 학생과 취약 학생을 직관적으로 분류(Filtering)하여 밀착 관리가 가능해집니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -96,7 +96,6 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [availableClasses, selectedClassId]);
 
-    // 🚀 [CTO 패치] 데이터를 stat에 가둬두는(캐싱하는) 로직을 완전히 폐기하고 순수하게 학생 필터링만 수행합니다!
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         
@@ -104,9 +103,9 @@ const VocaManager = ({ currentUser }) => {
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .filter(student => student.name.includes(searchQuery));
 
-        if (activeTab === 'analytics' && sortConfig) {
+        // 🚀 [CTO 패치] 특정 탭(analytics) 제한을 풀고, 어휘력 지수 클릭 시 모든 탭에서 정렬이 작동하도록 수정
+        if (sortConfig) {
             filteredStudents.sort((a, b) => {
-                // 정렬 시에도 글로벌 데이터를 즉시 참조하여 오차를 없앱니다.
                 const statA = (englishStats || []).find(s => s.id === a.id) || {};
                 const statB = (englishStats || []).find(s => s.id === b.id) || {};
                 
@@ -115,14 +114,20 @@ const VocaManager = ({ currentUser }) => {
                 return valB - valA; 
             });
         } else {
+            // 정렬이 해제되면 기본 가나다순 정렬로 복귀
             filteredStudents.sort((a, b) => a.name.localeCompare(b.name));
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrolledStudentIds, users, englishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrolledStudentIds, users, englishStats, searchQuery, sortConfig]);
 
+    // 🚀 [CTO 패치] 정렬 토글(Toggle) 기능 추가 (내림차순 <-> 기본 이름순)
     const handleSort = (key) => {
-        setSortConfig(key);
+        if (sortConfig === key) {
+            setSortConfig(null); 
+        } else {
+            setSortConfig(key);
+        }
     };
 
     const preparePrintData = async (type, targetStudentId = null) => {
@@ -134,7 +139,6 @@ const VocaManager = ({ currentUser }) => {
                 : classStudents;
 
             for (const student of targetStudents) {
-                // 🚀 인쇄 시점에도 글로벌 데이터를 실시간으로 읽어옵니다.
                 const stat = (englishStats || []).find(s => s.id === student.id) || {};
                 const sessionNum = stat.vocaSession || 1;
                 const sessionId = `test_${student.id}_s${sessionNum}`;
@@ -591,7 +595,14 @@ const VocaManager = ({ currentUser }) => {
                         <thead className="bg-slate-50 border-b border-slate-200 whitespace-nowrap">
                             <tr>
                                 <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
-                                <th className="p-4 font-black text-slate-600 text-center">종합 어휘력 지수</th>
+                                
+                                {/* 🚀 [CTO 패치] 클릭 가능한 정렬 헤더 UI 적용 */}
+                                <th 
+                                    className="p-4 font-black text-slate-600 text-center cursor-pointer hover:bg-slate-200 transition-colors group" 
+                                    onClick={() => handleSort('catScore')}
+                                >
+                                    종합 어휘력 지수 {sortConfig === 'catScore' && <ChevronDown size={14} className="inline text-blue-600" />}
+                                </th>
                                 
                                 {activeTab === 'dashboard' && (
                                     <>
@@ -621,7 +632,6 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                // 🚀 [CTO 패치] useMemo 캐시를 우회하고 렌더링 순간에 글로벌 데이터를 즉각 수혈(Lookup)합니다!
                                 const stat = (englishStats || []).find(s => s.id === student.id) || {};
                                 const catScore = Number(stat.catScore) || 0;
                                 const masteredCount = Number(stat.masteredCount) || 0;
@@ -643,7 +653,6 @@ const VocaManager = ({ currentUser }) => {
                                     </td>
                                     
                                     <td className="p-4 text-center align-middle">
-                                        {/* 🚀 [CTO 패치] 외부 UI 라이브러리의 렌더링 오류를 막기 위해 100% 순수 HTML 방탄 태그(Span)로 직접 렌더링합니다! */}
                                         {catScore > 0 ? (
                                             <span className="inline-flex bg-emerald-100 text-emerald-700 font-black px-3 py-1.5 text-[13px] rounded-lg shadow-sm border border-emerald-200">
                                                 {catScore}점
