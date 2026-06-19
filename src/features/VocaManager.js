@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.4 (Final Sync)
-   데이터 정합성(Single Source of Truth): DataContext의 글로벌 englishStats를 직접 구독하여 
-   아카데미 유니버스와 100% 동일한 어휘력 지수를 오차 없이 즉각적으로 렌더링합니다. 불필요한 Firebase 읽기(Read) 비용을 원천 차단했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v5.5 (Final Rendering Fix)
+   렌더링 무결성: DataContext의 글로벌 스탯을 매핑할 때, 아카데미 유니버스와 100% 동일한 Number 강제 변환 및 
+   렌더링 조건(catScore > 0)을 적용하여, 타입 충돌로 인해 점수 박스가 투명해지거나 증발하는 UI 버그를 완벽하게 차단했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -15,7 +15,6 @@ import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } f
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 프리셋 비율 가이드 정보
 const PRESET_GUIDE = [
     { name: '밸런스 모드', desc: '신규 50% / 복습 30% / 오답 15% / 패시브 5%', color: 'text-indigo-600', bg: 'bg-indigo-50' },
     { name: '오답 학습', desc: '신규 15% / 복습 20% / 오답 60% / 패시브 5%', color: 'text-rose-600', bg: 'bg-rose-50' },
@@ -61,7 +60,7 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [CTO 최적화] 로컬 리스너를 완전히 삭제하고, 원장님이 세팅하신 DataContext의 englishStats를 직접 가져옵니다.
+    // DataContext에서 글로벌 데이터를 정확하게 수신합니다.
     const { users, classes, enrollments, englishStats } = useData();
 
     const [selectedClassId, setSelectedClassId] = useState('');
@@ -103,9 +102,9 @@ const VocaManager = ({ currentUser }) => {
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
-                // 🚀 [CTO 패치] 글로벌 englishStats를 기반으로 완벽 매핑
+                // 🚀 글로벌 englishStats 매핑
                 const stat = (englishStats || []).find(s => s.id === student.id) || { 
-                    catScore: null, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
+                    catScore: 0, vocaSession: 1, totalWords: 0, accuracy: 0, vocaPreset: '밸런스 모드',
                     vocaProgress: 0, vocaComprehension: 0, vocaRetention: 0, masteredCount: 0,
                     promotionPending: null, maxApprovedPromotion: 0, adaptivePreset: null
                 };
@@ -155,7 +154,7 @@ const VocaManager = ({ currentUser }) => {
                         isSessionCompleted = true;
                         wrongNums = testData.wrongAnswerNumbers || [];
                     }
-                } else if (student.stat.catScore) {
+                } else if (student.stat.catScore > 0) {
                     const payload = await generateDailyVocaSet(student.id, student.stat.adaptivePreset || student.stat.vocaPreset);
                     questionsList = payload.questionsForTest;
                     wordsList = payload.wordsForPrint;
@@ -565,7 +564,6 @@ const VocaManager = ({ currentUser }) => {
                 )}
             </div>
 
-            {/* 🚀 [CTO 패치] 각 프리셋에 대한 문항 비율 가이드라인 UI 추가 */}
             {activeTab === 'dashboard' && (
                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
                     <h3 className="text-sm font-black text-slate-800 mb-3 flex items-center gap-1.5"><Info size={16} className="text-indigo-500"/> 프리셋별 문항 출제 비율 가이드</h3>
@@ -621,7 +619,10 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                const tierInfo = getTierProgress(student.stat.masteredCount || 0, student.stat.catScore || 0);
+                                // 🚀 [CTO 패치] 무결점 숫자 변환 로직 적용
+                                const catScore = Number(student.stat.catScore) || 0;
+                                const masteredCount = Number(student.stat.masteredCount) || 0;
+                                const tierInfo = getTierProgress(masteredCount, catScore);
                                 const currentActivePreset = student.stat.adaptivePreset || student.stat.vocaPreset || '밸런스 모드';
 
                                 return (
@@ -639,12 +640,14 @@ const VocaManager = ({ currentUser }) => {
                                     </td>
                                     
                                     <td className="p-4 text-center relative">
-                                        {student.stat.catScore !== null && student.stat.catScore !== undefined
-                                            ? <Badge className="bg-emerald-100 text-emerald-700 font-black px-3">{student.stat.catScore}점</Badge> 
-                                            : <Badge className="bg-rose-100 text-rose-700 font-black px-3 cursor-pointer hover:bg-rose-200">미응시</Badge>
-                                        }
+                                        {/* 🚀 [CTO 패치] 아카데미 유니버스와 100% 동일한 안전한 렌더링 로직 적용 */}
+                                        {catScore > 0 ? (
+                                            <Badge className="bg-emerald-100 text-emerald-700 font-black px-3 py-1 text-sm shadow-sm">{catScore}점</Badge> 
+                                        ) : (
+                                            <Badge className="bg-rose-100 text-rose-700 font-black px-3 py-1 text-sm cursor-pointer hover:bg-rose-200">미응시</Badge>
+                                        )}
                                         {student.stat.promotionPending && (
-                                            <div className="text-[10px] text-rose-600 font-black mt-1 animate-pulse flex items-center justify-center gap-0.5">
+                                            <div className="text-[10px] text-rose-600 font-black mt-1.5 animate-pulse flex items-center justify-center gap-0.5">
                                                 <AlertCircle size={10}/> 심사 대기 중
                                             </div>
                                         )}
