@@ -1,6 +1,6 @@
 /* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v4.9
-   운영 안정성: 프리셋 변경 시 실수를 방지하는 고급 확인 모달(Confirmation Modal)을 추가했습니다. 
-   비용 최적화: 강사 접속 시 컬렉션 전체(list)를 한 번만 onSnapshot으로 구독하여, N+1 과금을 방어하고 점수가 0.1초 만에 화면에 렌더링되도록 버그를 수정했습니다. */
+   운영 안정성: '초기 영점 조절' 모드를 강사가 수동으로도 지정할 수 있도록 옵션을 추가했으며, 
+   프리셋 변경 시 실수를 방지하는 고급 확인 모달(Confirmation Modal)이 작동합니다. */
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
@@ -14,7 +14,6 @@ import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } f
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘 (CAT 점수 연동)
 const getTierProgress = (masteredCount = 0, catScore = 0) => {
     const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
     const totalEstimatedWords = baseVocab + masteredCount;
@@ -54,7 +53,6 @@ const VocaManager = ({ currentUser }) => {
     const { users, classes, enrollments } = useData();
     const [localEnglishStats, setLocalEnglishStats] = useState([]);
 
-    // 🚀 [CTO 패치] 보안 규칙의 list 허용(isStaff)을 활용하여 전체 컬렉션을 한 번만 구독합니다. (N+1 문제 원천 차단 및 즉각 반영)
     useEffect(() => {
         const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
         const unsubscribe = onSnapshot(statsRef, (snapshot) => {
@@ -78,9 +76,15 @@ const VocaManager = ({ currentUser }) => {
     const [gradingModalOpen, setGradingModalOpen] = useState(false);
     const [gradingData, setGradingData] = useState({ studentId: '', name: '', sessionNumber: 1, wrongAnswers: [] });
 
-    // 🚀 [CTO 패치] 프리셋 변경 전용 모달 상태 추가
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetData, setPresetData] = useState({ studentId: '', name: '', newPreset: '' });
+
+    const enrolledStudentIds = useMemo(() => {
+        if (!selectedClassId) return [];
+        return enrollments
+            .filter(e => e.classId === selectedClassId && e.status === 'active')
+            .map(e => e.studentId);
+    }, [selectedClassId, enrollments]);
 
     const availableClasses = useMemo(() => {
         let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
@@ -98,10 +102,7 @@ const VocaManager = ({ currentUser }) => {
 
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
-        const enrolledStudentIds = enrollments
-            .filter(e => e.classId === selectedClassId && e.status === 'active')
-            .map(e => e.studentId);
-
+        
         let filteredStudents = users
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
             .map(student => {
@@ -116,7 +117,6 @@ const VocaManager = ({ currentUser }) => {
 
         if (activeTab === 'analytics' && sortConfig) {
             filteredStudents.sort((a, b) => {
-                // 정렬 시 진도율(vocaProgress)도 추정 어휘량(totalMastered) 기준으로 정렬합니다.
                 const valA = sortConfig === 'vocaProgress' ? getTierProgress(a.stat.masteredCount || 0, a.stat.catScore || 0).totalMastered : (a.stat[sortConfig] || 0);
                 const valB = sortConfig === 'vocaProgress' ? getTierProgress(b.stat.masteredCount || 0, b.stat.catScore || 0).totalMastered : (b.stat[sortConfig] || 0);
                 return valB - valA; 
@@ -126,7 +126,7 @@ const VocaManager = ({ currentUser }) => {
         }
 
         return filteredStudents;
-    }, [selectedClassId, enrollments, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
+    }, [selectedClassId, enrolledStudentIds, users, localEnglishStats, searchQuery, activeTab, sortConfig]);
 
     const handleSort = (key) => {
         setSortConfig(key);
@@ -213,7 +213,6 @@ const VocaManager = ({ currentUser }) => {
                     .answer-blank { border-bottom: 1px solid #94a3b8; width: 100%; height: 20px; display: inline-block; }
                     .advanced-row td { border-top: 2px solid #334155; }
                     
-                    /* 🚀 [CTO 패치] 태그 색상 분리 인쇄용 CSS */
                     .rich-info { margin-top: 4px; font-size: 11px; color: #475569; line-height: 1.4; font-weight: 500; }
                     .rich-info span.tag { font-weight: bold; margin-right: 4px; display: inline-block; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
                     .tag.synonym { color: #059669; background-color: #d1fae5; border: 1px solid #a7f3d0; } 
@@ -351,21 +350,18 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] 프리셋 변경 시 확인 모달 호출 함수
     const handlePresetSelect = (student, newPreset) => {
-        if (student.stat.vocaPreset === newPreset) return; // 같은 프리셋이면 무시
+        if (student.stat.vocaPreset === newPreset) return;
         setPresetData({ studentId: student.id, name: student.name, newPreset });
         setPresetModalOpen(true);
     };
 
-    // 🚀 [CTO 패치] 모달에서 '변경 확정' 클릭 시 실행
     const confirmPresetChange = async () => {
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, presetData.studentId);
             await setDoc(statRef, { vocaPreset: presetData.newPreset }, { merge: true });
             setPresetModalOpen(false);
-            // alert(`${presetData.name} 학생의 프리셋이 [${presetData.newPreset}]로 변경되었습니다.`);
         } catch (error) {
             alert("프리셋 변경 중 오류가 발생했습니다.");
         } finally {
@@ -459,11 +455,14 @@ const VocaManager = ({ currentUser }) => {
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             
-            {/* 🚀 [CTO 패치] 프리셋 변경 확인 모달 */}
             <Modal isOpen={presetModalOpen} onClose={() => setPresetModalOpen(false)} title="학습 프리셋 변경 확인">
                 <div className="p-4 space-y-4 text-center">
                     <h3 className="text-xl font-bold text-gray-800 leading-snug">
-                        [{presetData.name}] 학생의 학습 프리셋을<br/> <span className="text-indigo-600 font-black">[{presetData.newPreset}]</span>(으)로 변경하시겠습니까?
+                        [{presetData.name}] 학생의 학습 프리셋을<br/> 
+                        {/* 🚀 [CTO 패치] 영점 조절 모드를 특별하게 하이라이트 */}
+                        <span className={`font-black ${presetData.newPreset === '초기 영점 조절' ? 'text-rose-600 bg-rose-50 px-2 py-1 rounded' : 'text-indigo-600'}`}>
+                            [{presetData.newPreset}]
+                        </span>(으)로 변경하시겠습니까?
                     </h3>
                     <p className="text-sm font-bold text-gray-500">다음 회차 시험지 생성 시점부터 해당 비율이 적용됩니다.</p>
                     <div className="flex gap-3 justify-center mt-6">
@@ -475,7 +474,6 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* 채점 모달 */}
             <Modal isOpen={gradingModalOpen} onClose={() => setGradingModalOpen(false)} title={`${gradingData.name} 학생 채점 (제 ${gradingData.sessionNumber}회차)`} className="max-w-3xl w-full">
                 <div className="p-4 space-y-6">
                     <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 flex items-start gap-3">
@@ -608,7 +606,6 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                // 🚀 [CTO 패치] 하이브리드 어휘량 추정 함수 연동
                                 const tierInfo = getTierProgress(student.stat.masteredCount || 0, student.stat.catScore || 0);
 
                                 return (
@@ -635,7 +632,7 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'dashboard' && (
                                         <>
                                             <td className="p-4 text-center">
-                                                {/* 🚀 [CTO 패치] 변경 이벤트 대신 모달 창 트리거 연결 */}
+                                                {/* 🚀 [CTO 패치] 영점 조절 모드 옵션 추가 및 모달 연동 */}
                                                 <select 
                                                     value={student.stat.vocaPreset}
                                                     onChange={(e) => handlePresetSelect(student, e.target.value)}
@@ -646,6 +643,7 @@ const VocaManager = ({ currentUser }) => {
                                                     <option value="망각 방어">망각 방어</option>
                                                     <option value="기초 수리">기초 수리</option>
                                                     <option value="스퍼트 모드">스퍼트 모드</option>
+                                                    <option value="초기 영점 조절">초기 영점 조절</option>
                                                 </select>
                                             </td>
                                             

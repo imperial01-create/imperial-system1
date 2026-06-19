@@ -1,18 +1,21 @@
 /* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture & Continuous SRS)
-   🚀 업데이트 1: '영원한 마스터' 모순을 해결하기 위해 Continuous SRS(1,3,7,14,30,60,120일) 간격 반복 알고리즘을 도입했습니다.
-   🚀 업데이트 2: 복습/오답 단어를 불러올 때 개별 getDoc이 아닌 Chunk 단위 'in' 쿼리를 사용하여 Firebase Read 과금을 90% 이상 절감합니다. */
+   🚀 업데이트 3 (영점 조절 엔진): 신규 원생의 '어휘 구멍'을 메우기 위해 [초기 영점 조절] 프리셋을 신설했습니다. 
+   Z1(딥 스캔), Z2(의심 스캔), Z3(타겟 진도)로 구역을 분할하며, Z1/Z2 단어는 한 번만 맞춰도 즉시 마스터 처리(Fast-Track)하여 학습 지루함을 없앱니다. 
+   약 10회차 진행 후 자동으로 '밸런스 모드'로 정상화(Normalization)됩니다. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 [CTO 패치] '초기 영점 조절' 프리셋 추가 (비율: 타겟 50%, 의심스캔 40%, 딥스캔 10%)
 export const VOCA_PRESETS = {
     '밸런스 모드':  { wrong: 15, review: 30, passive: 5, new: 50 },  
     '오답 학습':    { wrong: 60, review: 20, passive: 5, new: 15 },  
     '망각 방어':    { wrong: 40, review: 50, passive: 10, new: 0 },  
     '기초 수리':    { wrong: 10, review: 20, passive: 40, new: 30 }, 
-    '스퍼트 모드':  { wrong: 10, review: 15, passive: 5, new: 70 }   
+    '스퍼트 모드':  { wrong: 10, review: 15, passive: 5, new: 70 },
+    '초기 영점 조절': { wrong: 0, review: 0, z1_deep: 10, z2_scan: 40, z3_target: 50 } // 신규 등록자 전용
 };
 
 const TOTAL_WORDS = 40; 
@@ -108,12 +111,15 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const vocaSession = statData.vocaSession || 1;
         const catScore = Math.max(0, Math.min(1000, statData.catScore || 100)); 
         
-        const presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
+        // 🚀 만약 첫 세션(1회차)이고 프리셋이 지정되지 않았다면 강제로 '초기 영점 조절' 모드 가동
+        let presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
+        if (vocaSession === 1 && !statData.adaptivePreset && !requestedPreset) {
+            presetName = '초기 영점 조절';
+        }
+        
         const preset = VOCA_PRESETS[presetName] || VOCA_PRESETS['밸런스 모드'];
 
         const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
-        
-        // 🚀 O(1) 쿼리 최적화: 12,000개가 아닌 '오늘 일정에 도달한 단어'만 핀셋으로 가져옵니다.
         const qDue = query(historyRef, where('nextReviewSession', '<=', vocaSession));
         const historySnap = await getDocs(qDue);
         
@@ -128,86 +134,158 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             if (data.status === 'wrong' || data.status === 'chronic_error') {
                 wrongPool.push({ id: docSnap.id, ...data });
             } else if (data.status === 'review' || data.status === 'mastered') {
-                // 🚀 [CTO 패치] 장기 마스터 단어(mastered)도 복습 주기가 도래하면 reviewPool에 편입되어 테스트를 거칩니다.
                 reviewPool.push({ id: docSnap.id, ...data });
             }
         });
 
-        let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
-        let qReview = Math.round(TOTAL_WORDS * (preset.review / 100));
-        let qPassive = Math.round(TOTAL_WORDS * (preset.passive / 100));
-        let qNew = Math.round(TOTAL_WORDS * (preset.new / 100));
-
-        const requiredOldWordIds = [];
         const finalWordData = [];
+        const requiredOldWordIds = [];
         const newlySeenWordIds = []; 
 
-        if (qPassive > 0) {
-            const passiveQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', catScore), orderBy('rootDifficulty', 'desc'), limit(150));
-            const passiveSnap = await getDocs(passiveQuery);
-            const passiveCandidates = passiveSnap.docs.filter(d => !seenWordIds.has(d.id));
+        // ============================================================================
+        // 🚀 [CTO 패치] Phase 1 & 2: '초기 영점 조절' 모드 구동 알고리즘 (Zone Partitioning)
+        // ============================================================================
+        if (presetName === '초기 영점 조절') {
+            const z1_limit = Math.max(0, catScore - 150); // 패스 구역 (너무 쉬운 단어)
+            const z2_limit = catScore;                    // 의심 구역 (알아야 하지만 구멍이 있을 수 있는 단어)
             
-            const selectedPassive = shuffleArray(passiveCandidates).slice(0, qPassive);
-            selectedPassive.forEach(d => {
-                finalWordData.push({ ...d.data(), queueType: '패시브' });
-                seenWordIds.add(d.id);
-                newlySeenWordIds.push(d.id);
+            let qZ1 = Math.round(TOTAL_WORDS * (preset.z1_deep / 100));
+            let qZ2 = Math.round(TOTAL_WORDS * (preset.z2_scan / 100));
+            let qZ3 = Math.round(TOTAL_WORDS * (preset.z3_target / 100));
+
+            // [Z1] 패스 구역 딥스캔 추출
+            if (qZ1 > 0 && z1_limit > 0) {
+                const z1Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', z1_limit), limit(100));
+                const z1Snap = await getDocs(z1Query);
+                const z1Candidates = z1Snap.docs.filter(d => !seenWordIds.has(d.id));
+                const selectedZ1 = shuffleArray(z1Candidates).slice(0, qZ1);
+                selectedZ1.forEach(d => {
+                    finalWordData.push({ ...d.data(), queueType: '딥 스캔' });
+                    seenWordIds.add(d.id);
+                    newlySeenWordIds.push(d.id);
+                });
+                qZ2 += (qZ1 - selectedZ1.length);
+            }
+
+            // [Z2] 의심 구역 스캔 추출
+            if (qZ2 > 0) {
+                const z2Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', z1_limit), where('rootDifficulty', '<', z2_limit), limit(150));
+                const z2Snap = await getDocs(z2Query);
+                const z2Candidates = z2Snap.docs.filter(d => !seenWordIds.has(d.id));
+                const selectedZ2 = shuffleArray(z2Candidates).slice(0, qZ2);
+                selectedZ2.forEach(d => {
+                    finalWordData.push({ ...d.data(), queueType: '의심 스캔' });
+                    seenWordIds.add(d.id);
+                    newlySeenWordIds.push(d.id);
+                });
+                qZ3 += (qZ2 - selectedZ2.length);
+            }
+
+            // [Z3] 타겟 진도 추출
+            let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
+            if (qZ3 > 0) {
+                const z3Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(qZ3 + 20));
+                const z3Snap = await getDocs(z3Query);
+                const z3Candidates = z3Snap.docs.filter(d => !seenWordIds.has(d.id));
+                const selectedZ3 = z3Candidates.slice(0, qZ3);
+                selectedZ3.forEach(d => {
+                    const wData = d.data();
+                    finalWordData.push({ ...wData, queueType: '신규' });
+                    seenWordIds.add(d.id);
+                    newlySeenWordIds.push(d.id);
+                    if (wData.rootDifficulty > newProgressDifficulty) {
+                        newProgressDifficulty = wData.rootDifficulty; 
+                    }
+                });
+            }
+
+            // 영점 조절 모드에서는 기존 오답이 있다면 Z3(신규) 자리를 대체하여 조금씩 섞어줍니다.
+            if (wrongPool.length > 0) {
+                const qWrong = Math.min(wrongPool.length, 5);
+                const actualWrong = wrongPool.slice(0, qWrong);
+                actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '오답' }); });
+                // 배열 맨 끝의 신규 단어를 빼고 오답을 넣습니다.
+                finalWordData.splice(finalWordData.length - qWrong, qWrong); 
+            }
+
+            await updateDoc(statRef, { lastNewWordDifficulty: newProgressDifficulty, adaptivePreset: '초기 영점 조절' });
+
+        } else {
+            // ============================================================================
+            // 일반 모드 (밸런스, 오답학습, 스퍼트 등) 구동 알고리즘
+            // ============================================================================
+            let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
+            let qReview = Math.round(TOTAL_WORDS * (preset.review / 100));
+            let qPassive = Math.round(TOTAL_WORDS * (preset.passive / 100));
+            let qNew = Math.round(TOTAL_WORDS * (preset.new / 100));
+
+            if (qPassive > 0) {
+                const passiveQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', catScore), orderBy('rootDifficulty', 'desc'), limit(150));
+                const passiveSnap = await getDocs(passiveQuery);
+                const passiveCandidates = passiveSnap.docs.filter(d => !seenWordIds.has(d.id));
+                
+                const selectedPassive = shuffleArray(passiveCandidates).slice(0, qPassive);
+                selectedPassive.forEach(d => {
+                    finalWordData.push({ ...d.data(), queueType: '패시브' });
+                    seenWordIds.add(d.id);
+                    newlySeenWordIds.push(d.id);
+                });
+                qReview += (qPassive - selectedPassive.length); 
+            }
+
+            reviewPool.sort((a, b) => {
+                if (a.nextReviewSession !== b.nextReviewSession) return a.nextReviewSession - b.nextReviewSession;
+                return (a.consecutiveCorrect || 0) - (b.consecutiveCorrect || 0);
             });
-            qReview += (qPassive - selectedPassive.length); 
-        }
+            const actualReview = reviewPool.slice(0, qReview);
+            actualReview.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '복습' }); });
+            qNew += (qReview - actualReview.length);
 
-        // 🚀 [핵심 최적화] 복습 큐 정렬: 1순위(기한이 많이 연체된 것), 2순위(단기 기억이라 휘발성이 높은 것 우선)
-        reviewPool.sort((a, b) => {
-            if (a.nextReviewSession !== b.nextReviewSession) return a.nextReviewSession - b.nextReviewSession;
-            return (a.consecutiveCorrect || 0) - (b.consecutiveCorrect || 0);
-        });
-        const actualReview = reviewPool.slice(0, qReview);
-        actualReview.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '복습' }); });
-        qNew += (qReview - actualReview.length);
+            const chronicCandidates = wrongPool.filter(w => w.incorrectCount >= 3);
+            const normalWrongCandidates = wrongPool.filter(w => w.incorrectCount < 3);
 
-        const chronicCandidates = wrongPool.filter(w => w.incorrectCount >= 3);
-        const normalWrongCandidates = wrongPool.filter(w => w.incorrectCount < 3);
-
-        const chronicCap = Math.max(1, Math.floor(qWrong * 0.3));
-        
-        chronicCandidates.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
-        normalWrongCandidates.sort((a, b) => (b.lastIncorrectSession || 0) - (a.lastIncorrectSession || 0));
-
-        let actualWrong = [];
-        actualWrong.push(...chronicCandidates.slice(0, chronicCap)); 
-        
-        const remainingWrongQuota = qWrong - actualWrong.length;
-        actualWrong.push(...normalWrongCandidates.slice(0, remainingWrongQuota)); 
-
-        if (actualWrong.length < qWrong) {
-            const extraNeeded = qWrong - actualWrong.length;
-            const extraChronic = chronicCandidates.slice(chronicCap, chronicCap + extraNeeded);
-            actualWrong.push(...extraChronic);
-        }
-
-        actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' }); });
-        qNew += (qWrong - actualWrong.length);
-
-        let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
-        
-        if (qNew > 0) {
-            const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(qNew + 20));
-            const newSnap = await getDocs(newQuery);
-            const newCandidates = newSnap.docs.filter(d => !seenWordIds.has(d.id));
+            const chronicCap = Math.max(1, Math.floor(qWrong * 0.3));
             
-            const selectedNew = newCandidates.slice(0, qNew);
-            selectedNew.forEach(d => {
-                const wData = d.data();
-                finalWordData.push({ ...wData, queueType: '신규' });
-                seenWordIds.add(d.id);
-                newlySeenWordIds.push(d.id);
-                if (wData.rootDifficulty > newProgressDifficulty) {
-                    newProgressDifficulty = wData.rootDifficulty; 
-                }
-            });
+            chronicCandidates.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
+            normalWrongCandidates.sort((a, b) => (b.lastIncorrectSession || 0) - (a.lastIncorrectSession || 0));
+
+            let actualWrong = [];
+            actualWrong.push(...chronicCandidates.slice(0, chronicCap)); 
+            
+            const remainingWrongQuota = qWrong - actualWrong.length;
+            actualWrong.push(...normalWrongCandidates.slice(0, remainingWrongQuota)); 
+
+            if (actualWrong.length < qWrong) {
+                const extraNeeded = qWrong - actualWrong.length;
+                const extraChronic = chronicCandidates.slice(chronicCap, chronicCap + extraNeeded);
+                actualWrong.push(...extraChronic);
+            }
+
+            actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' }); });
+            qNew += (qWrong - actualWrong.length);
+
+            let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
+            
+            if (qNew > 0) {
+                const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(qNew + 20));
+                const newSnap = await getDocs(newQuery);
+                const newCandidates = newSnap.docs.filter(d => !seenWordIds.has(d.id));
+                
+                const selectedNew = newCandidates.slice(0, qNew);
+                selectedNew.forEach(d => {
+                    const wData = d.data();
+                    finalWordData.push({ ...wData, queueType: '신규' });
+                    seenWordIds.add(d.id);
+                    newlySeenWordIds.push(d.id);
+                    if (wData.rootDifficulty > newProgressDifficulty) {
+                        newProgressDifficulty = wData.rootDifficulty; 
+                    }
+                });
+            }
+            await updateDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty });
         }
 
-        // 🚀 [N+1 문제 완벽 해결] 개별 getDoc 대신 10개씩 묶어서 in 쿼리로 가져옵니다.
+        // 공통: DB에서 기존 단어 정보 가져오기 (N+1 최적화 chunk)
         if (requiredOldWordIds.length > 0) {
             const chunkSize = 10;
             const fetchPromises = [];
@@ -262,11 +340,9 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId), testPayload);
         
-        const updatePayload = { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty };
         if (newlySeenWordIds.length > 0) {
-            updatePayload.seenWordIds = arrayUnion(...newlySeenWordIds);
+            await updateDoc(statRef, { seenWordIds: arrayUnion(...newlySeenWordIds) });
         }
-        await updateDoc(statRef, updatePayload);
         
         return testPayload;
 
@@ -282,12 +358,11 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const sessionSnap = await getDoc(sessionRef);
     if (!sessionSnap.exists()) return;
 
-    const { questionsForTest, wordsForPrint } = sessionSnap.data();
+    const { questionsForTest, wordsForPrint, presetUsed } = sessionSnap.data();
     const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
     const statSnap = await getDoc(statRef);
     const statData = statSnap.data();
     
-    // Lazy Migration
     let { totalAttempts = 0, totalErrors = 0, masteredCount = 0, waitingWrong = 0, waitingReview = 0 } = statData;
     
     if (statData.totalAttempts === undefined) {
@@ -374,18 +449,25 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         const oldStatus = oldHist ? oldHist.status : 'new';
 
         if (isCorrect) {
-            const newConsecutive = ((oldHist ? oldHist.consecutiveCorrect : 0) || 0) + 1;
+            let newConsecutive = ((oldHist ? oldHist.consecutiveCorrect : 0) || 0) + 1;
             let nextReviewInterval = 1;
             let nextStatus = 'review';
             
-            // 🚀 [CTO 패치] 진정한 의미의 스페이싱 이펙트(간격 반복) 탑재
-            if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
-            else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
-            else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'mastered'; }
-            else if (newConsecutive === 4) { nextReviewInterval = 14; nextStatus = 'mastered'; }
-            else if (newConsecutive === 5) { nextReviewInterval = 30; nextStatus = 'mastered'; }
-            else if (newConsecutive === 6) { nextReviewInterval = 60; nextStatus = 'mastered'; }
-            else { nextReviewInterval = 120; nextStatus = 'mastered'; } 
+            // 🚀 [CTO 패치] Fast-Track 로직: 영점 조절 구역(Z1, Z2) 단어는 1번만 맞춰도 즉시 마스터 처리
+            if (q.queueType === '의심 스캔' || q.queueType === '딥 스캔') {
+                newConsecutive = 7; // 마스터 진입 조건 충족
+                nextReviewInterval = 120; // 4개월 뒤 생존 신고
+                nextStatus = 'mastered';
+            } else {
+                // 정상 간격 반복 (Continuous SRS)
+                if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
+                else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
+                else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'mastered'; }
+                else if (newConsecutive === 4) { nextReviewInterval = 14; nextStatus = 'mastered'; }
+                else if (newConsecutive === 5) { nextReviewInterval = 30; nextStatus = 'mastered'; }
+                else if (newConsecutive === 6) { nextReviewInterval = 60; nextStatus = 'mastered'; }
+                else { nextReviewInterval = 120; nextStatus = 'mastered'; } 
+            }
 
             if (oldStatus === 'new') { deltaWaitingReview += 1; }
             else if (oldStatus === 'review' && nextStatus === 'mastered') { deltaWaitingReview -= 1; deltaMastered += 1; }
@@ -443,33 +525,40 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const adaptiveStats = statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 };
     let newAdaptivePreset = statData.adaptivePreset || null; 
 
-    const reviewAccuracy = reviewTotal > 0 ? (reviewCorrect / reviewTotal) : 1; 
-    if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
-    else adaptiveStats.reviewLowAccuracyCount = 0; 
+    // 🚀 [CTO 패치] Phase 3: 영점 조절 모드 정상화(Normalization)
+    // 10회차 이상 진행되었고 현재 영점 조절 모드라면, 스캔이 얼추 끝났다고 판단하여 '밸런스 모드'로 복귀시킵니다.
+    if (presetUsed === '초기 영점 조절' && sessionNumber >= 10) {
+        newAdaptivePreset = null; // null이 되면 학생의 기본 프리셋(밸런스 모드)으로 돌아갑니다.
+        autoShiftMessage = '✅ 기초 어휘 영점 조절(스캔)이 완료되어 표준 진도 모드로 전환됩니다.';
+    } else {
+        const reviewAccuracy = reviewTotal > 0 ? (reviewCorrect / reviewTotal) : 1; 
+        if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
+        else adaptiveStats.reviewLowAccuracyCount = 0; 
+
+        if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1;
+        else adaptiveStats.queueOverflowCount = 0; 
+
+        if (adaptiveStats.reviewLowAccuracyCount >= 3) {
+            newAdaptivePreset = '망각 방어';
+            if (!autoShiftMessage) autoShiftMessage = '🚨 복습 정답률 3회 연속 60% 미만 감지 -> [망각 방어] 모드 자동 가동';
+            adaptiveStats.reviewLowAccuracyCount = 0;
+        } else if (adaptiveStats.queueOverflowCount >= 2 && newAdaptivePreset !== '망각 방어') {
+            newAdaptivePreset = '오답 학습';
+            if (!autoShiftMessage) autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) 2회 연속 감지 -> [오답 학습] 모드 자동 가동';
+            adaptiveStats.queueOverflowCount = 0;
+        } else if (adaptiveStats.reviewLowAccuracyCount === 0 && adaptiveStats.queueOverflowCount === 0) {
+            if (newAdaptivePreset !== null && newAdaptivePreset !== '초기 영점 조절') {
+                if (!autoShiftMessage) autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
+            }
+            if (presetUsed !== '초기 영점 조절') newAdaptivePreset = null;
+        }
+    }
 
     totalAttempts += sessionTotal;
     totalErrors += wrongSet.size;
     masteredCount += deltaMastered;
     waitingWrong += deltaWaitingWrong;
     waitingReview += deltaWaitingReview;
-
-    if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1;
-    else adaptiveStats.queueOverflowCount = 0; 
-
-    if (adaptiveStats.reviewLowAccuracyCount >= 3) {
-        newAdaptivePreset = '망각 방어';
-        if (!autoShiftMessage) autoShiftMessage = '🚨 복습 정답률 3회 연속 60% 미만 감지 -> [망각 방어] 모드 자동 가동';
-        adaptiveStats.reviewLowAccuracyCount = 0;
-    } else if (adaptiveStats.queueOverflowCount >= 2 && newAdaptivePreset !== '망각 방어') {
-        newAdaptivePreset = '오답 학습';
-        if (!autoShiftMessage) autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) 2회 연속 감지 -> [오답 학습] 모드 자동 가동';
-        adaptiveStats.queueOverflowCount = 0;
-    } else if (adaptiveStats.reviewLowAccuracyCount === 0 && adaptiveStats.queueOverflowCount === 0) {
-        if (newAdaptivePreset !== null) {
-            if (!autoShiftMessage) autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
-        }
-        newAdaptivePreset = null;
-    }
 
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
