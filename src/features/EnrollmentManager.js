@@ -1,14 +1,21 @@
+/* [서비스 가치] 학생의 수강 이력을 관리하고 맞춤형 요일 스케줄을 배정합니다.
+   (🚀 CTO 패치: 강의실 입력 방식을 텍스트(수동)에서 '수용 인원 포함 마스터 드롭다운'으로 교체하여, 
+   추후 도입될 시험기간 교실 관제탑 알고리즘의 오차를 원천 차단했습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
   Users, Search, Plus, Calendar, Clock, Edit2, Trash2, CheckCircle, 
-  BookOpen, UserPlus, AlertCircle, Save, X, BookMarked
+  BookOpen, UserPlus, AlertCircle, Save, X, BookMarked, Loader
 } from 'lucide-react';
+import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
 const EnrollmentManager = ({ currentUser }) => {
+  // 🚀 [CTO 패치] 글로벌 환경설정(masterData)을 가져옵니다.
+  const { masterData } = useData();
+
   const [students, setStudents] = useState([]);
   const [enrollments, setEnrollments] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,7 +63,7 @@ const EnrollmentManager = ({ currentUser }) => {
     } else {
       setFormData({
         id: '', className: '', lecturerId: '', status: 'active',
-        schedules: [{ dayOfWeek: '월', callTime: '18:00', classTime: '20:00', endTime: '22:00', room: '1강의실' }]
+        schedules: [{ dayOfWeek: '월', callTime: '18:00', classTime: '20:00', endTime: '22:00', room: '' }]
       });
     }
     setErrorMsg('');
@@ -66,7 +73,7 @@ const EnrollmentManager = ({ currentUser }) => {
   const handleAddSchedule = () => {
     setFormData(prev => ({
       ...prev,
-      schedules: [...prev.schedules, { dayOfWeek: '수', callTime: '18:00', classTime: '20:00', endTime: '22:00', room: '1강의실' }]
+      schedules: [...prev.schedules, { dayOfWeek: '수', callTime: '18:00', classTime: '20:00', endTime: '22:00', room: '' }]
     }));
   };
 
@@ -221,7 +228,7 @@ const EnrollmentManager = ({ currentUser }) => {
                               <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 font-black flex items-center justify-center shrink-0">{sch.dayOfWeek}</span>
                               <span className="font-bold text-rose-600 bg-rose-50 px-2 py-1 rounded flex items-center gap-1"><Clock size={12}/> 등원요구 {sch.callTime}</span>
                               <span className="font-bold text-gray-700">본수업 {sch.classTime} ~ {sch.endTime}</span>
-                              <span className="text-gray-500 font-medium ml-auto">({sch.room})</span>
+                              <span className="text-gray-500 font-medium ml-auto">({sch.room || '미정'})</span>
                             </div>
                           ))}
                         </div>
@@ -283,25 +290,35 @@ const EnrollmentManager = ({ currentUser }) => {
                       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                         <div>
                           <label className="block text-[10px] font-bold text-gray-500 mb-1">요일</label>
-                          <select className="w-full border p-2 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-indigo-500 bg-gray-50" value={sch.dayOfWeek} onChange={e => handleScheduleChange(idx, 'dayOfWeek', e.target.value)}>
+                          <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-indigo-500 bg-gray-50" value={sch.dayOfWeek} onChange={e => handleScheduleChange(idx, 'dayOfWeek', e.target.value)}>
                             {['월', '화', '수', '목', '금', '토', '일'].map(d => <option key={d} value={d}>{d}요일</option>)}
                           </select>
                         </div>
                         <div className="col-span-1 md:col-span-1 border-r-2 border-dashed border-rose-200 pr-3">
                           <label className="block text-[10px] font-black text-rose-600 mb-1 text-center bg-rose-50 rounded">등원요구(Call)</label>
-                          <input type="time" className="w-full border p-2 rounded-lg text-sm font-bold outline-none text-rose-700 bg-rose-50" value={sch.callTime} onChange={e => handleScheduleChange(idx, 'callTime', e.target.value)} />
+                          <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none text-rose-700 bg-rose-50" value={sch.callTime} onChange={e => handleScheduleChange(idx, 'callTime', e.target.value)} />
                         </div>
                         <div>
                           <label className="block text-[10px] font-bold text-gray-500 mb-1">본수업 시작</label>
-                          <input type="time" className="w-full border p-2 rounded-lg text-sm font-bold outline-none bg-gray-50" value={sch.classTime} onChange={e => handleScheduleChange(idx, 'classTime', e.target.value)} />
+                          <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none bg-gray-50" value={sch.classTime} onChange={e => handleScheduleChange(idx, 'classTime', e.target.value)} />
                         </div>
                         <div>
                           <label className="block text-[10px] font-bold text-gray-500 mb-1">수업 종료</label>
-                          <input type="time" className="w-full border p-2 rounded-lg text-sm font-bold outline-none bg-gray-50" value={sch.endTime} onChange={e => handleScheduleChange(idx, 'endTime', e.target.value)} />
+                          <input type="time" className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none bg-gray-50" value={sch.endTime} onChange={e => handleScheduleChange(idx, 'endTime', e.target.value)} />
                         </div>
                         <div className="col-span-2 md:col-span-1">
                           <label className="block text-[10px] font-bold text-gray-500 mb-1">강의실</label>
-                          <input type="text" placeholder="301호" className="w-full border p-2 rounded-lg text-sm font-bold outline-none bg-gray-50" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)} />
+                          
+                          {/* 🚀 [CTO 패치] 강의실 수용 인원을 포함하는 방어적 렌더링 드롭다운 적용 */}
+                          <select className="w-full border p-2.5 rounded-lg text-sm font-bold outline-none focus:ring-1 focus:ring-indigo-500 bg-gray-50" value={sch.room} onChange={e => handleScheduleChange(idx, 'room', e.target.value)}>
+                              <option value="">미정/선택</option>
+                              {(masterData?.classrooms || []).map((room, rIdx) => {
+                                  const rName = typeof room === 'string' ? room : room.name;
+                                  const rCap = typeof room === 'string' ? '' : ` (최대: ${room.capacity}명)`;
+                                  return <option key={rIdx} value={rName}>{rName}{rCap}</option>;
+                              })}
+                              {sch.room && !(masterData?.classrooms || []).some(r => (typeof r === 'string' ? r : r.name) === sch.room) && <option value={sch.room}>{sch.room} (이전 데이터)</option>}
+                          </select>
                         </div>
                       </div>
                     </div>

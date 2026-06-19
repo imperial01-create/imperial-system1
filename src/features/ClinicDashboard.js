@@ -1,6 +1,7 @@
 /* [서비스 가치] 클리닉 V3.1.6 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
    (🚀 학부모 UX/UI 패치: 학부모 역시 학생과 동일하게 '최대 7일 이내'의 일정만 조회 가능하도록
-   캘린더 필터링(isAllowedDate)을 강제 적용하여 인지 부하 감소 및 렌더링을 최적화했습니다.) */
+   캘린더 필터링(isAllowedDate)을 강제 적용하여 인지 부하 감소 및 렌더링을 최적화했습니다.
+   🚀 CTO 패치: 강의실 수용 인원 업데이트에 따른 객체 렌더링 방어막 탑재) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -282,7 +283,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
     if (isStudent || isParent) {
         const isSelectedDateAllowed = selectedDateStr <= getFutureDate(7) && selectedDateStr >= getLocalToday();
         const availableSlots = slots.filter(s => s.status === 'open' && new Date(`${s.date}T${s.startTime}`) >= now);
-        // 학생/학부모는 7일 범위를 벗어난 날짜의 슬롯을 볼 수 없음
         if (!isSelectedDateAllowed) return null;
         if (isStudent && availableSlots.length === 0) return null;
     }
@@ -415,16 +415,20 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                                 onChange={(e) => onAction('update_classroom', { session: s, val: e.target.value })}
                             >
                               <option value="">장소 미지정</option>
-                              {masterClassrooms?.map(r => {
-                                  const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
+                              {masterClassrooms?.map((r, idx) => {
+                                  // 🚀 [CTO 패치] 강의실 객체-문자열 하위 호환 매핑 방어 로직 적용
+                                  const rName = typeof r === 'string' ? r : r.name;
+                                  const rCap = typeof r === 'string' ? '' : ` (최대: ${r.capacity}명)`;
+                                  const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, rName, s.originalIds || []);
+                                  
                                   return (
                                       <option 
-                                          key={r} 
-                                          value={r} 
+                                          key={idx} 
+                                          value={rName} 
                                           className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
                                           disabled={occupiedStatus === 'clinic'}
                                       >
-                                          {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
+                                          {rName}{rCap} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
                                       </option>
                                   );
                               })}
@@ -1083,9 +1087,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                           <option value="">1. 담당 조교 선택 (필수)</option>
                           {users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(u=><option key={u.id} value={u.id}>[{u.role==='admin_assistant'?'행정':'수업'}] {u.name}</option>)}
                       </select>
+                      
+                      {/* 🚀 [CTO 패치] 강의실 수용 인원 정보가 포함된 방어적 드롭다운 렌더링 */}
                       <select className="border rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-300 font-bold text-blue-700" value={batchClassroom} onChange={e=>setBatchClassroom(e.target.value)}>
                           <option value="">2. 배정 강의실 선택 (미정)</option>
-                          {masterData?.classrooms?.map(r=><option key={r} value={r}>{r}</option>)}
+                          {masterData?.classrooms?.map((r, idx) => {
+                              const rName = typeof r === 'string' ? r : r.name;
+                              const rCap = typeof r === 'string' ? '' : ` (최대: ${r.capacity}명)`;
+                              return <option key={idx} value={rName}>{rName}{rCap}</option>;
+                          })}
                       </select>
                   </div>
                   <div className="flex gap-2 mb-4">
@@ -1146,22 +1156,25 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     </div>
                                     
                                     <div className="mt-2">
+                                        {/* 🚀 [CTO 패치] 강의실 수용 인원 정보가 포함된 방어적 드롭다운 렌더링 */}
                                         <select 
                                             className={`text-sm border rounded-lg p-2 font-bold focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-800 shadow-inner'}`} 
                                             value={s.classroom || ''} 
                                             onChange={(e) => handleAction('update_classroom', { session: s, val: e.target.value })}
                                         >
                                             <option value="">강의실 미배정 (선택 필수)</option>
-                                            {masterData?.classrooms?.map(r => {
-                                                const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, r, s.originalIds || []);
+                                            {masterData?.classrooms?.map((r, idx) => {
+                                                const rName = typeof r === 'string' ? r : r.name;
+                                                const rCap = typeof r === 'string' ? '' : ` (최대: ${r.capacity}명)`;
+                                                const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, rName, s.originalIds || []);
                                                 return (
                                                     <option 
-                                                        key={r} 
-                                                        value={r} 
+                                                        key={idx} 
+                                                        value={rName} 
                                                         className={occupiedStatus ? 'text-gray-400 bg-gray-100' : ''}
                                                         disabled={occupiedStatus === 'clinic'}
                                                     >
-                                                        {r} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
+                                                        {rName}{rCap} {occupiedStatus === 'class' ? '(정규수업-협업가능)' : occupiedStatus === 'clinic' ? '(타 클리닉 사용중)' : ''}
                                                     </option>
                                                 );
                                             })}
