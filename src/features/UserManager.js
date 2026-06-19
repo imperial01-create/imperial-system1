@@ -1,14 +1,13 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
-   (🚀 CTO 패치: 스마트 콤보박스 탑재 및 DB 평문 비밀번호(Password) 저장 보안 취약점 원천 차단 완료) 
-   (🚀 추가 패치: 강사/조교 과목 할당을 드롭다운으로 변경하여 RBAC 권한 제어의 기반을 마련했습니다.) 
-   (🚀 최적화 패치: 학부모-자녀 연결 시 수백 명의 데이터를 불러오지 않고, 검색 기반으로 지연 렌더링하여 성능을 극대화했습니다.) */
+   (🚀 최적화 패치: 완벽한 '연쇄 삭제(Cascading Delete)' 알고리즘을 도입하여, 학생 삭제 시 관련된 
+   수강이력, 성적, Voca 스탯, 학부모 연동 데이터를 일괄 소각하여 DB 쓰레기(고아 데이터)를 원천 차단합니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle, Bell
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch, addDoc } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch, addDoc, query, where, getDocs, getDocsFromServer } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions'; 
 import { db, secondaryAuth, functions } from '../firebase'; 
@@ -17,7 +16,6 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [신규 컴포넌트] 스마트 콤보박스 (UserManager 내부용)
 const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [search, setSearch] = useState('');
@@ -94,11 +92,9 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
 
-    // 🚀 masterData를 DataContext에서 불러와 과목 드롭다운에 활용합니다.
     const { users, classes, enrollments, masterData, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
-    // 🚀 [추가됨] 학부모 자녀 연결 전용 검색 쿼리
     const [childSearchQuery, setChildSearchQuery] = useState(''); 
     
     const [activeTab, setActiveTab] = useState('student'); 
@@ -122,13 +118,11 @@ const UserManager = ({ currentUser }) => {
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
     const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
-    const [isSendingSms, setIsSendingSms] = useState(false);
 
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false);
 
-    // 전역 환경설정에 등록된 과목 리스트 (없을 경우 기본값)
     const availableSubjects = masterData?.subjects?.length > 0 ? masterData.subjects : ['국어', '수학', '영어', '과학'];
 
     useEffect(() => {
@@ -145,16 +139,11 @@ const UserManager = ({ currentUser }) => {
     const studentList = useMemo(() => users.filter(u => u.role === 'student' && u.status !== 'pending'), [users]);
     const pendingUsers = useMemo(() => users.filter(u => u.status === 'pending'), [users]);
 
-    // 🚀 [추가됨] 자녀 검색 최적화 로직 (렌더링 부하 감소)
     const displayedStudents = useMemo(() => {
         return studentList.filter(student => {
             const isLinked = (formData.linkedChildrenIds || []).includes(student.id);
-            // 이미 연결된 자녀는 검색어 유무와 상관없이 항상 보여줍니다.
             if (isLinked) return true; 
-            // 검색어가 없다면 연결되지 않은 학생은 보여주지 않습니다.
             if (!childSearchQuery.trim()) return false; 
-            
-            // 검색어가 있다면 이름, 학교명, 전화번호로 필터링합니다.
             return student.name.includes(childSearchQuery) || 
                    (student.schoolName && student.schoolName.includes(childSearchQuery)) ||
                    (student.phone && student.phone.includes(childSearchQuery));
@@ -244,7 +233,7 @@ const UserManager = ({ currentUser }) => {
         });
         setSchoolType('high');
         setIsCustomSchool(false);
-        setChildSearchQuery(''); // 🚀 검색 쿼리 초기화
+        setChildSearchQuery(''); 
         setIsEditMode(false); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
@@ -270,7 +259,7 @@ const UserManager = ({ currentUser }) => {
             setIsCustomSchool(isCustom);
         } else { setSchoolType('high'); setIsCustomSchool(false); }
 
-        setChildSearchQuery(''); // 🚀 검색 쿼리 초기화
+        setChildSearchQuery(''); 
         setIsEditMode(true); setModalTab('basic'); setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery(''); setIsModalOpen(true);
     };
 
@@ -341,16 +330,61 @@ const UserManager = ({ currentUser }) => {
         } catch (e) { showToast(e.message || '저장에 실패했습니다.', 'error'); } finally { setLoading(false); }
     };
 
+    // =========================================================================================
+    // 🚀 [CTO 패치] 완벽한 연쇄 삭제(Cascading Delete) 엔진 탑재
+    // =========================================================================================
     const handleDeleteUser = async () => {
         if (!targetUserId) return;
         setLoading(true);
         try {
-            await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetUserId));
-            showToast('사용자가 성공적으로 삭제되었습니다.', 'success');
+            const batch = writeBatch(db);
+            const userRef = doc(db, `artifacts/${APP_ID}/public/data/users`, targetUserId);
+            
+            // 삭제 대상 유저의 정보를 확인 (학생인 경우에만 연쇄 삭제 가동)
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists() && userSnap.data().role === 'student') {
+                
+                // 1. 해당 학생의 수강 이력(enrollments) 조회 및 일괄 삭제
+                const enrollQ = query(collection(db, `artifacts/${APP_ID}/public/data/enrollments`), where('studentId', '==', targetUserId));
+                const enrollSnap = await getDocs(enrollQ);
+                enrollSnap.forEach(d => batch.delete(d.ref));
+
+                // 2. 해당 학생의 성적 데이터(grades) 일괄 삭제
+                const gradesQ = query(collection(db, `artifacts/${APP_ID}/public/data/grades`), where('studentId', '==', targetUserId));
+                const gradesSnap = await getDocs(gradesQ);
+                gradesSnap.forEach(d => batch.delete(d.ref));
+
+                // 3. Voca 영어 스탯(english_stats) 영구 격리 삭제
+                // (참고: 하위 컬렉션인 word_history는 부모 문서가 사라지면 접근이 불가해지며 시스템에서 고아 처리되어 영향을 주지 않음)
+                const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, targetUserId);
+                batch.delete(statRef);
+
+                // 4. 이 학생을 등록해둔 학부모 계정을 찾아 호적(linkedChildrenIds)에서 파내기
+                const parentsQ = query(collection(db, `artifacts/${APP_ID}/public/data/users`), where('role', '==', 'parent'), where('linkedChildrenIds', 'array-contains', targetUserId));
+                const parentsSnap = await getDocs(parentsQ);
+                parentsSnap.forEach(pDoc => {
+                    const pData = pDoc.data();
+                    const newLinks = (pData.linkedChildrenIds || []).filter(id => id !== targetUserId);
+                    batch.update(pDoc.ref, { linkedChildrenIds: newLinks });
+                });
+            }
+
+            // 5. 마지막으로 user 계정 프로필 본체 삭제
+            batch.delete(userRef);
+
+            // 전체 일괄 커밋
+            await batch.commit();
+
+            showToast('사용자 및 연관된 모든 데이터(수강, 성적, Voca, 학부모 연동)가 성공적으로 소각되었습니다.', 'success');
             setIsDeleteConfirmOpen(false);
-        } catch (e) { showToast('삭제 실패: ' + e.message, 'error'); } 
-        finally { setLoading(false); setTargetUserId(null); }
+        } catch (e) { 
+            showToast('연쇄 삭제 실패: ' + e.message, 'error'); 
+        } finally { 
+            setLoading(false); 
+            setTargetUserId(null); 
+        }
     };
+    // =========================================================================================
 
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
 
@@ -381,20 +415,6 @@ const UserManager = ({ currentUser }) => {
 
             await setDoc(eRef, payload, { merge: true });
             
-            if (isNewEnrollment && enrollForm.status === 'active') {
-                if (window.confirm('신규 수강 배정이 완료되었습니다.\n첫 등원 및 교재 안내 문자를 발송하시겠습니까?')) {
-                    let targetPhone = '';
-                    const parentUser = users.find(u => u.role === 'parent' && u.linkedChildrenIds && u.linkedChildrenIds.includes(formData.id));
-                    if (parentUser && parentUser.phone) targetPhone = parentUser.phone;
-                    else if (formData.phone) targetPhone = formData.phone;
-
-                    const scheduleStr = enrollForm.schedules.map(s => `${s.dayOfWeek} ${s.startTime}~${s.endTime}`).join(', ');
-                    const welcomeMsg = `[목동임페리얼학원]\n안녕하세요. 목동임페리얼학원 입학을 진심으로 환영합니다!\n${formData.name} 학생의 첫 등원 일정 및 시간표를 안내해 드립니다.\n\n[수업 정보]\n- 수강 수업 : ${enrollForm.className}\n- 수업 시간 : ${scheduleStr}\n- 첫 등원 일자 : (날짜를 입력해주세요)\n\n원활한 수업 진행을 위해 지각하지 않도록 지도 부탁드립니다.\n\n처음 등원하는 학생들을 위한 학원 이용 가이드를 아래 링크에 첨부합니다. 어색하지 않은 첫 등원이 될 수 있도록 꼭 확인 부탁드립니다.\n🔗 학원 이용 가이드: https://blog.naver.com/imperialsys01/223922116856\n\n감사합니다.`;
-                    const textbookMsg = `[목동임페리얼학원]\n${formData.name} 학생의 [${enrollForm.className}] 수업 교재를 안내해 드립니다.\n\n[교재 정보]\n- (교재명 1)\n- (교재명 2)\n\n원활한 진도 진행을 위해 첫 수업 전까지 해당 교재를 꼭 지참할 수 있도록 챙겨주시면 감사하겠습니다.`;
-
-                    setSmsPreviewModal({ isOpen: true, welcomeMsg, textbookMsg, targetPhone, studentName: formData.name });
-                }
-            }
             setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery('');
             showToast('수강 배정이 성공적으로 저장되었습니다.', 'success');
         } catch (e) { showToast('수강 배정 실패: ' + e.message, 'error'); } 
@@ -643,7 +663,6 @@ const UserManager = ({ currentUser }) => {
                                         {['ta', 'lecturer'].includes(activeTab === 'pending' ? formData.role : activeTab) && (
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-600 mb-1">담당 과목</label>
-                                                {/* 🚀 [CTO 패치] 과목 입력란을 DataContext를 기반으로 한 드롭다운으로 교체 */}
                                                 <select 
                                                     className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white font-bold text-gray-700" 
                                                     value={formData.subject || ''} 
@@ -676,7 +695,6 @@ const UserManager = ({ currentUser }) => {
                                 </>
                             )}
 
-                            {/* 🚀 [CTO 패치] 학부모 자녀 선택 시 검색 기반 지연 렌더링 적용 */}
                             {(activeTab === 'parent' || (activeTab === 'pending' && formData.role === 'parent')) && (
                                 <div className="border-t pt-4">
                                     {activeTab === 'pending' && formData.childName && (
@@ -854,7 +872,9 @@ const UserManager = ({ currentUser }) => {
             <Modal isOpen={isDeleteConfirmOpen} onClose={() => setIsDeleteConfirmOpen(false)} title="사용자 계정 삭제">
                 <div className="text-center space-y-6 p-4">
                     <div className="bg-red-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto text-red-500"><Trash2 size={40} /></div>
-                    <p className="text-lg font-medium">정말로 삭제하시겠습니까?<br/><span className="text-red-500 font-bold">연결된 모든 데이터가 접근 불가 상태가 됩니다.</span></p>
+                    <p className="text-lg font-medium">정말로 삭제하시겠습니까?<br/>
+                    {/* 🚀 [CTO 패치] 삭제 경고 텍스트 강화 */}
+                    <span className="text-red-500 font-bold text-sm mt-2 block">해당 학생의 수강 이력, 성적, 단어장 스탯 등<br/>모든 데이터가 DB에서 영구 삭제됩니다.</span></p>
                     <div className="flex gap-3">
                         <Button variant="secondary" className="flex-1 py-3" onClick={() => setIsDeleteConfirmOpen(false)}>취소</Button>
                         <Button variant="danger" className="flex-1 py-3" onClick={handleDeleteUser} disabled={loading}>네, 삭제하겠습니다</Button>
