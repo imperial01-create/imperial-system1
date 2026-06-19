@@ -1,6 +1,6 @@
 /* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 데이터 동기화 핫픽스: english_stats의 Document ID 매핑 버그를 해결하여, 
-   CAT 점수 및 일일 Voca 시험 결과(Elo 레이팅)가 유니버스 어휘력 스탯에 실시간으로 완벽하게 연동됩니다.) */
+   (🚀 CTO 최적화: 레이더 차트 및 과목별 심층 분석 UI를 완벽 보존하면서, 
+   새로운 '하이브리드 Voca 엔진(동적 어휘량, 이해도, 기억력, 승급 심사)'과 100% 실시간 동기화되도록 결합했습니다.) */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
@@ -14,7 +14,42 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 100단계 초정밀 Voca 진단 루브릭 매트릭스
+// 🚀 [CTO 패치] Voca 통합 관제 센터와 100% 동일한 동적 하이브리드 티어 계산 엔진
+const getTierProgress = (masteredCount = 0, catScore = 0) => {
+    const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
+    const totalEstimatedWords = baseVocab + masteredCount;
+
+    const TIERS = [
+        { name: '초등 기초 (초3~4)', limit: 500, color: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
+        { name: '초등 필수 (초5~6)', limit: 800, color: 'bg-orange-400', bg: 'bg-orange-50', text: 'text-orange-700' },
+        { name: '중등 기초 (중1)', limit: 1400, color: 'bg-lime-500', bg: 'bg-lime-50', text: 'text-lime-700' },
+        { name: '중등 발전 (중2)', limit: 2000, color: 'bg-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700' },
+        { name: '중등 마스터 (중3)', limit: 2800, color: 'bg-teal-500', bg: 'bg-teal-50', text: 'text-teal-700' },
+        { name: '고등 기초 (고1)', limit: 4000, color: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700' },
+        { name: '고등 발전 (고2)', limit: 6000, color: 'bg-indigo-500', bg: 'bg-indigo-50', text: 'text-indigo-700' },
+        { name: '수능 완성 (고3)', limit: 8500, color: 'bg-purple-500', bg: 'bg-purple-50', text: 'text-purple-700' },
+        { name: '최상위 (TEPS/TOEFL)', limit: 99999, color: 'bg-rose-500', bg: 'bg-rose-50', text: 'text-rose-700' }
+    ];
+
+    let prevLimit = 0;
+    let currentTier = TIERS[0];
+    
+    for (let i = 0; i < TIERS.length; i++) {
+        if (totalEstimatedWords < TIERS[i].limit) {
+            currentTier = TIERS[i];
+            break;
+        }
+        prevLimit = TIERS[i].limit;
+        if (i === TIERS.length - 1) currentTier = TIERS[i];
+    }
+
+    const currentBracketMastered = Math.max(0, totalEstimatedWords - prevLimit);
+    const bracketTotal = currentTier.limit - prevLimit;
+    const percent = Math.min(100, Math.round((currentBracketMastered / bracketTotal) * 100));
+
+    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: totalEstimatedWords };
+};
+
 const VOCA_RUBRICS = [
   { min: 0, max: 10, target: '파닉스/초저', desc: '알파벳 대소문자를 간신히 구분하며 영어를 그림처럼 인식함.' },
   { min: 11, max: 20, target: '파닉스/초저', desc: '알파벳이 내는 고유의 소리(음가)를 겨우 떼기 시작함.' },
@@ -217,7 +252,19 @@ const RadarChart = ({ stats, isDummy = false }) => {
 };
 
 const AcademyUniverse = ({ currentUser }) => {
-  const { users, classes, enrollments, englishStats } = useData();
+  const { users, classes, enrollments } = useData();
+  const [localEnglishStats, setLocalEnglishStats] = useState([]);
+
+  // 🚀 [CTO 패치] 글로벌 영어 스탯 동기화 구독 (N+1 차단)
+  useEffect(() => {
+      const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
+      const unsubscribe = onSnapshot(statsRef, (snapshot) => {
+          const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setLocalEnglishStats(statsData);
+      });
+      return () => unsubscribe();
+  }, []);
+
   const isStudent = currentUser.role === 'student';
   const isParent = currentUser?.role === 'parent';
 
@@ -250,15 +297,14 @@ const AcademyUniverse = ({ currentUser }) => {
       return [];
   }, [users, classes, enrollments, currentUser, isParent, linkedChildren]);
 
-  // 🚀 [CTO 패치] activeStudentId를 찾은 후 studentEnglishStat을 불러올 때 Document ID 매핑 버그 수정
   const activeStudentId = isStudent ? currentUser.id : (isParent ? selectedChildId : selectedStudentId);
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
-  // s.studentId 가 아닌 문서 자체의 고유 ID(s.id)를 비교하여 데이터를 완벽하게 찾아옵니다.
-  const studentEnglishStat = (englishStats || []).find(s => s.id === activeStudentId);
+  // 🚀 [CTO 패치] 동기화된 Voca 데이터 호출
+  const studentEnglishStat = localEnglishStats.find(s => s.id === activeStudentId) || {};
   
-  const catScore = studentEnglishStat?.catScore;
-  const hasCatScore = catScore !== undefined && catScore !== null;
+  const catScore = studentEnglishStat?.catScore || 0;
+  const hasCatScore = catScore > 0;
   
   const currentVocaRubric = useMemo(() => {
       if (hasCatScore) {
@@ -321,7 +367,7 @@ const AcademyUniverse = ({ currentUser }) => {
             let dynamicDesc = s.desc; 
             
             if (s.id === 'voca') {
-                realValue = studentEnglishStat?.catScore || 0; 
+                realValue = catScore; 
                 chartValue = Math.round(realValue / 10); 
                 
                 if (hasCatScore && currentVocaRubric) {
@@ -380,7 +426,7 @@ const AcademyUniverse = ({ currentUser }) => {
         }
     });
     return result;
-  }, [grades, myActiveClasses, englishStats, generateMockStats]);
+  }, [grades, myActiveClasses, localEnglishStats, generateMockStats]);
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -512,6 +558,9 @@ const AcademyUniverse = ({ currentUser }) => {
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
   };
 
+  // 🚀 [CTO 패치] 영어 과목 선택 시 동기화된 Voca 세부 지표 계산
+  const tierInfo = getTierProgress(studentEnglishStat.masteredCount || 0, studentEnglishStat.catScore || 0);
+
   return (
       <div className="max-w-[1400px] mx-auto space-y-6 animate-in fade-in pb-20 px-2 sm:px-4 pt-6">
           
@@ -611,27 +660,39 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </div>
                               </div>
 
+                              {/* 🚀 [CTO 패치] 동기화된 Voca 상세 추적 지표 및 알림 */}
                               {stat.isVoca && hasCatScore && (
                                   <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50 p-4 rounded-2xl w-full">
                                       <h4 className="text-xs font-black text-blue-700 flex items-center gap-1 mb-3"><Sparkles size={14}/> Voca 학습 상세 추적 지표</h4>
+                                      
+                                      {/* 🚀 [CTO 패치] 승급 심사 대기 중일 경우 알림 표시 */}
+                                      {studentEnglishStat.promotionPending && (
+                                          <div className="mb-4 bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-rose-600 text-[11px] font-black flex items-center justify-center gap-1.5 animate-pulse shadow-sm">
+                                              <AlertCircle size={14}/> {studentEnglishStat.promotionPending}점 승급 심사 대기 중 (어휘력 성장 제한됨)
+                                          </div>
+                                      )}
+
                                       <div className="space-y-3">
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
-                                                  <span>📚 어휘 진도 (학년 단어 학습 퍼센트)</span><span className="text-blue-600">{studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%</span>
+                                                  <span>📚 어휘 진도 ({tierInfo.name})</span>
+                                                  <span className="text-blue-600">{tierInfo.percent}% (총 보유 {tierInfo.totalMastered}단어)</span>
                                               </div>
-                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vProgress || studentEnglishStat?.vocaProgress || 0}%` }}></div></div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${tierInfo.percent}%` }}></div></div>
                                           </div>
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
-                                                  <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span><span className="text-emerald-600">{studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%</span>
+                                                  <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span>
+                                                  <span className="text-emerald-600">{studentEnglishStat.vocaComprehension || 0}%</span>
                                               </div>
-                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vComprehension || studentEnglishStat?.vocaComprehension || 0}%` }}></div></div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
                                           </div>
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
-                                                  <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span><span className="text-indigo-600">{studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%</span>
+                                                  <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span>
+                                                  <span className="text-indigo-600">{studentEnglishStat.vocaRetention || 0}%</span>
                                               </div>
-                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat?.vRetention || studentEnglishStat?.vocaRetention || 0}%` }}></div></div>
+                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaRetention || 0}%` }}></div></div>
                                           </div>
                                       </div>
                                   </div>

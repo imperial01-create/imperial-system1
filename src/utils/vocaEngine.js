@@ -1,6 +1,6 @@
 /* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture)
-   🚀 업데이트 5 (동적 조기 졸업): 학생의 오답 누적률을 평가하여 우수 학생은 5회차 만에 지루한 스캔 구간을 탈출시키는 'Adaptive Early Exit'를 적용했습니다. 
-   비용 효율성: 추가적인 DB 쿼리 없이 캐싱된 상태값(waitingWrong)만을 평가하므로 과금(Bill)이 전혀 발생하지 않습니다. */
+   🚀 업데이트 6 (동적 50점 승급 심사): 특정 점수가 아닌 '매 50점 단위(50, 100, 150...)'마다 승급 심사를 강제하는 알고리즘을 도입했습니다. 
+   강사의 승인이 떨어지기 전까지 학생의 점수는 다음 50점 구간을 절대 돌파할 수 없으며, 화면에 강력한 경고를 발생시킵니다. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -377,6 +377,8 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         adaptivePreset: statData.adaptivePreset || null,
         lastNewWordDifficulty: statData.lastNewWordDifficulty || statData.catScore || 100,
         totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview,
+        promotionPending: statData.promotionPending || null,
+        maxApprovedPromotion: statData.maxApprovedPromotion || 0,
         wordHistories: {}
     };
 
@@ -491,16 +493,19 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let finalVocaScore = Math.round(currentVocaScore + scoreDelta);
     let autoShiftMessage = '';
 
-    const hasPassed400 = statData.passedMockExam400 === true;
-    const hasPassed700 = statData.passedMockExam700 === true;
+    // ============================================================================
+    // 🚀 [CTO 패치] 50점 단위 동적 승급 심사 (Hard-Cap) 알고리즘
+    // ============================================================================
+    const nextBoundary = Math.floor(currentVocaScore / 50) * 50 + 50; 
+    const maxApprovedPromotion = statData.maxApprovedPromotion || 0;
+    let promotionPending = statData.promotionPending || null;
 
-    if (currentVocaScore < 400 && finalVocaScore >= 400 && !hasPassed400) {
-        finalVocaScore = 399;
-        autoShiftMessage = "🚨 400점 승급 심사 구간에 도달했습니다. 모의고사 성적 연동 전까지 점수가 오르지 않습니다.";
-    } 
-    else if (currentVocaScore < 700 && finalVocaScore >= 700 && !hasPassed700) {
-        finalVocaScore = 699;
-        autoShiftMessage = "🚨 700점 승급 심사 구간에 도달했습니다. 모의고사 성적 연동 전까지 점수가 오르지 않습니다.";
+    if (finalVocaScore >= nextBoundary && maxApprovedPromotion < nextBoundary) {
+        finalVocaScore = nextBoundary - 1; // 허들에서 -1점으로 강제 정지
+        promotionPending = nextBoundary;
+        autoShiftMessage = `🚨 ${nextBoundary}점 승급 심사 구간에 도달했습니다. 담당 강사의 승인 전까지 점수가 오르지 않습니다.`;
+    } else {
+        promotionPending = null;
     }
 
     finalVocaScore = Math.max(0, Math.min(1000, finalVocaScore));
@@ -508,13 +513,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const adaptiveStats = statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 };
     let newAdaptivePreset = statData.adaptivePreset || null; 
 
-    totalAttempts += sessionTotal;
-    totalErrors += wrongSet.size;
-    masteredCount += deltaMastered;
-    waitingWrong += deltaWaitingWrong;
-    waitingReview += deltaWaitingReview;
-
-    // 🚀 [CTO 패치] 동적 조기 졸업 로직 (Adaptive Early Exit) 적용
     if (presetUsed === '초기 영점 조절') {
         if (sessionNumber >= 10 || (sessionNumber >= 5 && waitingWrong < 10)) {
             newAdaptivePreset = null; 
@@ -548,6 +546,12 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         }
     }
 
+    totalAttempts += sessionTotal;
+    totalErrors += wrongSet.size;
+    masteredCount += deltaMastered;
+    waitingWrong += deltaWaitingWrong;
+    waitingReview += deltaWaitingReview;
+
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
     
@@ -574,6 +578,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         adaptiveStats: adaptiveStats,       
         adaptivePreset: newAdaptivePreset,  
         totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, 
+        promotionPending: promotionPending,
         updatedAt: serverTimestamp()
     });
 };
@@ -618,7 +623,9 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
         totalErrors: rb.totalErrors,
         masteredCount: rb.masteredCount,
         waitingWrong: rb.waitingWrong,
-        waitingReview: rb.waitingReview
+        waitingReview: rb.waitingReview,
+        promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
+        maxApprovedPromotion: rb.maxApprovedPromotion !== undefined ? rb.maxApprovedPromotion : 0
     });
 
     await updateDoc(sessionRef, {
