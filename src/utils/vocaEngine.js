@@ -1,21 +1,19 @@
-/* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture & Continuous SRS)
-   🚀 업데이트 3 (영점 조절 엔진): 신규 원생의 '어휘 구멍'을 메우기 위해 [초기 영점 조절] 프리셋을 신설했습니다. 
-   Z1(딥 스캔), Z2(의심 스캔), Z3(타겟 진도)로 구역을 분할하며, Z1/Z2 단어는 한 번만 맞춰도 즉시 마스터 처리(Fast-Track)하여 학습 지루함을 없앱니다. 
-   약 10회차 진행 후 자동으로 '밸런스 모드'로 정상화(Normalization)됩니다. */
+/* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture)
+   🚀 업데이트 5 (동적 조기 졸업): 학생의 오답 누적률을 평가하여 우수 학생은 5회차 만에 지루한 스캔 구간을 탈출시키는 'Adaptive Early Exit'를 적용했습니다. 
+   비용 효율성: 추가적인 DB 쿼리 없이 캐싱된 상태값(waitingWrong)만을 평가하므로 과금(Bill)이 전혀 발생하지 않습니다. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] '초기 영점 조절' 프리셋 추가 (비율: 타겟 50%, 의심스캔 40%, 딥스캔 10%)
 export const VOCA_PRESETS = {
     '밸런스 모드':  { wrong: 15, review: 30, passive: 5, new: 50 },  
     '오답 학습':    { wrong: 60, review: 20, passive: 5, new: 15 },  
     '망각 방어':    { wrong: 40, review: 50, passive: 10, new: 0 },  
     '기초 수리':    { wrong: 10, review: 20, passive: 40, new: 30 }, 
     '스퍼트 모드':  { wrong: 10, review: 15, passive: 5, new: 70 },
-    '초기 영점 조절': { wrong: 0, review: 0, z1_deep: 10, z2_scan: 40, z3_target: 50 } // 신규 등록자 전용
+    '초기 영점 조절': { wrong: 0, review: 0, z1_deep: 5, z2_scan: 45, z3_target: 50 } 
 };
 
 const TOTAL_WORDS = 40; 
@@ -111,7 +109,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const vocaSession = statData.vocaSession || 1;
         const catScore = Math.max(0, Math.min(1000, statData.catScore || 100)); 
         
-        // 🚀 만약 첫 세션(1회차)이고 프리셋이 지정되지 않았다면 강제로 '초기 영점 조절' 모드 가동
         let presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
         if (vocaSession === 1 && !statData.adaptivePreset && !requestedPreset) {
             presetName = '초기 영점 조절';
@@ -142,18 +139,14 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const requiredOldWordIds = [];
         const newlySeenWordIds = []; 
 
-        // ============================================================================
-        // 🚀 [CTO 패치] Phase 1 & 2: '초기 영점 조절' 모드 구동 알고리즘 (Zone Partitioning)
-        // ============================================================================
         if (presetName === '초기 영점 조절') {
-            const z1_limit = Math.max(0, catScore - 150); // 패스 구역 (너무 쉬운 단어)
-            const z2_limit = catScore;                    // 의심 구역 (알아야 하지만 구멍이 있을 수 있는 단어)
+            const z1_limit = Math.max(0, catScore - 150); 
+            const z2_limit = catScore;                    
             
-            let qZ1 = Math.round(TOTAL_WORDS * (preset.z1_deep / 100));
-            let qZ2 = Math.round(TOTAL_WORDS * (preset.z2_scan / 100));
-            let qZ3 = Math.round(TOTAL_WORDS * (preset.z3_target / 100));
+            let qZ1 = Math.round(TOTAL_WORDS * (preset.z1_deep / 100)); 
+            let qZ2 = Math.round(TOTAL_WORDS * (preset.z2_scan / 100)); 
+            let qZ3 = Math.round(TOTAL_WORDS * (preset.z3_target / 100)); 
 
-            // [Z1] 패스 구역 딥스캔 추출
             if (qZ1 > 0 && z1_limit > 0) {
                 const z1Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', z1_limit), limit(100));
                 const z1Snap = await getDocs(z1Query);
@@ -167,7 +160,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 qZ2 += (qZ1 - selectedZ1.length);
             }
 
-            // [Z2] 의심 구역 스캔 추출
             if (qZ2 > 0) {
                 const z2Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', z1_limit), where('rootDifficulty', '<', z2_limit), limit(150));
                 const z2Snap = await getDocs(z2Query);
@@ -181,7 +173,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 qZ3 += (qZ2 - selectedZ2.length);
             }
 
-            // [Z3] 타겟 진도 추출
             let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
             if (qZ3 > 0) {
                 const z3Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(qZ3 + 20));
@@ -199,21 +190,16 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 });
             }
 
-            // 영점 조절 모드에서는 기존 오답이 있다면 Z3(신규) 자리를 대체하여 조금씩 섞어줍니다.
             if (wrongPool.length > 0) {
                 const qWrong = Math.min(wrongPool.length, 5);
                 const actualWrong = wrongPool.slice(0, qWrong);
                 actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '오답' }); });
-                // 배열 맨 끝의 신규 단어를 빼고 오답을 넣습니다.
                 finalWordData.splice(finalWordData.length - qWrong, qWrong); 
             }
 
             await updateDoc(statRef, { lastNewWordDifficulty: newProgressDifficulty, adaptivePreset: '초기 영점 조절' });
 
         } else {
-            // ============================================================================
-            // 일반 모드 (밸런스, 오답학습, 스퍼트 등) 구동 알고리즘
-            // ============================================================================
             let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
             let qReview = Math.round(TOTAL_WORDS * (preset.review / 100));
             let qPassive = Math.round(TOTAL_WORDS * (preset.passive / 100));
@@ -285,7 +271,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             await updateDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty });
         }
 
-        // 공통: DB에서 기존 단어 정보 가져오기 (N+1 최적화 chunk)
         if (requiredOldWordIds.length > 0) {
             const chunkSize = 10;
             const fetchPromises = [];
@@ -453,13 +438,11 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             let nextReviewInterval = 1;
             let nextStatus = 'review';
             
-            // 🚀 [CTO 패치] Fast-Track 로직: 영점 조절 구역(Z1, Z2) 단어는 1번만 맞춰도 즉시 마스터 처리
             if (q.queueType === '의심 스캔' || q.queueType === '딥 스캔') {
-                newConsecutive = 7; // 마스터 진입 조건 충족
-                nextReviewInterval = 120; // 4개월 뒤 생존 신고
+                newConsecutive = 7; 
+                nextReviewInterval = 120; 
                 nextStatus = 'mastered';
             } else {
-                // 정상 간격 반복 (Continuous SRS)
                 if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
                 else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
                 else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'mastered'; }
@@ -525,11 +508,22 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const adaptiveStats = statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 };
     let newAdaptivePreset = statData.adaptivePreset || null; 
 
-    // 🚀 [CTO 패치] Phase 3: 영점 조절 모드 정상화(Normalization)
-    // 10회차 이상 진행되었고 현재 영점 조절 모드라면, 스캔이 얼추 끝났다고 판단하여 '밸런스 모드'로 복귀시킵니다.
-    if (presetUsed === '초기 영점 조절' && sessionNumber >= 10) {
-        newAdaptivePreset = null; // null이 되면 학생의 기본 프리셋(밸런스 모드)으로 돌아갑니다.
-        autoShiftMessage = '✅ 기초 어휘 영점 조절(스캔)이 완료되어 표준 진도 모드로 전환됩니다.';
+    totalAttempts += sessionTotal;
+    totalErrors += wrongSet.size;
+    masteredCount += deltaMastered;
+    waitingWrong += deltaWaitingWrong;
+    waitingReview += deltaWaitingReview;
+
+    // 🚀 [CTO 패치] 동적 조기 졸업 로직 (Adaptive Early Exit) 적용
+    if (presetUsed === '초기 영점 조절') {
+        if (sessionNumber >= 10 || (sessionNumber >= 5 && waitingWrong < 10)) {
+            newAdaptivePreset = null; 
+            autoShiftMessage = sessionNumber < 10 
+                ? '✅ 기초 어휘 스캔 결과가 매우 우수하여, 조기 졸업 및 표준 진도 모드로 전환됩니다.' 
+                : '✅ 기초 어휘 영점 조절(스캔)이 완료되어 표준 진도 모드로 전환됩니다.';
+        } else {
+            newAdaptivePreset = '초기 영점 조절';
+        }
     } else {
         const reviewAccuracy = reviewTotal > 0 ? (reviewCorrect / reviewTotal) : 1; 
         if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
@@ -547,18 +541,12 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             if (!autoShiftMessage) autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) 2회 연속 감지 -> [오답 학습] 모드 자동 가동';
             adaptiveStats.queueOverflowCount = 0;
         } else if (adaptiveStats.reviewLowAccuracyCount === 0 && adaptiveStats.queueOverflowCount === 0) {
-            if (newAdaptivePreset !== null && newAdaptivePreset !== '초기 영점 조절') {
+            if (newAdaptivePreset !== null) {
                 if (!autoShiftMessage) autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
             }
-            if (presetUsed !== '초기 영점 조절') newAdaptivePreset = null;
+            newAdaptivePreset = null;
         }
     }
-
-    totalAttempts += sessionTotal;
-    totalErrors += wrongSet.size;
-    masteredCount += deltaMastered;
-    waitingWrong += deltaWaitingWrong;
-    waitingReview += deltaWaitingReview;
 
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
