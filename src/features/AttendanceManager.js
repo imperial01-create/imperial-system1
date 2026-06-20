@@ -1,46 +1,49 @@
-/* [서비스 가치(Service Value)] 통합 출결 관리 및 시험 기간 관제 엔진 v7.0
-   1. 운영 효율화: '일별 관제'와 '원생별 통계'를 통합하여 데스크의 화면 전환(Friction)을 없앴습니다.
-   2. 에러 방어: 연쇄 삭제된 유령 데이터를 필터링하는 방어막(Bulletproof)을 유지합니다.
-   3. 자동화: '시험 기간 설정' 시 해당 기간 동안 학생을 자동으로 결석(Exam Leave) 처리하여 불필요한 긴급 콜과 오발송 문자를 원천 차단합니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v8.0
+   1. 공간 최적화: '교실 매트릭스' 탭을 통해 학원의 시공간 자원을 시각화하고 데드타임을 제거합니다.
+   2. 지능형 인원 계산: 시험 기간 결석자(Exam Leave)를 정규반 실제 등원 예정 인원에서 자동 차감하여 빈 교실을 찾아냅니다.
+   3. O(n) 렌더링 최적화: 30분 단위 테이블 렌더링 시 RowSpan을 동적 계산하여 React 렌더링 과부하를 방지합니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Plus, Trash2, Calendar
+    CalendarDays, UserCheck, AlertTriangle, Plus, Trash2, Calendar, LayoutGrid, ArrowRightLeft
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, orderBy } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Card, Button, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
+// 매트릭스 관제를 위한 시간대 (14:00 ~ 22:00, 30분 단위)
+const TIME_SLOTS = Array.from({ length: 17 }, (_, i) => {
+    const hour = Math.floor(i / 2) + 14;
+    const min = i % 2 === 0 ? '00' : '30';
+    return `${String(hour).padStart(2, '0')}:${min}`;
+});
 
-// 한국 시간(KST) 기준 정확한 로컬 날짜 문자열(YYYY-MM-DD) 추출기
 const getLocalDateStr = (dateObj) => {
     const pad = (n) => String(n).padStart(2, '0');
     return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
 };
 
 const AttendanceManager = ({ currentUser }) => {
-    const { classes, enrollments, users, loadingData } = useData();
+    const { classes, enrollments, users, masterData, loadingData } = useData();
 
     // --- State ---
-    const [activeTab, setActiveTab] = useState('daily'); // 'daily', 'student', 'exam_leave'
+    const [activeTab, setActiveTab] = useState('daily'); // 'daily', 'student', 'exam_leave', 'matrix'
     const [currentTime, setCurrentTime] = useState(new Date());
     const [searchQuery, setSearchQuery] = useState('');
     
-    // 데이터 State
     const [dailyAttendances, setDailyAttendances] = useState([]); 
     const [examLeaves, setExamLeaves] = useState([]);
+    const [todaySessions, setTodaySessions] = useState([]); // 클리닉/직보 데이터
     const [localLoading, setLocalLoading] = useState(true);
 
-    // 원생별 출결 조회를 위한 State
     const [selectedStudentId, setSelectedStudentId] = useState('');
     const [studentLogs, setStudentLogs] = useState([]);
 
-    // 시험기간 설정 모달 State
     const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
     const [leaveForm, setLeaveForm] = useState({ studentId: '', startDate: '', endDate: '', reason: '중간/기말고사 대비' });
     const [isSavingLeave, setIsSavingLeave] = useState(false);
@@ -48,14 +51,12 @@ const AttendanceManager = ({ currentUser }) => {
     const todayStr = DAYS_OF_WEEK[currentTime.getDay()];
     const todayDateStr = getLocalDateStr(currentTime);
 
-    // 1분마다 현재 시간 갱신
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 60000);
         return () => clearInterval(timer);
     }, []);
 
-    // 🚀 [Firebase 최적화] 리스너 분리 및 최소화
-    // 1. 오늘 날짜 출결 로그 구독
+    // 출결 로그 구독
     useEffect(() => {
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', todayDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
@@ -65,24 +66,24 @@ const AttendanceManager = ({ currentUser }) => {
         return () => unsubAtt();
     }, [todayDateStr]);
 
-    // 2. 현재 활성화된 시험 기간(Exam Leaves) 전체 구독 (용량이 작으므로 전체 구독 후 메모리 필터링)
+    // 시험 결석자 구독
     useEffect(() => {
         const qLeave = query(collection(db, `artifacts/${APP_ID}/public/data/exam_leaves`));
-        const unsubLeave = onSnapshot(qLeave, s => {
-            setExamLeaves(s.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
+        const unsubLeave = onSnapshot(qLeave, s => setExamLeaves(s.docs.map(d => ({ id: d.id, ...d.data() }))));
         return () => unsubLeave();
     }, []);
 
-    // 원생별 출결 탭 - 학생 선택 시 과거 기록 로딩 (비용 절감을 위해 onSnapshot 대신 1회성 getDocs 사용)
+    // 당일 보충/클리닉(세션) 구독
+    useEffect(() => {
+        const qSession = query(collection(db, `artifacts/${APP_ID}/public/data/sessions`), where('date', '==', todayDateStr));
+        const unsubSession = onSnapshot(qSession, s => setTodaySessions(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+        return () => unsubSession();
+    }, [todayDateStr]);
+
     useEffect(() => {
         if (activeTab === 'student' && selectedStudentId) {
             const fetchLogs = async () => {
-                const q = query(
-                    collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`),
-                    where('studentId', '==', selectedStudentId),
-                    // 복합 인덱스 필요 경고 방지를 위해 메모리 정렬 사용
-                );
+                const q = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
                 const snap = await getDocs(q);
                 const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.date.localeCompare(a.date));
                 setStudentLogs(logs);
@@ -91,14 +92,12 @@ const AttendanceManager = ({ currentUser }) => {
         }
     }, [activeTab, selectedStudentId]);
 
-    // 🚀 [CTO 코어 엔진] 일별 스케줄 및 출결 매트릭스 계산
+    // 🚀 [CTO 코어 엔진] 정규반 실시간 출결 현황 계산
     const radarData = useMemo(() => {
         const classGroups = {};
         const emergencyList = [];
-        const examLeaveList = []; // 시험기간 면제자 리스트
-        let totalExpected = 0;
-        let totalAttended = 0;
-        let totalLate = 0;
+        const examLeaveList = []; 
+        let totalExpected = 0; let totalAttended = 0; let totalLate = 0;
 
         enrollments.forEach(enroll => {
             if (enroll.status !== 'active') return;
@@ -108,47 +107,27 @@ const AttendanceManager = ({ currentUser }) => {
             if (!todaySch) return;
 
             const student = users.find(u => u.id === enroll.studentId);
-            // 방탄 필터링: 유령 데이터 차단
             if (!student) return;
 
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             if (searchQuery && !student.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
 
-            // 🚀 [신규 엔진] 이 학생이 오늘 '시험 기간 결석' 대상자인지 검증
-            const isExamLeave = examLeaves.some(leave => 
-                leave.studentId === student.id && 
-                todayDateStr >= leave.startDate && 
-                todayDateStr <= leave.endDate
-            );
-
+            const isExamLeave = examLeaves.some(leave => leave.studentId === student.id && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate);
             const hasAttended = dailyAttendances.some(a => a.studentId === enroll.studentId);
             const currentHHMM = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
             const isLate = !hasAttended && (currentHHMM > todaySch.callTime);
 
             let status = 'expected'; 
-            
-            if (isExamLeave) {
-                status = 'exam_leave';
-            } else if (hasAttended) { 
-                status = 'attended'; totalAttended++; 
-            } else if (isLate) { 
-                status = 'late'; totalLate++; 
-            } else { 
-                totalExpected++; 
-            }
+            if (isExamLeave) { status = 'exam_leave'; } 
+            else if (hasAttended) { status = 'attended'; totalAttended++; } 
+            else if (isLate) { status = 'late'; totalLate++; } 
+            else { totalExpected++; }
 
-            const studentData = {
-                studentId: enroll.studentId,
-                studentName: student.name,
-                phone: student.phone || '-',
-                status: status,
-                enrollId: enroll.id
-            };
+            const studentData = { studentId: enroll.studentId, studentName: student.name, phone: student.phone || '-', status: status, enrollId: enroll.id };
 
-            // 그룹 분리 적재
             if (status === 'exam_leave') {
                 examLeaveList.push({ ...studentData, className: enroll.className });
-                return; // 정규 그룹 카드에 표시하지 않고 넘깁니다. (원한다면 표시할 수도 있음)
+                return; 
             }
 
             if (status === 'late') {
@@ -158,12 +137,8 @@ const AttendanceManager = ({ currentUser }) => {
             const groupKey = `${enroll.classId}_${todaySch.callTime}`;
             if (!classGroups[groupKey]) {
                 classGroups[groupKey] = {
-                    classId: enroll.classId,
-                    className: enroll.className,
-                    lecturerName: lecturer?.name || '미지정',
-                    callTime: todaySch.callTime,
-                    classTime: todaySch.startTime,
-                    room: todaySch.room || '미정',
+                    classId: enroll.classId, className: enroll.className, lecturerName: lecturer?.name || '미지정',
+                    callTime: todaySch.callTime, classTime: todaySch.startTime, endTime: todaySch.endTime, room: todaySch.room || '미정',
                     students: []
                 };
             }
@@ -174,15 +149,92 @@ const AttendanceManager = ({ currentUser }) => {
         sortedGroups.forEach(g => g.students.sort((a, b) => a.studentName.localeCompare(b.studentName)));
         emergencyList.sort((a, b) => a.callTime.localeCompare(b.callTime));
 
-        return { 
-            groups: sortedGroups, 
-            emergencyList,
-            examLeaveList,
-            totalExpected: totalExpected + totalAttended + totalLate, 
-            totalAttended, 
-            totalLate 
-        };
+        return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
+
+    // 🚀 [CTO 매트릭스 엔진] 강의실 x 시간표 그리드 데이터 구축 (O(n) 최적화 및 rowSpan 계산)
+    const matrixGrid = useMemo(() => {
+        const grid = {};
+        const masterRooms = masterData?.classrooms || [];
+        
+        // 1. 그리드 뼈대 초기화
+        masterRooms.forEach(room => {
+            const rName = typeof room === 'string' ? room : room.name;
+            grid[rName] = {};
+            TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
+        });
+
+        // 2. 정규반 데이터 매핑 (radarData.groups 재활용)
+        radarData.groups.forEach(group => {
+            if (!group.room || !grid[group.room]) return;
+            const startTime = group.classTime;
+            const endTime = group.endTime || '22:00';
+            
+            // 수용 인원 및 실제 출석 예정 계산 (시험 결석자는 이미 groups에서 제외됨)
+            const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === group.room);
+            const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
+            const currentHeadcount = group.students.length;
+            
+            const startIndex = TIME_SLOTS.indexOf(startTime);
+            const endIndex = TIME_SLOTS.indexOf(endTime);
+            
+            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+                const rowSpan = endIndex - startIndex;
+                grid[group.room][startTime] = {
+                    type: 'class',
+                    title: group.className,
+                    lecturer: group.lecturerName,
+                    headcount: currentHeadcount,
+                    capacity: capacity,
+                    rowSpan: rowSpan,
+                    warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal')
+                };
+                // 병합되는 하위 슬롯은 'skip' 처리하여 렌더링 방지
+                for (let i = startIndex + 1; i < endIndex; i++) {
+                    if (TIME_SLOTS[i]) grid[group.room][TIME_SLOTS[i]] = { skip: true };
+                }
+            }
+        });
+
+        // 3. 직전보충/클리닉 (sessions) 데이터 매핑
+        todaySessions.forEach(session => {
+            if (!session.classroom || !grid[session.classroom] || !['confirmed', 'completed'].includes(session.status)) return;
+            const startTime = session.startTime;
+            const endTime = session.endTime;
+            
+            const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === session.classroom);
+            const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
+            const stList = Array.isArray(session.students) ? session.students : (session.studentName ? [1] : []);
+            const currentHeadcount = stList.length;
+
+            const startIndex = TIME_SLOTS.indexOf(startTime);
+            const endIndex = TIME_SLOTS.indexOf(endTime);
+
+            if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+                // 충돌 감지 로직
+                if (grid[session.classroom][startTime] && grid[session.classroom][startTime].type === 'class') {
+                    grid[session.classroom][startTime].conflict = true;
+                    return;
+                }
+
+                const rowSpan = endIndex - startIndex;
+                grid[session.classroom][startTime] = {
+                    type: 'clinic',
+                    title: session.topic || '보충/클리닉',
+                    lecturer: session.taName,
+                    headcount: currentHeadcount,
+                    capacity: capacity,
+                    rowSpan: rowSpan,
+                    warn: currentHeadcount > capacity ? 'over' : 'normal'
+                };
+                for (let i = startIndex + 1; i < endIndex; i++) {
+                    if (TIME_SLOTS[i]) grid[session.classroom][TIME_SLOTS[i]] = { skip: true };
+                }
+            }
+        });
+
+        return grid;
+    }, [masterData, radarData.groups, todaySessions]);
 
     // --- Handlers ---
     const handleManualCheckIn = async (studentId, studentName) => {
@@ -190,66 +242,51 @@ const AttendanceManager = ({ currentUser }) => {
         try {
             const logId = `${todayDateStr}_${studentId}`;
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/attendance_logs`, logId), {
-                studentId,
-                date: todayDateStr,
-                timestamp: serverTimestamp(),
-                method: 'manual_desk'
+                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk'
             });
         } catch (e) { alert("출결 처리 실패: " + e.message); }
     };
 
     const handleSaveExamLeave = async () => {
-        if (!leaveForm.studentId || !leaveForm.startDate || !leaveForm.endDate) {
-            return alert("학생과 기간을 모두 선택해주세요.");
-        }
-        if (leaveForm.startDate > leaveForm.endDate) {
-            return alert("시작일이 종료일보다 늦을 수 없습니다.");
-        }
+        if (!leaveForm.studentId || !leaveForm.startDate || !leaveForm.endDate) return alert("학생과 기간을 모두 선택해주세요.");
+        if (leaveForm.startDate > leaveForm.endDate) return alert("시작일이 종료일보다 늦을 수 없습니다.");
 
         setIsSavingLeave(true);
         try {
             const student = users.find(u => u.id === leaveForm.studentId);
             await addDoc(collection(db, `artifacts/${APP_ID}/public/data/exam_leaves`), {
-                studentId: student.id,
-                studentName: student.name,
-                startDate: leaveForm.startDate,
-                endDate: leaveForm.endDate,
-                reason: leaveForm.reason,
-                createdAt: serverTimestamp(),
-                createdBy: currentUser.name
+                studentId: student.id, studentName: student.name, startDate: leaveForm.startDate, endDate: leaveForm.endDate,
+                reason: leaveForm.reason, createdAt: serverTimestamp(), createdBy: currentUser.name
             });
             setIsLeaveModalOpen(false);
             setLeaveForm({ studentId: '', startDate: '', endDate: '', reason: '중간/기말고사 대비' });
-        } catch (error) {
-            alert("저장 실패: " + error.message);
-        } finally {
-            setIsSavingLeave(false);
-        }
+        } catch (error) { alert("저장 실패: " + error.message); } finally { setIsSavingLeave(false); }
     };
 
     const handleDeleteExamLeave = async (id) => {
         if (!window.confirm("이 시험기간 면제 설정을 삭제하시겠습니까?\n삭제 즉시 정규 출결 스케줄로 원복됩니다.")) return;
-        try {
-            await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/exam_leaves`, id));
-        } catch (error) { alert("삭제 실패: " + error.message); }
+        try { await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/exam_leaves`, id)); } 
+        catch (error) { alert("삭제 실패: " + error.message); }
     };
 
     if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
-        <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in h-screen flex flex-col">
+        <div className="max-w-screen-2xl mx-auto space-y-6 pb-20 animate-in fade-in h-screen flex flex-col">
             
-            {/* Header & Tabs */}
             <div className="bg-white p-4 md:p-6 rounded-3xl shadow-sm border border-gray-200 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
-                        <UserCheck className="text-indigo-600" /> 통합 출결 관리
+                        <UserCheck className="text-indigo-600" /> 통합 출결 및 공간 관제
                     </h1>
                 </div>
                 
                 <div className="flex bg-gray-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
                     <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>일별 운영 관제</button>
-                    <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>원생별 출결 현황</button>
+                    <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>
+                        <LayoutGrid size={16}/> 교실 매트릭스
+                    </button>
+                    <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>원생별 출결</button>
                     <button onClick={() => setActiveTab('exam_leave')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'exam_leave' ? 'bg-white text-rose-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>
                         시험결석 설정 {examLeaves.length > 0 && <span className="bg-rose-100 text-rose-600 px-1.5 rounded-full text-[10px]">{examLeaves.length}</span>}
                     </button>
@@ -269,7 +306,7 @@ const AttendanceManager = ({ currentUser }) => {
                         </div>
                         <div className="bg-black/20 p-4 rounded-2xl flex items-center gap-5">
                             <div className="text-center">
-                                <div className="text-xs opacity-70 font-bold mb-1">등원 예정</div>
+                                <div className="text-xs opacity-70 font-bold mb-1">등원 예정 (면제 제외)</div>
                                 <div className="text-2xl font-black">{radarData.totalExpected}명</div>
                             </div>
                             <div className="text-center">
@@ -381,7 +418,7 @@ const AttendanceManager = ({ currentUser }) => {
                                         <div className="text-center py-6 text-gray-400 font-bold text-xs">오늘 면제자가 없습니다.</div>
                                     ) : (
                                         radarData.examLeaveList.map((data, idx) => (
-                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-gray-200 flex justify-between items-center">
+                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-gray-200 flex justify-between items-center shadow-sm">
                                                 <span className="font-bold text-gray-800 text-sm">{data.studentName}</span>
                                                 <span className="text-[10px] font-bold text-gray-500 truncate max-w-[120px]">{data.className}</span>
                                             </div>
@@ -389,6 +426,106 @@ const AttendanceManager = ({ currentUser }) => {
                                     )}
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) */}
+            {activeTab === 'matrix' && (
+                <div className="flex flex-col h-full gap-6 animate-in fade-in">
+                    <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <div className="flex items-center gap-3 mb-1">
+                                <LayoutGrid size={24} />
+                                <h2 className="text-xl font-black">{todayDateStr} 교실 자원 관제탑</h2>
+                            </div>
+                            <p className="opacity-90 text-sm">빈 강의실을 시각적으로 확인하고, 시험 결석자로 인해 인원이 빈 정규반 교실을 찾아냅니다.</p>
+                        </div>
+                        <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-400 rounded-sm"></span> 정규반</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-purple-100 border border-purple-400 rounded-sm"></span> 직보/보충</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-100 border border-rose-400 rounded-sm"></span> 초과/충돌</span>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
+                        <div className="flex-1 overflow-auto custom-scrollbar relative">
+                            <table className="w-full min-w-[1200px] border-collapse text-sm">
+                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
+                                    <tr>
+                                        <th className="p-3 border-b border-r border-gray-200 text-center w-20 bg-gray-100">시간</th>
+                                        {masterData?.classrooms?.map((room, idx) => {
+                                            const rName = typeof room === 'string' ? room : room.name;
+                                            const rCap = typeof room === 'string' ? '' : room.capacity;
+                                            return (
+                                                <th key={idx} className="p-3 border-b border-r border-gray-200 text-center font-black text-gray-700 min-w-[150px]">
+                                                    {rName} <br/><span className="text-[10px] text-gray-400 font-bold">{rCap ? `수용: ${rCap}명` : ''}</span>
+                                                </th>
+                                            );
+                                        })}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {TIME_SLOTS.map((time, tIdx) => (
+                                        <tr key={time} className="hover:bg-gray-50/50">
+                                            <td className="p-2 border-b border-r border-gray-200 text-center font-mono font-bold text-gray-500 bg-gray-50 sticky left-0 z-10">
+                                                {time}
+                                            </td>
+                                            {masterData?.classrooms?.map((room, rIdx) => {
+                                                const rName = typeof room === 'string' ? room : room.name;
+                                                const cellData = matrixGrid[rName]?.[time];
+                                                
+                                                if (cellData?.skip) return null; // rowSpan에 의해 병합된 셀은 렌더링 스킵
+
+                                                if (!cellData) {
+                                                    return <td key={rIdx} className="p-2 border-b border-r border-gray-100 text-center text-gray-300"></td>;
+                                                }
+
+                                                // 렌더링 스타일 지정
+                                                let bgClass = 'bg-blue-50 border-blue-200';
+                                                let textClass = 'text-blue-800';
+                                                
+                                                if (cellData.type === 'clinic') {
+                                                    bgClass = 'bg-purple-50 border-purple-200';
+                                                    textClass = 'text-purple-800';
+                                                }
+                                                
+                                                if (cellData.conflict) {
+                                                    bgClass = 'bg-rose-100 border-rose-400 animate-pulse';
+                                                    textClass = 'text-rose-900';
+                                                }
+
+                                                return (
+                                                    <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-b border-r border-gray-200 align-top transition-all hover:brightness-95 cursor-pointer ${bgClass}`}>
+                                                        <div className="h-full flex flex-col gap-1 relative">
+                                                            <div className={`font-black text-sm leading-tight ${textClass}`}>{cellData.title}</div>
+                                                            <div className="text-[10px] font-bold text-gray-500">{cellData.lecturer} 강사</div>
+                                                            
+                                                            <div className="mt-auto pt-2 flex items-center justify-between">
+                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded">
+                                                                    예상: {cellData.headcount}명
+                                                                </span>
+                                                                {cellData.warn === 'over' && (
+                                                                    <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm" title="수용 인원 초과!">초과</span>
+                                                                )}
+                                                                {cellData.warn === 'under' && cellData.type === 'class' && (
+                                                                    <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1" title="시험결석자로 인해 빈 자리가 많습니다. 스왑 추천!">
+                                                                        <ArrowRightLeft size={10}/> 스왑 추천
+                                                                    </span>
+                                                                )}
+                                                                {cellData.conflict && (
+                                                                    <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><AlertTriangle size={10}/> 교실 중복</span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -471,7 +608,7 @@ const AttendanceManager = ({ currentUser }) => {
                         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                             <div>
                                 <h2 className="text-xl font-black text-rose-800 flex items-center gap-2 mb-2"><AlertTriangle size={20}/> 시험기간 출석 면제(Bypass) 관리</h2>
-                                <p className="text-sm font-bold text-rose-600">설정된 기간 동안 해당 학생들은 정규 출결 스케줄(긴급 콜, 지각 알림)에서 완전히 제외됩니다.</p>
+                                <p className="text-sm font-bold text-rose-600">설정된 기간 동안 해당 학생들은 정규 출결 스케줄(긴급 콜, 지각 알림)에서 완전히 제외되며, 교실 수용 인원 계산에서도 차감됩니다.</p>
                             </div>
                             <Button onClick={() => setIsLeaveModalOpen(true)} className="bg-rose-600 hover:bg-rose-700 shadow-md font-bold" icon={Plus}>면제 대상자 추가</Button>
                         </div>
@@ -513,7 +650,6 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* 모달: 시험기간 면제자 추가 */}
             <Modal isOpen={isLeaveModalOpen} onClose={() => setIsLeaveModalOpen(false)} title="시험기간 출석 면제 설정">
                 <div className="space-y-5 p-2">
                     <div className="bg-rose-50 p-4 rounded-xl text-rose-700 text-sm font-bold flex items-start gap-2 border border-rose-100">
