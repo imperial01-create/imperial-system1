@@ -1,7 +1,8 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.0
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.1
    1. 공간 최적화: '수강생' 기준이 아닌 '클래스 마스터' 기준으로 매트릭스를 그려 유령 클래스 증발 문제를 해결했습니다.
    2. 시간 동기화: 14:15 같은 비정형 시간대를 30분 단위 그리드에 맞게 스냅(Snap)하는 알고리즘을 추가했습니다.
-   3. Auto-Resolver: 빈 교실을 클릭해 직보를 퀵 등록하며, 인원/시간 충돌 시 최적의 대안 교실을 찾아 제안하는 AI 배정 알고리즘을 탑재했습니다. */
+   3. Auto-Resolver: 빈 교실을 클릭해 직보를 퀵 등록하며, 인원/시간 충돌 시 최적의 대안 교실을 찾아 제안하는 AI 배정 알고리즘을 탑재했습니다. 
+   4. 타임라인 확장: 주말/방학 특강을 위해 관제 시간을 08:00 ~ 23:00으로 대폭 확장했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -17,9 +18,9 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 매트릭스 관제를 위한 시간대 (14:00 ~ 22:00, 30분 단위)
-const TIME_SLOTS = Array.from({ length: 17 }, (_, i) => {
-    const hour = Math.floor(i / 2) + 14;
+// 🚀 [CTO 패치] 오전 수업(방학/주말)을 커버하기 위해 08:00 ~ 23:00 으로 확장 (총 31슬롯)
+const TIME_SLOTS = Array.from({ length: 31 }, (_, i) => {
+    const hour = Math.floor(i / 2) + 8; // 8시부터 시작
     const min = i % 2 === 0 ? '00' : '30';
     return `${String(hour).padStart(2, '0')}:${min}`;
 });
@@ -29,7 +30,7 @@ const getLocalDateStr = (dateObj) => {
     return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
 };
 
-// 🚀 [CTO 패치] 비정형 시간을 30분 단위 그리드에 맞추는 Snap 함수
+// 비정형 시간을 30분 단위 그리드에 맞추는 Snap 함수
 const snapTime = (timeStr) => {
     if (!timeStr) return null;
     const [h, m] = timeStr.split(':').map(Number);
@@ -56,7 +57,7 @@ const AttendanceManager = ({ currentUser }) => {
     const [leaveForm, setLeaveForm] = useState({ studentId: '', startDate: '', endDate: '', reason: '중간/기말고사 대비' });
     const [isSavingLeave, setIsSavingLeave] = useState(false);
 
-    // 🚀 [Auto-Resolver] 퀵 등록 모달 및 확인창 State
+    // [Auto-Resolver] 퀵 등록 모달 및 확인창 State
     const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
@@ -102,6 +103,7 @@ const AttendanceManager = ({ currentUser }) => {
         }
     }, [activeTab, selectedStudentId]);
 
+    // 정규반 실시간 출결 현황 계산
     const radarData = useMemo(() => {
         const classGroups = {};
         const emergencyList = [];
@@ -161,7 +163,7 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
 
-    // 🚀 [CTO 매트릭스 엔진] 수강생이 없어도 클래스 마스터를 기준으로 빈 방을 찾아냅니다.
+    // [매트릭스 엔진] 수강생이 없어도 클래스 마스터를 기준으로 빈 방을 찾아냅니다.
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
@@ -283,7 +285,7 @@ const AttendanceManager = ({ currentUser }) => {
         catch (error) { alert("삭제 실패: " + error.message); }
     };
 
-    // 🚀 [Auto-Resolver 엔진] 빈칸 클릭 시 직보 등록 모달 오픈
+    // [Auto-Resolver 엔진] 빈칸 클릭 시 직보 등록 모달 오픈
     const handleCellClick = (room, time) => {
         const currentCell = matrixGrid[room][time];
         if (currentCell) return; // 이미 무언가 있으면 무시
