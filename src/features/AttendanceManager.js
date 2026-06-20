@@ -1,21 +1,22 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v8.0
-   1. 공간 최적화: '교실 매트릭스' 탭을 통해 학원의 시공간 자원을 시각화하고 데드타임을 제거합니다.
-   2. 지능형 인원 계산: 시험 기간 결석자(Exam Leave)를 정규반 실제 등원 예정 인원에서 자동 차감하여 빈 교실을 찾아냅니다.
-   3. O(n) 렌더링 최적화: 30분 단위 테이블 렌더링 시 RowSpan을 동적 계산하여 React 렌더링 과부하를 방지합니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.0
+   1. 공간 최적화: '수강생' 기준이 아닌 '클래스 마스터' 기준으로 매트릭스를 그려 유령 클래스 증발 문제를 해결했습니다.
+   2. 시간 동기화: 14:15 같은 비정형 시간대를 30분 단위 그리드에 맞게 스냅(Snap)하는 알고리즘을 추가했습니다.
+   3. Auto-Resolver: 빈 교실을 클릭해 직보를 퀵 등록하며, 인원/시간 충돌 시 최적의 대안 교실을 찾아 제안하는 AI 배정 알고리즘을 탑재했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Plus, Trash2, Calendar, LayoutGrid, ArrowRightLeft
+    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, BookOpen
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-import { Card, Button, Modal, Badge } from '../components/UI';
+import { Card, Button, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
+
 // 매트릭스 관제를 위한 시간대 (14:00 ~ 22:00, 30분 단위)
 const TIME_SLOTS = Array.from({ length: 17 }, (_, i) => {
     const hour = Math.floor(i / 2) + 14;
@@ -28,17 +29,24 @@ const getLocalDateStr = (dateObj) => {
     return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
 };
 
+// 🚀 [CTO 패치] 비정형 시간을 30분 단위 그리드에 맞추는 Snap 함수
+const snapTime = (timeStr) => {
+    if (!timeStr) return null;
+    const [h, m] = timeStr.split(':').map(Number);
+    const snappedM = m < 30 ? '00' : '30';
+    return `${String(h).padStart(2, '0')}:${snappedM}`;
+};
+
 const AttendanceManager = ({ currentUser }) => {
     const { classes, enrollments, users, masterData, loadingData } = useData();
 
-    // --- State ---
-    const [activeTab, setActiveTab] = useState('daily'); // 'daily', 'student', 'exam_leave', 'matrix'
+    const [activeTab, setActiveTab] = useState('daily'); 
     const [currentTime, setCurrentTime] = useState(new Date());
     const [searchQuery, setSearchQuery] = useState('');
     
     const [dailyAttendances, setDailyAttendances] = useState([]); 
     const [examLeaves, setExamLeaves] = useState([]);
-    const [todaySessions, setTodaySessions] = useState([]); // 클리닉/직보 데이터
+    const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
 
     const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -48,6 +56,11 @@ const AttendanceManager = ({ currentUser }) => {
     const [leaveForm, setLeaveForm] = useState({ studentId: '', startDate: '', endDate: '', reason: '중간/기말고사 대비' });
     const [isSavingLeave, setIsSavingLeave] = useState(false);
 
+    // 🚀 [Auto-Resolver] 퀵 등록 모달 및 확인창 State
+    const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
+    const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
+    const [confirmConfig, setConfirmConfig] = useState(null);
+
     const todayStr = DAYS_OF_WEEK[currentTime.getDay()];
     const todayDateStr = getLocalDateStr(currentTime);
 
@@ -56,7 +69,6 @@ const AttendanceManager = ({ currentUser }) => {
         return () => clearInterval(timer);
     }, []);
 
-    // 출결 로그 구독
     useEffect(() => {
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', todayDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
@@ -66,14 +78,12 @@ const AttendanceManager = ({ currentUser }) => {
         return () => unsubAtt();
     }, [todayDateStr]);
 
-    // 시험 결석자 구독
     useEffect(() => {
         const qLeave = query(collection(db, `artifacts/${APP_ID}/public/data/exam_leaves`));
         const unsubLeave = onSnapshot(qLeave, s => setExamLeaves(s.docs.map(d => ({ id: d.id, ...d.data() }))));
         return () => unsubLeave();
     }, []);
 
-    // 당일 보충/클리닉(세션) 구독
     useEffect(() => {
         const qSession = query(collection(db, `artifacts/${APP_ID}/public/data/sessions`), where('date', '==', todayDateStr));
         const unsubSession = onSnapshot(qSession, s => setTodaySessions(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -92,7 +102,6 @@ const AttendanceManager = ({ currentUser }) => {
         }
     }, [activeTab, selectedStudentId]);
 
-    // 🚀 [CTO 코어 엔진] 정규반 실시간 출결 현황 계산
     const radarData = useMemo(() => {
         const classGroups = {};
         const emergencyList = [];
@@ -152,79 +161,84 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
 
-    // 🚀 [CTO 매트릭스 엔진] 강의실 x 시간표 그리드 데이터 구축 (O(n) 최적화 및 rowSpan 계산)
+    // 🚀 [CTO 매트릭스 엔진] 수강생이 없어도 클래스 마스터를 기준으로 빈 방을 찾아냅니다.
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
         
-        // 1. 그리드 뼈대 초기화
         masterRooms.forEach(room => {
             const rName = typeof room === 'string' ? room : room.name;
             grid[rName] = {};
             TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
         });
 
-        // 2. 정규반 데이터 매핑 (radarData.groups 재활용)
-        radarData.groups.forEach(group => {
-            if (!group.room || !grid[group.room]) return;
-            const startTime = group.classTime;
-            const endTime = group.endTime || '22:00';
+        // 1. 정규반 데이터 매핑 (classes DB 직접 순회)
+        classes.forEach(cls => {
+            const todaySch = cls.schedules?.find(s => s.dayOfWeek === todayStr);
+            if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
+
+            const snappedStart = snapTime(todaySch.startTime);
+            const snappedEnd = snapTime(todaySch.endTime || '22:00');
             
-            // 수용 인원 및 실제 출석 예정 계산 (시험 결석자는 이미 groups에서 제외됨)
-            const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === group.room);
+            const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === todaySch.room);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
-            const currentHeadcount = group.students.length;
             
-            const startIndex = TIME_SLOTS.indexOf(startTime);
-            const endIndex = TIME_SLOTS.indexOf(endTime);
+            // 실 등원 예상 인원 계산 (시험결석자 차감)
+            const activeEnrolls = enrollments.filter(e => e.classId === cls.id && e.status === 'active');
+            let currentHeadcount = 0;
+            activeEnrolls.forEach(e => {
+                const isExamLeave = examLeaves.some(leave => leave.studentId === e.studentId && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate);
+                if (!isExamLeave) currentHeadcount++;
+            });
+
+            const lecturer = users.find(u => u.id === cls.lecturerId);
+
+            const startIndex = TIME_SLOTS.indexOf(snappedStart);
+            const endIndex = TIME_SLOTS.indexOf(snappedEnd);
             
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                const rowSpan = endIndex - startIndex;
-                grid[group.room][startTime] = {
+                grid[todaySch.room][snappedStart] = {
                     type: 'class',
-                    title: group.className,
-                    lecturer: group.lecturerName,
+                    title: cls.name,
+                    lecturer: lecturer?.name || '미지정',
                     headcount: currentHeadcount,
                     capacity: capacity,
-                    rowSpan: rowSpan,
+                    rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal')
                 };
-                // 병합되는 하위 슬롯은 'skip' 처리하여 렌더링 방지
                 for (let i = startIndex + 1; i < endIndex; i++) {
-                    if (TIME_SLOTS[i]) grid[group.room][TIME_SLOTS[i]] = { skip: true };
+                    if (TIME_SLOTS[i]) grid[todaySch.room][TIME_SLOTS[i]] = { skip: true };
                 }
             }
         });
 
-        // 3. 직전보충/클리닉 (sessions) 데이터 매핑
+        // 2. 직전보충/클리닉 (sessions) 데이터 매핑
         todaySessions.forEach(session => {
-            if (!session.classroom || !grid[session.classroom] || !['confirmed', 'completed'].includes(session.status)) return;
-            const startTime = session.startTime;
-            const endTime = session.endTime;
+            if (!session.classroom || !grid[session.classroom] || !['confirmed', 'completed', 'pending'].includes(session.status)) return;
+            const snappedStart = snapTime(session.startTime);
+            const snappedEnd = snapTime(session.endTime || '22:00');
             
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === session.classroom);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
             const stList = Array.isArray(session.students) ? session.students : (session.studentName ? [1] : []);
             const currentHeadcount = stList.length;
 
-            const startIndex = TIME_SLOTS.indexOf(startTime);
-            const endIndex = TIME_SLOTS.indexOf(endTime);
+            const startIndex = TIME_SLOTS.indexOf(snappedStart);
+            const endIndex = TIME_SLOTS.indexOf(snappedEnd);
 
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                // 충돌 감지 로직
-                if (grid[session.classroom][startTime] && grid[session.classroom][startTime].type === 'class') {
-                    grid[session.classroom][startTime].conflict = true;
+                if (grid[session.classroom][snappedStart] && grid[session.classroom][snappedStart].type === 'class') {
+                    grid[session.classroom][snappedStart].conflict = true;
                     return;
                 }
 
-                const rowSpan = endIndex - startIndex;
-                grid[session.classroom][startTime] = {
+                grid[session.classroom][snappedStart] = {
                     type: 'clinic',
-                    title: session.topic || '보충/클리닉',
+                    title: session.topic || '보충/직보',
                     lecturer: session.taName,
                     headcount: currentHeadcount,
                     capacity: capacity,
-                    rowSpan: rowSpan,
+                    rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : 'normal'
                 };
                 for (let i = startIndex + 1; i < endIndex; i++) {
@@ -234,7 +248,7 @@ const AttendanceManager = ({ currentUser }) => {
         });
 
         return grid;
-    }, [masterData, radarData.groups, todaySessions]);
+    }, [masterData, classes, enrollments, examLeaves, todaySessions, users, todayStr, todayDateStr]);
 
     // --- Handlers ---
     const handleManualCheckIn = async (studentId, studentName) => {
@@ -269,6 +283,91 @@ const AttendanceManager = ({ currentUser }) => {
         catch (error) { alert("삭제 실패: " + error.message); }
     };
 
+    // 🚀 [Auto-Resolver 엔진] 빈칸 클릭 시 직보 등록 모달 오픈
+    const handleCellClick = (room, time) => {
+        const currentCell = matrixGrid[room][time];
+        if (currentCell) return; // 이미 무언가 있으면 무시
+        
+        let endTime = '22:00';
+        const startIndex = TIME_SLOTS.indexOf(time);
+        if (startIndex + 4 <= TIME_SLOTS.length - 1) { // 기본 2시간 배정
+            endTime = TIME_SLOTS[startIndex + 4];
+        }
+
+        setQuickAddForm({ room, startTime: time, endTime, topic: '직전 보충', lecturerId: currentUser.id, headcount: 1 });
+        setIsQuickAddModalOpen(true);
+    };
+
+    const executeQuickAdd = async (finalRoom) => {
+        try {
+            const lecturer = users.find(u => u.id === quickAddForm.lecturerId);
+            const docId = `quick_${Date.now()}`;
+            
+            await setDoc(doc(db, `artifacts/${APP_ID}/public/data/sessions`, docId), {
+                taId: lecturer?.id || '', taName: lecturer?.name || '미정',
+                date: todayDateStr, startTime: quickAddForm.startTime, endTime: quickAddForm.endTime,
+                classroom: finalRoom, status: 'confirmed', source: 'matrix_quick_add',
+                topic: quickAddForm.topic,
+                students: Array(Number(quickAddForm.headcount)).fill({ name: '직보학생' }) // 인원수 확보용 더미
+            });
+            
+            setIsQuickAddModalOpen(false);
+            setConfirmConfig(null);
+        } catch (e) {
+            alert("배정 실패: " + e.message);
+        }
+    };
+
+    const handleQuickAddSubmit = () => {
+        if (!quickAddForm.startTime || !quickAddForm.endTime || quickAddForm.startTime >= quickAddForm.endTime) {
+            return alert('시간을 올바르게 설정해주세요.');
+        }
+
+        const reqHeadcount = Number(quickAddForm.headcount);
+        const startIndex = TIME_SLOTS.indexOf(quickAddForm.startTime);
+        const endIndex = TIME_SLOTS.indexOf(quickAddForm.endTime);
+        const requiredSlots = TIME_SLOTS.slice(startIndex, endIndex);
+
+        const checkRoomAvailable = (roomName) => {
+            const rObj = (masterData?.classrooms || []).find(r => (typeof r === 'string' ? r : r.name) === roomName);
+            const cap = typeof rObj === 'string' ? 999 : (rObj?.capacity || 999);
+            
+            if (cap < reqHeadcount) return false; // 정원 초과
+            
+            // 시간표 충돌 검사
+            for (const slot of requiredSlots) {
+                if (matrixGrid[roomName][slot] !== null) return false;
+            }
+            return true;
+        };
+
+        // 1. 내가 선택한 원래 방이 가능한지 체크
+        if (checkRoomAvailable(quickAddForm.room)) {
+            return executeQuickAdd(quickAddForm.room);
+        }
+
+        // 2. 불가능하다면 Auto-Resolver 가동 (가장 작은 적합한 방 찾기)
+        const masterRooms = masterData?.classrooms || [];
+        const availableRooms = masterRooms
+            .filter(r => checkRoomAvailable(typeof r === 'string' ? r : r.name))
+            .sort((a, b) => {
+                const capA = typeof a === 'string' ? 999 : (a.capacity || 999);
+                const capB = typeof b === 'string' ? 999 : (b.capacity || 999);
+                return capA - capB; // 정원 낭비 최소화
+            });
+
+        if (availableRooms.length > 0) {
+            const bestRoom = typeof availableRooms[0] === 'string' ? availableRooms[0] : availableRooms[0].name;
+            setConfirmConfig({
+                message: `🚨 선택하신 [${quickAddForm.room}]는 정원이 초과되거나 이미 수업이 있습니다.\n\n대신 현재 비어있는 [${bestRoom}]로 자동 변경하여 배정하시겠습니까?`,
+                onConfirm: () => executeQuickAdd(bestRoom)
+            });
+        } else {
+            alert(`🚨 지정하신 시간에 ${reqHeadcount}명을 수용할 수 있는 빈 강의실이 학원 전체에 단 한 곳도 없습니다.`);
+        }
+    };
+
+
     if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
@@ -293,7 +392,7 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* TAB 1: 일별 운영 관제 (기존 ScheduleControlTower 진화형) */}
+            {/* TAB 1: 일별 운영 관제 */}
             {activeTab === 'daily' && (
                 <div className="flex flex-col h-full gap-6">
                     <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-6 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
@@ -321,7 +420,6 @@ const AttendanceManager = ({ currentUser }) => {
                     </div>
 
                     <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-                        {/* 메인 관제탑 (반 단위 그룹 리스트) */}
                         <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm flex flex-col min-h-[400px]">
                             <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50/50 rounded-t-3xl shrink-0">
                                 <h2 className="font-bold text-gray-800 flex items-center gap-2"><Users size={18}/> 콜 타임(Call Time)별 타임라인</h2>
@@ -378,9 +476,7 @@ const AttendanceManager = ({ currentUser }) => {
                             </div>
                         </div>
 
-                        {/* 우측 긴급 콜 & 면제자 리스트 */}
                         <div className="w-full lg:w-80 shrink-0 flex flex-col gap-4">
-                            {/* 긴급 콜 */}
                             <div className="bg-rose-50 border-2 border-rose-200 rounded-3xl p-5 shadow-sm flex flex-col h-1/2 min-h-[300px]">
                                 <h2 className="text-lg font-black text-rose-800 mb-3 flex items-center gap-2">
                                     <ShieldAlert size={20} className="animate-pulse"/> 긴급 콜 리스트
@@ -408,7 +504,6 @@ const AttendanceManager = ({ currentUser }) => {
                                 </div>
                             </div>
                             
-                            {/* 시험기간 결석 자동 면제자 알림판 */}
                             <div className="bg-gray-50 border-2 border-gray-200 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
                                 <h2 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-2">
                                     <CalendarDays size={18} className="text-gray-500"/> 자동 출석 면제 (시험/특수)
@@ -418,7 +513,7 @@ const AttendanceManager = ({ currentUser }) => {
                                         <div className="text-center py-6 text-gray-400 font-bold text-xs">오늘 면제자가 없습니다.</div>
                                     ) : (
                                         radarData.examLeaveList.map((data, idx) => (
-                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-gray-200 flex justify-between items-center shadow-sm">
+                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-gray-200 flex justify-between items-center">
                                                 <span className="font-bold text-gray-800 text-sm">{data.studentName}</span>
                                                 <span className="text-[10px] font-bold text-gray-500 truncate max-w-[120px]">{data.className}</span>
                                             </div>
@@ -426,106 +521,6 @@ const AttendanceManager = ({ currentUser }) => {
                                     )}
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) */}
-            {activeTab === 'matrix' && (
-                <div className="flex flex-col h-full gap-6 animate-in fade-in">
-                    <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <div>
-                            <div className="flex items-center gap-3 mb-1">
-                                <LayoutGrid size={24} />
-                                <h2 className="text-xl font-black">{todayDateStr} 교실 자원 관제탑</h2>
-                            </div>
-                            <p className="opacity-90 text-sm">빈 강의실을 시각적으로 확인하고, 시험 결석자로 인해 인원이 빈 정규반 교실을 찾아냅니다.</p>
-                        </div>
-                        <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-400 rounded-sm"></span> 정규반</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-purple-100 border border-purple-400 rounded-sm"></span> 직보/보충</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-rose-100 border border-rose-400 rounded-sm"></span> 초과/충돌</span>
-                        </div>
-                    </div>
-
-                    <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
-                        <div className="flex-1 overflow-auto custom-scrollbar relative">
-                            <table className="w-full min-w-[1200px] border-collapse text-sm">
-                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
-                                    <tr>
-                                        <th className="p-3 border-b border-r border-gray-200 text-center w-20 bg-gray-100">시간</th>
-                                        {masterData?.classrooms?.map((room, idx) => {
-                                            const rName = typeof room === 'string' ? room : room.name;
-                                            const rCap = typeof room === 'string' ? '' : room.capacity;
-                                            return (
-                                                <th key={idx} className="p-3 border-b border-r border-gray-200 text-center font-black text-gray-700 min-w-[150px]">
-                                                    {rName} <br/><span className="text-[10px] text-gray-400 font-bold">{rCap ? `수용: ${rCap}명` : ''}</span>
-                                                </th>
-                                            );
-                                        })}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {TIME_SLOTS.map((time, tIdx) => (
-                                        <tr key={time} className="hover:bg-gray-50/50">
-                                            <td className="p-2 border-b border-r border-gray-200 text-center font-mono font-bold text-gray-500 bg-gray-50 sticky left-0 z-10">
-                                                {time}
-                                            </td>
-                                            {masterData?.classrooms?.map((room, rIdx) => {
-                                                const rName = typeof room === 'string' ? room : room.name;
-                                                const cellData = matrixGrid[rName]?.[time];
-                                                
-                                                if (cellData?.skip) return null; // rowSpan에 의해 병합된 셀은 렌더링 스킵
-
-                                                if (!cellData) {
-                                                    return <td key={rIdx} className="p-2 border-b border-r border-gray-100 text-center text-gray-300"></td>;
-                                                }
-
-                                                // 렌더링 스타일 지정
-                                                let bgClass = 'bg-blue-50 border-blue-200';
-                                                let textClass = 'text-blue-800';
-                                                
-                                                if (cellData.type === 'clinic') {
-                                                    bgClass = 'bg-purple-50 border-purple-200';
-                                                    textClass = 'text-purple-800';
-                                                }
-                                                
-                                                if (cellData.conflict) {
-                                                    bgClass = 'bg-rose-100 border-rose-400 animate-pulse';
-                                                    textClass = 'text-rose-900';
-                                                }
-
-                                                return (
-                                                    <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-b border-r border-gray-200 align-top transition-all hover:brightness-95 cursor-pointer ${bgClass}`}>
-                                                        <div className="h-full flex flex-col gap-1 relative">
-                                                            <div className={`font-black text-sm leading-tight ${textClass}`}>{cellData.title}</div>
-                                                            <div className="text-[10px] font-bold text-gray-500">{cellData.lecturer} 강사</div>
-                                                            
-                                                            <div className="mt-auto pt-2 flex items-center justify-between">
-                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded">
-                                                                    예상: {cellData.headcount}명
-                                                                </span>
-                                                                {cellData.warn === 'over' && (
-                                                                    <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm" title="수용 인원 초과!">초과</span>
-                                                                )}
-                                                                {cellData.warn === 'under' && cellData.type === 'class' && (
-                                                                    <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1" title="시험결석자로 인해 빈 자리가 많습니다. 스왑 추천!">
-                                                                        <ArrowRightLeft size={10}/> 스왑 추천
-                                                                    </span>
-                                                                )}
-                                                                {cellData.conflict && (
-                                                                    <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><AlertTriangle size={10}/> 교실 중복</span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </td>
-                                                );
-                                            })}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
                         </div>
                     </div>
                 </div>
@@ -601,14 +596,14 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* TAB 3: 시험기간 면제(Exam Leave) 관리 */}
+            {/* TAB 3: 시험기간 면제 관리 */}
             {activeTab === 'exam_leave' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <Card className="bg-rose-50 border-rose-200 w-full shrink-0">
                         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                             <div>
                                 <h2 className="text-xl font-black text-rose-800 flex items-center gap-2 mb-2"><AlertTriangle size={20}/> 시험기간 출석 면제(Bypass) 관리</h2>
-                                <p className="text-sm font-bold text-rose-600">설정된 기간 동안 해당 학생들은 정규 출결 스케줄(긴급 콜, 지각 알림)에서 완전히 제외되며, 교실 수용 인원 계산에서도 차감됩니다.</p>
+                                <p className="text-sm font-bold text-rose-600">설정된 기간 동안 해당 학생들은 정규 출결 스케줄에서 제외되며, 교실 수용 인원 계산에서도 차감됩니다.</p>
                             </div>
                             <Button onClick={() => setIsLeaveModalOpen(true)} className="bg-rose-600 hover:bg-rose-700 shadow-md font-bold" icon={Plus}>면제 대상자 추가</Button>
                         </div>
@@ -650,6 +645,104 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
+            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) & Auto-Resolver */}
+            {activeTab === 'matrix' && (
+                <div className="flex flex-col h-full gap-6 animate-in fade-in">
+                    <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <div className="flex items-center gap-3 mb-1">
+                                <LayoutGrid size={24} />
+                                <h2 className="text-xl font-black">{todayDateStr} 교실 자원 관제탑</h2>
+                            </div>
+                            <p className="opacity-90 text-sm">빈 칸을 클릭하여 직보/보충을 즉시 배정하고, 충돌 시 AI 대안을 확인하세요.</p>
+                        </div>
+                        <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-400 rounded-sm"></span> 정규반</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-purple-100 border border-purple-400 rounded-sm"></span> 직보/보충</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/50 border border-gray-200 rounded-sm"></span> 빈 교실 (클릭)</span>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
+                        <div className="flex-1 overflow-auto custom-scrollbar relative">
+                            <table className="w-full min-w-[1200px] border-collapse text-sm">
+                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
+                                    <tr>
+                                        <th className="p-3 border-b border-r border-gray-200 text-center w-20 bg-gray-100">시간</th>
+                                        {masterData?.classrooms?.map((room, idx) => {
+                                            const rName = typeof room === 'string' ? room : room.name;
+                                            const rCap = typeof room === 'string' ? '' : room.capacity;
+                                            return (
+                                                <th key={idx} className="p-3 border-b border-r border-gray-200 text-center font-black text-gray-700 min-w-[150px]">
+                                                    {rName} <br/><span className="text-[10px] text-gray-400 font-bold">{rCap ? `수용: ${rCap}명` : ''}</span>
+                                                </th>
+                                            );
+                                        })}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {TIME_SLOTS.map((time, tIdx) => (
+                                        <tr key={time} className="hover:bg-gray-50/50">
+                                            <td className="p-2 border-b border-r border-gray-200 text-center font-mono font-bold text-gray-500 bg-gray-50 sticky left-0 z-10">
+                                                {time}
+                                            </td>
+                                            {masterData?.classrooms?.map((room, rIdx) => {
+                                                const rName = typeof room === 'string' ? room : room.name;
+                                                const cellData = matrixGrid[rName]?.[time];
+                                                
+                                                if (cellData?.skip) return null;
+
+                                                if (!cellData) {
+                                                    // 🚀 [Auto-Resolver] 빈 칸 클릭 활성화
+                                                    return (
+                                                        <td key={rIdx} 
+                                                            onClick={() => handleCellClick(rName, time)}
+                                                            className="p-2 border-b border-r border-gray-100 text-center text-transparent hover:bg-emerald-50 hover:text-emerald-500 cursor-pointer transition-colors font-black text-xs"
+                                                        >
+                                                            + 배정하기
+                                                        </td>
+                                                    );
+                                                }
+
+                                                let bgClass = 'bg-blue-50 border-blue-200';
+                                                let textClass = 'text-blue-800';
+                                                
+                                                if (cellData.type === 'clinic') {
+                                                    bgClass = 'bg-purple-50 border-purple-200';
+                                                    textClass = 'text-purple-800';
+                                                }
+                                                
+                                                if (cellData.conflict) {
+                                                    bgClass = 'bg-rose-100 border-rose-400 animate-pulse';
+                                                    textClass = 'text-rose-900';
+                                                }
+
+                                                return (
+                                                    <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-b border-r border-gray-200 align-top ${bgClass}`}>
+                                                        <div className="h-full flex flex-col gap-1 relative">
+                                                            <div className={`font-black text-sm leading-tight ${textClass}`}>{cellData.title}</div>
+                                                            <div className="text-[10px] font-bold text-gray-500">{cellData.lecturer} 강사</div>
+                                                            
+                                                            <div className="mt-auto pt-2 flex items-center justify-between">
+                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded">예상: {cellData.headcount}명</span>
+                                                                {cellData.warn === 'over' && <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm">초과</span>}
+                                                                {cellData.warn === 'under' && cellData.type === 'class' && <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><ArrowRightLeft size={10}/> 스왑 추천</span>}
+                                                                {cellData.conflict && <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><AlertTriangle size={10}/> 중복</span>}
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 모달: 시험기간 면제자 추가 */}
             <Modal isOpen={isLeaveModalOpen} onClose={() => setIsLeaveModalOpen(false)} title="시험기간 출석 면제 설정">
                 <div className="space-y-5 p-2">
                     <div className="bg-rose-50 p-4 rounded-xl text-rose-700 text-sm font-bold flex items-start gap-2 border border-rose-100">
@@ -688,6 +781,66 @@ const AttendanceManager = ({ currentUser }) => {
                     </Button>
                 </div>
             </Modal>
+
+            {/* 🚀 [Auto-Resolver] 퀵 등록 모달 */}
+            <Modal isOpen={isQuickAddModalOpen} onClose={() => setIsQuickAddModalOpen(false)} title="직전 보충 / 클리닉 퀵 배정">
+                <div className="space-y-4">
+                    <div className="bg-emerald-50 p-4 rounded-xl text-emerald-800 font-bold text-sm border border-emerald-200">
+                        선택하신 <span className="font-black">[{quickAddForm.room}]</span>에 스케줄을 배정합니다. 만약 충돌이 발생하면 시스템이 최적의 대안 교실을 제안해 드립니다.
+                    </div>
+                    
+                    <div>
+                        <label className="text-xs font-bold text-gray-600 mb-1.5 block">강의 내용 / 타이틀</label>
+                        <input type="text" className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.topic} onChange={e => setQuickAddForm({...quickAddForm, topic: e.target.value})} placeholder="예: 신목고 2학년 내신 직보" />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="text-xs font-bold text-gray-600 mb-1.5 block">담당 강사</label>
+                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.lecturerId} onChange={e => setQuickAddForm({...quickAddForm, lecturerId: e.target.value})}>
+                                {users.filter(u => ['lecturer', 'ta', 'admin_assistant', 'admin'].includes(u.role)).map(u => (
+                                    <option key={u.id} value={u.id}>{u.name}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-gray-600 mb-1.5 block">참석 예상 인원수</label>
+                            <input type="number" min="1" className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.headcount} onChange={e => setQuickAddForm({...quickAddForm, headcount: e.target.value})} />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">시작 시간</label>
+                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.startTime} onChange={e => setQuickAddForm({...quickAddForm, startTime: e.target.value})}>
+                                {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">종료 시간</label>
+                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.endTime} onChange={e => setQuickAddForm({...quickAddForm, endTime: e.target.value})}>
+                                {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <Button className="w-full py-4 text-lg font-black shadow-lg bg-emerald-600 hover:bg-emerald-700 mt-4" onClick={handleQuickAddSubmit}>
+                        스마트 배정 등록 (Auto-Resolve)
+                    </Button>
+                </div>
+            </Modal>
+
+            {/* Auto-Resolver 대안 수락 확인 팝업 */}
+            <Modal isOpen={!!confirmConfig} onClose={() => setConfirmConfig(null)} title="🚨 스마트 교실 재배정">
+                <div className="space-y-6 p-2 text-center">
+                    <p className="text-base text-gray-800 font-bold whitespace-pre-wrap leading-relaxed bg-rose-50 p-6 rounded-2xl border border-rose-100">{confirmConfig?.message}</p>
+                    <div className="flex gap-3">
+                        <Button variant="secondary" onClick={() => setConfirmConfig(null)} className="flex-1 py-4 text-lg font-bold">취소</Button>
+                        <Button variant="danger" onClick={() => { confirmConfig.onConfirm(); }} className="flex-1 py-4 text-lg font-black bg-rose-600 hover:bg-rose-700">네, 제안대로 변경합니다</Button>
+                    </div>
+                </div>
+            </Modal>
+
         </div>
     );
 };
