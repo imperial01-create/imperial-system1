@@ -1,12 +1,12 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v10.0
-   1. 데이터 가시성(UX): 예상 인원수에 마우스를 올리면 실제 집계된 '학생 명단(Tooltip)'이 보이도록 하여, 수강 데이터 오류(중복/누락)를 즉시 추적할 수 있게 했습니다.
-   2. 해시 충돌 최소화: 강사 고유 색상 팔레트를 8종에서 21종으로 대폭 확장하여 색상 중복 현상을 방지했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v10.5
+   1. UX 최적화: 원생별 출결 조회 시 검색 전 렌더링을 차단하여 성능을 높이고, 결석/지각 데이터를 명시적으로 기록하고 시각화합니다.
+   2. 에러 방어: 삭제된 계정(유령 데이터)이 매트릭스 인원수에 합산되는 것을 원천 차단(Ghost Filter)하고, 이름 없는 데이터 정렬 시 발생하는 White Screen 에러를 픽스했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft
+    Calendar, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, BookOpen, Plus, X
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -16,7 +16,6 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 관제를 위한 시간대 (08:00 ~ 23:00, 30분 단위)
 const TIME_SLOTS = Array.from({ length: 31 }, (_, i) => {
     const hour = Math.floor(i / 2) + 8;
     const min = i % 2 === 0 ? '00' : '30';
@@ -35,28 +34,17 @@ const snapTime = (timeStr) => {
     return `${String(h).padStart(2, '0')}:${snappedM}`;
 };
 
-// 🚀 [CTO UX 패치] 강사 색상 팔레트를 21가지로 대폭 확장하여 중복(Collision) 확률 최소화
 const TEACHER_COLORS = [
-    'bg-indigo-50 border-indigo-400 text-indigo-900',
-    'bg-emerald-50 border-emerald-400 text-emerald-900',
-    'bg-amber-50 border-amber-400 text-amber-900',
-    'bg-rose-50 border-rose-400 text-rose-900',
-    'bg-cyan-50 border-cyan-400 text-cyan-900',
-    'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
-    'bg-lime-50 border-lime-400 text-lime-900',
-    'bg-orange-50 border-orange-400 text-orange-900',
-    'bg-blue-50 border-blue-400 text-blue-900',
-    'bg-purple-50 border-purple-400 text-purple-900',
-    'bg-pink-50 border-pink-400 text-pink-900',
-    'bg-teal-50 border-teal-400 text-teal-900',
-    'bg-yellow-50 border-yellow-400 text-yellow-900',
-    'bg-red-50 border-red-400 text-red-900',
-    'bg-sky-50 border-sky-400 text-sky-900',
-    'bg-violet-50 border-violet-400 text-violet-900',
-    'bg-green-50 border-green-400 text-green-900',
-    'bg-stone-50 border-stone-400 text-stone-900',
-    'bg-neutral-50 border-neutral-400 text-neutral-900',
-    'bg-slate-50 border-slate-400 text-slate-900',
+    'bg-indigo-50 border-indigo-400 text-indigo-900', 'bg-emerald-50 border-emerald-400 text-emerald-900',
+    'bg-amber-50 border-amber-400 text-amber-900', 'bg-rose-50 border-rose-400 text-rose-900',
+    'bg-cyan-50 border-cyan-400 text-cyan-900', 'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
+    'bg-lime-50 border-lime-400 text-lime-900', 'bg-orange-50 border-orange-400 text-orange-900',
+    'bg-blue-50 border-blue-400 text-blue-900', 'bg-purple-50 border-purple-400 text-purple-900',
+    'bg-pink-50 border-pink-400 text-pink-900', 'bg-teal-50 border-teal-400 text-teal-900',
+    'bg-yellow-50 border-yellow-400 text-yellow-900', 'bg-red-50 border-red-400 text-red-900',
+    'bg-sky-50 border-sky-400 text-sky-900', 'bg-violet-50 border-violet-400 text-violet-900',
+    'bg-green-50 border-green-400 text-green-900', 'bg-stone-50 border-stone-400 text-stone-900',
+    'bg-neutral-50 border-neutral-400 text-neutral-900', 'bg-slate-50 border-slate-400 text-slate-900',
     'bg-zinc-50 border-zinc-400 text-zinc-900'
 ];
 
@@ -64,9 +52,9 @@ const getTeacherColor = (name) => {
     if (!name || name === '미지정') return 'bg-slate-50 border-slate-300 text-slate-700';
     let hash = 0;
     for (let i = 0; i < name.length; i++) {
-        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        hash = (hash * 31 + name.charCodeAt(i)) % 1000000007; 
     }
-    return TEACHER_COLORS[Math.abs(hash) % TEACHER_COLORS.length];
+    return TEACHER_COLORS[hash % TEACHER_COLORS.length];
 };
 
 const AttendanceManager = ({ currentUser }) => {
@@ -153,17 +141,25 @@ const AttendanceManager = ({ currentUser }) => {
             if (searchQuery && !student.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
 
             const isExamLeave = examLeaves.some(leave => leave.studentId === student.id && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate);
-            const hasAttended = dailyAttendances.some(a => a.studentId === enroll.studentId);
+            
+            const attLog = dailyAttendances.find(a => a.studentId === enroll.studentId);
             const currentHHMM = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
-            const isLate = !hasAttended && (currentHHMM > todaySch.callTime);
+            const isLate = !attLog && (currentHHMM > todaySch.callTime);
 
             let status = 'expected'; 
-            if (isExamLeave) { status = 'exam_leave'; } 
-            else if (hasAttended) { status = 'attended'; totalAttended++; } 
-            else if (isLate) { status = 'late'; totalLate++; } 
-            else { totalExpected++; }
+            if (isExamLeave) { 
+                status = 'exam_leave'; 
+            } else if (attLog) { 
+                if (attLog.status === 'absent') { status = 'absent'; }
+                else if (attLog.status === 'late') { status = 'late_attended'; totalAttended++; }
+                else { status = 'attended'; totalAttended++; }
+            } else if (isLate) { 
+                status = 'late'; totalLate++; 
+            } else { 
+                totalExpected++; 
+            }
 
-            const studentData = { studentId: enroll.studentId, studentName: student.name, phone: student.phone || '-', status: status, enrollId: enroll.id };
+            const studentData = { studentId: enroll.studentId, studentName: student.name, phone: student.phone || '-', status: status, enrollId: enroll.id, callTime: todaySch.callTime };
 
             if (status === 'exam_leave') {
                 examLeaveList.push({ ...studentData, className: enroll.className });
@@ -171,7 +167,7 @@ const AttendanceManager = ({ currentUser }) => {
             }
 
             if (status === 'late') {
-                emergencyList.push({ ...studentData, className: enroll.className, callTime: todaySch.callTime });
+                emergencyList.push({ ...studentData, className: enroll.className });
             }
 
             const groupKey = `${enroll.classId}_${todaySch.callTime}`;
@@ -192,7 +188,7 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
 
-    // 🚀 [CTO 매트릭스 엔진] 
+    // 🚀 [Ghost Filter 탑재] 삭제된 학생을 교실 매트릭스 계산에서 원천 차단
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
@@ -203,7 +199,6 @@ const AttendanceManager = ({ currentUser }) => {
             TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
         });
 
-        // 1. 정규반 데이터 매핑
         classes.forEach(cls => {
             const todaySch = cls.schedules?.find(s => s.dayOfWeek === todayStr);
             if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
@@ -214,8 +209,8 @@ const AttendanceManager = ({ currentUser }) => {
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === todaySch.room);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
             
-            // 🚀 [명단 수집 로직] 인원수뿐만 아니라 학생 이름 배열을 직접 수집하여 툴팁(Tooltip)에 활용합니다.
-            const activeEnrolls = enrollments.filter(e => e.classId === cls.id && e.status === 'active');
+            // 🚀 [Ghost Filter] users DB에 존재하는 학생만 필터링합니다.
+            const activeEnrolls = enrollments.filter(e => e.classId === cls.id && e.status === 'active' && users.some(u => u.id === e.studentId));
             let currentHeadcount = 0;
             let expectedStudentNames = [];
             
@@ -223,24 +218,19 @@ const AttendanceManager = ({ currentUser }) => {
                 const isExamLeave = examLeaves.some(leave => leave.studentId === e.studentId && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate);
                 if (!isExamLeave) {
                     currentHeadcount++;
-                    expectedStudentNames.push(e.studentName || '이름없음');
+                    const sObj = users.find(u => u.id === e.studentId);
+                    expectedStudentNames.push(sObj?.name || e.studentName || '이름없음');
                 }
             });
 
             const lecturer = users.find(u => u.id === cls.lecturerId);
-
             const startIndex = TIME_SLOTS.indexOf(snappedStart);
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
             
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
                 grid[todaySch.room][snappedStart] = {
-                    type: 'class',
-                    title: cls.name,
-                    lecturer: lecturer?.name || '미지정',
-                    headcount: currentHeadcount,
-                    studentNames: expectedStudentNames, // 툴팁용 데이터
-                    capacity: capacity,
-                    rowSpan: endIndex - startIndex,
+                    type: 'class', title: cls.name, lecturer: lecturer?.name || '미지정', headcount: currentHeadcount,
+                    studentNames: expectedStudentNames, capacity: capacity, rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal')
                 };
                 for (let i = startIndex + 1; i < endIndex; i++) {
@@ -249,7 +239,6 @@ const AttendanceManager = ({ currentUser }) => {
             }
         });
 
-        // 2. 직전보충/클리닉 데이터 매핑
         todaySessions.forEach(session => {
             if (!session.classroom || !grid[session.classroom] || session.status === 'rejected') return;
             const snappedStart = snapTime(session.startTime);
@@ -258,7 +247,6 @@ const AttendanceManager = ({ currentUser }) => {
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === session.classroom);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
             
-            // 🚀 [명단 수집 로직] 세션에 배정된 학생 이름 수집
             const stList = Array.isArray(session.students) ? session.students : (session.studentName ? [{name: session.studentName}] : []);
             const currentHeadcount = stList.length;
             const expectedStudentNames = stList.map(st => st.name || '미정');
@@ -276,14 +264,8 @@ const AttendanceManager = ({ currentUser }) => {
                 if (session.status === 'open') displayTitle = '💡 대기중 (예약가능)';
 
                 grid[session.classroom][snappedStart] = {
-                    type: 'clinic',
-                    status: session.status,
-                    title: displayTitle,
-                    lecturer: session.taName,
-                    headcount: currentHeadcount,
-                    studentNames: expectedStudentNames, // 툴팁용 데이터
-                    capacity: capacity,
-                    rowSpan: endIndex - startIndex,
+                    type: 'clinic', status: session.status, title: displayTitle, lecturer: session.taName,
+                    headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : 'normal'
                 };
                 for (let i = startIndex + 1; i < endIndex; i++) {
@@ -295,14 +277,30 @@ const AttendanceManager = ({ currentUser }) => {
         return grid;
     }, [masterData, classes, enrollments, examLeaves, todaySessions, users, todayStr, todayDateStr]);
 
-    const handleManualCheckIn = async (studentId, studentName) => {
-        if (!window.confirm(`[${studentName}] 학생을 즉시 등원(출석) 처리하시겠습니까?`)) return;
+    // 🚀 [CTO 패치] 출석, 지각, 결석 상태를 명시적으로 저장
+    const handleManualCheckIn = async (studentId, studentName, callTime) => {
+        const currentHHMM = `${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}`;
+        const isLate = callTime && currentHHMM > callTime;
+        const statusVal = isLate ? 'late' : 'attended';
+        const msg = isLate ? `[지각] 처리하시겠습니까?` : `[정상 출석] 처리하시겠습니까?`;
+
+        if (!window.confirm(`[${studentName}] 학생을 ${msg}`)) return;
         try {
             const logId = `${todayDateStr}_${studentId}`;
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/attendance_logs`, logId), {
-                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk'
+                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: statusVal
             });
         } catch (e) { alert("출결 처리 실패: " + e.message); }
+    };
+
+    const handleMarkAbsent = async (studentId, studentName) => {
+        if (!window.confirm(`[${studentName}] 학생을 결석 처리하시겠습니까?`)) return;
+        try {
+            const logId = `${todayDateStr}_${studentId}`;
+            await setDoc(doc(db, `artifacts/${APP_ID}/public/data/attendance_logs`, logId), {
+                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: 'absent'
+            });
+        } catch (e) { alert("결석 처리 실패: " + e.message); }
     };
 
     const handleSaveExamLeave = async () => {
@@ -336,7 +334,6 @@ const AttendanceManager = ({ currentUser }) => {
         if (startIndex + 4 <= TIME_SLOTS.length - 1) { 
             endTime = TIME_SLOTS[startIndex + 4];
         }
-
         setQuickAddForm({ room, startTime: time, endTime, topic: '직전 보충', lecturerId: currentUser.id, headcount: 1 });
         setIsQuickAddModalOpen(true);
     };
@@ -356,9 +353,7 @@ const AttendanceManager = ({ currentUser }) => {
             
             setIsQuickAddModalOpen(false);
             setConfirmConfig(null);
-        } catch (e) {
-            alert("배정 실패: " + e.message);
-        }
+        } catch (e) { alert("배정 실패: " + e.message); }
     };
 
     const handleQuickAddSubmit = () => {
@@ -493,15 +488,24 @@ const AttendanceManager = ({ currentUser }) => {
 
                                                 <div className="flex flex-wrap gap-2">
                                                     {group.students.map(student => (
-                                                        <div key={student.studentId} className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-sm transition-all ${student.status === 'late' ? 'bg-rose-50 border-rose-300 text-rose-800' : student.status === 'attended' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
+                                                        <div key={student.studentId} className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-sm transition-all ${student.status === 'late' ? 'bg-rose-50 border-rose-300 text-rose-800' : student.status === 'attended' || student.status === 'late_attended' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : student.status === 'absent' ? 'bg-slate-100 border-slate-300 text-slate-500' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
                                                             <span className="font-bold">{student.studentName}</span>
                                                             {student.status === 'late' && <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded animate-pulse">지각</span>}
-                                                            {student.status === 'attended' && <span className="text-emerald-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 완료</span>}
+                                                            {student.status === 'attended' && <span className="text-emerald-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 정상 출석</span>}
+                                                            {student.status === 'late_attended' && <span className="text-amber-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 지각 등원</span>}
+                                                            {student.status === 'absent' && <span className="text-rose-500 text-[10px] font-black flex items-center gap-0.5"><X size={12}/> 결석</span>}
                                                             {student.status === 'expected' && <span className="text-slate-400 text-[10px] font-black">대기</span>}
-                                                            {student.status !== 'attended' && (
-                                                                <button onClick={() => handleManualCheckIn(student.studentId, student.studentName)} className={`ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
-                                                                    등원
-                                                                </button>
+                                                            
+                                                            {/* 🚀 [CTO 패치] 결석/지각 명시적 저장 버튼 분리 */}
+                                                            {['expected', 'late'].includes(student.status) && (
+                                                                <div className="flex gap-1 ml-1">
+                                                                    <button onClick={() => handleManualCheckIn(student.studentId, student.studentName, group.callTime)} className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
+                                                                        등원
+                                                                    </button>
+                                                                    <button onClick={() => handleMarkAbsent(student.studentId, student.studentName)} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors">
+                                                                        결석
+                                                                    </button>
+                                                                </div>
                                                             )}
                                                         </div>
                                                     ))}
@@ -543,7 +547,7 @@ const AttendanceManager = ({ currentUser }) => {
                             
                             <div className="bg-slate-50 border-2 border-slate-300 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
                                 <h2 className="text-sm font-black text-slate-700 mb-3 flex items-center gap-2">
-                                    <CalendarDays size={18} className="text-slate-500"/> 자동 출석 면제 (시험/특수)
+                                    <Calendar size={18} className="text-slate-500"/> 자동 출석 면제 (시험/특수)
                                 </h2>
                                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
                                     {radarData.examLeaveList.length === 0 ? (
@@ -574,15 +578,23 @@ const AttendanceManager = ({ currentUser }) => {
                             </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                            {users.filter(u => u.role === 'student' && (u.name.includes(searchQuery) || (u.schoolName||'').includes(searchQuery))).map(student => (
-                                <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border-2 border-blue-400 shadow-sm' : 'hover:bg-slate-50 border-2 border-transparent'}`}>
-                                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{student.name[0]}</div>
-                                    <div>
-                                        <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-slate-800'}`}>{student.name}</div>
-                                        <div className="text-xs text-slate-500 mt-0.5">{student.schoolName}</div>
-                                    </div>
-                                </button>
-                            ))}
+                            {/* 🚀 [UX 최적화] 검색어가 없을 때는 리스트 렌더링을 차단하여 데이터 사용량 절약 */}
+                            {searchQuery.trim().length === 0 ? (
+                                <div className="text-center py-10 text-slate-400 font-bold text-sm flex flex-col items-center">
+                                    <Search size={32} className="mb-3 opacity-20"/>
+                                    학생 이름을 검색해주세요.
+                                </div>
+                            ) : (
+                                users.filter(u => u.role === 'student' && (u.name.includes(searchQuery) || (u.schoolName||'').includes(searchQuery))).map(student => (
+                                    <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border-2 border-blue-400 shadow-sm' : 'hover:bg-slate-50 border-2 border-transparent'}`}>
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{student.name[0]}</div>
+                                        <div>
+                                            <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-slate-800'}`}>{student.name}</div>
+                                            <div className="text-xs text-slate-500 mt-0.5">{student.schoolName}</div>
+                                        </div>
+                                    </button>
+                                ))
+                            )}
                         </div>
                     </div>
                     
@@ -590,7 +602,7 @@ const AttendanceManager = ({ currentUser }) => {
                         {!selectedStudentId ? (
                             <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-3">
                                 <UserCheck size={48} className="opacity-20" />
-                                <p className="font-bold">좌측에서 학생을 선택하면 상세 출결을 봅니다.</p>
+                                <p className="font-bold">좌측에서 학생을 검색 및 선택하면 상세 출결을 봅니다.</p>
                             </div>
                         ) : (
                             <>
@@ -601,7 +613,7 @@ const AttendanceManager = ({ currentUser }) => {
                                         </h2>
                                     </div>
                                     <div className="bg-white border border-slate-300 px-4 py-2 rounded-xl text-center shadow-sm">
-                                        <div className="text-xs text-slate-500 font-bold">누적 등원 횟수</div>
+                                        <div className="text-xs text-slate-500 font-bold">누적 기록 횟수</div>
                                         <div className="text-xl font-black text-blue-600">{studentLogs.length}회</div>
                                     </div>
                                 </div>
@@ -610,20 +622,30 @@ const AttendanceManager = ({ currentUser }) => {
                                         <div className="text-center py-16 text-slate-400 font-bold border-2 border-dashed border-slate-300 rounded-2xl bg-white">기록이 없습니다.</div>
                                     ) : (
                                         <div className="space-y-3">
-                                            {studentLogs.map(log => (
+                                            {/* 🚀 [CTO 패치] 결석, 지각 데이터를 직관적으로 색상 구분 */}
+                                            {studentLogs.map(log => {
+                                                const isAbsent = log.status === 'absent';
+                                                const isLate = log.status === 'late';
+                                                return (
                                                 <div key={log.id} className="bg-white border border-slate-300 rounded-xl p-4 flex justify-between items-center shadow-sm">
                                                     <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center border border-emerald-200"><CheckCircle size={20}/></div>
+                                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center border ${isAbsent ? 'bg-rose-100 text-rose-600 border-rose-200' : isLate ? 'bg-amber-100 text-amber-600 border-amber-200' : 'bg-emerald-100 text-emerald-600 border-emerald-200'}`}>
+                                                            {isAbsent ? <X size={20}/> : isLate ? <AlertTriangle size={20}/> : <CheckCircle size={20}/>}
+                                                        </div>
                                                         <div>
                                                             <div className="font-black text-slate-800">{log.date}</div>
-                                                            <div className="text-xs text-slate-500 font-bold mt-1">인증 방식: {log.method === 'manual_desk' ? '데스크 수동 인증' : '키패드 인증'}</div>
+                                                            <div className="text-xs text-slate-500 font-bold mt-1">
+                                                                상태: <span className={isAbsent ? 'text-rose-600' : isLate ? 'text-amber-600' : 'text-emerald-600'}>{isAbsent ? '결석' : isLate ? '지각' : '정상 출석'}</span>
+                                                                <span className="mx-2 text-slate-300">|</span>
+                                                                방식: {log.method === 'manual_desk' ? '데스크 수동 인증' : '키패드 인증'}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                     <div className="text-sm font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 font-bold">
                                                         {new Date(log.timestamp?.seconds * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
                                                     </div>
                                                 </div>
-                                            ))}
+                                            )})}
                                         </div>
                                     )}
                                 </div>
@@ -650,7 +672,7 @@ const AttendanceManager = ({ currentUser }) => {
                         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                             {examLeaves.length === 0 ? (
                                 <div className="text-center py-20 text-slate-400 font-bold flex flex-col items-center">
-                                    <CalendarDays size={48} className="opacity-20 mb-4"/>
+                                    <Calendar size={48} className="opacity-20 mb-4"/>
                                     현재 설정된 시험 기간/면제자가 없습니다.
                                 </div>
                             ) : (
@@ -759,13 +781,21 @@ const AttendanceManager = ({ currentUser }) => {
                                                             <div className="text-xs font-bold opacity-80">{cellData.lecturer} 강사</div>
                                                             
                                                             <div className="mt-auto pt-2 flex items-center justify-between">
-                                                                {/* 🚀 [CTO UX 패치] 예상 인원에 마우스를 올리면 명단 툴팁 노출 */}
-                                                                <span 
-                                                                    className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30 cursor-help"
-                                                                    title={cellData.studentNames?.length > 0 ? cellData.studentNames.join('\n') : '명단 없음'}
-                                                                >
-                                                                    예상: {cellData.headcount}명
-                                                                </span>
+                                                                {/* 🚀 [CTO UX 패치] 마우스 오버 시 즉시 반응하는 커스텀 학생 명단 툴팁 */}
+                                                                <div className="relative group/tooltip">
+                                                                    <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30 cursor-help block">
+                                                                        예상: {cellData.headcount}명
+                                                                    </span>
+                                                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-max min-w-[60px] max-w-[120px] bg-slate-800 text-white text-[11px] p-2 rounded-lg opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-[100] shadow-xl pointer-events-none">
+                                                                        {cellData.studentNames?.length > 0 ? (
+                                                                            <div className="flex flex-col gap-0.5">
+                                                                                {cellData.studentNames.map((n, i) => <span key={i} className="text-center">{n}</span>)}
+                                                                            </div>
+                                                                        ) : '명단 없음'}
+                                                                        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></div>
+                                                                    </div>
+                                                                </div>
+
                                                                 {cellData.warn === 'under' && cellData.type === 'class' && <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><ArrowRightLeft size={10}/> 추천</span>}
                                                             </div>
                                                         </div>
@@ -793,7 +823,8 @@ const AttendanceManager = ({ currentUser }) => {
                         <label className="text-xs font-bold text-slate-700 mb-1.5 block">1. 대상 학생 선택</label>
                         <select className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white text-slate-800" value={leaveForm.studentId} onChange={e => setLeaveForm({...leaveForm, studentId: e.target.value})}>
                             <option value="">학생을 선택해주세요</option>
-                            {users.filter(u=>u.role==='student').sort((a,b)=>a.name.localeCompare(b.name)).map(u => (
+                            {/* 🚀 정렬 로직 방어막 추가 */}
+                            {users.filter(u=>u.role==='student').sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(u => (
                                 <option key={u.id} value={u.id}>{u.name} ({u.schoolName})</option>
                             ))}
                         </select>
