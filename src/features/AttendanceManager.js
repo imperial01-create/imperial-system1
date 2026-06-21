@@ -1,14 +1,14 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.1
-   1. 공간 최적화: '수강생' 기준이 아닌 '클래스 마스터' 기준으로 매트릭스를 그려 유령 클래스 증발 문제를 해결했습니다.
-   2. 시간 동기화: 14:15 같은 비정형 시간대를 30분 단위 그리드에 맞게 스냅(Snap)하는 알고리즘을 추가했습니다.
-   3. Auto-Resolver: 빈 교실을 클릭해 직보를 퀵 등록하며, 인원/시간 충돌 시 최적의 대안 교실을 찾아 제안하는 AI 배정 알고리즘을 탑재했습니다. 
-   4. 타임라인 확장: 주말/방학 특강을 위해 관제 시간을 08:00 ~ 23:00으로 대폭 확장했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.2
+   1. UX 최적화: 강사 이름에 따른 자동 고유 색상(Color-coding) 부여 및 테이블 실선 테두리 적용으로 가독성을 극대화했습니다.
+   2. 자원 누수 방지: 아직 학생이 예약하지 않은 'open(대기중)' 상태의 클리닉 스케줄도 매트릭스에 시각화하여 중복 예약을 원천 차단합니다.
+   3. 버그 픽스: Plus 아이콘 import 누락으로 인한 시험결석일정 탭의 White Screen 에러를 완벽히 해결했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, BookOpen
+    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, BookOpen,
+    Plus // 🚀 [CTO 버그픽스] 빈 화면 에러의 원인이었던 아이콘 복구 완료
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -18,9 +18,9 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 [CTO 패치] 오전 수업(방학/주말)을 커버하기 위해 08:00 ~ 23:00 으로 확장 (총 31슬롯)
+// 관제를 위한 시간대 (08:00 ~ 23:00, 30분 단위)
 const TIME_SLOTS = Array.from({ length: 31 }, (_, i) => {
-    const hour = Math.floor(i / 2) + 8; // 8시부터 시작
+    const hour = Math.floor(i / 2) + 8;
     const min = i % 2 === 0 ? '00' : '30';
     return `${String(hour).padStart(2, '0')}:${min}`;
 });
@@ -30,12 +30,32 @@ const getLocalDateStr = (dateObj) => {
     return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
 };
 
-// 비정형 시간을 30분 단위 그리드에 맞추는 Snap 함수
 const snapTime = (timeStr) => {
     if (!timeStr) return null;
     const [h, m] = timeStr.split(':').map(Number);
     const snappedM = m < 30 ? '00' : '30';
     return `${String(h).padStart(2, '0')}:${snappedM}`;
+};
+
+// 🚀 [CTO UX 패치] 강사 이름 기반 고정 컬러 해싱 알고리즘
+const TEACHER_COLORS = [
+    'bg-indigo-50 border-indigo-400 text-indigo-900',
+    'bg-emerald-50 border-emerald-400 text-emerald-900',
+    'bg-amber-50 border-amber-400 text-amber-900',
+    'bg-rose-50 border-rose-400 text-rose-900',
+    'bg-cyan-50 border-cyan-400 text-cyan-900',
+    'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
+    'bg-lime-50 border-lime-400 text-lime-900',
+    'bg-orange-50 border-orange-400 text-orange-900'
+];
+
+const getTeacherColor = (name) => {
+    if (!name || name === '미지정') return 'bg-slate-50 border-slate-300 text-slate-700';
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return TEACHER_COLORS[Math.abs(hash) % TEACHER_COLORS.length];
 };
 
 const AttendanceManager = ({ currentUser }) => {
@@ -57,7 +77,6 @@ const AttendanceManager = ({ currentUser }) => {
     const [leaveForm, setLeaveForm] = useState({ studentId: '', startDate: '', endDate: '', reason: '중간/기말고사 대비' });
     const [isSavingLeave, setIsSavingLeave] = useState(false);
 
-    // [Auto-Resolver] 퀵 등록 모달 및 확인창 State
     const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
@@ -103,7 +122,6 @@ const AttendanceManager = ({ currentUser }) => {
         }
     }, [activeTab, selectedStudentId]);
 
-    // 정규반 실시간 출결 현황 계산
     const radarData = useMemo(() => {
         const classGroups = {};
         const emergencyList = [];
@@ -163,7 +181,7 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
 
-    // [매트릭스 엔진] 수강생이 없어도 클래스 마스터를 기준으로 빈 방을 찾아냅니다.
+    // 🚀 [CTO 매트릭스 엔진] 
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
@@ -174,7 +192,7 @@ const AttendanceManager = ({ currentUser }) => {
             TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
         });
 
-        // 1. 정규반 데이터 매핑 (classes DB 직접 순회)
+        // 1. 정규반 데이터 매핑
         classes.forEach(cls => {
             const todaySch = cls.schedules?.find(s => s.dayOfWeek === todayStr);
             if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
@@ -185,7 +203,6 @@ const AttendanceManager = ({ currentUser }) => {
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === todaySch.room);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
             
-            // 실 등원 예상 인원 계산 (시험결석자 차감)
             const activeEnrolls = enrollments.filter(e => e.classId === cls.id && e.status === 'active');
             let currentHeadcount = 0;
             activeEnrolls.forEach(e => {
@@ -214,9 +231,10 @@ const AttendanceManager = ({ currentUser }) => {
             }
         });
 
-        // 2. 직전보충/클리닉 (sessions) 데이터 매핑
+        // 2. 직전보충/클리닉 데이터 매핑
+        // 🚀 [CTO 패치] 'open', 'addition_requested' 등 점유 중인 모든 세션을 표시
         todaySessions.forEach(session => {
-            if (!session.classroom || !grid[session.classroom] || !['confirmed', 'completed', 'pending'].includes(session.status)) return;
+            if (!session.classroom || !grid[session.classroom] || session.status === 'rejected') return;
             const snappedStart = snapTime(session.startTime);
             const snappedEnd = snapTime(session.endTime || '22:00');
             
@@ -234,9 +252,13 @@ const AttendanceManager = ({ currentUser }) => {
                     return;
                 }
 
+                let displayTitle = session.topic || '보충/직보';
+                if (session.status === 'open') displayTitle = '💡 대기중 (예약가능)';
+
                 grid[session.classroom][snappedStart] = {
                     type: 'clinic',
-                    title: session.topic || '보충/직보',
+                    status: session.status,
+                    title: displayTitle,
                     lecturer: session.taName,
                     headcount: currentHeadcount,
                     capacity: capacity,
@@ -252,7 +274,6 @@ const AttendanceManager = ({ currentUser }) => {
         return grid;
     }, [masterData, classes, enrollments, examLeaves, todaySessions, users, todayStr, todayDateStr]);
 
-    // --- Handlers ---
     const handleManualCheckIn = async (studentId, studentName) => {
         if (!window.confirm(`[${studentName}] 학생을 즉시 등원(출석) 처리하시겠습니까?`)) return;
         try {
@@ -285,14 +306,13 @@ const AttendanceManager = ({ currentUser }) => {
         catch (error) { alert("삭제 실패: " + error.message); }
     };
 
-    // [Auto-Resolver 엔진] 빈칸 클릭 시 직보 등록 모달 오픈
     const handleCellClick = (room, time) => {
         const currentCell = matrixGrid[room][time];
-        if (currentCell) return; // 이미 무언가 있으면 무시
+        if (currentCell) return; 
         
         let endTime = '22:00';
         const startIndex = TIME_SLOTS.indexOf(time);
-        if (startIndex + 4 <= TIME_SLOTS.length - 1) { // 기본 2시간 배정
+        if (startIndex + 4 <= TIME_SLOTS.length - 1) { 
             endTime = TIME_SLOTS[startIndex + 4];
         }
 
@@ -310,7 +330,7 @@ const AttendanceManager = ({ currentUser }) => {
                 date: todayDateStr, startTime: quickAddForm.startTime, endTime: quickAddForm.endTime,
                 classroom: finalRoom, status: 'confirmed', source: 'matrix_quick_add',
                 topic: quickAddForm.topic,
-                students: Array(Number(quickAddForm.headcount)).fill({ name: '직보학생' }) // 인원수 확보용 더미
+                students: Array(Number(quickAddForm.headcount)).fill({ name: '직보학생' }) 
             });
             
             setIsQuickAddModalOpen(false);
@@ -333,29 +353,24 @@ const AttendanceManager = ({ currentUser }) => {
         const checkRoomAvailable = (roomName) => {
             const rObj = (masterData?.classrooms || []).find(r => (typeof r === 'string' ? r : r.name) === roomName);
             const cap = typeof rObj === 'string' ? 999 : (rObj?.capacity || 999);
-            
-            if (cap < reqHeadcount) return false; // 정원 초과
-            
-            // 시간표 충돌 검사
+            if (cap < reqHeadcount) return false; 
             for (const slot of requiredSlots) {
                 if (matrixGrid[roomName][slot] !== null) return false;
             }
             return true;
         };
 
-        // 1. 내가 선택한 원래 방이 가능한지 체크
         if (checkRoomAvailable(quickAddForm.room)) {
             return executeQuickAdd(quickAddForm.room);
         }
 
-        // 2. 불가능하다면 Auto-Resolver 가동 (가장 작은 적합한 방 찾기)
         const masterRooms = masterData?.classrooms || [];
         const availableRooms = masterRooms
             .filter(r => checkRoomAvailable(typeof r === 'string' ? r : r.name))
             .sort((a, b) => {
                 const capA = typeof a === 'string' ? 999 : (a.capacity || 999);
                 const capB = typeof b === 'string' ? 999 : (b.capacity || 999);
-                return capA - capB; // 정원 낭비 최소화
+                return capA - capB; 
             });
 
         if (availableRooms.length > 0) {
@@ -369,26 +384,25 @@ const AttendanceManager = ({ currentUser }) => {
         }
     };
 
-
     if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="max-w-screen-2xl mx-auto space-y-6 pb-20 animate-in fade-in h-screen flex flex-col">
             
-            <div className="bg-white p-4 md:p-6 rounded-3xl shadow-sm border border-gray-200 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="bg-white p-4 md:p-6 rounded-3xl shadow-sm border border-slate-300 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
                 <div>
-                    <h1 className="text-2xl font-black text-gray-800 flex items-center gap-2">
+                    <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                         <UserCheck className="text-indigo-600" /> 통합 출결 및 공간 관제
                     </h1>
                 </div>
                 
-                <div className="flex bg-gray-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
-                    <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>일별 운영 관제</button>
-                    <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>
+                <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
+                    <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>일별 운영 관제</button>
+                    <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <LayoutGrid size={16}/> 교실 매트릭스
                     </button>
-                    <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>원생별 출결</button>
-                    <button onClick={() => setActiveTab('exam_leave')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'exam_leave' ? 'bg-white text-rose-700 shadow-sm' : 'text-gray-500 hover:bg-gray-200'}`}>
+                    <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>원생별 출결</button>
+                    <button onClick={() => setActiveTab('exam_leave')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'exam_leave' ? 'bg-white text-rose-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         시험결석 설정 {examLeaves.length > 0 && <span className="bg-rose-100 text-rose-600 px-1.5 rounded-full text-[10px]">{examLeaves.length}</span>}
                     </button>
                 </div>
@@ -422,18 +436,18 @@ const AttendanceManager = ({ currentUser }) => {
                     </div>
 
                     <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-                        <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm flex flex-col min-h-[400px]">
-                            <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50/50 rounded-t-3xl shrink-0">
-                                <h2 className="font-bold text-gray-800 flex items-center gap-2"><Users size={18}/> 콜 타임(Call Time)별 타임라인</h2>
+                        <div className="flex-1 bg-white border border-slate-300 rounded-3xl shadow-sm flex flex-col min-h-[400px]">
+                            <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 bg-slate-50 rounded-t-3xl shrink-0">
+                                <h2 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18}/> 콜 타임(Call Time)별 타임라인</h2>
                                 <div className="relative w-full sm:w-64">
-                                    <input type="text" placeholder="학생 이름, 반 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold bg-white"/>
-                                    <Search className="absolute left-3 top-2.5 text-gray-400" size={16}/>
+                                    <input type="text" placeholder="학생 이름, 반 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold bg-white"/>
+                                    <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
                                 </div>
                             </div>
 
                             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-4">
                                 {radarData.groups.length === 0 ? (
-                                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                                    <div className="h-full flex flex-col items-center justify-center text-slate-400">
                                         <Activity size={48} className="opacity-20 mb-4"/>
                                         <p className="font-bold">오늘 예정된 스케줄이 없습니다.</p>
                                     </div>
@@ -441,16 +455,16 @@ const AttendanceManager = ({ currentUser }) => {
                                     radarData.groups.map((group, idx) => {
                                         const hasLate = group.students.some(s => s.status === 'late');
                                         return (
-                                            <div key={idx} className={`border-2 rounded-2xl p-4 transition-all ${hasLate ? 'border-rose-200 bg-rose-50/20 shadow-sm' : 'border-gray-100 bg-white'}`}>
-                                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 mb-4 pb-3 border-b border-gray-100">
+                                            <div key={idx} className={`border-2 rounded-2xl p-4 transition-all ${hasLate ? 'border-rose-300 bg-rose-50/20 shadow-sm' : 'border-slate-200 bg-white'}`}>
+                                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 mb-4 pb-3 border-b border-slate-200">
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-1">
-                                                            <span className={`text-xs font-black px-2 py-0.5 rounded-md ${hasLate ? 'bg-rose-100 text-rose-700' : 'bg-gray-100 text-gray-600'}`}>콜타임 {group.callTime}</span>
-                                                            <span className="text-xs font-bold text-gray-500">본수업 {group.classTime}</span>
+                                                            <span className={`text-xs font-black px-2 py-0.5 rounded-md ${hasLate ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>콜타임 {group.callTime}</span>
+                                                            <span className="text-xs font-bold text-slate-500">본수업 {group.classTime}</span>
                                                         </div>
-                                                        <h3 className="text-lg font-black text-gray-900">{group.className}</h3>
+                                                        <h3 className="text-lg font-black text-slate-900">{group.className}</h3>
                                                     </div>
-                                                    <div className="flex flex-row md:flex-col gap-3 md:gap-1 text-xs font-bold text-gray-500">
+                                                    <div className="flex flex-row md:flex-col gap-3 md:gap-1 text-xs font-bold text-slate-500">
                                                         <div className="flex items-center gap-1"><User size={12}/> {group.lecturerName} 강사</div>
                                                         <div className="flex items-center gap-1"><MapPin size={12}/> {group.room}</div>
                                                     </div>
@@ -458,13 +472,13 @@ const AttendanceManager = ({ currentUser }) => {
 
                                                 <div className="flex flex-wrap gap-2">
                                                     {group.students.map(student => (
-                                                        <div key={student.studentId} className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-sm transition-all ${student.status === 'late' ? 'bg-rose-50 border-rose-300 text-rose-800' : student.status === 'attended' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                                                        <div key={student.studentId} className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-sm transition-all ${student.status === 'late' ? 'bg-rose-50 border-rose-300 text-rose-800' : student.status === 'attended' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
                                                             <span className="font-bold">{student.studentName}</span>
                                                             {student.status === 'late' && <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded animate-pulse">지각</span>}
                                                             {student.status === 'attended' && <span className="text-emerald-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 완료</span>}
-                                                            {student.status === 'expected' && <span className="text-gray-400 text-[10px] font-black">대기</span>}
+                                                            {student.status === 'expected' && <span className="text-slate-400 text-[10px] font-black">대기</span>}
                                                             {student.status !== 'attended' && (
-                                                                <button onClick={() => handleManualCheckIn(student.studentId, student.studentName)} className={`ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-gray-100 text-gray-500 hover:bg-emerald-500 hover:text-white'}`}>
+                                                                <button onClick={() => handleManualCheckIn(student.studentId, student.studentName)} className={`ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
                                                                     등원
                                                                 </button>
                                                             )}
@@ -479,7 +493,7 @@ const AttendanceManager = ({ currentUser }) => {
                         </div>
 
                         <div className="w-full lg:w-80 shrink-0 flex flex-col gap-4">
-                            <div className="bg-rose-50 border-2 border-rose-200 rounded-3xl p-5 shadow-sm flex flex-col h-1/2 min-h-[300px]">
+                            <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-sm flex flex-col h-1/2 min-h-[300px]">
                                 <h2 className="text-lg font-black text-rose-800 mb-3 flex items-center gap-2">
                                     <ShieldAlert size={20} className="animate-pulse"/> 긴급 콜 리스트
                                 </h2>
@@ -488,16 +502,16 @@ const AttendanceManager = ({ currentUser }) => {
                                         <div className="text-center py-10 text-rose-400 font-bold text-sm">지각생이 없습니다! 🕊️</div>
                                     ) : (
                                         radarData.emergencyList.map(data => (
-                                            <div key={`call_${data.enrollId}`} className="bg-white p-3 rounded-xl border border-rose-200 shadow-sm relative group hover:border-rose-300">
+                                            <div key={`call_${data.enrollId}`} className="bg-white p-3 rounded-xl border border-rose-300 shadow-sm relative group hover:border-rose-400">
                                                 <div className="flex justify-between items-start mb-2">
                                                     <div>
-                                                        <span className="font-bold text-gray-900">{data.studentName}</span>
+                                                        <span className="font-bold text-slate-900">{data.studentName}</span>
                                                         <span className="text-[10px] font-black text-white bg-rose-500 px-1.5 py-0.5 rounded ml-2 animate-pulse">{data.callTime} 지각</span>
                                                     </div>
                                                 </div>
-                                                <div className="text-[11px] font-bold text-gray-500 mb-2 truncate">{data.className}</div>
-                                                <div className="bg-gray-50 p-2 rounded-lg flex justify-between items-center border border-gray-100">
-                                                    <div className="font-mono text-xs font-bold text-gray-700">{data.phone || '번호없음'}</div>
+                                                <div className="text-[11px] font-bold text-slate-500 mb-2 truncate">{data.className}</div>
+                                                <div className="bg-slate-50 p-2 rounded-lg flex justify-between items-center border border-slate-200">
+                                                    <div className="font-mono text-xs font-bold text-slate-700">{data.phone || '번호없음'}</div>
                                                     <a href={`tel:${data.phone}`} className="w-7 h-7 bg-green-100 text-green-600 rounded-full flex items-center justify-center hover:bg-green-500 hover:text-white"><PhoneCall size={14} /></a>
                                                 </div>
                                             </div>
@@ -506,18 +520,18 @@ const AttendanceManager = ({ currentUser }) => {
                                 </div>
                             </div>
                             
-                            <div className="bg-gray-50 border-2 border-gray-200 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
-                                <h2 className="text-sm font-black text-gray-700 mb-3 flex items-center gap-2">
-                                    <CalendarDays size={18} className="text-gray-500"/> 자동 출석 면제 (시험/특수)
+                            <div className="bg-slate-50 border-2 border-slate-300 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
+                                <h2 className="text-sm font-black text-slate-700 mb-3 flex items-center gap-2">
+                                    <CalendarDays size={18} className="text-slate-500"/> 자동 출석 면제 (시험/특수)
                                 </h2>
                                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
                                     {radarData.examLeaveList.length === 0 ? (
-                                        <div className="text-center py-6 text-gray-400 font-bold text-xs">오늘 면제자가 없습니다.</div>
+                                        <div className="text-center py-6 text-slate-400 font-bold text-xs">오늘 면제자가 없습니다.</div>
                                     ) : (
                                         radarData.examLeaveList.map((data, idx) => (
-                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-gray-200 flex justify-between items-center">
-                                                <span className="font-bold text-gray-800 text-sm">{data.studentName}</span>
-                                                <span className="text-[10px] font-bold text-gray-500 truncate max-w-[120px]">{data.className}</span>
+                                            <div key={idx} className="bg-white px-3 py-2 rounded-lg border border-slate-300 flex justify-between items-center shadow-sm">
+                                                <span className="font-bold text-slate-800 text-sm">{data.studentName}</span>
+                                                <span className="text-[10px] font-bold text-slate-500 truncate max-w-[120px]">{data.className}</span>
                                             </div>
                                         ))
                                     )}
@@ -531,60 +545,60 @@ const AttendanceManager = ({ currentUser }) => {
             {/* TAB 2: 원생별 출결 현황 */}
             {activeTab === 'student' && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full min-h-0">
-                    <div className="lg:col-span-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col h-full">
-                        <div className="p-4 border-b border-gray-100 bg-gray-50 rounded-t-2xl">
+                    <div className="lg:col-span-1 bg-white border border-slate-300 rounded-2xl shadow-sm flex flex-col h-full">
+                        <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-2xl">
                             <div className="relative">
-                                <input type="text" placeholder="이름, 학교 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-500 text-sm font-bold bg-white"/>
-                                <Search className="absolute left-3 top-2.5 text-gray-400" size={16}/>
+                                <input type="text" placeholder="이름, 학교 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-blue-500 text-sm font-bold bg-white"/>
+                                <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
                             </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
                             {users.filter(u => u.role === 'student' && (u.name.includes(searchQuery) || (u.schoolName||'').includes(searchQuery))).map(student => (
-                                <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border border-blue-200 shadow-sm' : 'hover:bg-gray-50 border border-transparent'}`}>
+                                <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border-2 border-blue-400 shadow-sm' : 'hover:bg-slate-50 border-2 border-transparent'}`}>
                                     <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{student.name[0]}</div>
                                     <div>
-                                        <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-gray-800'}`}>{student.name}</div>
-                                        <div className="text-xs text-gray-500 mt-0.5">{student.schoolName}</div>
+                                        <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-slate-800'}`}>{student.name}</div>
+                                        <div className="text-xs text-slate-500 mt-0.5">{student.schoolName}</div>
                                     </div>
                                 </button>
                             ))}
                         </div>
                     </div>
                     
-                    <div className="lg:col-span-2 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col h-full overflow-hidden">
+                    <div className="lg:col-span-2 bg-white border border-slate-300 rounded-2xl shadow-sm flex flex-col h-full overflow-hidden">
                         {!selectedStudentId ? (
-                            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-3">
+                            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-3">
                                 <UserCheck size={48} className="opacity-20" />
                                 <p className="font-bold">좌측에서 학생을 선택하면 상세 출결을 봅니다.</p>
                             </div>
                         ) : (
                             <>
-                                <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-blue-50/30">
+                                <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-blue-50/30">
                                     <div>
-                                        <h2 className="text-xl font-black text-gray-900 flex items-center gap-2">
-                                            {users.find(u=>u.id===selectedStudentId)?.name} <span className="text-sm font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-md">출결 통계</span>
+                                        <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                                            {users.find(u=>u.id===selectedStudentId)?.name} <span className="text-sm font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200">출결 통계</span>
                                         </h2>
                                     </div>
-                                    <div className="bg-white border border-gray-200 px-4 py-2 rounded-xl text-center shadow-sm">
-                                        <div className="text-xs text-gray-500 font-bold">누적 등원 횟수</div>
+                                    <div className="bg-white border border-slate-300 px-4 py-2 rounded-xl text-center shadow-sm">
+                                        <div className="text-xs text-slate-500 font-bold">누적 등원 횟수</div>
                                         <div className="text-xl font-black text-blue-600">{studentLogs.length}회</div>
                                     </div>
                                 </div>
-                                <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-gray-50">
+                                <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-slate-50">
                                     {studentLogs.length === 0 ? (
-                                        <div className="text-center py-16 text-gray-400 font-bold border-2 border-dashed border-gray-200 rounded-2xl bg-white">기록이 없습니다.</div>
+                                        <div className="text-center py-16 text-slate-400 font-bold border-2 border-dashed border-slate-300 rounded-2xl bg-white">기록이 없습니다.</div>
                                     ) : (
                                         <div className="space-y-3">
                                             {studentLogs.map(log => (
-                                                <div key={log.id} className="bg-white border border-gray-200 rounded-xl p-4 flex justify-between items-center shadow-sm">
+                                                <div key={log.id} className="bg-white border border-slate-300 rounded-xl p-4 flex justify-between items-center shadow-sm">
                                                     <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center"><CheckCircle size={20}/></div>
+                                                        <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center border border-emerald-200"><CheckCircle size={20}/></div>
                                                         <div>
-                                                            <div className="font-black text-gray-800">{log.date}</div>
-                                                            <div className="text-xs text-gray-500 font-bold mt-1">인증 방식: {log.method === 'manual_desk' ? '데스크 수동 인증' : '키패드 인증'}</div>
+                                                            <div className="font-black text-slate-800">{log.date}</div>
+                                                            <div className="text-xs text-slate-500 font-bold mt-1">인증 방식: {log.method === 'manual_desk' ? '데스크 수동 인증' : '키패드 인증'}</div>
                                                         </div>
                                                     </div>
-                                                    <div className="text-sm font-mono text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
+                                                    <div className="text-sm font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 font-bold">
                                                         {new Date(log.timestamp?.seconds * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
                                                     </div>
                                                 </div>
@@ -601,7 +615,7 @@ const AttendanceManager = ({ currentUser }) => {
             {/* TAB 3: 시험기간 면제 관리 */}
             {activeTab === 'exam_leave' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
-                    <Card className="bg-rose-50 border-rose-200 w-full shrink-0">
+                    <Card className="bg-rose-50 border-2 border-rose-300 w-full shrink-0">
                         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                             <div>
                                 <h2 className="text-xl font-black text-rose-800 flex items-center gap-2 mb-2"><AlertTriangle size={20}/> 시험기간 출석 면제(Bypass) 관리</h2>
@@ -611,10 +625,10 @@ const AttendanceManager = ({ currentUser }) => {
                         </div>
                     </Card>
 
-                    <Card className="flex-1 overflow-hidden p-0 flex flex-col border border-gray-200">
+                    <Card className="flex-1 overflow-hidden p-0 flex flex-col border border-slate-300">
                         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                             {examLeaves.length === 0 ? (
-                                <div className="text-center py-20 text-gray-400 font-bold flex flex-col items-center">
+                                <div className="text-center py-20 text-slate-400 font-bold flex flex-col items-center">
                                     <CalendarDays size={48} className="opacity-20 mb-4"/>
                                     현재 설정된 시험 기간/면제자가 없습니다.
                                 </div>
@@ -623,19 +637,19 @@ const AttendanceManager = ({ currentUser }) => {
                                     {examLeaves.map(leave => {
                                         const isExpired = todayDateStr > leave.endDate;
                                         return (
-                                            <div key={leave.id} className={`border-2 rounded-2xl p-5 relative overflow-hidden transition-all ${isExpired ? 'bg-gray-50 border-gray-200 opacity-60' : 'bg-white border-rose-200 shadow-sm'}`}>
+                                            <div key={leave.id} className={`border-2 rounded-2xl p-5 relative overflow-hidden transition-all ${isExpired ? 'bg-slate-50 border-slate-300 opacity-60' : 'bg-white border-rose-300 shadow-sm'}`}>
                                                 <div className="flex justify-between items-start mb-3">
                                                     <div>
-                                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full mb-2 inline-block ${isExpired ? 'bg-gray-200 text-gray-600' : 'bg-rose-100 text-rose-700 animate-pulse'}`}>
+                                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full mb-2 inline-block border ${isExpired ? 'bg-slate-200 text-slate-600 border-slate-300' : 'bg-rose-100 text-rose-700 border-rose-300 animate-pulse'}`}>
                                                             {isExpired ? '기간 만료' : '면제 적용 중'}
                                                         </span>
-                                                        <h3 className="text-lg font-black text-gray-900">{leave.studentName} 학생</h3>
+                                                        <h3 className="text-lg font-black text-slate-900">{leave.studentName} 학생</h3>
                                                     </div>
-                                                    <button onClick={() => handleDeleteExamLeave(leave.id)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                                                    <button onClick={() => handleDeleteExamLeave(leave.id)} className="text-slate-400 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors"><Trash2 size={16}/></button>
                                                 </div>
-                                                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 space-y-1">
-                                                    <div className="text-xs font-bold text-gray-500">면제 사유: <span className="text-gray-800">{leave.reason}</span></div>
-                                                    <div className="text-xs font-bold text-gray-500">적용 기간: <span className="text-rose-600">{leave.startDate} ~ {leave.endDate}</span></div>
+                                                <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-1">
+                                                    <div className="text-xs font-bold text-slate-500">면제 사유: <span className="text-slate-800">{leave.reason}</span></div>
+                                                    <div className="text-xs font-bold text-slate-500">적용 기간: <span className="text-rose-600">{leave.startDate} ~ {leave.endDate}</span></div>
                                                 </div>
                                             </div>
                                         )
@@ -647,7 +661,7 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) & Auto-Resolver */}
+            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) */}
             {activeTab === 'matrix' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
@@ -656,27 +670,28 @@ const AttendanceManager = ({ currentUser }) => {
                                 <LayoutGrid size={24} />
                                 <h2 className="text-xl font-black">{todayDateStr} 교실 자원 관제탑</h2>
                             </div>
-                            <p className="opacity-90 text-sm">빈 칸을 클릭하여 직보/보충을 즉시 배정하고, 충돌 시 AI 대안을 확인하세요.</p>
+                            <p className="opacity-90 text-sm">강사별 고유 색상 식별. 빈 칸을 클릭하여 직보/보충을 즉시 배정하세요.</p>
                         </div>
                         <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-100 border border-blue-400 rounded-sm"></span> 정규반</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-purple-100 border border-purple-400 rounded-sm"></span> 직보/보충</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/50 border border-gray-200 rounded-sm"></span> 빈 교실 (클릭)</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/60 rounded-sm"></span> 정규반</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/20 rounded-sm"></span> 클리닉/직보</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/50 border border-slate-300 rounded-sm"></span> 빈 교실</span>
                         </div>
                     </div>
 
-                    <div className="flex-1 bg-white border border-gray-200 rounded-3xl shadow-sm overflow-hidden flex flex-col">
+                    <div className="flex-1 bg-white border border-slate-300 rounded-3xl shadow-sm overflow-hidden flex flex-col">
                         <div className="flex-1 overflow-auto custom-scrollbar relative">
-                            <table className="w-full min-w-[1200px] border-collapse text-sm">
-                                <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
+                            {/* 🚀 [CTO 패치] 테이블 전체 실선(border) 적용 및 가독성 최적화 */}
+                            <table className="w-full min-w-[1200px] border-collapse text-sm border-2 border-slate-300">
+                                <thead className="bg-slate-100 sticky top-0 z-20 shadow-md">
                                     <tr>
-                                        <th className="p-3 border-b border-r border-gray-200 text-center w-20 bg-gray-100">시간</th>
+                                        <th className="p-3 border border-slate-300 text-center w-20 bg-slate-200">시간</th>
                                         {masterData?.classrooms?.map((room, idx) => {
                                             const rName = typeof room === 'string' ? room : room.name;
                                             const rCap = typeof room === 'string' ? '' : room.capacity;
                                             return (
-                                                <th key={idx} className="p-3 border-b border-r border-gray-200 text-center font-black text-gray-700 min-w-[150px]">
-                                                    {rName} <br/><span className="text-[10px] text-gray-400 font-bold">{rCap ? `수용: ${rCap}명` : ''}</span>
+                                                <th key={idx} className="p-3 border border-slate-300 text-center font-black text-slate-700 min-w-[150px]">
+                                                    {rName} <br/><span className="text-[10px] text-slate-500 font-bold">{rCap ? `수용: ${rCap}명` : ''}</span>
                                                 </th>
                                             );
                                         })}
@@ -684,8 +699,8 @@ const AttendanceManager = ({ currentUser }) => {
                                 </thead>
                                 <tbody>
                                     {TIME_SLOTS.map((time, tIdx) => (
-                                        <tr key={time} className="hover:bg-gray-50/50">
-                                            <td className="p-2 border-b border-r border-gray-200 text-center font-mono font-bold text-gray-500 bg-gray-50 sticky left-0 z-10">
+                                        <tr key={time} className="hover:bg-slate-50/50">
+                                            <td className="p-2 border border-slate-300 text-center font-mono font-bold text-slate-500 bg-slate-100 sticky left-0 z-10">
                                                 {time}
                                             </td>
                                             {masterData?.classrooms?.map((room, rIdx) => {
@@ -695,41 +710,38 @@ const AttendanceManager = ({ currentUser }) => {
                                                 if (cellData?.skip) return null;
 
                                                 if (!cellData) {
-                                                    // 🚀 [Auto-Resolver] 빈 칸 클릭 활성화
                                                     return (
                                                         <td key={rIdx} 
                                                             onClick={() => handleCellClick(rName, time)}
-                                                            className="p-2 border-b border-r border-gray-100 text-center text-transparent hover:bg-emerald-50 hover:text-emerald-500 cursor-pointer transition-colors font-black text-xs"
+                                                            className="p-2 border border-slate-300 text-center text-transparent hover:bg-emerald-50 hover:text-emerald-500 cursor-pointer transition-colors font-black text-xs"
                                                         >
                                                             + 배정하기
                                                         </td>
                                                     );
                                                 }
 
-                                                let bgClass = 'bg-blue-50 border-blue-200';
-                                                let textClass = 'text-blue-800';
-                                                
-                                                if (cellData.type === 'clinic') {
-                                                    bgClass = 'bg-purple-50 border-purple-200';
-                                                    textClass = 'text-purple-800';
-                                                }
-                                                
-                                                if (cellData.conflict) {
-                                                    bgClass = 'bg-rose-100 border-rose-400 animate-pulse';
-                                                    textClass = 'text-rose-900';
-                                                }
+                                                // 🚀 [CTO 패치] 충돌 시 경고색, 정상 시 강사 고유 색상 렌더링
+                                                const colorClass = cellData.conflict 
+                                                    ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' 
+                                                    : getTeacherColor(cellData.lecturer);
 
                                                 return (
-                                                    <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-b border-r border-gray-200 align-top ${bgClass}`}>
+                                                    <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
                                                         <div className="h-full flex flex-col gap-1 relative">
-                                                            <div className={`font-black text-sm leading-tight ${textClass}`}>{cellData.title}</div>
-                                                            <div className="text-[10px] font-bold text-gray-500">{cellData.lecturer} 강사</div>
+                                                            <div className="flex justify-between items-start mb-1">
+                                                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded shadow-sm border ${cellData.type === 'class' ? 'bg-white/90 border-white text-slate-800' : 'bg-white/40 border-white/50 text-slate-700'}`}>
+                                                                    {cellData.type === 'class' ? '📚 정규' : '💡 클리닉'}
+                                                                </span>
+                                                                {cellData.warn === 'over' && <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm border border-rose-600">초과</span>}
+                                                                {cellData.conflict && <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1 border border-rose-800"><AlertTriangle size={10}/> 중복</span>}
+                                                            </div>
+                                                            
+                                                            <div className="font-black text-sm leading-tight break-keep">{cellData.title}</div>
+                                                            <div className="text-xs font-bold opacity-80">{cellData.lecturer} 강사</div>
                                                             
                                                             <div className="mt-auto pt-2 flex items-center justify-between">
-                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded">예상: {cellData.headcount}명</span>
-                                                                {cellData.warn === 'over' && <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm">초과</span>}
-                                                                {cellData.warn === 'under' && cellData.type === 'class' && <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><ArrowRightLeft size={10}/> 스왑 추천</span>}
-                                                                {cellData.conflict && <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><AlertTriangle size={10}/> 중복</span>}
+                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30">예상: {cellData.headcount}명</span>
+                                                                {cellData.warn === 'under' && cellData.type === 'class' && <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><ArrowRightLeft size={10}/> 추천</span>}
                                                             </div>
                                                         </div>
                                                     </td>
@@ -747,14 +759,14 @@ const AttendanceManager = ({ currentUser }) => {
             {/* 모달: 시험기간 면제자 추가 */}
             <Modal isOpen={isLeaveModalOpen} onClose={() => setIsLeaveModalOpen(false)} title="시험기간 출석 면제 설정">
                 <div className="space-y-5 p-2">
-                    <div className="bg-rose-50 p-4 rounded-xl text-rose-700 text-sm font-bold flex items-start gap-2 border border-rose-100">
+                    <div className="bg-rose-50 p-4 rounded-xl text-rose-700 text-sm font-bold flex items-start gap-2 border border-rose-200">
                         <AlertTriangle size={18} className="shrink-0 mt-0.5"/>
                         이 기간 동안 해당 학생은 학원에 오지 않아도 지각/결석 처리가 되지 않으며 긴급 콜 리스트에서 제외됩니다.
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-gray-700 mb-1.5 block">1. 대상 학생 선택</label>
-                        <select className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white text-gray-800" value={leaveForm.studentId} onChange={e => setLeaveForm({...leaveForm, studentId: e.target.value})}>
+                        <label className="text-xs font-bold text-slate-700 mb-1.5 block">1. 대상 학생 선택</label>
+                        <select className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white text-slate-800" value={leaveForm.studentId} onChange={e => setLeaveForm({...leaveForm, studentId: e.target.value})}>
                             <option value="">학생을 선택해주세요</option>
                             {users.filter(u=>u.role==='student').sort((a,b)=>a.name.localeCompare(b.name)).map(u => (
                                 <option key={u.id} value={u.id}>{u.name} ({u.schoolName})</option>
@@ -764,18 +776,18 @@ const AttendanceManager = ({ currentUser }) => {
 
                     <div className="flex gap-3">
                         <div className="flex-1">
-                            <label className="text-xs font-bold text-gray-700 mb-1.5 block">2. 시작일</label>
-                            <input type="date" className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.startDate} onChange={e => setLeaveForm({...leaveForm, startDate: e.target.value})} />
+                            <label className="text-xs font-bold text-slate-700 mb-1.5 block">2. 시작일</label>
+                            <input type="date" className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.startDate} onChange={e => setLeaveForm({...leaveForm, startDate: e.target.value})} />
                         </div>
                         <div className="flex-1">
-                            <label className="text-xs font-bold text-gray-700 mb-1.5 block">3. 종료일</label>
-                            <input type="date" className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.endDate} onChange={e => setLeaveForm({...leaveForm, endDate: e.target.value})} />
+                            <label className="text-xs font-bold text-slate-700 mb-1.5 block">3. 종료일</label>
+                            <input type="date" className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.endDate} onChange={e => setLeaveForm({...leaveForm, endDate: e.target.value})} />
                         </div>
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-gray-700 mb-1.5 block">4. 사유</label>
-                        <input type="text" className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.reason} onChange={e => setLeaveForm({...leaveForm, reason: e.target.value})} placeholder="예: 1학기 기말고사 직전대비 휴원" />
+                        <label className="text-xs font-bold text-slate-700 mb-1.5 block">4. 사유</label>
+                        <input type="text" className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={leaveForm.reason} onChange={e => setLeaveForm({...leaveForm, reason: e.target.value})} placeholder="예: 1학기 기말고사 직전대비 휴원" />
                     </div>
 
                     <Button className="w-full py-4 text-lg font-black bg-rose-600 hover:bg-rose-700 shadow-lg mt-4" onClick={handleSaveExamLeave} disabled={isSavingLeave}>
@@ -787,40 +799,40 @@ const AttendanceManager = ({ currentUser }) => {
             {/* 🚀 [Auto-Resolver] 퀵 등록 모달 */}
             <Modal isOpen={isQuickAddModalOpen} onClose={() => setIsQuickAddModalOpen(false)} title="직전 보충 / 클리닉 퀵 배정">
                 <div className="space-y-4">
-                    <div className="bg-emerald-50 p-4 rounded-xl text-emerald-800 font-bold text-sm border border-emerald-200">
+                    <div className="bg-emerald-50 p-4 rounded-xl text-emerald-800 font-bold text-sm border border-emerald-300">
                         선택하신 <span className="font-black">[{quickAddForm.room}]</span>에 스케줄을 배정합니다. 만약 충돌이 발생하면 시스템이 최적의 대안 교실을 제안해 드립니다.
                     </div>
                     
                     <div>
-                        <label className="text-xs font-bold text-gray-600 mb-1.5 block">강의 내용 / 타이틀</label>
-                        <input type="text" className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.topic} onChange={e => setQuickAddForm({...quickAddForm, topic: e.target.value})} placeholder="예: 신목고 2학년 내신 직보" />
+                        <label className="text-xs font-bold text-slate-600 mb-1.5 block">강의 내용 / 타이틀</label>
+                        <input type="text" className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.topic} onChange={e => setQuickAddForm({...quickAddForm, topic: e.target.value})} placeholder="예: 신목고 2학년 내신 직보" />
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="text-xs font-bold text-gray-600 mb-1.5 block">담당 강사</label>
-                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.lecturerId} onChange={e => setQuickAddForm({...quickAddForm, lecturerId: e.target.value})}>
+                            <label className="text-xs font-bold text-slate-600 mb-1.5 block">담당 강사</label>
+                            <select className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.lecturerId} onChange={e => setQuickAddForm({...quickAddForm, lecturerId: e.target.value})}>
                                 {users.filter(u => ['lecturer', 'ta', 'admin_assistant', 'admin'].includes(u.role)).map(u => (
                                     <option key={u.id} value={u.id}>{u.name}</option>
                                 ))}
                             </select>
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-gray-600 mb-1.5 block">참석 예상 인원수</label>
-                            <input type="number" min="1" className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.headcount} onChange={e => setQuickAddForm({...quickAddForm, headcount: e.target.value})} />
+                            <label className="text-xs font-bold text-slate-600 mb-1.5 block">참석 예상 인원수</label>
+                            <input type="number" min="1" className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold" value={quickAddForm.headcount} onChange={e => setQuickAddForm({...quickAddForm, headcount: e.target.value})} />
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3 border-t border-gray-100 pt-4">
+                    <div className="grid grid-cols-2 gap-3 border-t border-slate-200 pt-4">
                         <div>
-                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">시작 시간</label>
-                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.startTime} onChange={e => setQuickAddForm({...quickAddForm, startTime: e.target.value})}>
+                            <label className="text-[10px] font-bold text-slate-500 mb-1 block">시작 시간</label>
+                            <select className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.startTime} onChange={e => setQuickAddForm({...quickAddForm, startTime: e.target.value})}>
                                 {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
                         <div>
-                            <label className="text-[10px] font-bold text-gray-500 mb-1 block">종료 시간</label>
-                            <select className="w-full border-2 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.endTime} onChange={e => setQuickAddForm({...quickAddForm, endTime: e.target.value})}>
+                            <label className="text-[10px] font-bold text-slate-500 mb-1 block">종료 시간</label>
+                            <select className="w-full border-2 border-slate-300 p-3 rounded-xl outline-none focus:border-emerald-500 font-bold bg-white" value={quickAddForm.endTime} onChange={e => setQuickAddForm({...quickAddForm, endTime: e.target.value})}>
                                 {TIME_SLOTS.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                         </div>
@@ -835,10 +847,10 @@ const AttendanceManager = ({ currentUser }) => {
             {/* Auto-Resolver 대안 수락 확인 팝업 */}
             <Modal isOpen={!!confirmConfig} onClose={() => setConfirmConfig(null)} title="🚨 스마트 교실 재배정">
                 <div className="space-y-6 p-2 text-center">
-                    <p className="text-base text-gray-800 font-bold whitespace-pre-wrap leading-relaxed bg-rose-50 p-6 rounded-2xl border border-rose-100">{confirmConfig?.message}</p>
+                    <p className="text-base text-slate-800 font-bold whitespace-pre-wrap leading-relaxed bg-rose-50 p-6 rounded-2xl border border-rose-200">{confirmConfig?.message}</p>
                     <div className="flex gap-3">
-                        <Button variant="secondary" onClick={() => setConfirmConfig(null)} className="flex-1 py-4 text-lg font-bold">취소</Button>
-                        <Button variant="danger" onClick={() => { confirmConfig.onConfirm(); }} className="flex-1 py-4 text-lg font-black bg-rose-600 hover:bg-rose-700">네, 제안대로 변경합니다</Button>
+                        <Button variant="secondary" onClick={() => setConfirmConfig(null)} className="flex-1 py-4 text-lg font-bold border-2 border-slate-300">취소</Button>
+                        <Button variant="danger" onClick={() => { confirmConfig.onConfirm(); }} className="flex-1 py-4 text-lg font-black bg-rose-600 hover:bg-rose-700 shadow-md">네, 제안대로 변경합니다</Button>
                     </div>
                 </div>
             </Modal>
