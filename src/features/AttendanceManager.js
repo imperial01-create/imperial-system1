@@ -1,14 +1,12 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v9.2
-   1. UX 최적화: 강사 이름에 따른 자동 고유 색상(Color-coding) 부여 및 테이블 실선 테두리 적용으로 가독성을 극대화했습니다.
-   2. 자원 누수 방지: 아직 학생이 예약하지 않은 'open(대기중)' 상태의 클리닉 스케줄도 매트릭스에 시각화하여 중복 예약을 원천 차단합니다.
-   3. 버그 픽스: Plus 아이콘 import 누락으로 인한 시험결석일정 탭의 White Screen 에러를 완벽히 해결했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v10.0
+   1. 데이터 가시성(UX): 예상 인원수에 마우스를 올리면 실제 집계된 '학생 명단(Tooltip)'이 보이도록 하여, 수강 데이터 오류(중복/누락)를 즉시 추적할 수 있게 했습니다.
+   2. 해시 충돌 최소화: 강사 고유 색상 팔레트를 8종에서 21종으로 대폭 확장하여 색상 중복 현상을 방지했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, BookOpen,
-    Plus // 🚀 [CTO 버그픽스] 빈 화면 에러의 원인이었던 아이콘 복구 완료
+    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -37,7 +35,7 @@ const snapTime = (timeStr) => {
     return `${String(h).padStart(2, '0')}:${snappedM}`;
 };
 
-// 🚀 [CTO UX 패치] 강사 이름 기반 고정 컬러 해싱 알고리즘
+// 🚀 [CTO UX 패치] 강사 색상 팔레트를 21가지로 대폭 확장하여 중복(Collision) 확률 최소화
 const TEACHER_COLORS = [
     'bg-indigo-50 border-indigo-400 text-indigo-900',
     'bg-emerald-50 border-emerald-400 text-emerald-900',
@@ -46,7 +44,20 @@ const TEACHER_COLORS = [
     'bg-cyan-50 border-cyan-400 text-cyan-900',
     'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
     'bg-lime-50 border-lime-400 text-lime-900',
-    'bg-orange-50 border-orange-400 text-orange-900'
+    'bg-orange-50 border-orange-400 text-orange-900',
+    'bg-blue-50 border-blue-400 text-blue-900',
+    'bg-purple-50 border-purple-400 text-purple-900',
+    'bg-pink-50 border-pink-400 text-pink-900',
+    'bg-teal-50 border-teal-400 text-teal-900',
+    'bg-yellow-50 border-yellow-400 text-yellow-900',
+    'bg-red-50 border-red-400 text-red-900',
+    'bg-sky-50 border-sky-400 text-sky-900',
+    'bg-violet-50 border-violet-400 text-violet-900',
+    'bg-green-50 border-green-400 text-green-900',
+    'bg-stone-50 border-stone-400 text-stone-900',
+    'bg-neutral-50 border-neutral-400 text-neutral-900',
+    'bg-slate-50 border-slate-400 text-slate-900',
+    'bg-zinc-50 border-zinc-400 text-zinc-900'
 ];
 
 const getTeacherColor = (name) => {
@@ -203,11 +214,17 @@ const AttendanceManager = ({ currentUser }) => {
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === todaySch.room);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
             
+            // 🚀 [명단 수집 로직] 인원수뿐만 아니라 학생 이름 배열을 직접 수집하여 툴팁(Tooltip)에 활용합니다.
             const activeEnrolls = enrollments.filter(e => e.classId === cls.id && e.status === 'active');
             let currentHeadcount = 0;
+            let expectedStudentNames = [];
+            
             activeEnrolls.forEach(e => {
                 const isExamLeave = examLeaves.some(leave => leave.studentId === e.studentId && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate);
-                if (!isExamLeave) currentHeadcount++;
+                if (!isExamLeave) {
+                    currentHeadcount++;
+                    expectedStudentNames.push(e.studentName || '이름없음');
+                }
             });
 
             const lecturer = users.find(u => u.id === cls.lecturerId);
@@ -221,6 +238,7 @@ const AttendanceManager = ({ currentUser }) => {
                     title: cls.name,
                     lecturer: lecturer?.name || '미지정',
                     headcount: currentHeadcount,
+                    studentNames: expectedStudentNames, // 툴팁용 데이터
                     capacity: capacity,
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal')
@@ -232,7 +250,6 @@ const AttendanceManager = ({ currentUser }) => {
         });
 
         // 2. 직전보충/클리닉 데이터 매핑
-        // 🚀 [CTO 패치] 'open', 'addition_requested' 등 점유 중인 모든 세션을 표시
         todaySessions.forEach(session => {
             if (!session.classroom || !grid[session.classroom] || session.status === 'rejected') return;
             const snappedStart = snapTime(session.startTime);
@@ -240,8 +257,11 @@ const AttendanceManager = ({ currentUser }) => {
             
             const roomObj = masterRooms.find(r => (typeof r === 'string' ? r : r.name) === session.classroom);
             const capacity = typeof roomObj === 'string' ? 999 : (roomObj?.capacity || 999);
-            const stList = Array.isArray(session.students) ? session.students : (session.studentName ? [1] : []);
+            
+            // 🚀 [명단 수집 로직] 세션에 배정된 학생 이름 수집
+            const stList = Array.isArray(session.students) ? session.students : (session.studentName ? [{name: session.studentName}] : []);
             const currentHeadcount = stList.length;
+            const expectedStudentNames = stList.map(st => st.name || '미정');
 
             const startIndex = TIME_SLOTS.indexOf(snappedStart);
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
@@ -261,6 +281,7 @@ const AttendanceManager = ({ currentUser }) => {
                     title: displayTitle,
                     lecturer: session.taName,
                     headcount: currentHeadcount,
+                    studentNames: expectedStudentNames, // 툴팁용 데이터
                     capacity: capacity,
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : 'normal'
@@ -681,7 +702,6 @@ const AttendanceManager = ({ currentUser }) => {
 
                     <div className="flex-1 bg-white border border-slate-300 rounded-3xl shadow-sm overflow-hidden flex flex-col">
                         <div className="flex-1 overflow-auto custom-scrollbar relative">
-                            {/* 🚀 [CTO 패치] 테이블 전체 실선(border) 적용 및 가독성 최적화 */}
                             <table className="w-full min-w-[1200px] border-collapse text-sm border-2 border-slate-300">
                                 <thead className="bg-slate-100 sticky top-0 z-20 shadow-md">
                                     <tr>
@@ -720,7 +740,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                     );
                                                 }
 
-                                                // 🚀 [CTO 패치] 충돌 시 경고색, 정상 시 강사 고유 색상 렌더링
                                                 const colorClass = cellData.conflict 
                                                     ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' 
                                                     : getTeacherColor(cellData.lecturer);
@@ -740,7 +759,13 @@ const AttendanceManager = ({ currentUser }) => {
                                                             <div className="text-xs font-bold opacity-80">{cellData.lecturer} 강사</div>
                                                             
                                                             <div className="mt-auto pt-2 flex items-center justify-between">
-                                                                <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30">예상: {cellData.headcount}명</span>
+                                                                {/* 🚀 [CTO UX 패치] 예상 인원에 마우스를 올리면 명단 툴팁 노출 */}
+                                                                <span 
+                                                                    className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30 cursor-help"
+                                                                    title={cellData.studentNames?.length > 0 ? cellData.studentNames.join('\n') : '명단 없음'}
+                                                                >
+                                                                    예상: {cellData.headcount}명
+                                                                </span>
                                                                 {cellData.warn === 'under' && cellData.type === 'class' && <span className="bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1"><ArrowRightLeft size={10}/> 추천</span>}
                                                             </div>
                                                         </div>
