@@ -1,8 +1,6 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v11.0
-   1. UX/UI 최적화: 강사 구분을 위한 다항식 롤링 해시(Polynomial Hash) 적용 및 커스텀 툴팁 명단 가시화.
-   2. 자원 및 비용 최적화(Firebase): 시험기간 결석 처리를 '학생 단위'에서 '학교 단위(School-based Policy)'로 일괄 격상시켜, 
-      데스크의 업무 마찰(Friction)을 0으로 만들고 DB 읽기/쓰기 비용을 극적으로 절감했습니다. 
-   3. 하위 호환성 방어막: 과거에 '학생 단위'로 등록된 결석 데이터도 에러 없이 호환되도록 처리했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v12.0
+   1. 타임머신 관제: 상단 캘린더(Date Picker)를 통해 과거의 출결을 조회하거나 미래의 시험기간 스케줄(직보/클리닉)을 미리 배정할 수 있습니다.
+   2. 컴플라이언스(Compliance): 심야교습 금지 조례에 맞추어 매트릭스 타임라인을 22:00으로 제한하여 가독성과 법적 기준을 모두 충족했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -18,7 +16,8 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-const TIME_SLOTS = Array.from({ length: 31 }, (_, i) => {
+// 🚀 [CTO 패치] 법적 심야교습 시간 제한 반영 (08:00 ~ 22:00, 총 29슬롯)
+const TIME_SLOTS = Array.from({ length: 29 }, (_, i) => {
     const hour = Math.floor(i / 2) + 8;
     const min = i % 2 === 0 ? '00' : '30';
     return `${String(hour).padStart(2, '0')}:${min}`;
@@ -51,7 +50,12 @@ const AttendanceManager = ({ currentUser }) => {
     const { classes, enrollments, users, masterData, loadingData } = useData();
 
     const [activeTab, setActiveTab] = useState('daily'); 
-    const [currentTime, setCurrentTime] = useState(new Date());
+    
+    // 🚀 [CTO 패치] 날짜 변경(타임머신) State 추가
+    const [selectedDateObj, setSelectedDateObj] = useState(new Date());
+    const selectedDayStr = DAYS_OF_WEEK[selectedDateObj.getDay()];
+    const selectedDateStr = getLocalDateStr(selectedDateObj);
+
     const [searchQuery, setSearchQuery] = useState('');
     
     const [dailyAttendances, setDailyAttendances] = useState([]); 
@@ -63,7 +67,6 @@ const AttendanceManager = ({ currentUser }) => {
     const [studentLogs, setStudentLogs] = useState([]);
 
     const [isLeaveModalOpen, setIsLeaveModalOpen] = useState(false);
-    // 🚀 [CTO 패치] studentId 대신 schoolName을 기준으로 폼 구조 변경
     const [leaveForm, setLeaveForm] = useState({ schoolName: '', startDate: '', endDate: '', reason: '1학기 기말고사 대비' });
     const [isSavingLeave, setIsSavingLeave] = useState(false);
 
@@ -71,10 +74,6 @@ const AttendanceManager = ({ currentUser }) => {
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
 
-    const todayStr = DAYS_OF_WEEK[currentTime.getDay()];
-    const todayDateStr = getLocalDateStr(currentTime);
-
-    // 🚀 [CTO 패치] 현재 학원에 재원 중인 학생들의 '학교 목록'만 실시간으로 추출 (중복 제거)
     const uniqueSchools = useMemo(() => {
         const schools = new Set();
         users.forEach(u => {
@@ -102,19 +101,15 @@ const AttendanceManager = ({ currentUser }) => {
         return teacherColorMap[name] || 'bg-gray-100 border-gray-300 text-gray-800';
     };
 
+    // 선택된 날짜에 맞추어 실시간 데이터 구독 갱신
     useEffect(() => {
-        const timer = setInterval(() => setCurrentTime(new Date()), 60000);
-        return () => clearInterval(timer);
-    }, []);
-
-    useEffect(() => {
-        const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', todayDateStr));
+        const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', selectedDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
             setDailyAttendances(s.docs.map(d => ({ id: d.id, ...d.data() })));
             setLocalLoading(false);
         });
         return () => unsubAtt();
-    }, [todayDateStr]);
+    }, [selectedDateStr]);
 
     useEffect(() => {
         const qLeave = query(collection(db, `artifacts/${APP_ID}/public/data/exam_leaves`));
@@ -123,10 +118,10 @@ const AttendanceManager = ({ currentUser }) => {
     }, []);
 
     useEffect(() => {
-        const qSession = query(collection(db, `artifacts/${APP_ID}/public/data/sessions`), where('date', '==', todayDateStr));
+        const qSession = query(collection(db, `artifacts/${APP_ID}/public/data/sessions`), where('date', '==', selectedDateStr));
         const unsubSession = onSnapshot(qSession, s => setTodaySessions(s.docs.map(d => ({ id: d.id, ...d.data() }))));
         return () => unsubSession();
-    }, [todayDateStr]);
+    }, [selectedDateStr]);
 
     useEffect(() => {
         if (activeTab === 'student' && selectedStudentId) {
@@ -146,11 +141,16 @@ const AttendanceManager = ({ currentUser }) => {
         const examLeaveList = []; 
         let totalExpected = 0; let totalAttended = 0; let totalLate = 0;
 
+        const now = new Date();
+        const isToday = selectedDateStr === getLocalDateStr(now);
+        const isPastDate = selectedDateStr < getLocalDateStr(now);
+        const currentHHMM = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
         enrollments.forEach(enroll => {
             if (enroll.status !== 'active') return;
             if (currentUser.role === 'lecturer' && enroll.lecturerId !== currentUser.id) return;
 
-            const todaySch = enroll.schedules?.find(s => s.dayOfWeek === todayStr);
+            const todaySch = enroll.schedules?.find(s => s.dayOfWeek === selectedDayStr);
             if (!todaySch) return;
 
             const student = users.find(u => u.id === enroll.studentId);
@@ -159,17 +159,15 @@ const AttendanceManager = ({ currentUser }) => {
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             if (searchQuery && !student.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
 
-            // 🚀 [CTO 패치] 학교 단위(School-based) 결석 면제 필터링 + 구버전(학생단위) 하위 호환성 유지
             const isExamLeave = examLeaves.some(leave => {
-                const isTargetMatch = leave.schoolName 
-                    ? (leave.schoolName === student.schoolName) 
-                    : (leave.studentId === student.id);
-                return isTargetMatch && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate;
+                const isTargetMatch = leave.schoolName ? (leave.schoolName === student.schoolName) : (leave.studentId === student.id);
+                return isTargetMatch && selectedDateStr >= leave.startDate && selectedDateStr <= leave.endDate;
             });
             
             const attLog = dailyAttendances.find(a => a.studentId === enroll.studentId);
-            const currentHHMM = `${String(currentTime.getHours()).padStart(2,'0')}:${String(currentTime.getMinutes()).padStart(2,'0')}`;
-            const isLate = !attLog && (currentHHMM > todaySch.callTime);
+            
+            // 🚀 과거 날짜인데 출결기록이 없다면 무조건 지각/결석 처리. 미래 날짜면 대기.
+            const isLate = !attLog && (isPastDate || (isToday && currentHHMM > todaySch.callTime));
 
             let status = 'expected'; 
             if (isExamLeave) { 
@@ -211,7 +209,7 @@ const AttendanceManager = ({ currentUser }) => {
         emergencyList.sort((a, b) => a.callTime.localeCompare(b.callTime));
 
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
-    }, [enrollments, users, dailyAttendances, examLeaves, todayStr, todayDateStr, currentTime, searchQuery, currentUser]);
+    }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser]);
 
     const matrixGrid = useMemo(() => {
         const grid = {};
@@ -224,7 +222,7 @@ const AttendanceManager = ({ currentUser }) => {
         });
 
         classes.forEach(cls => {
-            const todaySch = cls.schedules?.find(s => s.dayOfWeek === todayStr);
+            const todaySch = cls.schedules?.find(s => s.dayOfWeek === selectedDayStr);
             if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
 
             const snappedStart = snapTime(todaySch.startTime);
@@ -239,10 +237,9 @@ const AttendanceManager = ({ currentUser }) => {
             
             activeEnrolls.forEach(e => {
                 const sObj = users.find(u => u.id === e.studentId);
-                // 🚀 학교 단위 결석 매트릭스 차감 적용
                 const isExamLeave = examLeaves.some(leave => {
                     const isTargetMatch = leave.schoolName ? (leave.schoolName === sObj?.schoolName) : (leave.studentId === e.studentId);
-                    return isTargetMatch && todayDateStr >= leave.startDate && todayDateStr <= leave.endDate;
+                    return isTargetMatch && selectedDateStr >= leave.startDate && selectedDateStr <= leave.endDate;
                 });
 
                 if (!isExamLeave) {
@@ -303,19 +300,20 @@ const AttendanceManager = ({ currentUser }) => {
         });
 
         return grid;
-    }, [masterData, classes, enrollments, examLeaves, todaySessions, users, todayStr, todayDateStr]);
+    }, [masterData, classes, enrollments, examLeaves, todaySessions, users, selectedDayStr, selectedDateStr]);
 
     const handleManualCheckIn = async (studentId, studentName, callTime) => {
         const currentHHMM = `${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}`;
-        const isLate = callTime && currentHHMM > callTime;
+        const isToday = selectedDateStr === getLocalDateStr(new Date());
+        const isLate = callTime && (!isToday || currentHHMM > callTime); 
         const statusVal = isLate ? 'late' : 'attended';
         const msg = isLate ? `[지각] 처리하시겠습니까?` : `[정상 출석] 처리하시겠습니까?`;
 
         if (!window.confirm(`[${studentName}] 학생을 ${msg}`)) return;
         try {
-            const logId = `${todayDateStr}_${studentId}`;
+            const logId = `${selectedDateStr}_${studentId}`;
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/attendance_logs`, logId), {
-                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: statusVal
+                studentId, date: selectedDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: statusVal
             });
         } catch (e) { alert("출결 처리 실패: " + e.message); }
     };
@@ -323,14 +321,13 @@ const AttendanceManager = ({ currentUser }) => {
     const handleMarkAbsent = async (studentId, studentName) => {
         if (!window.confirm(`[${studentName}] 학생을 결석 처리하시겠습니까?`)) return;
         try {
-            const logId = `${todayDateStr}_${studentId}`;
+            const logId = `${selectedDateStr}_${studentId}`;
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/attendance_logs`, logId), {
-                studentId, date: todayDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: 'absent'
+                studentId, date: selectedDateStr, timestamp: serverTimestamp(), method: 'manual_desk', status: 'absent'
             });
         } catch (e) { alert("결석 처리 실패: " + e.message); }
     };
 
-    // 🚀 [CTO 패치] 학교 단위 결석 저장 로직
     const handleSaveExamLeave = async () => {
         if (!leaveForm.schoolName || !leaveForm.startDate || !leaveForm.endDate) return alert("학교와 기간을 모두 선택해주세요.");
         if (leaveForm.startDate > leaveForm.endDate) return alert("시작일이 종료일보다 늦을 수 없습니다.");
@@ -376,7 +373,8 @@ const AttendanceManager = ({ currentUser }) => {
             
             await setDoc(doc(db, `artifacts/${APP_ID}/public/data/sessions`, docId), {
                 taId: lecturer?.id || '', taName: lecturer?.name || '미정',
-                date: todayDateStr, startTime: quickAddForm.startTime, endTime: quickAddForm.endTime,
+                date: selectedDateStr, // 🚀 [CTO 패치] 선택된 날짜에 정확히 등록됩니다.
+                startTime: quickAddForm.startTime, endTime: quickAddForm.endTime,
                 classroom: finalRoom, status: 'confirmed', source: 'matrix_quick_add',
                 topic: quickAddForm.topic,
                 students: Array(Number(quickAddForm.headcount)).fill({ name: '직보학생' }) 
@@ -437,10 +435,29 @@ const AttendanceManager = ({ currentUser }) => {
         <div className="max-w-screen-2xl mx-auto space-y-6 pb-20 animate-in fade-in h-screen flex flex-col">
             
             <div className="bg-white p-4 md:p-6 rounded-3xl shadow-sm border border-slate-300 shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
-                <div>
+                <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
                     <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
                         <UserCheck className="text-indigo-600" /> 통합 출결 및 공간 관제
                     </h1>
+                    
+                    {/* 🚀 [CTO 패치] 날짜 선택기 (Time Travel 캘린더) 탑재 */}
+                    <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
+                        <CalendarDays size={18} className="text-slate-500 ml-2" />
+                        <input 
+                            type="date" 
+                            value={selectedDateStr}
+                            onChange={(e) => {
+                                const d = new Date(e.target.value);
+                                if (!isNaN(d.getTime())) setSelectedDateObj(d);
+                            }}
+                            className="bg-transparent border-none outline-none font-bold text-slate-700 text-sm cursor-pointer"
+                        />
+                        {selectedDateStr !== getLocalDateStr(new Date()) && (
+                            <button onClick={() => setSelectedDateObj(new Date())} className="text-[10px] font-bold bg-white text-indigo-600 border border-slate-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors shadow-sm mr-1">
+                                오늘
+                            </button>
+                        )}
+                    </div>
                 </div>
                 
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
@@ -462,7 +479,7 @@ const AttendanceManager = ({ currentUser }) => {
                         <div>
                             <div className="flex items-center gap-3 mb-1">
                                 <Activity size={28} className="animate-pulse" />
-                                <h2 className="text-xl md:text-2xl font-black">{todayStr}요일 실시간 출결 현황</h2>
+                                <h2 className="text-xl md:text-2xl font-black">{selectedDayStr}요일 실시간 출결 현황</h2>
                             </div>
                             <p className="opacity-90 text-sm">{currentUser.role === 'lecturer' ? '담당하시는 반의' : '학원의 모든'} 스케줄이 실시간으로 관제됩니다.</p>
                         </div>
@@ -496,7 +513,7 @@ const AttendanceManager = ({ currentUser }) => {
                                 {radarData.groups.length === 0 ? (
                                     <div className="h-full flex flex-col items-center justify-center text-slate-400">
                                         <Activity size={48} className="opacity-20 mb-4"/>
-                                        <p className="font-bold">오늘 예정된 스케줄이 없습니다.</p>
+                                        <p className="font-bold">선택하신 날짜에 예정된 스케줄이 없습니다.</p>
                                     </div>
                                 ) : (
                                     radarData.groups.map((group, idx) => {
@@ -707,7 +724,6 @@ const AttendanceManager = ({ currentUser }) => {
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {examLeaves.map(leave => {
                                         const isExpired = todayDateStr > leave.endDate;
-                                        // 🚀 하위 호환 렌더링 지원 (학교 단위 vs 학생 단위)
                                         const displayName = leave.schoolName ? `${leave.schoolName} 전체` : `${leave.studentName} 학생 (구버전)`;
                                         const iconMode = leave.schoolName ? <School size={16} className="text-indigo-500 mr-1 inline"/> : <User size={16} className="text-gray-400 mr-1 inline"/>;
                                         
@@ -736,14 +752,14 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* TAB 4: 교실 매트릭스 (Room Matrix View) */}
+            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) */}
             {activeTab === 'matrix' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
                         <div>
                             <div className="flex items-center gap-3 mb-1">
                                 <LayoutGrid size={24} />
-                                <h2 className="text-xl font-black">{todayDateStr} 교실 자원 관제탑</h2>
+                                <h2 className="text-xl font-black">{selectedDateStr} 교실 자원 관제탑</h2>
                             </div>
                             <p className="opacity-90 text-sm">강사별 고유 색상 식별. 빈 칸을 클릭하여 직보/보충을 즉시 배정하세요.</p>
                         </div>
@@ -842,7 +858,7 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             )}
 
-            {/* 🚀 [CTO 패치] 모달: 학교 단위 시험기간 면제자 추가 */}
+            {/* 모달: 시험기간 면제자 추가 */}
             <Modal isOpen={isLeaveModalOpen} onClose={() => setIsLeaveModalOpen(false)} title="학교 단위 시험기간 면제 설정">
                 <div className="space-y-5 p-2">
                     <div className="bg-rose-50 p-4 rounded-xl text-rose-700 text-sm font-bold flex items-start gap-2 border border-rose-200">

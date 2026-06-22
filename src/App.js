@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: Voca 출제/관리 기능 복구, CAT 시험 UI 완전 제거, '출결 관리' 격상 및
-   UX 심리학을 적용한 '스마트 카테고리 아코디언 메뉴'를 도입하여 인지 부하를 최소화했습니다.) */
+   (🚀 CTO 패치: Voca 출제/관리 기능 복구, CAT 시험 UI 완전 제거, '출결 관리' 격상,
+   UX 심리학을 적용한 '스마트 카테고리 아코디언 메뉴' 도입 및 '영단어 챌린지' 독립 메뉴 신규 탑재) */
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
@@ -8,7 +8,7 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
   Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2, UserCheck,
-  ChevronDown, ChevronRight // 🚀 [CTO 패치] 카테고리 화살표 아이콘 추가
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -39,6 +39,9 @@ const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
 const ConsultationManager = React.lazy(() => import('./features/ConsultationManager'));
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
+
+// 🚀 [CTO 패치] 게이미피케이션 영단어 챌린지 라우트 추가
+const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -371,6 +374,10 @@ const Dashboard = ({ currentUser }) => {
         { path: '/lectures', label: ['student', 'parent'].includes(currentUser.role) ? '수강 강의' : '강의 관리', icon: ['student', 'parent'].includes(currentUser.role) ? GraduationCap : Video, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'], desc: ['student', 'parent'].includes(currentUser.role) ? '배정된 강의 진도를 확인하고 영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고 강의 영상을 업로드하세요.', color: 'text-fuchsia-600', bg: 'bg-fuchsia-100', hoverBg: 'group-hover:bg-fuchsia-600' },
         { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '학교별 기출문제와 분석 자료를 가장 빠르게 확인하세요.', color: 'text-sky-600', bg: 'bg-sky-100', hoverBg: 'group-hover:bg-sky-600' },
         { path: '/voca', label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어'), desc: currentUser.role === 'student' ? '나만의 맞춤형 단어장과 숨겨진 약점을 투명하게 확인하세요.' : '영단어 시험지를 발급하고 고속 채점을 통해 스탯을 관리합니다.', color: 'text-violet-600', bg: 'bg-violet-100', hoverBg: 'group-hover:bg-violet-600' },
+        
+        // 🚀 [CTO 패치] 영단어 챌린지 대시보드 카드 추가
+        { path: '/voca-challenge', label: '영단어 챌린지', icon: Target, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'], desc: '게이미피케이션 기반 영단어 암기 서바이벌 챌린지입니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
+        
         { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'], desc: '학원의 다양한 소식과 커뮤니티 랭킹을 확인합니다.', color: 'text-amber-600', bg: 'bg-amber-100', hoverBg: 'group-hover:bg-amber-600' },
         { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'], desc: '성적표, 결제 안내 등 대량 문자를 템플릿으로 발송합니다.', color: 'text-red-600', bg: 'bg-red-100', hoverBg: 'group-hover:bg-red-600' },
         { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'], desc: '학원 구성원(학생, 학부모, 강사 등)의 계정과 권한을 관리합니다.', color: 'text-slate-600', bg: 'bg-slate-100', hoverBg: 'group-hover:bg-slate-600' },
@@ -421,8 +428,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 [CTO 패치] 메뉴 카테고리화 및 아코디언 상태 관리
-  // 직군별로 꼭 필요한 카테고리만 열려있도록 초기 상태를 최적화합니다.
   const [expandedCategories, setExpandedCategories] = useState({
       '학습 및 수강': ['student', 'parent'].includes(currentUser.role),
       '학원 관제탑': ['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role),
@@ -435,7 +440,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
   };
 
-  // 🚀 [CTO 패치] 각 메뉴에 category 속성 부여
   const menuItems = useMemo(() => [
     { category: '학원 관제탑', path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
     { category: '학원 관제탑', path: '/attendance', label: '통합 출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
@@ -447,6 +451,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { category: '학습 및 수강', path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
     { category: '학습 및 수강', path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
     { category: '학습 및 수강', path: '/voca', label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어') },
+    
+    // 🚀 [CTO 패치] 영단어 챌린지 사이드바 메뉴 추가
+    { category: '학습 및 수강', path: '/voca-challenge', label: '영단어 챌린지', icon: Target, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
+    
     { category: '학습 및 수강', path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { category: '학습 및 수강', path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
     { category: '학습 및 수강', path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
@@ -464,7 +472,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { category: '시스템 설정', path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
   ], [currentUser]);
 
-  // 🚀 [CTO 패치] O(n) 복잡도로 현재 권한에 맞는 메뉴만 그룹화
   const groupedMenus = useMemo(() => {
       const groups = {};
       menuItems.forEach(item => {
@@ -487,7 +494,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar pb-24">
-            {/* 대시보드는 카테고리 없이 최상단 고정 */}
             <button 
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-700 hover:bg-gray-50 font-medium'}`}
@@ -495,7 +501,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Home size={20} /> 대시보드 홈
             </button>
 
-            {/* 그룹화된 아코디언 메뉴 렌더링 */}
             {Object.entries(groupedMenus).map(([category, items]) => (
                 <div key={category} className="space-y-1">
                     <button 
@@ -588,6 +593,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                                 ? <StudentVocaDaily currentUser={currentUser} /> 
                                 : <VocaManager currentUser={currentUser} />
                         } />
+
+                        {/* 🚀 [CTO 패치] 영단어 챌린지 라우팅 추가 */}
+                        <Route path="/voca-challenge" element={['student', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <VocaChallenge currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
