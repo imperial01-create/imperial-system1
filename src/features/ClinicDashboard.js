@@ -1,7 +1,6 @@
-/* [서비스 가치] 클리닉 V3.1.6 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
-   (🚀 학부모 UX/UI 패치: 학부모 역시 학생과 동일하게 '최대 7일 이내'의 일정만 조회 가능하도록
-   캘린더 필터링(isAllowedDate)을 강제 적용하여 인지 부하 감소 및 렌더링을 최적화했습니다.
-   🚀 CTO 패치: 강의실 수용 인원 업데이트에 따른 객체 렌더링 방어막 탑재) */
+/* [서비스 가치] 클리닉 V3.2 - 1:N 다대일 그룹 클리닉 배정 및 연속 시간 드릴다운(Drill-down) 관리 엔진
+   (🚀 학부모 UX/UI 패치: 학부모 역시 학생과 동일하게 '최대 7일 이내'의 일정만 조회 가능하도록 캘린더 필터링(isAllowedDate)을 강제 적용하여 인지 부하 감소 및 렌더링을 최적화했습니다.
+   🚀 CTO 패치: 하이브리드 학생/반 단체 배정 엔진 도입 및 반 단체 배정 시 '예약 완료(Confirmed)' 강제 오버라이드 로직 적용) */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, CheckCircle, MessageSquare, Plus, Trash2, 
@@ -163,20 +162,38 @@ const groupSessions = (sessionList) => {
     return [...grouped, ...others].sort((a,b) => String(a.startTime || '').localeCompare(String(b.startTime || '')));
 };
 
-const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) => {
+// 🚀 [CTO 패치] 하이브리드 학생-반 다중 선택 드롭다운
+const AdminStudentMultiSelect = ({ users, classes, selectedStudents, onAdd, onRemove }) => {
     const [search, setSearch] = useState('');
     const [isOpen, setIsOpen] = useState(false);
 
-    const students = Array.isArray(users) ? users.filter(u => u.role === 'student') : [];
-    const filtered = search ? students.filter(s => s.name.includes(search)) : students.slice(0, 5);
+    const assignableOptions = useMemo(() => {
+        // 1. 반 목록을 '[반 단체]' 접두사를 붙여 옵션으로 변환
+        const classOptions = (classes || []).map(c => ({
+            id: `CLASS_${c.id}`,
+            name: `[반 단체] ${c.name}`,
+            type: 'class'
+        }));
+        
+        // 2. 기존 학생 목록
+        const studentOptions = (users || []).filter(u => u.role === 'student').map(u => ({
+            id: u.id,
+            name: u.name,
+            type: 'student'
+        }));
+        
+        return [...classOptions, ...studentOptions];
+    }, [classes, users]);
+
+    const filtered = search ? assignableOptions.filter(s => s.name.includes(search)) : assignableOptions.slice(0, 8);
     const safeSelected = Array.isArray(selectedStudents) ? selectedStudents : [];
 
     return (
         <div className="relative w-full">
             <div className="flex flex-wrap gap-1.5 mb-2 p-2 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50/50 min-h-[46px]">
-                {safeSelected.length === 0 && <span className="text-xs text-gray-400 font-bold p-1">현재 배정된 학생이 없습니다. 아래에서 검색해 추가하세요.</span>}
+                {safeSelected.length === 0 && <span className="text-xs text-gray-400 font-bold p-1">현재 배정된 학생/반이 없습니다. 아래에서 검색해 추가하세요.</span>}
                 {safeSelected.map(st => (
-                    <div key={st.id} className="flex items-center gap-1 bg-indigo-600 text-white font-bold text-xs px-2.5 py-1 rounded-lg shadow-sm">
+                    <div key={st.id} className={`flex items-center gap-1 font-bold text-xs px-2.5 py-1 rounded-lg shadow-sm ${st.name.includes('[반 단체]') ? 'bg-purple-600 text-white' : 'bg-indigo-600 text-white'}`}>
                         {st.name}
                         <button type="button" onClick={() => onRemove(st.id)} className="hover:text-red-200"><X size={12}/></button>
                     </div>
@@ -186,7 +203,7 @@ const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) =
             <div className="relative">
                 <input 
                     type="text" 
-                    placeholder="🔍 배정할 학생 이름을 입력하세요..." 
+                    placeholder="🔍 배정할 반 이름 또는 학생 이름을 입력하세요..." 
                     className="w-full border-2 p-2.5 rounded-xl outline-none font-bold text-sm focus:border-indigo-500 bg-white"
                     value={search}
                     onChange={e => { setSearch(e.target.value); setIsOpen(true); }}
@@ -196,17 +213,19 @@ const AdminStudentMultiSelect = ({ users, selectedStudents, onAdd, onRemove }) =
                     <>
                         <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
                         <div className="absolute z-50 w-full mt-1 bg-white border-2 border-indigo-100 rounded-xl shadow-xl max-h-48 overflow-y-auto custom-scrollbar p-1">
+                            {filtered.length === 0 && <div className="text-center py-4 text-xs font-bold text-gray-400">검색 결과가 없습니다.</div>}
                             {filtered.map(s => {
                                 const isAlreadyAdded = safeSelected.some(st => st.id === s.id);
+                                const isClass = s.type === 'class';
                                 return (
                                     <button 
                                         key={s.id} 
                                         type="button"
                                         disabled={isAlreadyAdded}
                                         onClick={() => { onAdd({ id: s.id, name: s.name, phone: s.phone || '' }); setSearch(''); setIsOpen(false); }}
-                                        className={`w-full text-left px-3 py-2 text-xs font-bold rounded-lg transition-colors flex justify-between items-center ${isAlreadyAdded ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'hover:bg-indigo-50 text-gray-700'}`}
+                                        className={`w-full text-left px-3 py-2.5 text-xs font-bold rounded-lg transition-colors flex justify-between items-center ${isAlreadyAdded ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (isClass ? 'hover:bg-purple-50 text-purple-900 border-b border-gray-50' : 'hover:bg-indigo-50 text-gray-700 border-b border-gray-50')}`}
                                     >
-                                        <span>{s.name} <span className="text-gray-400 font-normal">({s.schoolName || '학교미상'})</span></span>
+                                        <span>{s.name} {!isClass && <span className="text-gray-400 font-normal">({s.schoolName || '학교미상'})</span>}</span>
                                         {isAlreadyAdded && <span className="text-indigo-600 text-[10px]">이미 배정됨</span>}
                                     </button>
                                 );
@@ -416,7 +435,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                             >
                               <option value="">장소 미지정</option>
                               {masterClassrooms?.map((r, idx) => {
-                                  // 🚀 [CTO 패치] 강의실 객체-문자열 하위 호환 매핑 방어 로직 적용
                                   const rName = typeof r === 'string' ? r : r.name;
                                   const rCap = typeof r === 'string' ? '' : ` (최대: ${r.capacity}명)`;
                                   const occupiedStatus = checkRoomAvailability && checkRoomAvailability(s.date, s.startTime, s.endTime, rName, s.originalIds || []);
@@ -489,7 +507,6 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             const isSel = dStr===selectedDateStr;
             const isToday = dStr === getLocalToday();
             
-            // 🚀 [학부모/학생 권한 제어] 일주일 필터링 강제 적용
             const maxDateStr = getFutureDate(7);
             const isAllowedDate = (isStudent || isParent) ? (dStr >= getLocalToday() && dStr <= maxDateStr) : true;
 
@@ -707,7 +724,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             let sessionQuery;
 
             if (currentUser.role === 'student' || currentUser.role === 'parent') {
-                const today = getLocalToday(); const endDate = getFutureDate(7); // 🚀 [학부모/학생 공통 7일 필터 적용]
+                const today = getLocalToday(); const endDate = getFutureDate(7); 
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', today), where('date', '<=', endDate));
             } else {
                 sessionQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startOfMonth), where('date', '<=', endOfMonth));
@@ -990,6 +1007,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
       } catch(e) { notify(`예약 실패: ${e.message}`, 'error'); } finally { setIsSubmittingBooking(false); }
     };
 
+    // 🚀 [CTO 패치] 반 단체 배정 시 오버라이드 확정(Confirmed) 엔진
     const handleAdminEditSubmit = async () => {
         const isAsst = selectedSession.workerRole === 'admin_assistant';
         let updateData = {};
@@ -999,7 +1017,21 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             updateData = { topic: adminEditData.topic, status: newStatus };
         } else {
             const fallbackName = adminEditData.students.map(st => st.name).join(', ');
-            const newStatus = adminEditData.students.length > 0 ? (selectedSession.status === 'open' ? 'confirmed' : selectedSession.status) : 'open';
+            
+            // 🚀 반 단체 태그 확인 및 정원(Capacity) 초과 검사 로직
+            const hasClassAssignment = adminEditData.students.some(s => s.name && s.name.includes('[반 단체]'));
+            const isFull = adminEditData.students.length >= (Number(selectedSession.capacity || 1));
+            
+            let newStatus = selectedSession.status;
+            
+            if (adminEditData.students.length === 0) {
+                newStatus = 'open';
+            } else if (selectedSession.status === 'open') {
+                // 반 단체 배정이거나 정원이 꽉 찼으면 즉시 확정(Confirmed) 처리하여 블라인드
+                if (hasClassAssignment || isFull) {
+                    newStatus = 'confirmed';
+                }
+            }
             
             updateData = {
                 students: adminEditData.students,
@@ -1088,7 +1120,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                           {users.filter(u=>u.role==='ta' || u.role==='admin_assistant').map(u=><option key={u.id} value={u.id}>[{u.role==='admin_assistant'?'행정':'수업'}] {u.name}</option>)}
                       </select>
                       
-                      {/* 🚀 [CTO 패치] 강의실 수용 인원 정보가 포함된 방어적 드롭다운 렌더링 */}
                       <select className="border rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-300 font-bold text-blue-700" value={batchClassroom} onChange={e=>setBatchClassroom(e.target.value)}>
                           <option value="">2. 배정 강의실 선택 (미정)</option>
                           {masterData?.classrooms?.map((r, idx) => {
@@ -1156,7 +1187,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                                     </div>
                                     
                                     <div className="mt-2">
-                                        {/* 🚀 [CTO 패치] 강의실 수용 인원 정보가 포함된 방어적 드롭다운 렌더링 */}
                                         <select 
                                             className={`text-sm border rounded-lg p-2 font-bold focus:ring-2 focus:ring-green-200 outline-none w-full ${!s.classroom ? 'bg-red-50 border-red-300 text-red-700' : 'bg-green-50 border-green-300 text-green-800 shadow-inner'}`} 
                                             value={s.classroom || ''} 
@@ -1218,7 +1248,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
        )}
 
        {isMyScheduleView && (
-            <>
+           <>
                 <Card className={`bg-gradient-to-r ${currentUser.role === 'admin_assistant' ? 'from-cyan-600 to-blue-600' : 'from-indigo-600 to-purple-600'} text-white border-none w-full`}>
                     <div className="flex justify-between items-end">
                         <div>
@@ -1238,7 +1268,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     masterClassrooms={masterData?.classrooms}
                 />
             </>
-        )}
+       )}
 
        {currentUser.role === 'lecturer' && (
            <div className="space-y-8 w-full">
@@ -1502,6 +1532,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         <label className="block text-sm font-bold text-gray-700 mb-1.5">클리닉 배정 학생단 (다중 선택 검색)</label>
                         <AdminStudentMultiSelect 
                             users={users} 
+                            classes={classes}
                             selectedStudents={adminEditData.students} 
                             onAdd={(st) => setAdminEditData({ ...adminEditData, students: [...adminEditData.students, st] })}
                             onRemove={(id) => setAdminEditData({ ...adminEditData, students: adminEditData.students.filter(st => st.id !== id) })}
