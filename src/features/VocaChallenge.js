@@ -1,5 +1,5 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.0
-   - (🚀 CTO 패치: Cloudflare 빌드 충돌을 일으키는 eslint 주석을 완벽히 제거한 클린 빌드 버전입니다.)
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.1
+   - (🚀 CTO 패치: 런타임 에러(White Screen)를 원천 차단하는 방탄(Bulletproof) 설계 및 예외 처리 도입)
    - 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재 */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -323,6 +323,7 @@ const processRawCSV = (csvText) => {
 };
 
 const shuffleArray = (array) => {
+    if (!array || !Array.isArray(array)) return [];
     const arr = [...array];
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -331,10 +332,11 @@ const shuffleArray = (array) => {
     return arr;
 };
 
-const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+// 🚀 안전한 배열 랜덤 추출 함수 (빈 배열 시 예외 처리)
+const safePick = (arr) => arr && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : "없음";
 
 export default function VocaChallenge({ currentUser }) {
-    const { classes, enrollments } = useData();
+    const { classes = [], enrollments = [] } = useData() || {};
     const isStudent = currentUser.role === 'student';
 
     const englishClasses = useMemo(() => {
@@ -496,84 +498,115 @@ export default function VocaChallenge({ currentUser }) {
         }, 2500);
     };
 
+    // 🚀 [CTO 패치] 방탄 에러 방어(Try-Catch) 및 안전 변수 추출 로직
     const generateQuestion = (qNum) => {
-        const config = getRoundConfig(qNum);
-        setTimeLeft(config.time);
+        try {
+            const config = getRoundConfig(qNum);
+            setTimeLeft(config.time);
 
-        const poolAllSyn = activeVocaData.filter(w => w.syn.length >= 2);
-        const poolMixed = activeVocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
+            const poolAllSyn = activeVocaData.filter(w => w.syn.length >= 2);
+            const poolMixed = activeVocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
 
-        let isThreeWordType = Math.random() < 0.3; 
-        const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
+            let isThreeWordType = Math.random() < 0.3; 
+            const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
 
-        if (isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
+            if (isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
 
-        let questionTitle = "";
-        let options = [];
-        let correctAnswerText = "";
-        let targetWordData = null;
+            let questionTitle = "";
+            let options = [];
+            let correctAnswerText = "";
+            let targetWordData = null;
 
-        const makeThreeWordString = (base, w2, w3) => {
-            const others = shuffleArray([w2, w3]);
-            return `${base} - ${others[0]} - ${others[1]}`;
-        };
+            const makeThreeWordString = (base, w2, w3) => {
+                const others = shuffleArray([w2 || '없음', w3 || '없음']);
+                return `${base} - ${others[0]} - ${others[1]}`;
+            };
 
-        if (isThreeWordType) {
-            questionTitle = "다음 중 세 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-            const isMajorityAllSyn = Math.random() < 0.5;
+            if (isThreeWordType) {
+                questionTitle = "다음 중 세 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
+                const isMajorityAllSyn = Math.random() < 0.5;
 
-            if (isMajorityAllSyn) {
-                const targetData = shuffleArray(poolMixed)[0];
-                targetWordData = targetData;
-                correctAnswerText = makeThreeWordString(targetData.word, pickRandom(targetData.syn), pickRandom(targetData.ant));
-                options.push({ text: correctAnswerText, isCorrect: true });
+                if (isMajorityAllSyn) {
+                    const targetData = shuffleArray(poolMixed)[0] || activeVocaData[0];
+                    targetWordData = targetData;
+                    correctAnswerText = makeThreeWordString(targetData.word, safePick(targetData.syn), safePick(targetData.ant));
+                    options.push({ text: correctAnswerText, isCorrect: true });
 
-                const bgData = shuffleArray(poolAllSyn).slice(0, 4);
-                bgData.forEach(w => {
-                    const syns = shuffleArray(w.syn);
-                    options.push({ text: makeThreeWordString(w.word, syns[0], syns[1]), isCorrect: false });
-                });
+                    const bgData = shuffleArray(poolAllSyn).slice(0, 4);
+                    bgData.forEach(w => {
+                        const syns = shuffleArray(w.syn);
+                        options.push({ text: makeThreeWordString(w.word, syns[0] || '없음', syns[1] || '없음'), isCorrect: false });
+                    });
+                } else {
+                    const targetData = shuffleArray(poolAllSyn)[0] || activeVocaData[0];
+                    targetWordData = targetData;
+                    const syns = shuffleArray(targetData.syn);
+                    correctAnswerText = makeThreeWordString(targetData.word, syns[0] || '없음', syns[1] || '없음');
+                    options.push({ text: correctAnswerText, isCorrect: true });
+
+                    const bgData = shuffleArray(poolMixed).slice(0, 4);
+                    bgData.forEach(w => {
+                        options.push({ text: makeThreeWordString(w.word, safePick(w.syn), safePick(w.ant)), isCorrect: false });
+                    });
+                }
             } else {
-                const targetData = shuffleArray(poolAllSyn)[0];
+                questionTitle = "다음 중 두 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
+                const isTargetAntonym = Math.random() < 0.5;
+                let targetPool = isTargetAntonym ? activeVocaData.filter(w => w.ant.length > 0) : activeVocaData.filter(w => w.syn.length > 0);
+                let bgPool = isTargetAntonym ? activeVocaData.filter(w => w.syn.length > 0) : activeVocaData.filter(w => w.ant.length > 0);
+
+                if (targetPool.length === 0 || bgPool.length < 4) {
+                    targetPool = activeVocaData.filter(w => w.syn.length > 0);
+                    bgPool = activeVocaData.filter(w => w.syn.length > 0);
+                }
+
+                // 🚀 빈 풀(Empty Pool)에서 추출 시 undefined 방지
+                let targetData = shuffleArray(targetPool)[0];
+                if (!targetData) targetData = activeVocaData[0]; 
+                
                 targetWordData = targetData;
-                const syns = shuffleArray(targetData.syn);
-                correctAnswerText = makeThreeWordString(targetData.word, syns[0], syns[1]);
-                options.push({ text: correctAnswerText, isCorrect: true });
 
-                const bgData = shuffleArray(poolMixed).slice(0, 4);
-                bgData.forEach(w => {
-                    options.push({ text: makeThreeWordString(w.word, pickRandom(w.syn), pickRandom(w.ant)), isCorrect: false });
-                });
-            }
-        } else {
-            questionTitle = "다음 중 두 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-            const isTargetAntonym = Math.random() < 0.5;
-            let targetPool = isTargetAntonym ? activeVocaData.filter(w => w.ant.length > 0) : activeVocaData.filter(w => w.syn.length > 0);
-            let bgPool = isTargetAntonym ? activeVocaData.filter(w => w.syn.length > 0) : activeVocaData.filter(w => w.ant.length > 0);
-
-            if (targetPool.length === 0 || bgPool.length < 4) {
-                targetPool = activeVocaData.filter(w => w.syn.length > 0);
-                bgPool = activeVocaData.filter(w => w.syn.length > 0);
+                if (isTargetAntonym) {
+                    correctAnswerText = `${targetData.word} - ${safePick(targetData.ant)}`;
+                    options.push({ text: correctAnswerText, isCorrect: true });
+                    
+                    let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
+                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                    bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.syn)}`, isCorrect: false }));
+                } else {
+                    correctAnswerText = `${targetData.word} - ${safePick(targetData.syn)}`;
+                    options.push({ text: correctAnswerText, isCorrect: true });
+                    
+                    let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
+                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                    bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.ant)}`, isCorrect: false }));
+                }
             }
 
-            const targetData = shuffleArray(targetPool)[0];
-            targetWordData = targetData;
-
-            if (isTargetAntonym) {
-                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.ant)}`;
-                options.push({ text: correctAnswerText, isCorrect: true });
-                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
-                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.syn)}`, isCorrect: false }));
-            } else {
-                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.syn)}`;
-                options.push({ text: correctAnswerText, isCorrect: true });
-                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
-                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.ant)}`, isCorrect: false }));
+            // 만약 옵션이 5개가 안 채워졌을 경우의 보험
+            while (options.length < 5) {
+                options.push({ text: "데이터 부족 (임시 보기)", isCorrect: false });
             }
+
+            options = shuffleArray(options);
+            setCurrentQuestion({ title: questionTitle, options, targetWordData, answer: correctAnswerText });
+
+        } catch (error) {
+            console.error("Voca Challenge Engine Error:", error);
+            // 🚀 시스템 크래시를 막고 임시 문제 출력
+            setCurrentQuestion({
+                title: "⚠️ 단어 추출 오류가 발생했습니다. (임시 문제)",
+                options: [
+                    { text: "정답 (안전하게 계속하기)", isCorrect: true },
+                    { text: "오답", isCorrect: false },
+                    { text: "오답", isCorrect: false },
+                    { text: "오답", isCorrect: false },
+                    { text: "오답", isCorrect: false }
+                ],
+                targetWordData: activeVocaData[0],
+                answer: "정답 (안전하게 계속하기)"
+            });
         }
-
-        options = shuffleArray(options);
-        setCurrentQuestion({ title: questionTitle, options, targetWordData, answer: correctAnswerText });
     };
 
     const handleAnswer = (isCorrect) => {
@@ -651,6 +684,7 @@ export default function VocaChallenge({ currentUser }) {
             endGame(false); 
         }
         return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gameState, overlayState, timeLeft]);
 
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
