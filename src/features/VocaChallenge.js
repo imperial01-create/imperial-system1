@@ -541,7 +541,6 @@ export default function VocaChallenge({ currentUser }) {
             endGame(false); // 시간 초과 시 서든데스 탈락
         }
         return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gameState, timeLeft]);
 
 
