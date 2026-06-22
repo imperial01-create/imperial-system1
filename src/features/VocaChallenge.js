@@ -1,10 +1,10 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.2
-   - (🚀 CTO 패치: 렌더링 시점의 Null 참조 오류를 원천 차단하는 방탄(Bulletproof) 설계 적용 및 네이밍 반영)
-   - 운영 효율성: 게이미피케이션 요소를 통해 학생들의 자발적 단어 학습 완수율을 높여, 강사의 관리 리소스를 절감합니다. */
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v3.0
+   - (🚀 CTO 패치: 원장님의 기획을 반영하여 게임 엔진(HTML)을 완전히 독립된 Iframe으로 분리했습니다.)
+   - React의 렌더링 간섭을 0%로 만들어 런타임 에러(빈 화면)를 완벽히 차단하고, PostMessage API를 통해 명예의 전당만 연동합니다. */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen, ChevronRight } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit } from 'firebase/firestore';
+import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, Trash2 } from 'lucide-react';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Card, Button, Badge } from '../components/UI';
@@ -251,89 +251,569 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-const processRawCSV = (csvText) => {
-    const rows = [];
-    let currentRow = [];
-    let currentCell = '';
-    let insideQuotes = false;
+// 🚀 [CTO 패치] 원장님의 오리지널 HTML/JS 코드를 React Iframe용 문자열로 주입 (충돌 방지를 위한 백틱 이스케이프 적용)
+const GET_GAME_HTML = () => `
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>영단어 챌린지</title>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; }
+    body { background-color: #f0f2f5; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
     
-    for (let i = 0; i < csvText.length; i++) {
-      const char = csvText[i];
-      if (char === '"') {
-        insideQuotes = !insideQuotes;
-      } else if (char === ',' && !insideQuotes) {
-        currentRow.push(currentCell.trim());
-        currentCell = '';
-      } else if ((char === '\n' || char === '\r') && !insideQuotes) {
-        if (char === '\r') continue;
-        currentRow.push(currentCell.trim());
-        if (currentRow.length > 1 || currentRow[0] !== '') {
-          rows.push(currentRow);
+    .header { background-color: #4f46e5; color: white; padding: 15px; text-align: center; font-size: 20px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .status-bar { display: flex; justify-content: space-between; padding: 15px 20px; font-size: 18px; font-weight: 900; background: white; border-bottom: 2px solid #e5e7eb; }
+    .score-highlight { color: #4f46e5; }
+    .timer-container { width: 100%; height: 10px; background-color: #e5e7eb; }
+    .timer-bar { height: 100%; background-color: #10b981; transition: width 1s linear, background-color 0.3s; }
+    .timer-warning { background-color: #ef4444 !important; }
+    .game-area { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; overflow-y: auto; }
+    .question-box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center; margin-bottom: 20px; }
+    .question-title { font-size: 18px; color: #374151; margin-bottom: 10px; font-weight: bold; }
+    .question-type { font-size: 22px; font-weight: 800; color: #4f46e5; word-break: keep-all; }
+    .options { display: flex; flex-direction: column; gap: 10px; }
+    .option-btn { background: white; border: 2px solid #e5e7eb; padding: 15px; border-radius: 10px; font-size: 18px; font-weight: bold; color: #1f2937; cursor: pointer; text-align: left; transition: all 0.2s; }
+    .option-btn:active { background: #f3f4f6; transform: scale(0.98); }
+    .screen { display: none; flex: 1; flex-direction: column; justify-content: flex-start; align-items: center; padding: 30px 20px; text-align: center; overflow-y: auto; }
+    .active { display: flex; }
+    .start-container { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 40px; width: 100%; max-width: 900px; }
+    .start-left { flex: 1; min-width: 300px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+    
+    /* 🚀 React가 처리할 영역 숨김 처리 */
+    .start-right, .ranking-board, .name-input { display: none !important; }
+    
+    .day-selection-title { font-size: 16px; font-weight: bold; color: #4b5563; margin-bottom: 10px; }
+    .day-selection { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 30px; width: 100%; max-width: 400px; }
+    .day-btn { padding: 10px 18px; border: 2px solid #e5e7eb; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 15px; color: #6b7280; background: white; transition: all 0.2s; }
+    .day-btn.selected { border-color: #4f46e5; background: #e0e7ff; color: #4f46e5; box-shadow: 0 2px 4px rgba(79,70,229,0.2); }
+    .day-btn:active { transform: scale(0.95); }
+    .result-title { font-size: 32px; font-weight: 900; margin-bottom: 10px; }
+    .result-score { font-size: 48px; color: #4f46e5; font-weight: 900; margin-bottom: 15px; }
+    .result-msg { font-size: 18px; color: #4b5563; margin-bottom: 20px; line-height: 1.5; }
+    .explanation-box { display: none; background: #fee2e2; border: 2px solid #fca5a5; padding: 20px; border-radius: 12px; margin-bottom: 20px; text-align: left; width: 100%; max-width: 400px; }
+    .exp-label { font-size: 14px; font-weight: bold; color: #b91c1c; margin-bottom: 8px; margin-top: 10px; }
+    .exp-label:first-child { margin-top: 0; }
+    .exp-detail { font-size: 15px; color: #4b5563; line-height: 1.4; word-break: keep-all; background: white; padding: 12px; border-radius: 8px; border: 1px solid #fca5a5; }
+    .exp-word { font-weight: 800; color: #4f46e5; }
+    .exp-options { display: flex; flex-direction: column; gap: 6px; }
+    .exp-opt-item { padding: 10px; border-radius: 8px; font-size: 15px; font-weight: bold; line-height: 1.3; }
+    .exp-opt-correct { border: 2px solid #10b981; color: #047857; background: #d1fae5; }
+    .exp-opt-wrong { border: 1px solid #d1d5db; color: #9ca3af; text-decoration: line-through; background: #f9fafb; }
+    .ranking-input-area { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; width: 100%; max-width: 400px; }
+    .save-btn { background-color: #10b981; color: white; border: none; padding: 15px 20px; font-size: 18px; font-weight: bold; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3); }
+    .start-btn { background-color: #4f46e5; color: white; border: none; padding: 15px 40px; font-size: 20px; font-weight: bold; border-radius: 30px; cursor: pointer; box-shadow: 0 4px 6px rgba(79, 70, 229, 0.3); width: 100%; max-width: 400px; margin-bottom: 20px;}
+    .start-btn:active, .save-btn:active { transform: translateY(2px); }
+    .overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+    .overlay.active { display: flex; }
+    .countdown-text { font-size: 120px; font-weight: 900; color: #fbbf24; animation: pop 1s infinite; }
+    .feedback-title { font-size: 50px; font-weight: 900; margin-bottom: 15px; text-shadow: 2px 2px 10px rgba(0,0,0,0.5); text-align: center; word-break: keep-all; line-height: 1.2; }
+    .feedback-time { font-size: 24px; color: white; margin-bottom: 5px; font-weight: bold; text-align: center; word-break: keep-all; }
+    .feedback-score { font-size: 40px; font-weight: 900; color: #fbbf24; margin-bottom: 5px; }
+    .feedback-bonus { font-size: 18px; color: #9ca3af; font-weight: bold; }
+    @keyframes pop { 0% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+  </style>
+</head>
+<body>
+
+  <div id="startScreen" class="screen active" style="justify-content: center;">
+    <div class="start-container">
+      <div class="start-left">
+        <h1 style="color: #4f46e5; font-size: 36px; font-weight: 900; margin-bottom: 10px; word-break: keep-all; padding: 0 10px;">영단어 챌린지</h1>
+        <p style="margin-bottom: 30px; color: #ef4444; font-weight: bold; font-size: 16px;">서든데스 모드! 한 번 틀리면 끝납니다.</p>
+        <div class="day-selection-title">📚 학습할 범위를 선택하세요 (다중 선택)</div>
+        <div id="daySelectionContainer" class="day-selection"></div>
+        <button id="mainStartBtn" class="start-btn">도전 시작하기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameScreen" style="display: none; height: 100%; flex-direction: column;">
+    <div class="header" id="roundText">Round 1 - Q.1 / 10</div>
+    <div class="status-bar">
+      <div id="scoreText" class="score-highlight">현재 점수: 0</div>
+      <div id="timeText" style="color: #10b981;">15초 남음</div>
+    </div>
+    <div class="timer-container">
+      <div id="timerBar" class="timer-bar" style="width: 100%;"></div>
+    </div>
+    <div class="game-area">
+      <div class="question-box">
+        <div class="question-title" id="qTitle">다음 중 두 단어의 관계가</div>
+        <div class="question-type">나머지 넷과 다른 하나를 고르시오.</div>
+      </div>
+      <div class="options" id="optionsContainer"></div>
+    </div>
+  </div>
+
+  <div id="resultScreen" class="screen">
+    <div class="result-title" id="resultTitle">게임 오버</div>
+    <div class="result-score" id="finalScore">0점</div>
+    <div class="result-msg" id="resultMsg">조금 더 분발하세요!</div>
+    
+    <div id="explanationBox" class="explanation-box">
+      <div class="exp-label">💡 핵심 단어 복습</div>
+      <div id="expDetail" class="exp-detail" style="margin-bottom: 15px;"></div>
+      <div class="exp-label">📝 출제된 보기 확인</div>
+      <div id="expOptions" class="exp-options"></div>
+    </div>
+
+    <div id="rankingInputArea" class="ranking-input-area" style="display: flex;">
+      <button id="saveRankBtn" class="save-btn">🏆 명예의 전당에 점수 기록 및 종료하기</button>
+    </div>
+    <button id="restartBtn" class="start-btn" style="background-color: #6b7280; margin-top: 10px;">처음으로 돌아가기</button>
+  </div>
+
+  <div id="countdownOverlay" class="overlay">
+    <div id="countdownNumber" class="countdown-text">3</div>
+  </div>
+
+  <div id="roundTransitionOverlay" class="overlay">
+    <div id="roundTransitionTitle" class="feedback-title" style="color: #60a5fa;">1라운드 시작!</div>
+    <div id="roundTransitionDesc" class="feedback-time" style="color: white; margin-top: 20px;">문제당 15초의 시간이 주어집니다.</div>
+  </div>
+
+  <div id="feedbackOverlay" class="overlay">
+    <div id="feedbackTitle" class="feedback-title">정답!</div>
+    <div id="feedbackTime" class="feedback-time" style="display: none;"></div>
+    <div id="feedbackScore" class="feedback-score"></div>
+    <div id="feedbackBonus" class="feedback-bonus" style="display: none;"></div>
+  </div>
+
+  <script>
+    const rawCsvString = \`${RAW_CSV_DATA}\`;
+
+    function processRawCSV(csvText) {
+      const rows = [];
+      let currentRow = [];
+      let currentCell = '';
+      let insideQuotes = false;
+      
+      for (let i = 0; i < csvText.length; i++) {
+        const char = csvText[i];
+        if (char === '"') {
+          insideQuotes = !insideQuotes;
+        } else if (char === ',' && !insideQuotes) {
+          currentRow.push(currentCell.trim());
+          currentCell = '';
+        } else if ((char === '\\n' || char === '\\r') && !insideQuotes) {
+          if (char === '\\r') continue;
+          currentRow.push(currentCell.trim());
+          if (currentRow.length > 1 || currentRow[0] !== '') rows.push(currentRow);
+          currentRow = [];
+          currentCell = '';
+        } else {
+          currentCell += char;
         }
-        currentRow = [];
-        currentCell = '';
-      } else {
-        currentCell += char;
       }
-    }
-    
-    if (currentCell || currentRow.length > 0) {
-      currentRow.push(currentCell.trim());
-      rows.push(currentRow);
-    }
+      if (currentCell || currentRow.length > 0) {
+        currentRow.push(currentCell.trim());
+        rows.push(currentRow);
+      }
 
-    const wordMap = {};
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (row.length < 3) continue;
-      
-      const wordId = row[0];
-      const word = row[1];
-      const synStr = row[3];
-      const antStr = row[4];
-      if (!word) continue;
-      
-      let dayMatch = wordId.match(/_D(\d+)_/);
-      let dayNum = dayMatch ? parseInt(dayMatch[1], 10) : 1;
+      const wordMap = {};
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.length < 5) continue;
+        const word_id = row[0];
+        const word = row[1];
+        const syn = row[3];
+        const ant = row[4];
+        if (!word) continue;
+        
+        let dayMatch = word_id.match(/_D(\\d+)_/);
+        let day = dayMatch ? parseInt(dayMatch[1], 10) : 1;
+        if (!wordMap[word]) wordMap[word] = { word: word, synSet: new Set(), antSet: new Set(), day: day };
+        
+        if (syn) syn.split(',').forEach(s => { if(s.trim()) wordMap[word].synSet.add(s.trim()); });
+        if (ant) ant.split(',').forEach(a => { if(a.trim()) wordMap[word].antSet.add(a.trim()); });
+      }
 
-      if (!wordMap[word]) {
-        wordMap[word] = { word: word, day: dayNum, synSet: new Set(), antSet: new Set() };
-      }
-      
-      if (synStr) {
-        synStr.split(',').forEach(s => {
-          const cleaned = s.replace(/^"|"$/g, '').trim();
-          if(cleaned) wordMap[word].synSet.add(cleaned);
-        });
-      }
-      if (antStr) {
-        antStr.split(',').forEach(a => {
-          const cleaned = a.replace(/^"|"$/g, '').trim();
-          if(cleaned) wordMap[word].antSet.add(cleaned);
-        });
-      }
+      return Object.values(wordMap).map(item => {
+        return {
+          word: item.word,
+          syn: item.synSet.size > 0 ? Array.from(item.synSet).join(', ') : null,
+          ant: item.antSet.size > 0 ? Array.from(item.antSet).join(', ') : null,
+          day: item.day
+        };
+      });
     }
 
-    return Object.values(wordMap).map(item => ({
-      word: item.word,
-      day: item.day,
-      syn: Array.from(item.synSet),
-      ant: Array.from(item.antSet)
-    }));
-};
+    const rawVocaData = processRawCSV(rawCsvString);
+    let currentVocaData = [];
+    let selectedDays = [];
+    let currentTotalQuestion = 1;
+    const MAX_QUESTIONS = 30; 
+    let score = 0;
+    let timeLeft = 0;
+    let timerInterval;
+    let maxTime = 15;
+    let isTransitioning = false;
+    let currentCorrectAnswerText = "";
+    let currentTargetWordData = null;
+    let currentOptions = [];
 
-const shuffleArray = (array) => {
-    if (!array || !Array.isArray(array)) return [];
-    const arr = [...array];
-    for (let i = arr.length - 1; i > 0; i--) {
+    document.addEventListener("DOMContentLoaded", function() {
+      initDaySelection();
+      document.getElementById("mainStartBtn").addEventListener("click", checkAndStart);
+      document.getElementById("restartBtn").addEventListener("click", showStartScreen);
+      document.getElementById("saveRankBtn").addEventListener("click", saveRanking);
+    });
+
+    function initDaySelection() {
+      const days = [...new Set(rawVocaData.map(v => v.day))].sort((a,b)=>a-b);
+      const container = document.getElementById('daySelectionContainer');
+      container.innerHTML = '';
+      if(days.length === 0) return;
+      days.forEach(d => {
+        const btn = document.createElement('div');
+        btn.className = 'day-btn selected';
+        btn.innerText = 'Day ' + d;
+        btn.dataset.day = d;
+        btn.onclick = () => btn.classList.toggle('selected');
+        container.appendChild(btn);
+      });
+    }
+
+    function checkAndStart() {
+      const selectedDayEls = document.querySelectorAll('.day-btn.selected');
+      if(selectedDayEls.length === 0) {
+        alert("학습할 Day를 최소 1개 이상 선택해주세요!");
+        return;
+      }
+      selectedDays = Array.from(selectedDayEls).map(el => parseInt(el.dataset.day));
+      currentVocaData = rawVocaData.filter(w => selectedDays.includes(w.day));
+      if(currentVocaData.length < 5) {
+        alert("선택된 Day의 단어가 5개 미만입니다.");
+        return;
+      }
+      startPreparation();
+    }
+
+    function shuffle(array) {
+      for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
+        const temp = array[i];
+        array[i] = array[j];
+        array[j] = temp;
+      }
+      return array;
     }
-    return arr;
-};
 
-// 안전한 추출 (빈 값 방어)
-const safePick = (arr) => arr && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : "없음";
+    function pickOneRandomWord(wordString) {
+      if (!wordString) return '없음';
+      const wordsArray = wordString.split(',').map(w => w.trim());
+      return wordsArray[Math.floor(Math.random() * wordsArray.length)];
+    }
+
+    function makeThreeWordString(baseWord, word2, word3) {
+      let others = [word2, word3];
+      shuffle(others);
+      return baseWord + ' - ' + others[0] + ' - ' + others[1];
+    }
+
+    function showStartScreen() {
+      document.getElementById('startScreen').classList.add('active');
+      document.getElementById('gameScreen').style.display = 'none';
+      document.getElementById('resultScreen').classList.remove('active');
+    }
+
+    function startPreparation() {
+      document.getElementById('startScreen').classList.remove('active');
+      document.getElementById('gameScreen').style.display = 'flex';
+      const overlay = document.getElementById('countdownOverlay');
+      const numberText = document.getElementById('countdownNumber');
+      overlay.classList.add('active');
+      let count = 3;
+      numberText.innerText = count;
+      const countInterval = setInterval(() => {
+        count--;
+        if (count > 0) {
+          numberText.innerText = count;
+        } else if (count === 0) {
+          numberText.innerText = "Start!";
+          numberText.style.color = "#10b981";
+        } else {
+          clearInterval(countInterval);
+          overlay.classList.remove('active');
+          numberText.style.color = "#fbbf24"; 
+          startGame();
+        }
+      }, 1000);
+    }
+
+    function startGame() {
+      currentTotalQuestion = 1;
+      score = 0;
+      isTransitioning = false;
+      document.getElementById('explanationBox').style.display = 'none'; 
+      document.getElementById('rankingInputArea').style.display = 'flex'; 
+      document.getElementById('saveRankBtn').innerText = '🏆 명예의 전당에 점수 기록 및 종료하기';
+      document.getElementById('saveRankBtn').disabled = false;
+      showRoundTransition();
+    }
+
+    function getRoundConfig() {
+      const multiplier = selectedDays.length;
+      const basePoints = multiplier * 10;
+      if (currentTotalQuestion <= 10) return { round: 1, qNum: currentTotalQuestion, time: 15, baseScore: basePoints, bonus: multiplier * 1, prob3: 0.2 };
+      else if (currentTotalQuestion <= 20) return { round: 2, qNum: currentTotalQuestion - 10, time: 10, baseScore: basePoints * 2, bonus: multiplier * 2, prob3: 0.4 };
+      else return { round: 3, qNum: currentTotalQuestion - 20, time: 5, baseScore: basePoints * 3, bonus: multiplier * 5, prob3: 0.6 };
+    }
+
+    function showRoundTransition() {
+      const config = getRoundConfig();
+      if (config.qNum === 1) {
+        const overlay = document.getElementById('roundTransitionOverlay');
+        document.getElementById('roundTransitionTitle').innerText = config.round + '라운드 시작!';
+        document.getElementById('roundTransitionDesc').innerText = '문제당 ' + config.time + '초의 시간이 주어집니다.';
+        overlay.classList.add('active');
+        setTimeout(() => {
+          overlay.classList.remove('active');
+          nextQuestion();
+        }, 2500);
+      } else {
+        nextQuestion();
+      }
+    }
+
+    function nextQuestion() {
+      if (currentTotalQuestion > MAX_QUESTIONS) {
+        endGame(true);
+        return;
+      }
+      const config = getRoundConfig();
+      maxTime = config.time;
+      timeLeft = maxTime;
+      document.getElementById('roundText').innerText = 'Round ' + config.round + ' - Q.' + config.qNum + ' / 10';
+      document.getElementById('scoreText').innerText = '현재 점수: ' + score;
+      updateTimerUI();
+      generateQuestion(config.prob3);
+      startTimer();
+    }
+
+    function generateQuestion(threeWordProb) {
+      const qTitle = document.getElementById('qTitle');
+      let isThreeWordType = Math.random() < threeWordProb;
+      let options = [];
+
+      const poolAllSyn = currentVocaData.filter(w => w.syn && w.syn.includes(','));
+      const poolMixed = currentVocaData.filter(w => w.syn && w.ant);
+
+      const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
+      if(isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
+
+      if (isThreeWordType) {
+        qTitle.innerText = "다음 중 세 단어의 관계가";
+        shuffle(poolAllSyn); shuffle(poolMixed);
+        const isMajorityAllSyn = Math.random() < 0.5;
+
+        if (isMajorityAllSyn) {
+          const targetData = poolMixed[0];
+          currentTargetWordData = targetData;
+          currentCorrectAnswerText = makeThreeWordString(targetData.word, pickOneRandomWord(targetData.syn), pickOneRandomWord(targetData.ant));
+          options.push({ text: currentCorrectAnswerText, isCorrect: true });
+
+          const backgroundData = poolAllSyn.slice(0, 4);
+          backgroundData.forEach(w => {
+            const syns = w.syn.split(',').map(s => s.trim());
+            shuffle(syns);
+            options.push({ text: makeThreeWordString(w.word, syns[0], syns[1]), isCorrect: false });
+          });
+        } else {
+          const targetData = poolAllSyn[0];
+          currentTargetWordData = targetData;
+          const targetSyns = targetData.syn.split(',').map(s => s.trim());
+          shuffle(targetSyns);
+          currentCorrectAnswerText = makeThreeWordString(targetData.word, targetSyns[0], targetSyns[1]);
+          options.push({ text: currentCorrectAnswerText, isCorrect: true });
+
+          const backgroundData = poolMixed.slice(0, 4);
+          backgroundData.forEach(w => {
+            options.push({ text: makeThreeWordString(w.word, pickOneRandomWord(w.syn), pickOneRandomWord(w.ant)), isCorrect: false });
+          });
+        }
+      } else {
+        qTitle.innerText = "다음 중 두 단어의 관계가";
+        const isTargetAntonym = Math.random() < 0.5; 
+        let targetWordList = []; let backgroundWordList = [];
+        if (isTargetAntonym) {
+          targetWordList = currentVocaData.filter(w => w.ant);
+          backgroundWordList = currentVocaData.filter(w => w.syn);
+        } else {
+          targetWordList = currentVocaData.filter(w => w.syn);
+          backgroundWordList = currentVocaData.filter(w => w.ant);
+        }
+        if(targetWordList.length === 0 || backgroundWordList.length < 4) {
+             targetWordList = currentVocaData.filter(w => w.syn);
+             backgroundWordList = currentVocaData.filter(w => w.syn);
+             shuffle(targetWordList); shuffle(backgroundWordList);
+             const fallbackTarget = targetWordList[0];
+             currentTargetWordData = fallbackTarget;
+             currentCorrectAnswerText = fallbackTarget.word + ' - ' + pickOneRandomWord(fallbackTarget.syn);
+             options.push({ text: currentCorrectAnswerText, isCorrect: true });
+             const bgData = backgroundWordList.filter(w => w.word !== fallbackTarget.word).slice(0, 4);
+             bgData.forEach(w => options.push({ text: w.word + ' - ' + pickOneRandomWord(w.syn), isCorrect: false }));
+        } else {
+            shuffle(targetWordList); shuffle(backgroundWordList);
+            const targetData = targetWordList[0];
+            currentTargetWordData = targetData;
+            const backgroundData = backgroundWordList.filter(w => w.word !== targetData.word).slice(0, 4);
+            if (isTargetAntonym) {
+              currentCorrectAnswerText = targetData.word + ' - ' + pickOneRandomWord(targetData.ant);
+              options.push({ text: currentCorrectAnswerText, isCorrect: true });
+              backgroundData.forEach(w => options.push({ text: w.word + ' - ' + pickOneRandomWord(w.syn), isCorrect: false }));
+            } else {
+              currentCorrectAnswerText = targetData.word + ' - ' + pickOneRandomWord(targetData.syn);
+              options.push({ text: currentCorrectAnswerText, isCorrect: true });
+              backgroundData.forEach(w => options.push({ text: w.word + ' - ' + pickOneRandomWord(w.ant), isCorrect: false }));
+            }
+        }
+      }
+
+      shuffle(options);
+      currentOptions = options; 
+      const container = document.getElementById('optionsContainer');
+      container.innerHTML = '';
+      options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = 'option-btn';
+        btn.innerText = opt.text;
+        btn.onclick = () => handleAnswer(opt.isCorrect, false);
+        container.appendChild(btn);
+      });
+    }
+
+    function startTimer() {
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        updateTimerUI();
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          handleAnswer(false, true); 
+        }
+      }, 1000);
+    }
+
+    function updateTimerUI() {
+      const timeText = document.getElementById('timeText');
+      const timerBar = document.getElementById('timerBar');
+      timeText.innerText = timeLeft + '초 남음';
+      const percentage = (timeLeft / maxTime) * 100;
+      timerBar.style.width = percentage + '%';
+      if (timeLeft <= 3) {
+        timeText.style.color = '#ef4444';
+        timerBar.classList.add('timer-warning');
+      } else {
+        timeText.style.color = '#10b981';
+        timerBar.classList.remove('timer-warning');
+      }
+    }
+
+    function handleAnswer(isCorrect, isTimeout) {
+      if (isTransitioning) return;
+      isTransitioning = true;
+      clearInterval(timerInterval); 
+
+      const overlay = document.getElementById('feedbackOverlay');
+      const titleEl = document.getElementById('feedbackTitle');
+      const timeEl = document.getElementById('feedbackTime');
+      const scoreEl = document.getElementById('feedbackScore');
+      const bonusEl = document.getElementById('feedbackBonus');
+
+      const timeTaken = maxTime - timeLeft;
+      if (isCorrect) {
+        const config = getRoundConfig();
+        const bonusPoints = timeLeft * config.bonus;
+        const earnedScore = config.baseScore + bonusPoints;
+        score += earnedScore;
+        document.getElementById('scoreText').innerText = '현재 점수: ' + score;
+        titleEl.innerText = "🎉 정답! 🎉";
+        titleEl.style.color = "#10b981";
+        timeEl.innerText = '⏱️ ' + timeTaken + '초 만에 맞췄습니다!';
+        timeEl.style.display = "block";
+        scoreEl.innerText = '+' + earnedScore + '점';
+        scoreEl.style.display = "block";
+        bonusEl.innerText = '(기본 ' + config.baseScore + '점 + 시간 보너스 ' + bonusPoints + '점)';
+        bonusEl.style.display = "block";
+      } else {
+        if (isTimeout) titleEl.innerText = "⏰ 시간 초과!";
+        else titleEl.innerText = "❌ 오답! ❌";
+        titleEl.style.color = "#ef4444";
+        timeEl.style.display = "none";
+        scoreEl.style.display = "none";
+        bonusEl.style.display = "none";
+      }
+
+      overlay.classList.add('active'); 
+
+      setTimeout(() => {
+        overlay.classList.remove('active');
+        isTransitioning = false;
+        
+        if (isCorrect) {
+          currentTotalQuestion++; 
+          showRoundTransition();
+        } else {
+          endGame(false);
+        }
+      }, 2500);
+    }
+
+    function endGame(isWin) {
+      clearInterval(timerInterval);
+      document.getElementById('gameScreen').style.display = 'none';
+      const resultScreen = document.getElementById('resultScreen');
+      resultScreen.classList.add('active');
+      
+      const title = document.getElementById('resultTitle');
+      const msg = document.getElementById('resultMsg');
+      const expBox = document.getElementById('explanationBox');
+      
+      document.getElementById('finalScore').innerText = '최종 점수: ' + score + '점';
+      if (isWin) {
+        title.innerText = "🎉 게임 클리어! 🎉";
+        title.style.color = "#10b981";
+        msg.innerHTML = "영일고의 자랑!<br>모든 단어를 완벽하게 숙지하셨군요!";
+        expBox.style.display = "none"; 
+        if (typeof confetti === "function") {
+            confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+        }
+      } else {
+        const failedRound = getRoundConfig().round;
+        title.innerText = "💀 게임 오버 💀";
+        title.style.color = "#ef4444";
+        msg.innerHTML = '아쉽습니다. Round ' + failedRound + '에서 탈락했습니다.<br>아래 오답 노트를 확인하고 다시 도전하세요!';
+        
+        const synText = currentTargetWordData.syn ? currentTargetWordData.syn : "없음";
+        const antText = currentTargetWordData.ant ? currentTargetWordData.ant : "없음";
+        document.getElementById('expDetail').innerHTML = '<span class="exp-word">[' + currentTargetWordData.word + ']</span><br>✔️ 유의어: ' + synText + '<br>❌ 반의어: ' + antText;
+        let optionsHtml = '';
+        currentOptions.forEach(opt => {
+          if(opt.isCorrect) optionsHtml += '<div class="exp-opt-item exp-opt-correct">✅ 정답: ' + opt.text + '</div>';
+          else optionsHtml += '<div class="exp-opt-item exp-opt-wrong">❌ 오답: ' + opt.text + '</div>';
+        });
+        document.getElementById('expOptions').innerHTML = optionsHtml;
+        expBox.style.display = "block";
+      }
+    }
+
+    // 🚀 [CTO 패치] React 부모 창으로 점수 데이터 전송 (마이크로 프론트엔드 통신)
+    function saveRanking() {
+      window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
+      const btn = document.getElementById('saveRankBtn');
+      btn.innerText = '저장 완료! 화면을 닫는 중...';
+      btn.style.backgroundColor = '#6b7280';
+      btn.disabled = true;
+    }
+  </script>
+</body>
+</html>
+`;
 
 export default function VocaChallenge({ currentUser }) {
     const { classes = [], enrollments = [] } = useData() || {};
@@ -350,39 +830,8 @@ export default function VocaChallenge({ currentUser }) {
     const [rankings, setRankings] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const [gameState, setGameState] = useState('intro'); 
-    const [overlayState, setOverlayState] = useState('none'); 
-    const [countdownNum, setCountdownNum] = useState(3);
-    const [roundInfo, setRoundInfo] = useState({ round: 1, time: 15 });
-
-    const [timeLeft, setTimeLeft] = useState(15);
-    const [score, setScore] = useState(0);
-    const [questionNum, setQuestionNum] = useState(1);
-    
-    const [currentQuestion, setCurrentQuestion] = useState(null);
     const [studentClassId, setStudentClassId] = useState(null); 
-
-    const vocaDataAll = useMemo(() => processRawCSV(RAW_CSV_DATA), []);
-    
-    const availableDays = useMemo(() => {
-        return [...new Set(vocaDataAll.map(v => v.day))].sort((a,b) => a-b);
-    }, [vocaDataAll]);
-    const [selectedDays, setSelectedDays] = useState([]);
-
-    const activeVocaData = useMemo(() => {
-        return vocaDataAll.filter(v => selectedDays.includes(v.day));
-    }, [vocaDataAll, selectedDays]);
-
-    useEffect(() => {
-        if (!document.getElementById('confetti-script')) {
-            const script = document.createElement('script');
-            script.id = 'confetti-script';
-            script.src = 'https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js';
-            script.async = true;
-            document.body.appendChild(script);
-        }
-        setSelectedDays(availableDays);
-    }, [availableDays]);
+    const [isGameActive, setIsGameActive] = useState(false); // 🚀 Iframe 활성화 트리거
 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'voca_challenge'), (docSnap) => {
@@ -427,6 +876,7 @@ export default function VocaChallenge({ currentUser }) {
         return () => { if (unsub) unsub(); }
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
+
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
@@ -447,247 +897,67 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
-    const toggleDaySelection = (day) => {
-        setSelectedDays(prev => 
-            prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a,b)=>a-b)
-        );
-    };
-
-    const getRoundConfig = (qNum) => {
-        const multiplier = selectedDays.length || 1;
-        const basePoints = multiplier * 10;
-        if (qNum <= 10) return { round: 1, time: 15, baseScore: basePoints, bonus: multiplier * 1 };
-        if (qNum <= 20) return { round: 2, time: 10, baseScore: basePoints * 2, bonus: multiplier * 2 };
-        return { round: 3, time: 5, baseScore: basePoints * 3, bonus: multiplier * 5 };
-    };
-
-    const handleStartClick = () => {
-        if (selectedDays.length === 0) return alert("학습할 Day를 최소 1개 이상 선택해주세요!");
-        if (activeVocaData.length < 5) return alert("선택한 범위의 단어 수가 너무 적습니다 (최소 5개 필요).");
-        
-        setScore(0);
-        setQuestionNum(1);
-        setOverlayState('countdown');
-        
-        let count = 3;
-        setCountdownNum(count);
-        
-        const timer = setInterval(() => {
-            count--;
-            if (count > 0) {
-                setCountdownNum(count);
-            } else if (count === 0) {
-                setCountdownNum('Start!');
-            } else {
-                clearInterval(timer);
-                startGame();
-            }
-        }, 1000);
-    };
-
-    const startGame = () => {
-        setOverlayState('round');
-        const config = getRoundConfig(1);
-        setRoundInfo({ round: config.round, time: config.time });
-        
-        setTimeout(() => {
-            setOverlayState('none');
-            setGameState('playing');
-            generateQuestion(1);
-        }, 2500);
-    };
-
-    // 🚀 [CTO 패치] 모든 에러를 완벽하게 잡아내는 방탄 출제 엔진
-    const generateQuestion = (qNum) => {
-        try {
-            const config = getRoundConfig(qNum);
-            setTimeLeft(config.time);
-
-            if (!activeVocaData || activeVocaData.length === 0) {
-                throw new Error("학습 데이터가 비어있습니다.");
-            }
-
-            const poolAllSyn = activeVocaData.filter(w => w.syn.length >= 2);
-            const poolMixed = activeVocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
-
-            let isThreeWordType = Math.random() < 0.3; 
-            const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
-
-            if (isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
-
-            let questionTitle = "";
-            let options = [];
-            let correctAnswerText = "";
-            let targetWordData = null;
-
-            const makeThreeWordString = (base, w2, w3) => {
-                const others = shuffleArray([w2 || '없음', w3 || '없음']);
-                return `${base} - ${others[0]} - ${others[1]}`;
-            };
-
-            if (isThreeWordType) {
-                questionTitle = "다음 중 세 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-                const isMajorityAllSyn = Math.random() < 0.5;
-
-                if (isMajorityAllSyn) {
-                    const shuffledMixed = shuffleArray(poolMixed);
-                    targetWordData = shuffledMixed.length > 0 ? shuffledMixed[0] : activeVocaData[0];
-                    correctAnswerText = makeThreeWordString(targetWordData.word, safePick(targetWordData.syn), safePick(targetWordData.ant));
-                    options.push({ text: correctAnswerText, isCorrect: true });
-
-                    const bgData = shuffleArray(poolAllSyn).slice(0, 4);
-                    bgData.forEach(w => {
-                        const syns = shuffleArray(w.syn);
-                        options.push({ text: makeThreeWordString(w.word, syns[0] || '없음', syns[1] || '없음'), isCorrect: false });
-                    });
-                } else {
-                    const shuffledAllSyn = shuffleArray(poolAllSyn);
-                    targetWordData = shuffledAllSyn.length > 0 ? shuffledAllSyn[0] : activeVocaData[0];
-                    const syns = shuffleArray(targetWordData.syn);
-                    correctAnswerText = makeThreeWordString(targetWordData.word, syns[0] || '없음', syns[1] || '없음');
-                    options.push({ text: correctAnswerText, isCorrect: true });
-
-                    const bgData = shuffleArray(poolMixed).slice(0, 4);
-                    bgData.forEach(w => {
-                        options.push({ text: makeThreeWordString(w.word, safePick(w.syn), safePick(w.ant)), isCorrect: false });
-                    });
-                }
-            } else {
-                questionTitle = "다음 중 두 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-                const isTargetAntonym = Math.random() < 0.5;
-                let targetPool = isTargetAntonym ? activeVocaData.filter(w => w.ant.length > 0) : activeVocaData.filter(w => w.syn.length > 0);
-                let bgPool = isTargetAntonym ? activeVocaData.filter(w => w.syn.length > 0) : activeVocaData.filter(w => w.ant.length > 0);
-
-                if (targetPool.length === 0 || bgPool.length < 4) {
-                    targetPool = activeVocaData.filter(w => w.syn.length > 0);
-                    bgPool = activeVocaData.filter(w => w.syn.length > 0);
-                }
-
-                const shuffledTarget = shuffleArray(targetPool);
-                targetWordData = shuffledTarget.length > 0 ? shuffledTarget[0] : activeVocaData[0];
-
-                if (isTargetAntonym) {
-                    correctAnswerText = `${targetWordData.word} - ${safePick(targetWordData.ant)}`;
-                    options.push({ text: correctAnswerText, isCorrect: true });
-                    
-                    let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
-                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetWordData.word).slice(0, 4);
-                    bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.syn)}`, isCorrect: false }));
-                } else {
-                    correctAnswerText = `${targetWordData.word} - ${safePick(targetWordData.syn)}`;
-                    options.push({ text: correctAnswerText, isCorrect: true });
-                    
-                    let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
-                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetWordData.word).slice(0, 4);
-                    bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.ant)}`, isCorrect: false }));
-                }
-            }
-
-            // 만일 보기가 5개가 안 채워진 극단적 엣지 케이스 방어
-            while (options.length < 5) {
-                options.push({ text: "데이터 없음 (임시 보기)", isCorrect: false });
-            }
-
-            options = shuffleArray(options);
-            setCurrentQuestion({ title: questionTitle, options, targetWordData, answer: correctAnswerText });
-
-        } catch (error) {
-            console.error("Voca Challenge Engine Error:", error);
-            // 에러 발생 시 프로그램 크래시를 막는 비상용 문제 렌더링
-            setCurrentQuestion({
-                title: "⚠️ 단어 추출 오류가 발생했습니다. (임시 문제)",
-                options: [
-                    { text: "정답 (안전하게 계속하기)", isCorrect: true },
-                    { text: "오답 1", isCorrect: false },
-                    { text: "오답 2", isCorrect: false },
-                    { text: "오답 3", isCorrect: false },
-                    { text: "오답 4", isCorrect: false }
-                ],
-                targetWordData: activeVocaData && activeVocaData.length > 0 ? activeVocaData[0] : { word: '오류', syn: [], ant: [] },
-                answer: "정답 (안전하게 계속하기)"
-            });
-        }
-    };
-
-    const handleAnswer = (isCorrect) => {
-        if (isCorrect) {
-            const config = getRoundConfig(questionNum);
-            const timeBonus = timeLeft * config.bonus;
-            const earnedScore = config.baseScore + timeBonus;
-            
-            setScore(prev => prev + earnedScore);
-            
-            const nextQNum = questionNum + 1;
-            setQuestionNum(nextQNum);
-
-            if (nextQNum === 11 || nextQNum === 21) {
-                const nextConfig = getRoundConfig(nextQNum);
-                setOverlayState('round');
-                setRoundInfo({ round: nextConfig.round, time: nextConfig.time });
-                
-                setTimeout(() => {
-                    setOverlayState('none');
-                    generateQuestion(nextQNum);
-                }, 2500);
-            } else {
-                generateQuestion(nextQNum);
-            }
-        } else {
-            endGame(false); 
-        }
-    };
-
-    const saveRankingToDB = async (finalScore) => {
-        const myClassObj = classes.find(c => c.id === studentClassId);
-        const className = myClassObj?.name || '알수없음';
-        
-        try {
-            const q = query(
-                collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
-                where('classId', '==', studentClassId),
-                where('studentId', '==', currentUser.id)
-            );
-            const snap = await getDocs(q);
-            
-            if (!snap.empty) {
-                const docRef = snap.docs[0].ref;
-                const pastScore = snap.docs[0].data().score;
-                if (finalScore > pastScore) {
-                    await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
-                }
-            } else {
-                await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
-                    classId: studentClassId,
-                    className: className,
-                    studentId: currentUser.id,
-                    studentName: currentUser.name,
-                    score: finalScore,
-                    createdAt: serverTimestamp()
-                });
-            }
-        } catch (e) { console.error("Ranking save error:", e); }
-    };
-
-    const endGame = async (isWin) => {
-        setGameState('result');
-        if (isWin && window.confetti) {
-            window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
-        }
-        await saveRankingToDB(score);
-    };
-
+    // 🚀 [CTO 패치] Iframe 통신 리스너 (PostMessage API)
     useEffect(() => {
-        let timer;
-        if (gameState === 'playing' && overlayState === 'none' && timeLeft > 0) {
-            timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
-        } else if (gameState === 'playing' && overlayState === 'none' && timeLeft === 0) {
-            endGame(false); 
-        }
-        return () => clearInterval(timer);
-    }, [gameState, overlayState, timeLeft]);
+        const handleMessage = async (event) => {
+            if (event.data && event.data.type === 'VOCA_GAME_OVER') {
+                const finalScore = event.data.score;
+                
+                try {
+                    const myClassObj = classes.find(c => c.id === studentClassId);
+                    const q = query(
+                        collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
+                        where('classId', '==', studentClassId),
+                        where('studentId', '==', currentUser.id)
+                    );
+                    const snap = await getDocs(q);
+                    
+                    if (!snap.empty) {
+                        const docRef = snap.docs[0].ref;
+                        const pastScore = snap.docs[0].data().score;
+                        if (finalScore > pastScore) {
+                            await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
+                        }
+                    } else {
+                        await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
+                            classId: studentClassId,
+                            className: myClassObj?.name || '알수없음',
+                            studentId: currentUser.id,
+                            studentName: currentUser.name,
+                            score: finalScore,
+                            createdAt: serverTimestamp()
+                        });
+                    }
+                    
+                    alert(`게임 종료! 최종 점수 ${finalScore}점이 성공적으로 기록되었습니다.`);
+                    setIsGameActive(false); // 게임 창 닫기 및 랭킹보드로 복귀
+                    
+                } catch (e) {
+                    console.error("Score save error:", e);
+                    alert("점수 저장에 실패했습니다. 다시 시도해 주세요.");
+                }
+            }
+        };
 
-    // 🚀 [CTO 패치] 로딩 컴포넌트 이중 보호
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, [classes, currentUser, studentClassId]);
+
+
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
+
+    // 🚀 [CTO 패치] 게임 활성화 시 Iframe 전체 화면 렌더링
+    if (isGameActive) {
+        return (
+            <div className="fixed inset-0 z-[9999] bg-white">
+                <iframe 
+                    title="Voca Game Engine"
+                    srcDoc={GET_GAME_HTML()} 
+                    className="w-full h-full border-0"
+                />
+            </div>
+        );
+    }
 
     if (!isStudent) {
         return (
@@ -766,7 +1036,7 @@ export default function VocaChallenge({ currentUser }) {
                                                     <span className="font-bold text-white text-xl">{rank.studentName}</span>
                                                 </div>
                                                 <div className="text-right">
-                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score?.toLocaleString() || 0}</span>
+                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score.toLocaleString()}</span>
                                                     <span className="text-sm text-yellow-400/50 font-bold ml-1">pt</span>
                                                 </div>
                                             </div>
@@ -793,152 +1063,31 @@ export default function VocaChallenge({ currentUser }) {
 
     return (
         <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in pb-20 relative">
-            
-            {overlayState === 'countdown' && (
-                <div className="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center animate-in fade-in duration-200">
-                    <div className="text-9xl font-black text-yellow-400 animate-bounce drop-shadow-[0_0_30px_rgba(250,204,21,0.6)]">
-                        {countdownNum}
-                    </div>
-                </div>
-            )}
-            
-            {overlayState === 'round' && (
-                <div className="fixed inset-0 bg-slate-900/95 z-50 flex flex-col items-center justify-center animate-in fade-in duration-200">
-                    <h2 className="text-6xl font-black text-blue-400 mb-6 drop-shadow-[0_0_20px_rgba(96,165,250,0.5)]">{roundInfo.round}라운드 시작!</h2>
-                    <p className="text-2xl font-bold text-white bg-white/10 px-6 py-3 rounded-full flex items-center gap-2">
-                        <Clock className="text-emerald-400"/> 문제당 <span className="text-emerald-400">{roundInfo.time}초</span>의 시간이 주어집니다.
-                    </p>
-                </div>
-            )}
+            <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-indigo-500/30">
+                <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200}/></div>
+                
+                <Badge className="bg-indigo-500 text-white mb-6 border-0 text-sm py-1.5 px-4 rounded-full">우리 반 한정 챌린지</Badge>
+                <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">영단어<br/><span className="text-yellow-400">챌린지</span></h1>
+                <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
+                
+                <button onClick={() => setIsGameActive(true)} className="bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-orange-950 font-black text-2xl py-4 px-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-2 z-10">
+                    <Play fill="currentColor" size={24}/> 게임 시작 (전체 화면)
+                </button>
 
-            {gameState === 'intro' && (
-                <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-indigo-500/30">
-                    <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200}/></div>
-                    
-                    <Badge className="bg-indigo-500 text-white mb-6 border-0 text-sm py-1.5 px-4 rounded-full">우리 반 한정 챌린지</Badge>
-                    <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">영단어<br/><span className="text-yellow-400">챌린지</span></h1>
-                    <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
-                    
-                    <div className="w-full max-w-md bg-white/5 rounded-2xl p-5 border border-white/10 mb-8 z-10">
-                        <p className="text-sm font-bold text-indigo-300 mb-3">📚 학습할 범위를 선택하세요 (다중 선택)</p>
-                        <div className="flex flex-wrap gap-2 justify-center">
-                            {availableDays.map(d => (
-                                <button 
-                                    key={d} 
-                                    onClick={() => toggleDaySelection(d)}
-                                    className={`px-4 py-2 rounded-full font-bold text-sm transition-all ${selectedDays.includes(d) ? 'bg-indigo-500 text-white border border-indigo-400 shadow-md' : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'}`}
-                                >
-                                    Day {d}
-                                </button>
-                            ))}
-                        </div>
-                        <p className="text-[11px] text-white/40 mt-3 font-medium">* 범위를 많이 선택할수록 점수 배율(Bonus)이 증가합니다.</p>
-                    </div>
-
-                    <button onClick={handleStartClick} className="bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-orange-950 font-black text-2xl py-4 px-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-2 z-10">
-                        <Play fill="currentColor" size={24}/> 도전 시작하기
-                    </button>
-
-                    <div className="w-full mt-12 bg-white/5 rounded-2xl p-5 border border-white/10 text-left z-10">
-                        <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 현재 우리 반 랭킹 TOP 5</h3>
-                        <div className="space-y-2">
-                            {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
-                                rankings.slice(0, 5).map((r, i) => (
-                                    <div key={r.id} className="flex justify-between text-sm items-center border-b border-white/5 pb-2">
-                                        <span className="font-bold text-white/90">{i+1}. {r.studentName}</span>
-                                        <span className="font-mono text-yellow-200 font-bold">{r.score?.toLocaleString() || 0} pt</span>
-                                    </div>
-                                ))
-                            }
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* 🚀 [CTO 패치] 모든 매핑에 옵셔널 체이닝(?.) 강제 적용 */}
-            {gameState === 'playing' && (
-                <div className="bg-white rounded-3xl p-6 md:p-10 shadow-2xl min-h-[70vh] flex flex-col border-t-8 border-indigo-600">
-                    <div className="flex justify-between items-center mb-6">
-                        <div className="flex flex-col">
-                            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Score</span>
-                            <span className="text-3xl font-black text-indigo-600 font-mono">{score?.toLocaleString() || 0}</span>
-                        </div>
-                        <div className={`flex flex-col items-end ${timeLeft <= 3 ? 'text-red-500 animate-pulse' : 'text-gray-800'}`}>
-                            <span className="text-xs font-bold uppercase tracking-wider text-right">Round {getRoundConfig(questionNum)?.round || 1} (Q.{questionNum})</span>
-                            <span className="text-3xl font-black font-mono flex items-center gap-1"><Clock size={24}/> {timeLeft}s</span>
-                        </div>
-                    </div>
-
-                    <div className="flex-1 flex flex-col items-center justify-center w-full">
-                        {combo > 1 && (
-                            <div className="text-orange-500 font-black text-xl mb-4 animate-bounce flex items-center gap-1">
-                                <Flame fill="currentColor"/> {combo} COMBO!
-                            </div>
-                        )}
-                        
-                        <div className="text-lg md:text-2xl font-black px-6 py-4 rounded-2xl mb-8 bg-blue-50 text-blue-800 border-2 border-blue-200 text-center w-full break-keep shadow-sm">
-                            {currentQuestion?.title || "문제를 불러오고 있습니다..."}
-                        </div>
-
-                        <div className="flex flex-col gap-3 w-full max-w-xl">
-                            {currentQuestion?.options?.map((opt, i) => (
-                                <button 
-                                    key={i} 
-                                    onClick={() => handleAnswer(opt?.isCorrect)}
-                                    className="bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-400 text-gray-800 hover:text-indigo-800 font-bold text-base md:text-xl py-4 px-6 rounded-2xl transition-all active:scale-95 shadow-sm text-left break-words flex items-center justify-between group"
-                                >
-                                    <span>{opt?.text || "보기 없음"}</span>
-                                    <ChevronRight className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400"/>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {gameState === 'result' && (
-                <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-rose-500">
-                    <div className="bg-rose-500 text-white p-4 rounded-full mb-6 animate-pulse">
-                        <AlertCircle size={64} fill="currentColor" className="text-rose-900"/>
-                    </div>
-                    <h2 className="text-3xl font-black mb-2 text-rose-400">💀 게임 오버 💀</h2>
-                    <p className="text-indigo-200 font-medium mb-6">아쉽습니다. 당신의 최종 점수는...</p>
-                    
-                    <div className="text-7xl font-black text-yellow-400 font-mono mb-8 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]">
-                        {score?.toLocaleString() || 0}
-                    </div>
-
-                    {currentQuestion?.targetWordData && (
-                        <div className="w-full max-w-lg bg-white rounded-2xl p-6 text-left mb-8 shadow-xl">
-                            <h3 className="text-rose-600 font-black text-lg mb-3 flex items-center gap-2"><BookOpen size={20}/> 핵심 단어 오답 노트</h3>
-                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl mb-4">
-                                <span className="text-2xl font-black text-indigo-700 block mb-2">{currentQuestion.targetWordData.word || "단어 오류"}</span>
-                                <div className="text-sm font-bold text-gray-700 space-y-1">
-                                    <p className="flex items-start gap-2"><CheckCircle size={16} className="text-emerald-500 shrink-0 mt-0.5"/> <span className="shrink-0">유의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.syn?.join(', ') || '없음'}</span></p>
-                                    <p className="flex items-start gap-2"><XCircle size={16} className="text-rose-500 shrink-0 mt-0.5"/> <span className="shrink-0">반의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.ant?.join(', ') || '없음'}</span></p>
+                <div className="w-full mt-12 bg-white/5 rounded-2xl p-5 border border-white/10 text-left z-10">
+                    <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 현재 우리 반 랭킹 TOP 5</h3>
+                    <div className="space-y-2">
+                        {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
+                            rankings.slice(0, 5).map((r, i) => (
+                                <div key={r.id} className="flex justify-between text-sm items-center border-b border-white/5 pb-2">
+                                    <span className="font-bold text-white/90">{i+1}. {r.studentName}</span>
+                                    <span className="font-mono text-yellow-200 font-bold">{r.score?.toLocaleString() || 0} pt</span>
                                 </div>
-                            </div>
-                            
-                            <h4 className="text-sm font-bold text-gray-500 mb-2">출제된 보기 확인</h4>
-                            <div className="space-y-2">
-                                {currentQuestion.options?.map((opt, idx) => (
-                                    <div key={idx} className={`p-3 rounded-lg text-sm font-bold border ${opt?.isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-500 line-through'}`}>
-                                        {opt?.isCorrect ? '✅ 정답:' : '❌ 오답:'} {opt?.text || "보기 없음"}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <p className="text-sm text-gray-400 mb-8 bg-white/10 px-4 py-2 rounded-lg font-bold">
-                        {currentUser.name} 이름으로 명예의 전당에 자동 등록되었습니다.<br/>(기존 기록보다 높을 경우에만 갱신됩니다)
-                    </p>
-
-                    <button onClick={() => setGameState('intro')} className="bg-white text-slate-900 font-black text-xl py-4 px-10 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95">
-                        처음으로 돌아가기
-                    </button>
+                            ))
+                        }
+                    </div>
                 </div>
-            )}
+            </div>
         </div>
     );
 }
