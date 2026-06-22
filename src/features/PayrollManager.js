@@ -1,6 +1,7 @@
 /* [서비스 가치] 로컬 캐시 우선 전략으로 관리자 페이지 로딩 속도를 극대화하고, 
    PdfAutoFiller 세무 연동 및 실시간 스케줄 대조(Dynamic Sync)를 통해 완벽한 급여 정산을 실현합니다.
-   (Updated: 강사(Lecturer) 고정급 정산 로직 추가 및 권한 우회 쿼리 완벽 적용) */
+   (🚀 CTO 패치: '월 걸침 주차(Spanning Week)'의 미래 결근 리스크를 방어하기 위해 
+   '일요일 귀속월(Sunday-Attribution) 원칙'을 적용한 스마트 지연 정산 알고리즘을 도입했습니다.) */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { 
@@ -21,13 +22,33 @@ const DEDUCTION_KEYS = [
 
 const formatCurrency = (num) => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW' }).format(num || 0);
 
-const getMonthRange = (yearMonth) => {
+// 로컬 타임존 기반 날짜 문자열 추출
+const getLocalDateStr = (dateObj) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
+};
+
+// 🚀 [CTO 패치] 월 걸침 주차(Spanning week) 조회 및 귀속월 판별 엔진
+const getExtendedMonthRange = (yearMonth) => {
     const [y, m] = yearMonth.split('-').map(Number);
-    const start = new Date(y, m - 1, 1);
-    const end = new Date(y, m, 0);
-    const startStr = `${y}-${String(m).padStart(2,'0')}-01`;
-    const endStr = `${y}-${String(m).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}`;
-    return { start, end, startStr, endStr };
+    const firstDay = new Date(y, m - 1, 1);
+    const lastDay = new Date(y, m, 0);
+
+    // 해당 월의 '첫째 주 일요일' 찾기
+    const firstDayOfWeek = firstDay.getDay();
+    const daysUntilSunday = firstDayOfWeek === 0 ? 0 : 7 - firstDayOfWeek;
+    const firstSunday = new Date(y, m - 1, 1 + daysUntilSunday);
+
+    // 조회 시작일: 첫째 주 일요일의 월요일 (6일 전)부터 긁어와야 주 15시간 검증이 가능합니다.
+    const fetchStart = new Date(firstSunday);
+    fetchStart.setDate(firstSunday.getDate() - 6);
+
+    return {
+        fetchStartStr: getLocalDateStr(fetchStart),
+        fetchEndStr: getLocalDateStr(lastDay), // 조회 종료는 이번 달 말일까지
+        monthStartStr: getLocalDateStr(firstDay),
+        monthEndStr: getLocalDateStr(lastDay)
+    };
 };
 
 const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
@@ -74,7 +95,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const fetchPayrolls = useCallback(async (forceRefresh = false) => {
         if (!currentUser) return;
         setIsLoading(true);
-        const cacheKey = `imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
+        const cacheKey = `imperial_payroll_v8_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`;
         
         try {
             const cacheTTL = isManagementMode ? 300000 : 0;
@@ -115,7 +136,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                     }
                 });
             } else {
-                // 🚀 [CTO 패치] 권한 우회 쿼리 (본인 아이디로 명시적 검색)
                 const q = query(
                     collection(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls'), 
                     where('userId', '==', currentUser.id), 
@@ -142,11 +162,12 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         }
     }, [selectedMonth, isManagementMode, currentUser]);
 
+    // 🚀 확장된 날짜 범위로 세션을 가져옵니다.
     const fetchMonthlyData = useCallback(async () => {
         setIsSessionsLoading(true);
         try {
-            const { startStr, endStr } = getMonthRange(selectedMonth);
-            const sQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', startStr), where('date', '<=', endStr));
+            const { fetchStartStr, fetchEndStr } = getExtendedMonthRange(selectedMonth);
+            const sQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sessions'), where('date', '>=', fetchStartStr), where('date', '<=', fetchEndStr));
             const sSnap = await getDocs(sQuery);
             let sessions = sSnap.docs.map(d => d.data());
             
@@ -160,12 +181,15 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
     useEffect(() => { setPayrolls({}); fetchPayrolls(false); fetchMonthlyData(); }, [selectedMonth, fetchPayrolls, fetchMonthlyData]);
 
+    // 🚀 [CTO 패치] UI용 명세서 생성 로직 (일요일 귀속월 원칙 반영)
     const myWeeklyBreakdown = useMemo(() => {
         if (isManagementMode || !['ta', 'admin_assistant'].includes(currentUser?.role)) return [];
         
         const wage = currentUser.hourlyRate || currentUser.hourlyWage || 10030;
         const hourlyRate = parseInt(wage, 10);
         
+        const { monthStartStr, monthEndStr } = getExtendedMonthRange(selectedMonth);
+
         const validLogs = monthlySessions.filter(s => ['open', 'confirmed', 'completed', 'pending'].includes(s.status)).map(s => {
             const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
             const endH = parseInt((s.endTime||'00:00').split(':')[0], 10);
@@ -174,39 +198,65 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
         const weekGroups = {};
         validLogs.forEach(log => {
-            const d = new Date(log.date);
-            const day = d.getDay(); 
-            const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-            const weekStart = new Date(d.setDate(diff));
-            const weekKey = weekStart.toISOString().split('T')[0];
-            weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
+            const parts = log.date.split('-');
+            const d = new Date(Number(parts[0]), Number(parts[1])-1, Number(parts[2]));
+            const day = d.getDay();
+            // 해당 주의 '일요일' 날짜를 고유 Key로 사용합니다.
+            const diffToSunday = day === 0 ? 0 : 7 - day;
+            const weekSunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diffToSunday);
+            const weekKey = getLocalDateStr(weekSunday);
+
+            if (!weekGroups[weekKey]) weekGroups[weekKey] = { totalHours: 0, currentMonthHours: 0, isHolidayPayMonth: false };
+            weekGroups[weekKey].totalHours += log.hours;
+
+            // 기본급은 이번 달에 속한 일수만 계산
+            if (log.date >= monthStartStr && log.date <= monthEndStr) {
+                weekGroups[weekKey].currentMonthHours += log.hours;
+            }
+
+            // 🚀 주휴수당 귀속 판별: 일요일이 이번 달에 속해야 이번 달 명세서에 주휴수당이 포함됩니다.
+            if (weekKey >= monthStartStr && weekKey <= monthEndStr) {
+                weekGroups[weekKey].isHolidayPayMonth = true;
+            }
         });
 
         const sortedWeeks = Object.keys(weekGroups).sort();
         
         return sortedWeeks.map((weekKey, index) => {
-            const hours = weekGroups[weekKey];
-            const meetsHolidayPay = hours >= 15;
-            const holidayPay = meetsHolidayPay ? Math.round((Math.min(hours, 40) / 40) * 8 * hourlyRate) : 0;
-            const basePay = hours * hourlyRate;
+            const group = weekGroups[weekKey];
+            // 이번 달에 속한 기본급이 아예 없고, 이번 달 귀속 주차도 아니면 숨김
+            if (group.currentMonthHours === 0 && !group.isHolidayPayMonth) return null;
+
+            const meetsHolidayPay = group.totalHours >= 15;
+            let holidayPay = 0;
             
-            const wStart = new Date(weekKey);
-            const wEnd = new Date(wStart);
-            wEnd.setDate(wStart.getDate() + 6);
-            const weekEndStr = wEnd.toISOString().split('T')[0].substring(5).replace('-', '/');
-            const weekStartStr = weekKey.substring(5).replace('-', '/');
+            // 귀속월(일요일이 이번 달)인 경우에만 주휴수당을 전액 지급
+            if (group.isHolidayPayMonth && meetsHolidayPay) {
+                holidayPay = Math.round((Math.min(group.totalHours, 40) / 40) * 8 * hourlyRate);
+            }
+
+            const basePay = group.currentMonthHours * hourlyRate;
+            
+            const wEnd = new Date(weekKey);
+            const wStart = new Date(wEnd);
+            wStart.setDate(wEnd.getDate() - 6);
+            
+            const weekStartStr = getLocalDateStr(wStart).substring(5).replace('-', '/');
+            const weekEndStr = getLocalDateStr(wEnd).substring(5).replace('-', '/');
             
             return {
                 label: `${index + 1}주차 (${weekStartStr} ~ ${weekEndStr})`,
-                hours,
+                hours: group.currentMonthHours,
+                totalWeekHours: group.totalHours,
                 meetsHolidayPay,
                 holidayPay,
-                basePay
+                basePay,
+                isHolidayPayMonth: group.isHolidayPayMonth
             };
-        });
-    }, [monthlySessions, currentUser, isManagementMode]);
+        }).filter(Boolean);
+    }, [monthlySessions, currentUser, isManagementMode, selectedMonth]);
 
-    // 🚀 [CTO 패치] 강사(Lecturer) 고정급 추출 로직 추가!
+    // 🚀 [CTO 패치] 실제 급여 정산용 코어 로직 (일요일 귀속월 반영)
     const getRealtimeCalculation = useCallback((targetUser) => {
         const uid = targetUser.id || targetUser.userId;
         let baseSalary = 0, totalHours = 0, weeklyHolidayPay = 0, hourlyRate = 0;
@@ -215,12 +265,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         if (targetUser.role === 'ta' || targetUser.role === 'admin_assistant') {
             const wage = targetUser.hourlyRate || targetUser.hourlyWage || 10030;
             hourlyRate = parseInt(wage, 10);
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr(new Date());
 
             const userSessions = monthlySessions.filter(s =>
                 (s.taId === uid || s.taName === targetUser.name) &&
                 ['open', 'confirmed', 'completed', 'pending'].includes(s.status)
             );
+
+            const { monthStartStr, monthEndStr } = getExtendedMonthRange(selectedMonth);
 
             const validLogs = userSessions.map(s => {
                 const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
@@ -228,35 +280,50 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 return { date: s.date, hours: endH - startH };
             });
 
-            completedHours = validLogs.filter(l => l.date <= todayStr).reduce((sum, l) => sum + l.hours, 0);
-            expectedHours = validLogs.filter(l => l.date > todayStr).reduce((sum, l) => sum + l.hours, 0);
-            totalHours = completedHours + expectedHours;
-
             const weekGroups = {};
             validLogs.forEach(log => {
-                const d = new Date(log.date);
+                const parts = log.date.split('-');
+                const d = new Date(Number(parts[0]), Number(parts[1])-1, Number(parts[2]));
                 const day = d.getDay();
-                const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-                const weekKey = new Date(d.setDate(diff)).toISOString().split('T')[0];
-                weekGroups[weekKey] = (weekGroups[weekKey] || 0) + log.hours;
+                const diffToSunday = day === 0 ? 0 : 7 - day;
+                const weekSunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diffToSunday);
+                const weekKey = getLocalDateStr(weekSunday);
+
+                if (!weekGroups[weekKey]) weekGroups[weekKey] = { totalHours: 0, currentMonthHours: 0, isHolidayPayMonth: false };
+                weekGroups[weekKey].totalHours += log.hours;
+
+                // 기본급은 이번 달 해당분만
+                if (log.date >= monthStartStr && log.date <= monthEndStr) {
+                    weekGroups[weekKey].currentMonthHours += log.hours;
+                    if (log.date <= todayStr) completedHours += log.hours;
+                    else expectedHours += log.hours;
+                }
+
+                // 주휴수당은 일요일이 이번 달에 들어있는가로 결정
+                if (weekKey >= monthStartStr && weekKey <= monthEndStr) {
+                    weekGroups[weekKey].isHolidayPayMonth = true;
+                }
             });
 
-            Object.values(weekGroups).forEach(hours => {
-                if (hours >= 15) {
-                    weeklyHolidayPay += (Math.min(hours, 40) / 40) * 8 * hourlyRate;
+            totalHours = completedHours + expectedHours;
+
+            // 주휴수당 전액 할당 (해당 주차의 모든 근로가 완료되는 시점이 이번 달에 있을 때)
+            Object.values(weekGroups).forEach(group => {
+                if (group.isHolidayPayMonth && group.totalHours >= 15) {
+                    const fullHolidayPay = (Math.min(group.totalHours, 40) / 40) * 8 * hourlyRate;
+                    weeklyHolidayPay += fullHolidayPay;
                 }
             });
 
             weeklyHolidayPay = Math.round(weeklyHolidayPay);
             baseSalary = Math.floor(totalHours * hourlyRate);
         } else {
-            // 🚀 강사 및 관리자는 DB에 등록된 월급/기본급을 1순위로 가져옵니다.
             baseSalary = parseInt(targetUser.monthlySalary || targetUser.baseSalary || targetUser.fixedSalary || targetUser.hourlyRate || targetUser.hourlyWage || 0, 10);
             if (isNaN(baseSalary)) baseSalary = 0;
         }
 
         return { baseSalary, weeklyHolidayPay, totalHours, completedHours, expectedHours, totalGross: baseSalary + weeklyHolidayPay, hourlyRate };
-    }, [monthlySessions]);
+    }, [monthlySessions, selectedMonth]);
 
     const handlePdfDataExtracted = async (extractedData) => {
         setCalcProcessing(true);
@@ -303,7 +370,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             if (promises.length > 0) {
                 await Promise.all(promises);
                 setPayrolls(updatedPayrolls);
-                localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
+                localStorage.setItem(`imperial_payroll_v8_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
                 alert(`성공! 총 ${updateCount}명의 공제 내역이 적용되었습니다.`);
             }
         } catch (e) { alert("공제 내역 오류: " + e.message); } finally { setCalcProcessing(false); }
@@ -354,7 +421,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
             const updatedPayrolls = { ...payrolls, [uid]: localPayload };
             setPayrolls(updatedPayrolls);
-            localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
+            localStorage.setItem(`imperial_payroll_v8_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             
         } catch (e) { alert("동기화 오류: " + e.message); } finally { setCalcProcessing(false); }
     };
@@ -381,7 +448,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const localPayload = { ...dbPayload, updatedAt: new Date().toISOString(), _docId: docId };
             const updatedPayrolls = { ...payrolls, [editingPayroll.userId]: localPayload };
             setPayrolls(updatedPayrolls);
-            localStorage.setItem(`imperial_payroll_v7_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
+            localStorage.setItem(`imperial_payroll_v8_${selectedMonth}_${isManagementMode ? 'admin' : currentUser.id}`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
             setIsEditModalOpen(false);
         } catch(e) { alert('수정 실패: ' + e.message); } finally { setCalcProcessing(false); }
     };
@@ -439,7 +506,6 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             const roleLabel = user.role === 'ta' ? '수업조교' : (user.role === 'admin_assistant' ? '행정조교' : (user.role === 'lecturer' ? '강사' : '관리자'));
                             const wage = user.hourlyRate || user.hourlyWage;
                             
-                            // 🚀 [CTO 패치] 강사의 화면 표시 시급(기본급)
                             const wageDisplay = ['ta', 'admin_assistant'].includes(user.role) 
                                 ? (wage ? `${formatCurrency(wage)}/hr` : '미설정') 
                                 : (user.monthlySalary || user.baseSalary || user.fixedSalary ? formatCurrency(user.monthlySalary || user.baseSalary || user.fixedSalary) : '미정');
@@ -644,11 +710,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                     {personalTab === 'weekly' && (
                                         <div className="space-y-4 animate-in fade-in">
                                             <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm leading-relaxed">
-                                                <p className="font-black flex items-center gap-1.5 mb-2"><Calculator size={16}/> 임페리얼 학원 수당 산출 공식</p>
+                                                <p className="font-black flex items-center gap-1.5 mb-2"><Calculator size={16}/> 임페리얼 학원 수당 산출 공식 (지연 정산 적용)</p>
                                                 <ul className="list-disc pl-5 opacity-90 space-y-1.5 font-medium">
-                                                    <li><strong className="text-blue-900">기본급:</strong> 주차별 근무시간 × 나의 시급({formatCurrency(currentUser.hourlyRate || currentUser.hourlyWage || 10030)})</li>
-                                                    <li><strong className="text-blue-900">주휴수당 조건:</strong> 1주(월~일) 간 <span className="underline decoration-blue-400">15시간 이상 근무 시</span> 1일 유급휴일 수당 지급</li>
-                                                    <li><strong className="text-blue-900">주휴수당 계산식:</strong> (주 근무시간 ÷ 40시간) × 8시간 × 시급 <span className="text-[10px] bg-blue-100 px-1 rounded">(주 40시간 초과 시 최대 40시간까지만 인정)</span></li>
+                                                    <li><strong className="text-blue-900">기본급:</strong> 해당 월의 1일부터 말일까지 근로한 시간 × 나의 시급({formatCurrency(currentUser.hourlyRate || currentUser.hourlyWage || 10030)})</li>
+                                                    <li><strong className="text-blue-900">주휴수당 조건:</strong> 1주(월~일) 간 <span className="underline decoration-blue-400">15시간 이상 근무 시</span> 유급휴일 수당 발생</li>
+                                                    <li><strong className="text-blue-900">주휴수당 귀속월:</strong> 월이 걸치는 주차는 해당 주의 <span className="text-blue-600 bg-white px-1 font-bold rounded">일요일이 포함된 달</span>에 주휴수당이 전액 정산됩니다. (미래 결근 리스크를 방어하는 노무 표준 방식)</li>
                                                 </ul>
                                             </div>
                                             
@@ -657,10 +723,10 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                     <thead className="bg-gray-50 text-gray-500 border-b">
                                                         <tr>
                                                             <th className="p-3">주차 (월~일 기준)</th>
-                                                            <th className="p-3 text-center">주간 총 근무시간</th>
+                                                            <th className="p-3 text-center">당월 근무 <span className="text-[10px] text-gray-400 font-normal">(주간 총합)</span></th>
                                                             <th className="p-3 text-right">산출 기본급</th>
                                                             <th className="p-3 text-center">주휴조건(15h)</th>
-                                                            <th className="p-3 text-right">산출 주휴수당</th>
+                                                            <th className="p-3 text-right">주휴수당</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y">
@@ -669,17 +735,25 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                         ) : myWeeklyBreakdown.map((week, idx) => (
                                                             <tr key={idx} className="hover:bg-gray-50 transition-colors">
                                                                 <td className="p-3 font-bold text-gray-700">{week.label}</td>
-                                                                <td className="p-3 text-center font-black text-blue-600">{week.hours}시간</td>
+                                                                <td className="p-3 text-center font-black text-blue-600">
+                                                                    {week.hours}시간 <span className="text-[10px] text-gray-400 font-normal block">(주 {week.totalWeekHours}h)</span>
+                                                                </td>
                                                                 <td className="p-3 text-right text-gray-700 font-medium">{formatCurrency(week.basePay)}</td>
                                                                 <td className="p-3 text-center">
-                                                                    {week.meetsHolidayPay ? (
+                                                                    {!week.isHolidayPayMonth ? (
+                                                                        <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[11px] font-bold">익월 평가</span>
+                                                                    ) : week.meetsHolidayPay ? (
                                                                         <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs font-black flex items-center justify-center w-fit mx-auto gap-1"><CheckCircle size={10}/> 충족</span>
                                                                     ) : (
-                                                                        <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-xs font-bold">미달</span>
+                                                                        <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded text-[11px] font-bold">미달</span>
                                                                     )}
                                                                 </td>
-                                                                <td className={`p-3 text-right font-black ${week.meetsHolidayPay ? 'text-emerald-600' : 'text-gray-400'}`}>
-                                                                    {formatCurrency(week.holidayPay)}
+                                                                <td className={`p-3 text-right font-black ${week.holidayPay > 0 ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                                                    {!week.isHolidayPayMonth ? (
+                                                                        <span className="text-[11px] font-medium text-gray-400 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">익월 정산</span>
+                                                                    ) : (
+                                                                        formatCurrency(week.holidayPay)
+                                                                    )}
                                                                 </td>
                                                             </tr>
                                                         ))}
