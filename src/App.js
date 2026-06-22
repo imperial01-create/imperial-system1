@@ -111,6 +111,7 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false); 
+    // 🚀 과목(subject)의 초기값을 비워두어 드롭다운 유효성 검사가 작동하게 합니다.
     const [form, setForm] = useState({ role: 'student', userId: '', password: '', name: '', phone: '', schoolName: '', grade: '1학년', childName: '', subject: '' });
     const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -167,10 +168,15 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
     const handleSignUp = async (e) => {
         e.preventDefault();
+        
+        // 🚀 [방어적 코딩] 역할별 필수 데이터 누락 완벽 차단
         if (!smsAuth.verified) return setLoginErrorModal({ isOpen: true, msg: '먼저 휴대폰 본인 인증을 완료해주세요.' });
         if (!form.userId || !form.password || !form.name) return setLoginErrorModal({ isOpen: true, msg: '필수 정보를 모두 입력해주세요.' });
         if (form.password.length < 6) return setLoginErrorModal({ isOpen: true, msg: '비밀번호는 6자리 이상이어야 합니다.' });
-        if (form.role === 'student' && !form.schoolName) return setLoginErrorModal({ isOpen: true, msg: '학교를 정확히 선택하거나 입력해주세요.' });
+        
+        if (['student', 'parent'].includes(form.role) && !form.schoolName) return setLoginErrorModal({ isOpen: true, msg: '학교를 정확히 선택하거나 입력해주세요.' });
+        if (form.role === 'parent' && !form.childName) return setLoginErrorModal({ isOpen: true, msg: '자녀 이름을 입력해주세요.' });
+        if (['ta', 'lecturer'].includes(form.role) && !form.subject) return setLoginErrorModal({ isOpen: true, msg: '담당 과목을 선택해주세요.' });
 
         setLoading(true);
         try {
@@ -188,8 +194,10 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 payload.attendancePin = cleanPhone.slice(-4); 
             } else if (form.role === 'parent') { 
                 payload.childName = form.childName; 
+                payload.schoolName = form.schoolName; // 🚀 학부모의 자녀 학교 정보 저장
+                payload.grade = form.grade;           // 🚀 학부모의 자녀 학년 정보 저장
             } else if (['ta', 'lecturer'].includes(form.role)) { 
-                payload.subject = form.subject; 
+                payload.subject = form.subject;       // 🚀 규격화된 과목 데이터 저장
             }
 
             await setDoc(docRef, payload);
@@ -251,12 +259,21 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 )}
                 {smsAuth.verified && <div className="text-sm font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={16}/> 인증이 완료되었습니다.</div>}
             </div>
-            {form.role === 'student' && (
-                <div className="grid grid-cols-1 gap-3 bg-gray-50 p-3 rounded-xl border">
+
+            {/* 🚀 학생 & 학부모 공통 UI 블록 (학교/학년 통합) */}
+            {['student', 'parent'].includes(form.role) && (
+                <div className="grid grid-cols-1 gap-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                    {form.role === 'parent' && (
+                        <div className="mb-2">
+                            <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">자녀 이름</label>
+                            <input required className="w-full border-2 border-gray-200 focus:border-blue-400 outline-none p-3 rounded-xl bg-white font-bold transition-colors" placeholder="자녀 실명 입력" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
+                            <p className="text-[11px] text-rose-500 font-bold ml-1 mt-1.5">* 2명 이상의 자녀가 재원 중인 경우, 가입 후 데스크에 문의 바랍니다.</p>
+                        </div>
+                    )}
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학교 정보</label>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">{form.role === 'parent' ? '자녀 학교 정보' : '학교 정보'}</label>
                         <div className="flex gap-2 relative">
-                            <select className="w-1/3 border-2 p-3 rounded-xl bg-white font-bold text-sm" value={schoolType} onChange={e => { setSchoolType(e.target.value); setForm({...form, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
+                            <select className="w-1/3 border-2 border-gray-200 p-3 rounded-xl bg-white font-bold text-sm outline-none focus:border-blue-400 transition-colors" value={schoolType} onChange={e => { setSchoolType(e.target.value); setForm({...form, schoolName: '', grade: '1학년'}); setIsCustomSchool(false); }}>
                                 <option value="elementary">초등학교</option>
                                 <option value="middle">중학교</option>
                                 <option value="high">고등학교</option>
@@ -265,34 +282,38 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                                 <SmartSchoolSelect schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
                             ) : (
                                 <div className="w-2/3 relative">
-                                    <input required className="w-full border-2 border-blue-300 p-3 rounded-xl bg-white font-bold text-sm pr-8" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
-                                    <button type="button" onClick={() => { setIsCustomSchool(false); setForm({...form, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 bg-white rounded-full"><X size={18}/></button>
+                                    <input required className="w-full border-2 border-blue-400 p-3 rounded-xl bg-white font-bold text-sm pr-8 outline-none" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
+                                    <button type="button" onClick={() => { setIsCustomSchool(false); setForm({...form, schoolName: ''}); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 bg-white rounded-full p-1 transition-colors"><X size={16}/></button>
                                 </div>
                             )}
                         </div>
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">학년</label>
-                        <select className="w-full border-2 p-3 rounded-xl bg-white font-bold" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}>
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">{form.role === 'parent' ? '자녀 학년' : '학년'}</label>
+                        <select className="w-full border-2 border-gray-200 focus:border-blue-400 outline-none p-3 rounded-xl bg-white font-bold transition-colors" value={form.grade} onChange={e => setForm({...form, grade: e.target.value})}>
                             {getGradeOptions(schoolType).map(g => <option key={g} value={g}>{g}</option>)}
                         </select>
                     </div>
                 </div>
             )}
-            {form.role === 'parent' && (
-                <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">자녀 이름</label>
-                    <input required className="w-full border-2 p-3 rounded-xl bg-white font-bold" placeholder="데스크 확인용" value={form.childName} onChange={e => setForm({...form, childName: e.target.value})} />
-                </div>
-            )}
+
+            {/* 🚀 강사 & 수업조교 UI 블록 (담당 과목 드롭다운) */}
             {['ta', 'lecturer'].includes(form.role) && (
-                <div className="bg-gray-50 p-3 rounded-xl border">
-                    <label className="block text-xs font-bold text-gray-500 mb-1 ml-1">담당 과목</label>
-                    <input className="w-full border-2 p-3 rounded-xl bg-white font-bold" placeholder="예: 수학, 국어" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})} />
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                    <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">담당 과목</label>
+                    <select required className="w-full border-2 border-gray-200 focus:border-blue-400 outline-none p-3 rounded-xl bg-white font-bold transition-colors" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})}>
+                        <option value="" disabled hidden>과목을 선택해주세요</option>
+                        <option value="영어">영어 (English)</option>
+                        <option value="수학">수학 (Math)</option>
+                        <option value="국어">국어 (Korean)</option>
+                        <option value="과학">과학 (Science)</option>
+                        <option value="기타">기타 (Others)</option>
+                    </select>
                 </div>
             )}
+
             <div className="pt-2">
-                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-md">
+                <button type="submit" disabled={loading || !smsAuth.verified} className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold shadow-md hover:bg-blue-700 transition-colors disabled:opacity-50">
                     {loading ? <Loader className="animate-spin mx-auto" /> : '가입 신청 완료하기'}
                 </button>
             </div>
