@@ -802,9 +802,27 @@ export default function VocaChallenge({ currentUser }) {
     const { classes = [], enrollments = [] } = useData() || {};
     const isStudent = currentUser.role === 'student';
 
+    // 🚀 [CTO 패치] Role(역할) 기반 접근 제어 (RBAC) 및 과목 필터링 최적화
     const englishClasses = useMemo(() => {
-        return classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
-    }, [classes]);
+        // 1. 1차 필터링: 영어 과목 반만 추출
+        const baseEnglishClasses = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
+        
+        // 2. 2차 필터링: 권한에 따른 노출 제어 (Zero Trust)
+        if (['admin', 'admin_assistant'].includes(currentUser.role)) {
+            // 관리자 및 행정조교: 모든 영어 반 관제 가능
+            return baseEnglishClasses;
+        } else if (['lecturer', 'ta'].includes(currentUser.role)) {
+            // 강사 및 수업조교: 본인이 담당하는 반만 노출 (다양한 스키마 호환성 방어 로직 적용)
+            return baseEnglishClasses.filter(c => 
+                c.lecturerId === currentUser.id || 
+                c.teacherId === currentUser.id || 
+                (c.taIds && Array.isArray(c.taIds) && c.taIds.includes(currentUser.id)) ||
+                c.teacher === currentUser.name // 기존 시스템 호환성(Fallback) 유지
+            );
+        }
+        // 예외 상황 방어
+        return [];
+    }, [classes, currentUser]);
 
     const [activeClasses, setActiveClasses] = useState([]);
     const [adminTab, setAdminTab] = useState('settings'); 
