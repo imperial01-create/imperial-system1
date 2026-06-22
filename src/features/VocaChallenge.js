@@ -1,6 +1,6 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.1
-   - (🚀 CTO 패치: Cloudflare 빌드 크래시를 유발하는 모든 eslint 예외 처리 주석을 완벽히 제거했습니다.)
-   - 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재 */
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.2
+   - (🚀 CTO 패치: 렌더링 시점의 Null 참조 오류를 원천 차단하는 방탄(Bulletproof) 설계 적용 및 네이밍 반영)
+   - 운영 효율성: 게이미피케이션 요소를 통해 학생들의 자발적 단어 학습 완수율을 높여, 강사의 관리 리소스를 절감합니다. */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen, ChevronRight } from 'lucide-react';
@@ -332,6 +332,7 @@ const shuffleArray = (array) => {
     return arr;
 };
 
+// 안전한 추출 (빈 값 방어)
 const safePick = (arr) => arr && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : "없음";
 
 export default function VocaChallenge({ currentUser }) {
@@ -426,7 +427,6 @@ export default function VocaChallenge({ currentUser }) {
         return () => { if (unsub) unsub(); }
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
-
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
@@ -497,10 +497,15 @@ export default function VocaChallenge({ currentUser }) {
         }, 2500);
     };
 
+    // 🚀 [CTO 패치] 모든 에러를 완벽하게 잡아내는 방탄 출제 엔진
     const generateQuestion = (qNum) => {
         try {
             const config = getRoundConfig(qNum);
             setTimeLeft(config.time);
+
+            if (!activeVocaData || activeVocaData.length === 0) {
+                throw new Error("학습 데이터가 비어있습니다.");
+            }
 
             const poolAllSyn = activeVocaData.filter(w => w.syn.length >= 2);
             const poolMixed = activeVocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
@@ -525,9 +530,9 @@ export default function VocaChallenge({ currentUser }) {
                 const isMajorityAllSyn = Math.random() < 0.5;
 
                 if (isMajorityAllSyn) {
-                    const targetData = shuffleArray(poolMixed)[0] || activeVocaData[0];
-                    targetWordData = targetData;
-                    correctAnswerText = makeThreeWordString(targetData.word, safePick(targetData.syn), safePick(targetData.ant));
+                    const shuffledMixed = shuffleArray(poolMixed);
+                    targetWordData = shuffledMixed.length > 0 ? shuffledMixed[0] : activeVocaData[0];
+                    correctAnswerText = makeThreeWordString(targetWordData.word, safePick(targetWordData.syn), safePick(targetWordData.ant));
                     options.push({ text: correctAnswerText, isCorrect: true });
 
                     const bgData = shuffleArray(poolAllSyn).slice(0, 4);
@@ -536,10 +541,10 @@ export default function VocaChallenge({ currentUser }) {
                         options.push({ text: makeThreeWordString(w.word, syns[0] || '없음', syns[1] || '없음'), isCorrect: false });
                     });
                 } else {
-                    const targetData = shuffleArray(poolAllSyn)[0] || activeVocaData[0];
-                    targetWordData = targetData;
-                    const syns = shuffleArray(targetData.syn);
-                    correctAnswerText = makeThreeWordString(targetData.word, syns[0] || '없음', syns[1] || '없음');
+                    const shuffledAllSyn = shuffleArray(poolAllSyn);
+                    targetWordData = shuffledAllSyn.length > 0 ? shuffledAllSyn[0] : activeVocaData[0];
+                    const syns = shuffleArray(targetWordData.syn);
+                    correctAnswerText = makeThreeWordString(targetWordData.word, syns[0] || '없음', syns[1] || '없음');
                     options.push({ text: correctAnswerText, isCorrect: true });
 
                     const bgData = shuffleArray(poolMixed).slice(0, 4);
@@ -558,30 +563,29 @@ export default function VocaChallenge({ currentUser }) {
                     bgPool = activeVocaData.filter(w => w.syn.length > 0);
                 }
 
-                let targetData = shuffleArray(targetPool)[0];
-                if (!targetData) targetData = activeVocaData[0]; 
-                
-                targetWordData = targetData;
+                const shuffledTarget = shuffleArray(targetPool);
+                targetWordData = shuffledTarget.length > 0 ? shuffledTarget[0] : activeVocaData[0];
 
                 if (isTargetAntonym) {
-                    correctAnswerText = `${targetData.word} - ${safePick(targetData.ant)}`;
+                    correctAnswerText = `${targetWordData.word} - ${safePick(targetWordData.ant)}`;
                     options.push({ text: correctAnswerText, isCorrect: true });
                     
                     let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
-                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetWordData.word).slice(0, 4);
                     bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.syn)}`, isCorrect: false }));
                 } else {
-                    correctAnswerText = `${targetData.word} - ${safePick(targetData.syn)}`;
+                    correctAnswerText = `${targetWordData.word} - ${safePick(targetWordData.syn)}`;
                     options.push({ text: correctAnswerText, isCorrect: true });
                     
                     let safeBgPool = bgPool.length < 4 ? activeVocaData : bgPool;
-                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                    const bgData = shuffleArray(safeBgPool).filter(w => w.word !== targetWordData.word).slice(0, 4);
                     bgData.forEach(w => options.push({ text: `${w.word} - ${safePick(w.ant)}`, isCorrect: false }));
                 }
             }
 
+            // 만일 보기가 5개가 안 채워진 극단적 엣지 케이스 방어
             while (options.length < 5) {
-                options.push({ text: "데이터 부족 (임시 보기)", isCorrect: false });
+                options.push({ text: "데이터 없음 (임시 보기)", isCorrect: false });
             }
 
             options = shuffleArray(options);
@@ -589,16 +593,17 @@ export default function VocaChallenge({ currentUser }) {
 
         } catch (error) {
             console.error("Voca Challenge Engine Error:", error);
+            // 에러 발생 시 프로그램 크래시를 막는 비상용 문제 렌더링
             setCurrentQuestion({
                 title: "⚠️ 단어 추출 오류가 발생했습니다. (임시 문제)",
                 options: [
                     { text: "정답 (안전하게 계속하기)", isCorrect: true },
-                    { text: "오답", isCorrect: false },
-                    { text: "오답", isCorrect: false },
-                    { text: "오답", isCorrect: false },
-                    { text: "오답", isCorrect: false }
+                    { text: "오답 1", isCorrect: false },
+                    { text: "오답 2", isCorrect: false },
+                    { text: "오답 3", isCorrect: false },
+                    { text: "오답 4", isCorrect: false }
                 ],
-                targetWordData: activeVocaData[0],
+                targetWordData: activeVocaData && activeVocaData.length > 0 ? activeVocaData[0] : { word: '오류', syn: [], ant: [] },
                 answer: "정답 (안전하게 계속하기)"
             });
         }
@@ -681,6 +686,7 @@ export default function VocaChallenge({ currentUser }) {
         return () => clearInterval(timer);
     }, [gameState, overlayState, timeLeft]);
 
+    // 🚀 [CTO 패치] 로딩 컴포넌트 이중 보호
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
 
     if (!isStudent) {
@@ -760,7 +766,7 @@ export default function VocaChallenge({ currentUser }) {
                                                     <span className="font-bold text-white text-xl">{rank.studentName}</span>
                                                 </div>
                                                 <div className="text-right">
-                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score.toLocaleString()}</span>
+                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score?.toLocaleString() || 0}</span>
                                                     <span className="text-sm text-yellow-400/50 font-bold ml-1">pt</span>
                                                 </div>
                                             </div>
@@ -810,7 +816,7 @@ export default function VocaChallenge({ currentUser }) {
                     <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200}/></div>
                     
                     <Badge className="bg-indigo-500 text-white mb-6 border-0 text-sm py-1.5 px-4 rounded-full">우리 반 한정 챌린지</Badge>
-                    <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">단어 관계<br/><span className="text-yellow-400">서바이벌</span></h1>
+                    <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">영단어<br/><span className="text-yellow-400">챌린지</span></h1>
                     <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
                     
                     <div className="w-full max-w-md bg-white/5 rounded-2xl p-5 border border-white/10 mb-8 z-10">
@@ -840,7 +846,7 @@ export default function VocaChallenge({ currentUser }) {
                                 rankings.slice(0, 5).map((r, i) => (
                                     <div key={r.id} className="flex justify-between text-sm items-center border-b border-white/5 pb-2">
                                         <span className="font-bold text-white/90">{i+1}. {r.studentName}</span>
-                                        <span className="font-mono text-yellow-200 font-bold">{r.score.toLocaleString()} pt</span>
+                                        <span className="font-mono text-yellow-200 font-bold">{r.score?.toLocaleString() || 0} pt</span>
                                     </div>
                                 ))
                             }
@@ -849,15 +855,16 @@ export default function VocaChallenge({ currentUser }) {
                 </div>
             )}
 
+            {/* 🚀 [CTO 패치] 모든 매핑에 옵셔널 체이닝(?.) 강제 적용 */}
             {gameState === 'playing' && (
                 <div className="bg-white rounded-3xl p-6 md:p-10 shadow-2xl min-h-[70vh] flex flex-col border-t-8 border-indigo-600">
                     <div className="flex justify-between items-center mb-6">
                         <div className="flex flex-col">
                             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Score</span>
-                            <span className="text-3xl font-black text-indigo-600 font-mono">{score.toLocaleString()}</span>
+                            <span className="text-3xl font-black text-indigo-600 font-mono">{score?.toLocaleString() || 0}</span>
                         </div>
                         <div className={`flex flex-col items-end ${timeLeft <= 3 ? 'text-red-500 animate-pulse' : 'text-gray-800'}`}>
-                            <span className="text-xs font-bold uppercase tracking-wider text-right">Round {getRoundConfig(questionNum).round} (Q.{questionNum})</span>
+                            <span className="text-xs font-bold uppercase tracking-wider text-right">Round {getRoundConfig(questionNum)?.round || 1} (Q.{questionNum})</span>
                             <span className="text-3xl font-black font-mono flex items-center gap-1"><Clock size={24}/> {timeLeft}s</span>
                         </div>
                     </div>
@@ -870,17 +877,17 @@ export default function VocaChallenge({ currentUser }) {
                         )}
                         
                         <div className="text-lg md:text-2xl font-black px-6 py-4 rounded-2xl mb-8 bg-blue-50 text-blue-800 border-2 border-blue-200 text-center w-full break-keep shadow-sm">
-                            {currentQuestion?.title}
+                            {currentQuestion?.title || "문제를 불러오고 있습니다..."}
                         </div>
 
                         <div className="flex flex-col gap-3 w-full max-w-xl">
-                            {currentQuestion?.options.map((opt, i) => (
+                            {currentQuestion?.options?.map((opt, i) => (
                                 <button 
                                     key={i} 
-                                    onClick={() => handleAnswer(opt.isCorrect)}
+                                    onClick={() => handleAnswer(opt?.isCorrect)}
                                     className="bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-400 text-gray-800 hover:text-indigo-800 font-bold text-base md:text-xl py-4 px-6 rounded-2xl transition-all active:scale-95 shadow-sm text-left break-words flex items-center justify-between group"
                                 >
-                                    <span>{opt.text}</span>
+                                    <span>{opt?.text || "보기 없음"}</span>
                                     <ChevronRight className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400"/>
                                 </button>
                             ))}
@@ -898,25 +905,25 @@ export default function VocaChallenge({ currentUser }) {
                     <p className="text-indigo-200 font-medium mb-6">아쉽습니다. 당신의 최종 점수는...</p>
                     
                     <div className="text-7xl font-black text-yellow-400 font-mono mb-8 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]">
-                        {score.toLocaleString()}
+                        {score?.toLocaleString() || 0}
                     </div>
 
-                    {currentQuestion && currentQuestion.targetWordData && (
+                    {currentQuestion?.targetWordData && (
                         <div className="w-full max-w-lg bg-white rounded-2xl p-6 text-left mb-8 shadow-xl">
                             <h3 className="text-rose-600 font-black text-lg mb-3 flex items-center gap-2"><BookOpen size={20}/> 핵심 단어 오답 노트</h3>
                             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl mb-4">
-                                <span className="text-2xl font-black text-indigo-700 block mb-2">{currentQuestion.targetWordData.word}</span>
+                                <span className="text-2xl font-black text-indigo-700 block mb-2">{currentQuestion.targetWordData.word || "단어 오류"}</span>
                                 <div className="text-sm font-bold text-gray-700 space-y-1">
-                                    <p className="flex items-start gap-2"><CheckCircle size={16} className="text-emerald-500 shrink-0 mt-0.5"/> <span className="shrink-0">유의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.syn.join(', ') || '없음'}</span></p>
-                                    <p className="flex items-start gap-2"><XCircle size={16} className="text-rose-500 shrink-0 mt-0.5"/> <span className="shrink-0">반의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.ant.join(', ') || '없음'}</span></p>
+                                    <p className="flex items-start gap-2"><CheckCircle size={16} className="text-emerald-500 shrink-0 mt-0.5"/> <span className="shrink-0">유의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.syn?.join(', ') || '없음'}</span></p>
+                                    <p className="flex items-start gap-2"><XCircle size={16} className="text-rose-500 shrink-0 mt-0.5"/> <span className="shrink-0">반의어:</span> <span className="text-gray-900">{currentQuestion.targetWordData.ant?.join(', ') || '없음'}</span></p>
                                 </div>
                             </div>
                             
                             <h4 className="text-sm font-bold text-gray-500 mb-2">출제된 보기 확인</h4>
                             <div className="space-y-2">
-                                {currentQuestion.options.map((opt, idx) => (
-                                    <div key={idx} className={`p-3 rounded-lg text-sm font-bold border ${opt.isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-500 line-through'}`}>
-                                        {opt.isCorrect ? '✅ 정답:' : '❌ 오답:'} {opt.text}
+                                {currentQuestion.options?.map((opt, idx) => (
+                                    <div key={idx} className={`p-3 rounded-lg text-sm font-bold border ${opt?.isCorrect ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-gray-50 border-gray-200 text-gray-500 line-through'}`}>
+                                        {opt?.isCorrect ? '✅ 정답:' : '❌ 오답:'} {opt?.text || "보기 없음"}
                                     </div>
                                 ))}
                             </div>
