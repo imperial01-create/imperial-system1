@@ -1,9 +1,9 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v3.0
-   - (🚀 CTO 패치: 원장님의 기획을 반영하여 게임 엔진(HTML)을 완전히 독립된 Iframe으로 분리했습니다.)
-   - React의 렌더링 간섭을 0%로 만들어 런타임 에러(빈 화면)를 완벽히 차단하고, PostMessage API를 통해 명예의 전당만 연동합니다. */
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v5.0
+   - (🚀 CTO 패치: 제로 마찰(Zero Friction) UX 적용. 수동 저장 버튼을 없애고 최고 기록 달성 시 백그라운드 자동 동기화 적용)
+   - Firebase 비용 최적화: 신기록을 경신했을 때만 DB Update(Write)를 실행하여 과금을 극단적으로 방어합니다. */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
@@ -11,7 +11,7 @@ import { Card, Button, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 원장님 제공 실제 CSV 데이터
+// 🚀 원장님 제공 실제 CSV 데이터 (수정 금지)
 const RAW_CSV_DATA = `NVH2_D08_281,maintain,M1,preserve,
 NVH2_D08_281,maintain,M2,assert,
 NVH2_D08_282,undermine,M1,weaken,strengthen
@@ -251,7 +251,7 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] 원장님의 오리지널 HTML/JS 코드를 React Iframe용 문자열로 주입 (충돌 방지를 위한 백틱 이스케이프 적용)
+// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 (수동 저장 UI 완전 제거, 자동 동기화 적용)
 const GET_GAME_HTML = () => `
 <!DOCTYPE html>
 <html lang="ko">
@@ -263,79 +263,94 @@ const GET_GAME_HTML = () => `
   <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; }
-    body { background-color: #f0f2f5; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    body { background-color: #0f172a; display: flex; flex-direction: column; height: 100vh; overflow: hidden; color: white; }
     
     .header { background-color: #4f46e5; color: white; padding: 15px; text-align: center; font-size: 20px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .status-bar { display: flex; justify-content: space-between; padding: 15px 20px; font-size: 18px; font-weight: 900; background: white; border-bottom: 2px solid #e5e7eb; }
+    .status-bar { display: flex; justify-content: space-between; padding: 15px 20px; font-size: 18px; font-weight: 900; background: white; color: #1f2937; border-bottom: 2px solid #e5e7eb; }
     .score-highlight { color: #4f46e5; }
     .timer-container { width: 100%; height: 10px; background-color: #e5e7eb; }
     .timer-bar { height: 100%; background-color: #10b981; transition: width 1s linear, background-color 0.3s; }
     .timer-warning { background-color: #ef4444 !important; }
-    .game-area { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; overflow-y: auto; }
+    
+    .game-area { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; overflow-y: auto; background-color: #f0f2f5;}
     .question-box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center; margin-bottom: 20px; }
     .question-title { font-size: 18px; color: #374151; margin-bottom: 10px; font-weight: bold; }
-    .question-type { font-size: 22px; font-weight: 800; color: #4f46e5; word-break: keep-all; }
+    .question-type { font-size: 22px; font-weight: 900; color: #4f46e5; word-break: keep-all; }
+    
     .options { display: flex; flex-direction: column; gap: 10px; }
-    .option-btn { background: white; border: 2px solid #e5e7eb; padding: 15px; border-radius: 10px; font-size: 18px; font-weight: bold; color: #1f2937; cursor: pointer; text-align: left; transition: all 0.2s; }
-    .option-btn:active { background: #f3f4f6; transform: scale(0.98); }
+    .option-btn { background: white; border: 2px solid #e5e7eb; padding: 18px; border-radius: 12px; font-size: 18px; font-weight: bold; color: #1f2937; cursor: pointer; text-align: left; transition: all 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.05);}
+    .option-btn:active { background: #e0e7ff; border-color: #4f46e5; transform: scale(0.98); }
+    
     .screen { display: none; flex: 1; flex-direction: column; justify-content: flex-start; align-items: center; padding: 30px 20px; text-align: center; overflow-y: auto; }
     .active { display: flex; }
-    .start-container { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 40px; width: 100%; max-width: 900px; }
-    .start-left { flex: 1; min-width: 300px; display: flex; flex-direction: column; align-items: center; text-align: center; }
     
-    /* 🚀 React가 처리할 영역 숨김 처리 */
-    .start-right, .ranking-board, .name-input { display: none !important; }
+    .start-container { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; width: 100%; max-width: 600px; margin: auto; }
     
-    .day-selection-title { font-size: 16px; font-weight: bold; color: #4b5563; margin-bottom: 10px; }
-    .day-selection { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 30px; width: 100%; max-width: 400px; }
-    .day-btn { padding: 10px 18px; border: 2px solid #e5e7eb; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 15px; color: #6b7280; background: white; transition: all 0.2s; }
-    .day-btn.selected { border-color: #4f46e5; background: #e0e7ff; color: #4f46e5; box-shadow: 0 2px 4px rgba(79,70,229,0.2); }
+    .day-selection-title { font-size: 16px; font-weight: bold; color: #9ca3af; margin-bottom: 15px; }
+    .day-selection { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 30px; width: 100%; }
+    .day-btn { padding: 10px 18px; border: 2px solid #374151; border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 15px; color: #9ca3af; background: transparent; transition: all 0.2s; }
+    .day-btn.selected { border-color: #6366f1; background: #6366f1; color: white; box-shadow: 0 4px 10px rgba(99,102,241,0.3); }
     .day-btn:active { transform: scale(0.95); }
-    .result-title { font-size: 32px; font-weight: 900; margin-bottom: 10px; }
-    .result-score { font-size: 48px; color: #4f46e5; font-weight: 900; margin-bottom: 15px; }
-    .result-msg { font-size: 18px; color: #4b5563; margin-bottom: 20px; line-height: 1.5; }
-    .explanation-box { display: none; background: #fee2e2; border: 2px solid #fca5a5; padding: 20px; border-radius: 12px; margin-bottom: 20px; text-align: left; width: 100%; max-width: 400px; }
-    .exp-label { font-size: 14px; font-weight: bold; color: #b91c1c; margin-bottom: 8px; margin-top: 10px; }
+    
+    .result-title { font-size: 40px; font-weight: 900; margin-bottom: 10px; color: #f87171; text-shadow: 0 2px 10px rgba(248,113,113,0.3); }
+    .result-score { font-size: 64px; color: #facc15; font-weight: 900; margin-bottom: 15px; font-family: monospace; drop-shadow: 0 0 10px rgba(250,204,21,0.5);}
+    .result-msg { font-size: 18px; color: #9ca3af; margin-bottom: 30px; line-height: 1.5; }
+    
+    .explanation-box { display: none; background: white; border: 2px solid #fecaca; padding: 20px; border-radius: 16px; margin-bottom: 30px; text-align: left; width: 100%; max-width: 500px; color: #1f2937; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    .exp-label { font-size: 16px; font-weight: 900; color: #e11d48; margin-bottom: 10px; margin-top: 15px; display: flex; align-items: center; gap: 5px; }
     .exp-label:first-child { margin-top: 0; }
-    .exp-detail { font-size: 15px; color: #4b5563; line-height: 1.4; word-break: keep-all; background: white; padding: 12px; border-radius: 8px; border: 1px solid #fca5a5; }
-    .exp-word { font-weight: 800; color: #4f46e5; }
-    .exp-options { display: flex; flex-direction: column; gap: 6px; }
-    .exp-opt-item { padding: 10px; border-radius: 8px; font-size: 15px; font-weight: bold; line-height: 1.3; }
-    .exp-opt-correct { border: 2px solid #10b981; color: #047857; background: #d1fae5; }
-    .exp-opt-wrong { border: 1px solid #d1d5db; color: #9ca3af; text-decoration: line-through; background: #f9fafb; }
-    .ranking-input-area { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; width: 100%; max-width: 400px; }
-    .save-btn { background-color: #10b981; color: white; border: none; padding: 15px 20px; font-size: 18px; font-weight: bold; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3); }
-    .start-btn { background-color: #4f46e5; color: white; border: none; padding: 15px 40px; font-size: 20px; font-weight: bold; border-radius: 30px; cursor: pointer; box-shadow: 0 4px 6px rgba(79, 70, 229, 0.3); width: 100%; max-width: 400px; margin-bottom: 20px;}
-    .start-btn:active, .save-btn:active { transform: translateY(2px); }
-    .overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.9); flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+    .exp-detail { font-size: 16px; color: #4b5563; line-height: 1.5; word-break: keep-all; background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; }
+    .exp-word { font-weight: 900; color: #4f46e5; font-size: 22px; display: block; margin-bottom: 8px;}
+    .exp-options { display: flex; flex-direction: column; gap: 8px; }
+    .exp-opt-item { padding: 12px; border-radius: 10px; font-size: 15px; font-weight: bold; line-height: 1.3; }
+    .exp-opt-correct { border: 2px solid #10b981; color: #065f46; background: #d1fae5; }
+    .exp-opt-wrong { border: 1px solid #e5e7eb; color: #9ca3af; text-decoration: line-through; background: #f9fafb; }
+    
+    .btn-group { display: flex; flex-direction: column; gap: 15px; width: 100%; max-width: 400px; }
+    .action-btn { padding: 18px 20px; font-size: 20px; font-weight: 900; border-radius: 16px; cursor: pointer; border: none; transition: all 0.2s; display: flex; justify-content: center; align-items: center; gap: 10px;}
+    .action-btn:active { transform: scale(0.96); }
+    
+    .btn-primary { background: linear-gradient(to right, #fbbf24, #f97316); color: #431407; box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4); }
+    .btn-secondary { background: white; color: #1f2937; border: 2px solid #e5e7eb; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    
+    .overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.95); flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
     .overlay.active { display: flex; }
-    .countdown-text { font-size: 120px; font-weight: 900; color: #fbbf24; animation: pop 1s infinite; }
-    .feedback-title { font-size: 50px; font-weight: 900; margin-bottom: 15px; text-shadow: 2px 2px 10px rgba(0,0,0,0.5); text-align: center; word-break: keep-all; line-height: 1.2; }
-    .feedback-time { font-size: 24px; color: white; margin-bottom: 5px; font-weight: bold; text-align: center; word-break: keep-all; }
-    .feedback-score { font-size: 40px; font-weight: 900; color: #fbbf24; margin-bottom: 5px; }
-    .feedback-bonus { font-size: 18px; color: #9ca3af; font-weight: bold; }
+    .countdown-text { font-size: 150px; font-weight: 900; color: #facc15; animation: pop 1s infinite; text-shadow: 0 0 30px rgba(250,204,21,0.5);}
+    .feedback-title { font-size: 50px; font-weight: 900; margin-bottom: 15px; text-shadow: 2px 2px 10px rgba(0,0,0,0.5); text-align: center; word-break: keep-all; line-height: 1.2; color: #60a5fa;}
+    .feedback-time { font-size: 24px; color: white; margin-bottom: 5px; font-weight: bold; text-align: center; background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 30px;}
+    
     @keyframes pop { 0% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
   </style>
 </head>
 <body>
 
+  <!-- 인트로 화면 -->
   <div id="startScreen" class="screen active" style="justify-content: center;">
     <div class="start-container">
-      <div class="start-left">
-        <h1 style="color: #4f46e5; font-size: 36px; font-weight: 900; margin-bottom: 10px; word-break: keep-all; padding: 0 10px;">영단어 챌린지</h1>
-        <p style="margin-bottom: 30px; color: #ef4444; font-weight: bold; font-size: 16px;">서든데스 모드! 한 번 틀리면 끝납니다.</p>
-        <div class="day-selection-title">📚 학습할 범위를 선택하세요 (다중 선택)</div>
-        <div id="daySelectionContainer" class="day-selection"></div>
-        <button id="mainStartBtn" class="start-btn">도전 시작하기</button>
+      <span style="background: #6366f1; color: white; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px;">우리 반 한정 챌린지</span>
+      <h1 style="font-size: 50px; font-weight: 900; margin-bottom: 10px; word-break: keep-all; line-height: 1.1;">영단어<br><span style="color: #facc15;">챌린지</span></h1>
+      <p style="margin-bottom: 30px; color: #9ca3af; font-weight: bold; font-size: 16px; line-height: 1.5;">
+        단어의 유의어와 반의어 관계를 파악하여<br>혼자 튀는 하나를 찾아라!<br>
+        <span style="color: #fca5a5; display: block; margin-top: 5px;">※ 한 번 틀리면 즉시 게임 오버 (서든데스)</span>
+      </p>
+      
+      <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 20px; width: 100%; border: 1px solid rgba(255,255,255,0.1);">
+          <div class="day-selection-title">📚 학습할 범위를 선택하세요 (다중 선택)</div>
+          <div id="daySelectionContainer" class="day-selection"></div>
+          <p style="font-size: 12px; color: #6b7280; margin-top: -15px;">* 범위를 많이 선택할수록 점수 배율이 기하급수적으로 증가합니다.</p>
       </div>
+      
+      <button id="mainStartBtn" class="action-btn btn-primary" style="width: 100%; margin-top: 10px;">▶ 도전 시작하기</button>
+      <button onclick="exitGame()" class="action-btn btn-secondary" style="width: 100%; font-size: 16px; padding: 12px;">✖ 나가기</button>
     </div>
   </div>
 
+  <!-- 게임 플레이 화면 -->
   <div id="gameScreen" style="display: none; height: 100%; flex-direction: column;">
-    <div class="header" id="roundText">Round 1 - Q.1 / 10</div>
+    <div class="header" id="roundText">Round 1 - Q.1</div>
     <div class="status-bar">
-      <div id="scoreText" class="score-highlight">현재 점수: 0</div>
-      <div id="timeText" style="color: #10b981;">15초 남음</div>
+      <div id="scoreText" class="score-highlight">0 pt</div>
+      <div id="timeText" style="color: #10b981;">15s</div>
     </div>
     <div class="timer-container">
       <div id="timerBar" class="timer-bar" style="width: 100%;"></div>
@@ -349,31 +364,39 @@ const GET_GAME_HTML = () => `
     </div>
   </div>
 
-  <div id="resultScreen" class="screen">
-    <div class="result-title" id="resultTitle">게임 오버</div>
-    <div class="result-score" id="finalScore">0점</div>
-    <div class="result-msg" id="resultMsg">조금 더 분발하세요!</div>
+  <!-- 🚀 결과 화면 (버튼 UX 분리 및 제로 마찰 UI) -->
+  <div id="resultScreen" class="screen" style="justify-content: center;">
+    <div class="result-title" id="resultTitle">💀 게임 오버 💀</div>
+    <div class="result-msg" id="resultMsg">당신의 최종 점수는...</div>
+    <div class="result-score" id="finalScore">0</div>
     
+    <div style="color: #10b981; font-weight: bold; font-size: 14px; margin-bottom: 25px; background: rgba(16, 185, 129, 0.1); padding: 10px 20px; border-radius: 20px;">
+        🚀 최고 기록 경신 시 자동으로 명예의 전당에 반영됩니다.
+    </div>
+
+    <!-- 오답 노트 -->
     <div id="explanationBox" class="explanation-box">
-      <div class="exp-label">💡 핵심 단어 복습</div>
+      <div class="exp-label">💡 핵심 단어 오답 노트</div>
       <div id="expDetail" class="exp-detail" style="margin-bottom: 15px;"></div>
       <div class="exp-label">📝 출제된 보기 확인</div>
       <div id="expOptions" class="exp-options"></div>
     </div>
 
-    <div id="rankingInputArea" class="ranking-input-area" style="display: flex;">
-      <button id="saveRankBtn" class="save-btn">🏆 명예의 전당에 점수 기록 및 종료하기</button>
+    <!-- 🚀 액션 버튼 그룹 -->
+    <div class="btn-group">
+      <button onclick="retryGame()" class="action-btn btn-primary">🔥 챌린지 한 번 더!</button>
+      <button onclick="exitGame()" class="action-btn btn-secondary">🏆 명예의 전당 보러가기 (나가기)</button>
     </div>
-    <button id="restartBtn" class="start-btn" style="background-color: #6b7280; margin-top: 10px;">처음으로 돌아가기</button>
   </div>
 
+  <!-- 오버레이 요소들 -->
   <div id="countdownOverlay" class="overlay">
     <div id="countdownNumber" class="countdown-text">3</div>
   </div>
 
   <div id="roundTransitionOverlay" class="overlay">
-    <div id="roundTransitionTitle" class="feedback-title" style="color: #60a5fa;">1라운드 시작!</div>
-    <div id="roundTransitionDesc" class="feedback-time" style="color: white; margin-top: 20px;">문제당 15초의 시간이 주어집니다.</div>
+    <div id="roundTransitionTitle" class="feedback-title">1라운드 시작!</div>
+    <div id="roundTransitionDesc" class="feedback-time">문제당 15초의 시간이 주어집니다.</div>
   </div>
 
   <div id="feedbackOverlay" class="overlay">
@@ -446,7 +469,6 @@ const GET_GAME_HTML = () => `
     let currentVocaData = [];
     let selectedDays = [];
     let currentTotalQuestion = 1;
-    const MAX_QUESTIONS = 30; 
     let score = 0;
     let timeLeft = 0;
     let timerInterval;
@@ -459,8 +481,6 @@ const GET_GAME_HTML = () => `
     document.addEventListener("DOMContentLoaded", function() {
       initDaySelection();
       document.getElementById("mainStartBtn").addEventListener("click", checkAndStart);
-      document.getElementById("restartBtn").addEventListener("click", showStartScreen);
-      document.getElementById("saveRankBtn").addEventListener("click", saveRanking);
     });
 
     function initDaySelection() {
@@ -487,7 +507,7 @@ const GET_GAME_HTML = () => `
       selectedDays = Array.from(selectedDayEls).map(el => parseInt(el.dataset.day));
       currentVocaData = rawVocaData.filter(w => selectedDays.includes(w.day));
       if(currentVocaData.length < 5) {
-        alert("선택된 Day의 단어가 5개 미만입니다.");
+        alert("선택된 Day의 단어가 너무 적습니다. 범위를 더 넓혀주세요.");
         return;
       }
       startPreparation();
@@ -515,15 +535,11 @@ const GET_GAME_HTML = () => `
       return baseWord + ' - ' + others[0] + ' - ' + others[1];
     }
 
-    function showStartScreen() {
-      document.getElementById('startScreen').classList.add('active');
-      document.getElementById('gameScreen').style.display = 'none';
-      document.getElementById('resultScreen').classList.remove('active');
-    }
-
     function startPreparation() {
       document.getElementById('startScreen').classList.remove('active');
+      document.getElementById('resultScreen').classList.remove('active');
       document.getElementById('gameScreen').style.display = 'flex';
+      
       const overlay = document.getElementById('countdownOverlay');
       const numberText = document.getElementById('countdownNumber');
       overlay.classList.add('active');
@@ -539,7 +555,7 @@ const GET_GAME_HTML = () => `
         } else {
           clearInterval(countInterval);
           overlay.classList.remove('active');
-          numberText.style.color = "#fbbf24"; 
+          numberText.style.color = "#facc15"; 
           startGame();
         }
       }, 1000);
@@ -550,9 +566,6 @@ const GET_GAME_HTML = () => `
       score = 0;
       isTransitioning = false;
       document.getElementById('explanationBox').style.display = 'none'; 
-      document.getElementById('rankingInputArea').style.display = 'flex'; 
-      document.getElementById('saveRankBtn').innerText = '🏆 명예의 전당에 점수 기록 및 종료하기';
-      document.getElementById('saveRankBtn').disabled = false;
       showRoundTransition();
     }
 
@@ -569,27 +582,23 @@ const GET_GAME_HTML = () => `
       if (config.qNum === 1) {
         const overlay = document.getElementById('roundTransitionOverlay');
         document.getElementById('roundTransitionTitle').innerText = config.round + '라운드 시작!';
-        document.getElementById('roundTransitionDesc').innerText = '문제당 ' + config.time + '초의 시간이 주어집니다.';
+        document.getElementById('roundTransitionDesc').innerText = '제한시간: ' + config.time + '초';
         overlay.classList.add('active');
         setTimeout(() => {
           overlay.classList.remove('active');
           nextQuestion();
-        }, 2500);
+        }, 2000);
       } else {
         nextQuestion();
       }
     }
 
     function nextQuestion() {
-      if (currentTotalQuestion > MAX_QUESTIONS) {
-        endGame(true);
-        return;
-      }
       const config = getRoundConfig();
       maxTime = config.time;
       timeLeft = maxTime;
-      document.getElementById('roundText').innerText = 'Round ' + config.round + ' - Q.' + config.qNum + ' / 10';
-      document.getElementById('scoreText').innerText = '현재 점수: ' + score;
+      document.getElementById('roundText').innerText = 'Round ' + config.round + ' - Q.' + config.qNum;
+      document.getElementById('scoreText').innerText = score.toLocaleString() + ' pt';
       updateTimerUI();
       generateQuestion(config.prob3);
       startTimer();
@@ -719,49 +728,19 @@ const GET_GAME_HTML = () => `
       isTransitioning = true;
       clearInterval(timerInterval); 
 
-      const overlay = document.getElementById('feedbackOverlay');
-      const titleEl = document.getElementById('feedbackTitle');
-      const timeEl = document.getElementById('feedbackTime');
-      const scoreEl = document.getElementById('feedbackScore');
-      const bonusEl = document.getElementById('feedbackBonus');
-
-      const timeTaken = maxTime - timeLeft;
       if (isCorrect) {
         const config = getRoundConfig();
         const bonusPoints = timeLeft * config.bonus;
         const earnedScore = config.baseScore + bonusPoints;
         score += earnedScore;
-        document.getElementById('scoreText').innerText = '현재 점수: ' + score;
-        titleEl.innerText = "🎉 정답! 🎉";
-        titleEl.style.color = "#10b981";
-        timeEl.innerText = '⏱️ ' + timeTaken + '초 만에 맞췄습니다!';
-        timeEl.style.display = "block";
-        scoreEl.innerText = '+' + earnedScore + '점';
-        scoreEl.style.display = "block";
-        bonusEl.innerText = '(기본 ' + config.baseScore + '점 + 시간 보너스 ' + bonusPoints + '점)';
-        bonusEl.style.display = "block";
-      } else {
-        if (isTimeout) titleEl.innerText = "⏰ 시간 초과!";
-        else titleEl.innerText = "❌ 오답! ❌";
-        titleEl.style.color = "#ef4444";
-        timeEl.style.display = "none";
-        scoreEl.style.display = "none";
-        bonusEl.style.display = "none";
-      }
-
-      overlay.classList.add('active'); 
-
-      setTimeout(() => {
-        overlay.classList.remove('active');
-        isTransitioning = false;
+        document.getElementById('scoreText').innerText = score.toLocaleString() + ' pt';
         
-        if (isCorrect) {
-          currentTotalQuestion++; 
-          showRoundTransition();
-        } else {
-          endGame(false);
-        }
-      }, 2500);
+        currentTotalQuestion++; 
+        isTransitioning = false;
+        showRoundTransition();
+      } else {
+        endGame(false);
+      }
     }
 
     function endGame(isWin) {
@@ -774,9 +753,10 @@ const GET_GAME_HTML = () => `
       const msg = document.getElementById('resultMsg');
       const expBox = document.getElementById('explanationBox');
       
-      document.getElementById('finalScore').innerText = '최종 점수: ' + score + '점';
+      document.getElementById('finalScore').innerText = score.toLocaleString();
+      
       if (isWin) {
-        title.innerText = "🎉 게임 클리어! 🎉";
+        title.innerText = "🎉 챌린지 클리어! 🎉";
         title.style.color = "#10b981";
         msg.innerHTML = "영일고의 자랑!<br>모든 단어를 완벽하게 숙지하셨군요!";
         expBox.style.display = "none"; 
@@ -786,12 +766,12 @@ const GET_GAME_HTML = () => `
       } else {
         const failedRound = getRoundConfig().round;
         title.innerText = "💀 게임 오버 💀";
-        title.style.color = "#ef4444";
+        title.style.color = "#f87171";
         msg.innerHTML = '아쉽습니다. Round ' + failedRound + '에서 탈락했습니다.<br>아래 오답 노트를 확인하고 다시 도전하세요!';
         
         const synText = currentTargetWordData.syn ? currentTargetWordData.syn : "없음";
         const antText = currentTargetWordData.ant ? currentTargetWordData.ant : "없음";
-        document.getElementById('expDetail').innerHTML = '<span class="exp-word">[' + currentTargetWordData.word + ']</span><br>✔️ 유의어: ' + synText + '<br>❌ 반의어: ' + antText;
+        document.getElementById('expDetail').innerHTML = '<span class="exp-word">' + currentTargetWordData.word + '</span>✔️ 유의어: ' + synText + '<br>❌ 반의어: ' + antText;
         let optionsHtml = '';
         currentOptions.forEach(opt => {
           if(opt.isCorrect) optionsHtml += '<div class="exp-opt-item exp-opt-correct">✅ 정답: ' + opt.text + '</div>';
@@ -800,15 +780,20 @@ const GET_GAME_HTML = () => `
         document.getElementById('expOptions').innerHTML = optionsHtml;
         expBox.style.display = "block";
       }
+
+      // 🚀 백그라운드에서 React(부모) 창으로 점수 조용히 전송 (자동 저장)
+      window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
     }
 
-    // 🚀 [CTO 패치] React 부모 창으로 점수 데이터 전송 (마이크로 프론트엔드 통신)
-    function saveRanking() {
-      window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
-      const btn = document.getElementById('saveRankBtn');
-      btn.innerText = '저장 완료! 화면을 닫는 중...';
-      btn.style.backgroundColor = '#6b7280';
-      btn.disabled = true;
+    // 🚀 액션 버튼 1: 나가기 (React Iframe 닫기)
+    function exitGame() {
+      window.parent.postMessage({ type: 'CLOSE_GAME' }, '*');
+    }
+
+    // 🚀 액션 버튼 2: 재도전 (Iframe 내에서 인트로 화면으로 복귀)
+    function retryGame() {
+      document.getElementById('resultScreen').classList.remove('active');
+      document.getElementById('startScreen').classList.add('active');
     }
   </script>
 </body>
@@ -831,7 +816,7 @@ export default function VocaChallenge({ currentUser }) {
     const [isLoading, setIsLoading] = useState(true);
 
     const [studentClassId, setStudentClassId] = useState(null); 
-    const [isGameActive, setIsGameActive] = useState(false); // 🚀 Iframe 활성화 트리거
+    const [isGameActive, setIsGameActive] = useState(false);
 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'voca_challenge'), (docSnap) => {
@@ -876,7 +861,6 @@ export default function VocaChallenge({ currentUser }) {
         return () => { if (unsub) unsub(); }
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
-
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
@@ -897,59 +881,83 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
-    // 🚀 [CTO 패치] Iframe 통신 리스너 (PostMessage API)
+    // 🚀 [CTO 패치] useRef를 활용한 방탄 통신망 (Stale Closure 완벽 방어)
+    const studentClassIdRef = useRef(studentClassId);
+    const currentUserRef = useRef(currentUser);
+    const classesRef = useRef(classes);
+
+    // 컴포넌트가 리렌더링될 때마다 최신 값을 거울(Ref)에 즉시 동기화합니다.
+    useEffect(() => { studentClassIdRef.current = studentClassId; }, [studentClassId]);
+    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+    useEffect(() => { classesRef.current = classes; }, [classes]);
+
     useEffect(() => {
         const handleMessage = async (event) => {
-            if (event.data && event.data.type === 'VOCA_GAME_OVER') {
-                const finalScore = event.data.score;
-                
+            if (!event.data) return;
+
+            // 이벤트 1: 나가기 버튼 누름
+            if (event.data.type === 'CLOSE_GAME') {
+                setIsGameActive(false);
+                return;
+            }
+
+            // 이벤트 2: 게임 오버 시 찰나의 순간에 백그라운드 최고 기록 경신 처리
+            if (event.data.type === 'VOCA_GAME_OVER') {
+                const finalScore = Number(event.data.score) || 0;
+                if (finalScore === 0) return; // 0점은 랭킹판 혼탁 방지를 위해 버림 (최적화)
+
                 try {
-                    const myClassObj = classes.find(c => c.id === studentClassId);
+                    // 과거 스냅샷이 아닌, '현재 순간'의 거울(Ref) 값을 읽어옵니다.
+                    const sClassId = studentClassIdRef.current;
+                    const cUser = currentUserRef.current;
+                    const cList = classesRef.current;
+                    
+                    if (!sClassId || !cUser || !cUser.id) return; 
+
+                    const myClassObj = cList.find(c => c.id === sClassId);
+                    
                     const q = query(
                         collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
-                        where('classId', '==', studentClassId),
-                        where('studentId', '==', currentUser.id)
+                        where('classId', '==', sClassId),
+                        where('studentId', '==', cUser.id)
                     );
                     const snap = await getDocs(q);
                     
                     if (!snap.empty) {
                         const docRef = snap.docs[0].ref;
-                        const pastScore = snap.docs[0].data().score;
+                        const pastScore = snap.docs[0].data().score || 0;
+                        // 과거 내 기록보다 높은 신기록일 때만 DB에 덮어씁니다. (불필요한 과금 100% 방어)
                         if (finalScore > pastScore) {
                             await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
                         }
                     } else {
                         await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
-                            classId: studentClassId,
+                            classId: sClassId,
                             className: myClassObj?.name || '알수없음',
-                            studentId: currentUser.id,
-                            studentName: currentUser.name,
+                            studentId: cUser.id,
+                            studentName: cUser.name,
                             score: finalScore,
                             createdAt: serverTimestamp()
                         });
                     }
                     
-                    alert(`게임 종료! 최종 점수 ${finalScore}점이 성공적으로 기록되었습니다.`);
-                    setIsGameActive(false); // 게임 창 닫기 및 랭킹보드로 복귀
-                    
+                    // 🚀 주의: 게임 흐름을 방해하는 alert는 의도적으로 제거했습니다. 백그라운드에서 조용히 저장됩니다.
                 } catch (e) {
-                    console.error("Score save error:", e);
-                    alert("점수 저장에 실패했습니다. 다시 시도해 주세요.");
+                    console.error("Score auto-save error (Background):", e);
                 }
             }
         };
 
         window.addEventListener('message', handleMessage);
         return () => window.removeEventListener('message', handleMessage);
-    }, [classes, currentUser, studentClassId]);
+    }, []); 
 
 
-    if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
+    if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-indigo-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
 
-    // 🚀 [CTO 패치] 게임 활성화 시 Iframe 전체 화면 렌더링
     if (isGameActive) {
         return (
-            <div className="fixed inset-0 z-[9999] bg-white">
+            <div className="fixed inset-0 z-[9999] bg-slate-900 animate-in fade-in duration-300">
                 <iframe 
                     title="Voca Game Engine"
                     srcDoc={GET_GAME_HTML()} 
@@ -1075,7 +1083,7 @@ export default function VocaChallenge({ currentUser }) {
                 </button>
 
                 <div className="w-full mt-12 bg-white/5 rounded-2xl p-5 border border-white/10 text-left z-10">
-                    <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 현재 우리 반 랭킹 TOP 5</h3>
+                    <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 실시간 명예의 전당 TOP 5</h3>
                     <div className="space-y-2">
                         {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
                             rankings.slice(0, 5).map((r, i) => (
