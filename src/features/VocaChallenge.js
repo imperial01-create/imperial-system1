@@ -1,18 +1,17 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진
-   - (🚀 CTO 패치: 원장님의 오리지널 출제 로직 완벽 복원)
-   - 단순 뜻 맞추기가 아닌, 단어 간의 유의어/반의어 관계를 추론하는 고차원적 문제 출제 엔진 탑재
-   - 틀리는 순간 즉시 게임이 종료되는 서든 데스(Sudden Death) 룰 적용 */
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.0
+   - (🚀 CTO 패치: 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재)
+   - 최고 점수 경신 시에만 DB를 업데이트하여 Firestore 비용을 최적화하고 랭킹 도배를 방지합니다. */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit } from 'firebase/firestore';
+import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen, ChevronRight } from 'lucide-react';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Card, Button, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 원장님께서 제공해주신 실제 CSV 데이터
+// 🚀 원장님 제공 실제 CSV 데이터
 const RAW_CSV_DATA = `NVH2_D08_281,maintain,M1,preserve,
 NVH2_D08_281,maintain,M2,assert,
 NVH2_D08_282,undermine,M1,weaken,strengthen
@@ -252,7 +251,7 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] 원본 앱의 CSV 파싱 로직 100% 복원
+// 🚀 [CTO 패치] CSV에서 Day(범위) 정보를 함께 추출하는 파싱 엔진
 const processRawCSV = (csvText) => {
     const rows = [];
     let currentRow = [];
@@ -285,18 +284,22 @@ const processRawCSV = (csvText) => {
     }
 
     const wordMap = {};
-    // 첫 줄부터 데이터가 시작되므로 i=0부터 순회
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       if (row.length < 3) continue;
       
+      const wordId = row[0];
       const word = row[1];
       const synStr = row[3];
       const antStr = row[4];
       if (!word) continue;
       
+      // Day 추출 로직 (예: NVH2_D08_281 -> Day 8)
+      let dayMatch = wordId.match(/_D(\d+)_/);
+      let dayNum = dayMatch ? parseInt(dayMatch[1], 10) : 1;
+
       if (!wordMap[word]) {
-        wordMap[word] = { word: word, synSet: new Set(), antSet: new Set() };
+        wordMap[word] = { word: word, day: dayNum, synSet: new Set(), antSet: new Set() };
       }
       
       if (synStr) {
@@ -315,6 +318,7 @@ const processRawCSV = (csvText) => {
 
     return Object.values(wordMap).map(item => ({
       word: item.word,
+      day: item.day,
       syn: Array.from(item.synSet),
       ant: Array.from(item.antSet)
     }));
@@ -335,8 +339,12 @@ export default function VocaChallenge({ currentUser }) {
     const { classes, enrollments } = useData();
     const isStudent = currentUser.role === 'student';
 
+    // 🚀 [CTO 패치] 영어 과목(Subject) 반만 필터링 (Zero Trust)
+    const englishClasses = useMemo(() => {
+        return classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
+    }, [classes]);
+
     const [activeClasses, setActiveClasses] = useState([]);
-    
     const [adminTab, setAdminTab] = useState('settings'); 
     const [adminSelectedClass, setAdminSelectedClass] = useState('');
     
@@ -344,15 +352,29 @@ export default function VocaChallenge({ currentUser }) {
     const [isLoading, setIsLoading] = useState(true);
 
     const [gameState, setGameState] = useState('intro'); // 'intro', 'playing', 'result'
+    const [overlayState, setOverlayState] = useState('none'); // 'none', 'countdown', 'round'
+    const [countdownNum, setCountdownNum] = useState(3);
+    const [roundInfo, setRoundInfo] = useState({ round: 1, time: 15 });
+
     const [timeLeft, setTimeLeft] = useState(15);
     const [score, setScore] = useState(0);
-    const [combo, setCombo] = useState(0);
     const [questionNum, setQuestionNum] = useState(1);
     
     const [currentQuestion, setCurrentQuestion] = useState(null);
     const [studentClassId, setStudentClassId] = useState(null); 
 
-    const vocaData = useMemo(() => processRawCSV(RAW_CSV_DATA), []);
+    const vocaDataAll = useMemo(() => processRawCSV(RAW_CSV_DATA), []);
+    
+    // 🚀 [CTO 패치] 학습 범위(Day) 선택 상태
+    const availableDays = useMemo(() => {
+        return [...new Set(vocaDataAll.map(v => v.day))].sort((a,b) => a-b);
+    }, [vocaDataAll]);
+    const [selectedDays, setSelectedDays] = useState([]);
+
+    // 현재 선택된 Day의 단어 데이터
+    const activeVocaData = useMemo(() => {
+        return vocaDataAll.filter(v => selectedDays.includes(v.day));
+    }, [vocaDataAll, selectedDays]);
 
     useEffect(() => {
         if (!document.getElementById('confetti-script')) {
@@ -362,6 +384,9 @@ export default function VocaChallenge({ currentUser }) {
             script.async = true;
             document.body.appendChild(script);
         }
+        // 초기 Day 전체 선택
+        setSelectedDays(availableDays);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -409,142 +434,6 @@ export default function VocaChallenge({ currentUser }) {
 
 
     // ==========================================
-    // 🚀 [CTO 패치] 오리지널 관계형 출제 엔진 완벽 복원
-    // ==========================================
-    const generateQuestion = () => {
-        const poolAllSyn = vocaData.filter(w => w.syn.length >= 2);
-        const poolMixed = vocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
-
-        let isThreeWordType = Math.random() < 0.3; 
-        const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
-
-        if (isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
-
-        let questionTitle = "";
-        let options = [];
-        let correctAnswerText = "";
-        let targetWordData = null;
-
-        const makeThreeWordString = (base, w2, w3) => {
-            const others = shuffleArray([w2, w3]);
-            return `${base} - ${others[0]} - ${others[1]}`;
-        };
-
-        if (isThreeWordType) {
-            questionTitle = "다음 중 세 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-            const isMajorityAllSyn = Math.random() < 0.5;
-
-            if (isMajorityAllSyn) {
-                // Target은 Word-Syn-Ant, 나머지는 Word-Syn-Syn
-                const shuffledMixed = shuffleArray(poolMixed);
-                const targetData = shuffledMixed[0];
-                targetWordData = targetData;
-                correctAnswerText = makeThreeWordString(targetData.word, pickRandom(targetData.syn), pickRandom(targetData.ant));
-                options.push({ text: correctAnswerText, isCorrect: true });
-
-                const bgData = shuffleArray(poolAllSyn).slice(0, 4);
-                bgData.forEach(w => {
-                    const syns = shuffleArray(w.syn);
-                    options.push({ text: makeThreeWordString(w.word, syns[0], syns[1]), isCorrect: false });
-                });
-            } else {
-                // Target은 Word-Syn-Syn, 나머지는 Word-Syn-Ant
-                const shuffledAllSyn = shuffleArray(poolAllSyn);
-                const targetData = shuffledAllSyn[0];
-                targetWordData = targetData;
-                const syns = shuffleArray(targetData.syn);
-                correctAnswerText = makeThreeWordString(targetData.word, syns[0], syns[1]);
-                options.push({ text: correctAnswerText, isCorrect: true });
-
-                const bgData = shuffleArray(poolMixed).slice(0, 4);
-                bgData.forEach(w => {
-                    options.push({ text: makeThreeWordString(w.word, pickRandom(w.syn), pickRandom(w.ant)), isCorrect: false });
-                });
-            }
-        } else {
-            questionTitle = "다음 중 두 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
-            const isTargetAntonym = Math.random() < 0.5;
-            let targetPool = isTargetAntonym ? vocaData.filter(w => w.ant.length > 0) : vocaData.filter(w => w.syn.length > 0);
-            let bgPool = isTargetAntonym ? vocaData.filter(w => w.syn.length > 0) : vocaData.filter(w => w.ant.length > 0);
-
-            if (targetPool.length === 0 || bgPool.length < 4) {
-                targetPool = vocaData.filter(w => w.syn.length > 0);
-                bgPool = vocaData.filter(w => w.syn.length > 0);
-            }
-
-            const shuffledTarget = shuffleArray(targetPool);
-            const targetData = shuffledTarget[0];
-            targetWordData = targetData;
-
-            if (isTargetAntonym) {
-                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.ant)}`;
-                options.push({ text: correctAnswerText, isCorrect: true });
-                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
-                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.syn)}`, isCorrect: false }));
-            } else {
-                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.syn)}`;
-                options.push({ text: correctAnswerText, isCorrect: true });
-                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
-                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.ant)}`, isCorrect: false }));
-            }
-        }
-
-        options = shuffleArray(options);
-        setCurrentQuestion({ title: questionTitle, options, targetWordData, answer: correctAnswerText });
-        setTimeLeft(15);
-    };
-
-    const startGame = () => {
-        setScore(0);
-        setCombo(0);
-        setQuestionNum(1);
-        setGameState('playing');
-        generateQuestion();
-    };
-
-    // 🚀 서든 데스(Sudden Death) 처리
-    const handleAnswer = (isCorrect) => {
-        if (isCorrect) {
-            const addedScore = 10 + (combo * 2) + timeLeft;
-            setScore(prev => prev + addedScore);
-            setCombo(prev => prev + 1);
-            setQuestionNum(prev => prev + 1);
-            generateQuestion();
-        } else {
-            endGame(false); 
-        }
-    };
-
-    const endGame = async (isWin) => {
-        setGameState('result');
-        
-        if (isWin && window.confetti) {
-            window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
-        }
-
-        const myClassObj = classes.find(c => c.id === studentClassId);
-        await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
-            classId: studentClassId,
-            className: myClassObj?.name || '알수없음',
-            studentId: currentUser.id,
-            studentName: currentUser.name,
-            score: score,
-            createdAt: serverTimestamp()
-        });
-    };
-
-    useEffect(() => {
-        let timer;
-        if (gameState === 'playing' && timeLeft > 0) {
-            timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
-        } else if (gameState === 'playing' && timeLeft === 0) {
-            endGame(false); // 시간 초과 시 서든데스 탈락
-        }
-        return () => clearInterval(timer);
-    }, [gameState, timeLeft]);
-
-
-    // ==========================================
     // 강사/관리자 로직
     // ==========================================
     const toggleClassActive = async (classId) => {
@@ -567,16 +456,238 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
+
+    // ==========================================
+    // 학생 게임 로직 (동적 스코어링 & 라운드)
+    // ==========================================
+    const toggleDaySelection = (day) => {
+        setSelectedDays(prev => 
+            prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a,b)=>a-b)
+        );
+    };
+
+    // 🚀 동적 라운드 설정 및 스코어링 (원장님 기획 완벽 반영)
+    const getRoundConfig = (qNum) => {
+        const multiplier = selectedDays.length || 1;
+        const basePoints = multiplier * 10;
+        if (qNum <= 10) return { round: 1, time: 15, baseScore: basePoints, bonus: multiplier * 1 };
+        if (qNum <= 20) return { round: 2, time: 10, baseScore: basePoints * 2, bonus: multiplier * 2 };
+        return { round: 3, time: 5, baseScore: basePoints * 3, bonus: multiplier * 5 };
+    };
+
+    const handleStartClick = () => {
+        if (selectedDays.length === 0) return alert("학습할 Day를 최소 1개 이상 선택해주세요!");
+        if (activeVocaData.length < 5) return alert("선택한 범위의 단어 수가 너무 적습니다 (최소 5개 필요).");
+        
+        setScore(0);
+        setQuestionNum(1);
+        setOverlayState('countdown');
+        
+        let count = 3;
+        setCountdownNum(count);
+        
+        const timer = setInterval(() => {
+            count--;
+            if (count > 0) {
+                setCountdownNum(count);
+            } else if (count === 0) {
+                setCountdownNum('Start!');
+            } else {
+                clearInterval(timer);
+                startGame();
+            }
+        }, 1000);
+    };
+
+    const startGame = () => {
+        setOverlayState('round');
+        const config = getRoundConfig(1);
+        setRoundInfo({ round: config.round, time: config.time });
+        
+        setTimeout(() => {
+            setOverlayState('none');
+            setGameState('playing');
+            generateQuestion(1);
+        }, 2500);
+    };
+
+    const generateQuestion = (qNum) => {
+        const config = getRoundConfig(qNum);
+        setTimeLeft(config.time);
+
+        const poolAllSyn = activeVocaData.filter(w => w.syn.length >= 2);
+        const poolMixed = activeVocaData.filter(w => w.syn.length >= 1 && w.ant.length >= 1);
+
+        let isThreeWordType = Math.random() < 0.3; 
+        const canMakeThreeWord = (poolMixed.length >= 1 && poolAllSyn.length >= 4) || (poolAllSyn.length >= 1 && poolMixed.length >= 4);
+
+        if (isThreeWordType && !canMakeThreeWord) isThreeWordType = false;
+
+        let questionTitle = "";
+        let options = [];
+        let correctAnswerText = "";
+        let targetWordData = null;
+
+        const makeThreeWordString = (base, w2, w3) => {
+            const others = shuffleArray([w2, w3]);
+            return `${base} - ${others[0]} - ${others[1]}`;
+        };
+
+        if (isThreeWordType) {
+            questionTitle = "다음 중 세 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
+            const isMajorityAllSyn = Math.random() < 0.5;
+
+            if (isMajorityAllSyn) {
+                const targetData = shuffleArray(poolMixed)[0];
+                targetWordData = targetData;
+                correctAnswerText = makeThreeWordString(targetData.word, pickRandom(targetData.syn), pickRandom(targetData.ant));
+                options.push({ text: correctAnswerText, isCorrect: true });
+
+                const bgData = shuffleArray(poolAllSyn).slice(0, 4);
+                bgData.forEach(w => {
+                    const syns = shuffleArray(w.syn);
+                    options.push({ text: makeThreeWordString(w.word, syns[0], syns[1]), isCorrect: false });
+                });
+            } else {
+                const targetData = shuffleArray(poolAllSyn)[0];
+                targetWordData = targetData;
+                const syns = shuffleArray(targetData.syn);
+                correctAnswerText = makeThreeWordString(targetData.word, syns[0], syns[1]);
+                options.push({ text: correctAnswerText, isCorrect: true });
+
+                const bgData = shuffleArray(poolMixed).slice(0, 4);
+                bgData.forEach(w => {
+                    options.push({ text: makeThreeWordString(w.word, pickRandom(w.syn), pickRandom(w.ant)), isCorrect: false });
+                });
+            }
+        } else {
+            questionTitle = "다음 중 두 단어의 관계가 나머지 넷과 다른 하나를 고르시오.";
+            const isTargetAntonym = Math.random() < 0.5;
+            let targetPool = isTargetAntonym ? activeVocaData.filter(w => w.ant.length > 0) : activeVocaData.filter(w => w.syn.length > 0);
+            let bgPool = isTargetAntonym ? activeVocaData.filter(w => w.syn.length > 0) : activeVocaData.filter(w => w.ant.length > 0);
+
+            if (targetPool.length === 0 || bgPool.length < 4) {
+                targetPool = activeVocaData.filter(w => w.syn.length > 0);
+                bgPool = activeVocaData.filter(w => w.syn.length > 0);
+            }
+
+            const targetData = shuffleArray(targetPool)[0];
+            targetWordData = targetData;
+
+            if (isTargetAntonym) {
+                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.ant)}`;
+                options.push({ text: correctAnswerText, isCorrect: true });
+                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.syn)}`, isCorrect: false }));
+            } else {
+                correctAnswerText = `${targetData.word} - ${pickRandom(targetData.syn)}`;
+                options.push({ text: correctAnswerText, isCorrect: true });
+                const bgData = shuffleArray(bgPool).filter(w => w.word !== targetData.word).slice(0, 4);
+                bgData.forEach(w => options.push({ text: `${w.word} - ${pickRandom(w.ant)}`, isCorrect: false }));
+            }
+        }
+
+        options = shuffleArray(options);
+        setCurrentQuestion({ title: questionTitle, options, targetWordData, answer: correctAnswerText });
+    };
+
+    const handleAnswer = (isCorrect) => {
+        if (isCorrect) {
+            const config = getRoundConfig(questionNum);
+            const timeBonus = timeLeft * config.bonus;
+            const earnedScore = config.baseScore + timeBonus;
+            
+            setScore(prev => prev + earnedScore);
+            
+            const nextQNum = questionNum + 1;
+            setQuestionNum(nextQNum);
+
+            // 라운드 진입 체크 (11번, 21번 문제일 때 트랜지션)
+            if (nextQNum === 11 || nextQNum === 21) {
+                const nextConfig = getRoundConfig(nextQNum);
+                setOverlayState('round');
+                setRoundInfo({ round: nextConfig.round, time: nextConfig.time });
+                
+                setTimeout(() => {
+                    setOverlayState('none');
+                    generateQuestion(nextQNum);
+                }, 2500);
+            } else {
+                generateQuestion(nextQNum);
+            }
+        } else {
+            // 🚀 서든 데스 룰 (한 번 틀리면 즉시 아웃)
+            endGame(false); 
+        }
+    };
+
+    // 🚀 [CTO 패치] 리더보드 N+1 도배 방지 및 최고점수 업데이트 로직
+    const saveRankingToDB = async (finalScore) => {
+        const myClassObj = classes.find(c => c.id === studentClassId);
+        const className = myClassObj?.name || '알수없음';
+        
+        try {
+            const q = query(
+                collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
+                where('classId', '==', studentClassId),
+                where('studentId', '==', currentUser.id)
+            );
+            const snap = await getDocs(q);
+            
+            if (!snap.empty) {
+                // 기존 기록이 있을 경우 점수가 더 높을 때만 업데이트
+                const docRef = snap.docs[0].ref;
+                const pastScore = snap.docs[0].data().score;
+                if (finalScore > pastScore) {
+                    await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
+                }
+            } else {
+                // 첫 기록일 경우 신규 생성
+                await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
+                    classId: studentClassId,
+                    className: className,
+                    studentId: currentUser.id,
+                    studentName: currentUser.name,
+                    score: finalScore,
+                    createdAt: serverTimestamp()
+                });
+            }
+        } catch (e) { console.error("Ranking save error:", e); }
+    };
+
+    const endGame = async (isWin) => {
+        setGameState('result');
+        if (isWin && window.confetti) {
+            window.confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+        }
+        await saveRankingToDB(score);
+    };
+
+    useEffect(() => {
+        let timer;
+        if (gameState === 'playing' && overlayState === 'none' && timeLeft > 0) {
+            timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+        } else if (gameState === 'playing' && overlayState === 'none' && timeLeft === 0) {
+            endGame(false); // 시간 초과 시 아웃
+        }
+        return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [gameState, overlayState, timeLeft]);
+
+
+    // ==========================================
+    // UI 렌더링
+    // ==========================================
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
 
     // --- 강사/관리자 뷰 ---
     if (!isStudent) {
         return (
-            <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in">
+            <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in relative">
                 <div className="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-6 md:p-8 rounded-3xl shadow-lg flex justify-between items-center">
                     <div>
                         <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-2"><Trophy size={28}/> 영단어 챌린지 마스터</h1>
-                        <p className="opacity-90">게이미피케이션으로 학생들의 단어 암기 경쟁심을 자극하세요.</p>
+                        <p className="opacity-90">유의어/반의어 관계를 파악하는 게이미피케이션으로 암기 몰입도를 극대화하세요.</p>
                     </div>
                 </div>
 
@@ -591,23 +702,28 @@ export default function VocaChallenge({ currentUser }) {
 
                 {adminTab === 'settings' && (
                     <Card className="space-y-4">
-                        <div className="bg-purple-50 p-4 rounded-xl text-purple-800 text-sm font-bold flex items-center gap-2 mb-4">
-                            <Flame size={18}/> 토글을 켜면 해당 반 학생들의 화면에 즉시 게임 챌린지 메뉴가 활성화됩니다.
+                        <div className="bg-purple-50 p-4 rounded-xl text-purple-800 text-sm font-bold flex items-center gap-2 mb-4 border border-purple-200">
+                            <Flame size={18}/> 토글을 켜면 해당 영어 반 학생들의 화면에 즉시 게임 챌린지 메뉴가 활성화됩니다.
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {classes.map(cls => {
-                                const isOpen = activeClasses.includes(cls.id);
-                                return (
-                                    <div key={cls.id} className={`flex justify-between items-center p-4 border-2 rounded-2xl transition-all ${isOpen ? 'border-purple-400 bg-purple-50/30' : 'border-gray-100 hover:border-gray-300'}`}>
-                                        <div>
-                                            <div className="font-black text-gray-900">{cls.name}</div>
+                            {englishClasses.length === 0 ? <p className="text-gray-400 p-4 col-span-2 text-center font-bold">생성된 영어 반이 없습니다.</p> : 
+                                englishClasses.map(cls => {
+                                    const isOpen = activeClasses.includes(cls.id);
+                                    return (
+                                        <div key={cls.id} className={`flex justify-between items-center p-4 border-2 rounded-2xl transition-all ${isOpen ? 'border-purple-400 bg-purple-50/30 shadow-sm' : 'border-gray-100 hover:border-gray-300'}`}>
+                                            <div>
+                                                <div className="font-black text-gray-900 flex items-center gap-2">
+                                                    {cls.name}
+                                                    {isOpen && <span className="bg-purple-500 text-white text-[10px] px-2 py-0.5 rounded-full animate-pulse">LIVE</span>}
+                                                </div>
+                                            </div>
+                                            <button onClick={() => toggleClassActive(cls.id)} className={`px-4 py-2 rounded-xl font-bold text-sm transition-colors ${isOpen ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                                                {isOpen ? '닫기' : '챌린지 오픈'}
+                                            </button>
                                         </div>
-                                        <button onClick={() => toggleClassActive(cls.id)} className={`px-4 py-2 rounded-xl font-bold text-sm transition-colors ${isOpen ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                                            {isOpen ? '오픈됨 (진행중)' : '챌린지 열기'}
-                                        </button>
-                                    </div>
-                                )
-                            })}
+                                    )
+                                })
+                            }
                         </div>
                     </Card>
                 )}
@@ -616,32 +732,35 @@ export default function VocaChallenge({ currentUser }) {
                     <Card className="space-y-6">
                         <div className="flex gap-4 items-center">
                             <select className="border-2 border-gray-200 rounded-xl p-3 font-bold text-gray-800 outline-none focus:border-purple-500 flex-1" value={adminSelectedClass} onChange={e => setAdminSelectedClass(e.target.value)}>
-                                <option value="">랭킹을 조회할 반을 선택하세요</option>
-                                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                <option value="">랭킹을 조회할 영어 반을 선택하세요</option>
+                                {englishClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                             </select>
-                            <Button onClick={handleClearRankings} variant="outline" className="border-red-200 text-red-600 hover:bg-red-50">랭킹 초기화</Button>
+                            <Button onClick={handleClearRankings} variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 font-bold whitespace-nowrap">랭킹 초기화</Button>
                         </div>
 
                         {adminSelectedClass && (
-                            <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
+                            <div className="bg-slate-900 rounded-3xl p-6 md:p-10 text-white shadow-2xl relative overflow-hidden">
                                 <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400"></div>
-                                <h3 className="text-2xl font-black text-center mb-6 text-yellow-400 flex items-center justify-center gap-2">
-                                    <Crown size={28}/> 명예의 전당
+                                <h3 className="text-3xl font-black text-center mb-8 text-yellow-400 flex items-center justify-center gap-3">
+                                    <Crown size={36}/> 명예의 전당
                                 </h3>
                                 
                                 {rankings.length === 0 ? (
-                                    <div className="text-center py-10 text-gray-500 font-bold">아직 챌린지에 참가한 학생이 없습니다.</div>
+                                    <div className="text-center py-10 text-gray-500 font-bold">아직 이 반에서 챌린지에 참가한 학생이 없습니다.</div>
                                 ) : (
-                                    <div className="space-y-2">
+                                    <div className="space-y-3 max-w-2xl mx-auto">
                                         {rankings.map((rank, idx) => (
-                                            <div key={rank.id} className="flex justify-between items-center bg-white/10 p-3 rounded-xl backdrop-blur-sm border border-white/5">
-                                                <div className="flex items-center gap-3">
-                                                    <span className={`w-8 text-center font-black ${idx === 0 ? 'text-yellow-400 text-xl' : idx === 1 ? 'text-gray-300 text-lg' : idx === 2 ? 'text-amber-600 text-lg' : 'text-gray-500'}`}>
+                                            <div key={rank.id} className="flex justify-between items-center bg-white/10 p-4 md:p-5 rounded-2xl backdrop-blur-sm border border-white/5 hover:bg-white/20 transition-colors">
+                                                <div className="flex items-center gap-4">
+                                                    <span className={`w-8 text-center font-black ${idx === 0 ? 'text-yellow-400 text-3xl drop-shadow-md' : idx === 1 ? 'text-gray-300 text-2xl' : idx === 2 ? 'text-amber-600 text-2xl' : 'text-gray-500 text-xl'}`}>
                                                         {idx + 1}
                                                     </span>
-                                                    <span className="font-bold text-white text-lg">{rank.studentName}</span>
+                                                    <span className="font-bold text-white text-xl">{rank.studentName}</span>
                                                 </div>
-                                                <span className="font-black text-xl text-yellow-400 tracking-wider">{rank.score.toLocaleString()} <span className="text-xs text-white/50 font-medium">점</span></span>
+                                                <div className="text-right">
+                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score.toLocaleString()}</span>
+                                                    <span className="text-sm text-yellow-400/50 font-bold ml-1">pt</span>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -666,7 +785,27 @@ export default function VocaChallenge({ currentUser }) {
     }
 
     return (
-        <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in pb-20">
+        <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in pb-20 relative">
+            
+            {/* 🚀 카운트다운 & 라운드 트랜지션 오버레이 */}
+            {overlayState === 'countdown' && (
+                <div className="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center animate-in fade-in duration-200">
+                    <div className="text-9xl font-black text-yellow-400 animate-bounce drop-shadow-[0_0_30px_rgba(250,204,21,0.6)]">
+                        {countdownNum}
+                    </div>
+                </div>
+            )}
+            
+            {overlayState === 'round' && (
+                <div className="fixed inset-0 bg-slate-900/95 z-50 flex flex-col items-center justify-center animate-in fade-in duration-200">
+                    <h2 className="text-6xl font-black text-blue-400 mb-6 drop-shadow-[0_0_20px_rgba(96,165,250,0.5)]">{roundInfo.round}라운드 시작!</h2>
+                    <p className="text-2xl font-bold text-white bg-white/10 px-6 py-3 rounded-full flex items-center gap-2">
+                        <Clock className="text-emerald-400"/> 문제당 <span className="text-emerald-400">{roundInfo.time}초</span>의 시간이 주어집니다.
+                    </p>
+                </div>
+            )}
+
+
             {/* 학생 - 인트로 화면 */}
             {gameState === 'intro' && (
                 <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-indigo-500/30">
@@ -676,7 +815,24 @@ export default function VocaChallenge({ currentUser }) {
                     <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">단어 관계<br/><span className="text-yellow-400">서바이벌</span></h1>
                     <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
                     
-                    <button onClick={startGame} className="bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-orange-950 font-black text-2xl py-4 px-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-2 z-10">
+                    {/* 🚀 Day 선택 UI 복원 */}
+                    <div className="w-full max-w-md bg-white/5 rounded-2xl p-5 border border-white/10 mb-8 z-10">
+                        <p className="text-sm font-bold text-indigo-300 mb-3">📚 학습할 범위를 선택하세요 (다중 선택)</p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                            {availableDays.map(d => (
+                                <button 
+                                    key={d} 
+                                    onClick={() => toggleDaySelection(d)}
+                                    className={`px-4 py-2 rounded-full font-bold text-sm transition-all ${selectedDays.includes(d) ? 'bg-indigo-500 text-white border border-indigo-400 shadow-md' : 'bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700'}`}
+                                >
+                                    Day {d}
+                                </button>
+                            ))}
+                        </div>
+                        <p className="text-[11px] text-white/40 mt-3 font-medium">* 범위를 많이 선택할수록 점수 배율(Bonus)이 증가합니다.</p>
+                    </div>
+
+                    <button onClick={handleStartClick} className="bg-gradient-to-r from-yellow-400 to-orange-500 hover:from-yellow-300 hover:to-orange-400 text-orange-950 font-black text-2xl py-4 px-12 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-2 z-10">
                         <Play fill="currentColor" size={24}/> 도전 시작하기
                     </button>
 
@@ -687,7 +843,7 @@ export default function VocaChallenge({ currentUser }) {
                                 rankings.slice(0, 5).map((r, i) => (
                                     <div key={r.id} className="flex justify-between text-sm items-center border-b border-white/5 pb-2">
                                         <span className="font-bold text-white/90">{i+1}. {r.studentName}</span>
-                                        <span className="font-mono text-yellow-200 font-bold">{r.score} pt</span>
+                                        <span className="font-mono text-yellow-200 font-bold">{r.score.toLocaleString()} pt</span>
                                     </div>
                                 ))
                             }
@@ -702,10 +858,10 @@ export default function VocaChallenge({ currentUser }) {
                     <div className="flex justify-between items-center mb-6">
                         <div className="flex flex-col">
                             <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Score</span>
-                            <span className="text-3xl font-black text-indigo-600 font-mono">{score}</span>
+                            <span className="text-3xl font-black text-indigo-600 font-mono">{score.toLocaleString()}</span>
                         </div>
-                        <div className={`flex flex-col items-end ${timeLeft <= 5 ? 'text-red-500 animate-pulse' : 'text-gray-800'}`}>
-                            <span className="text-xs font-bold uppercase tracking-wider">Time (Q.{questionNum})</span>
+                        <div className={`flex flex-col items-end ${timeLeft <= 3 ? 'text-red-500 animate-pulse' : 'text-gray-800'}`}>
+                            <span className="text-xs font-bold uppercase tracking-wider text-right">Round {getRoundConfig(questionNum).round} (Q.{questionNum})</span>
                             <span className="text-3xl font-black font-mono flex items-center gap-1"><Clock size={24}/> {timeLeft}s</span>
                         </div>
                     </div>
@@ -726,9 +882,10 @@ export default function VocaChallenge({ currentUser }) {
                                 <button 
                                     key={i} 
                                     onClick={() => handleAnswer(opt.isCorrect)}
-                                    className="bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-400 text-gray-800 hover:text-indigo-800 font-bold text-lg md:text-xl py-4 px-6 rounded-2xl transition-all active:scale-95 shadow-sm text-left break-words"
+                                    className="bg-white hover:bg-indigo-50 border-2 border-gray-200 hover:border-indigo-400 text-gray-800 hover:text-indigo-800 font-bold text-base md:text-xl py-4 px-6 rounded-2xl transition-all active:scale-95 shadow-sm text-left break-words flex items-center justify-between group"
                                 >
-                                    {opt.text}
+                                    <span>{opt.text}</span>
+                                    <ChevronRight className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400"/>
                                 </button>
                             ))}
                         </div>
@@ -746,7 +903,7 @@ export default function VocaChallenge({ currentUser }) {
                     <p className="text-indigo-200 font-medium mb-6">아쉽습니다. 당신의 최종 점수는...</p>
                     
                     <div className="text-7xl font-black text-yellow-400 font-mono mb-8 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]">
-                        {score}
+                        {score.toLocaleString()}
                     </div>
 
                     {/* 오답 노트 영역 */}
@@ -773,11 +930,11 @@ export default function VocaChallenge({ currentUser }) {
                     )}
 
                     <p className="text-sm text-gray-400 mb-8 bg-white/10 px-4 py-2 rounded-lg font-bold">
-                        {currentUser.name} 이름으로 명예의 전당에 자동 등록되었습니다.
+                        {currentUser.name} 이름으로 명예의 전당에 자동 등록되었습니다.<br/>(기존 기록보다 높을 경우에만 갱신됩니다)
                     </p>
 
-                    <button onClick={startGame} className="bg-white text-slate-900 font-black text-xl py-4 px-10 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95">
-                        다시 도전하기
+                    <button onClick={() => setGameState('intro')} className="bg-white text-slate-900 font-black text-xl py-4 px-10 rounded-full shadow-lg hover:shadow-xl transition-all hover:scale-105 active:scale-95">
+                        처음으로 돌아가기
                     </button>
                 </div>
             )}
