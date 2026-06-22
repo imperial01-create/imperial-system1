@@ -1,10 +1,11 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v5.0
-   - (🚀 CTO 패치: 제로 마찰(Zero Friction) UX 적용. 수동 저장 버튼을 없애고 최고 기록 달성 시 백그라운드 자동 동기화 적용)
-   - Firebase 비용 최적화: 신기록을 경신했을 때만 DB Update(Write)를 실행하여 과금을 극단적으로 방어합니다. */
+/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v4.0
+   - (🚀 CTO 패치: 낙관적 UI(Optimistic UI) 업데이트를 적용하여 게임 종료 즉시 도파민(성취감)을 제공합니다.)
+   - Firebase 최적화: 불필요한 Read 쿼리를 제거하고 메모리 캐싱을 통해 과금을 방어합니다. 
+   - UX 개선: '나의 최고 기록' 패널을 추가하여 중하위권 학생들의 동기부여를 유도합니다. */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, addDoc, orderBy, limit, deleteDoc, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Card, Button, Badge } from '../components/UI';
@@ -251,7 +252,7 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 (수동 저장 UI 완전 제거, 자동 동기화 적용)
+// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 HTML (내부적으로 React와 통신)
 const GET_GAME_HTML = () => `
 <!DOCTYPE html>
 <html lang="ko">
@@ -364,7 +365,7 @@ const GET_GAME_HTML = () => `
     </div>
   </div>
 
-  <!-- 🚀 결과 화면 (버튼 UX 분리 및 제로 마찰 UI) -->
+  <!-- 결과 화면 -->
   <div id="resultScreen" class="screen" style="justify-content: center;">
     <div class="result-title" id="resultTitle">💀 게임 오버 💀</div>
     <div class="result-msg" id="resultMsg">당신의 최종 점수는...</div>
@@ -382,14 +383,13 @@ const GET_GAME_HTML = () => `
       <div id="expOptions" class="exp-options"></div>
     </div>
 
-    <!-- 🚀 액션 버튼 그룹 -->
+    <!-- 액션 버튼 -->
     <div class="btn-group">
       <button onclick="retryGame()" class="action-btn btn-primary">🔥 챌린지 한 번 더!</button>
       <button onclick="exitGame()" class="action-btn btn-secondary">🏆 명예의 전당 보러가기 (나가기)</button>
     </div>
   </div>
 
-  <!-- 오버레이 요소들 -->
   <div id="countdownOverlay" class="overlay">
     <div id="countdownNumber" class="countdown-text">3</div>
   </div>
@@ -660,7 +660,7 @@ const GET_GAME_HTML = () => `
              targetWordList = currentVocaData.filter(w => w.syn);
              backgroundWordList = currentVocaData.filter(w => w.syn);
              shuffle(targetWordList); shuffle(backgroundWordList);
-             const fallbackTarget = targetWordList[0];
+             const fallbackTarget = targetWordList[0] || currentVocaData[0];
              currentTargetWordData = fallbackTarget;
              currentCorrectAnswerText = fallbackTarget.word + ' - ' + pickOneRandomWord(fallbackTarget.syn);
              options.push({ text: currentCorrectAnswerText, isCorrect: true });
@@ -711,7 +711,7 @@ const GET_GAME_HTML = () => `
     function updateTimerUI() {
       const timeText = document.getElementById('timeText');
       const timerBar = document.getElementById('timerBar');
-      timeText.innerText = timeLeft + '초 남음';
+      timeText.innerText = timeLeft + 's';
       const percentage = (timeLeft / maxTime) * 100;
       timerBar.style.width = percentage + '%';
       if (timeLeft <= 3) {
@@ -781,16 +781,14 @@ const GET_GAME_HTML = () => `
         expBox.style.display = "block";
       }
 
-      // 🚀 백그라운드에서 React(부모) 창으로 점수 조용히 전송 (자동 저장)
+      // 🚀 백그라운드에서 React(부모) 창으로 점수 조용히 전송
       window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
     }
 
-    // 🚀 액션 버튼 1: 나가기 (React Iframe 닫기)
     function exitGame() {
       window.parent.postMessage({ type: 'CLOSE_GAME' }, '*');
     }
 
-    // 🚀 액션 버튼 2: 재도전 (Iframe 내에서 인트로 화면으로 복귀)
     function retryGame() {
       document.getElementById('resultScreen').classList.remove('active');
       document.getElementById('startScreen').classList.add('active');
@@ -817,6 +815,9 @@ export default function VocaChallenge({ currentUser }) {
 
     const [studentClassId, setStudentClassId] = useState(null); 
     const [isGameActive, setIsGameActive] = useState(false);
+    
+    // 🚀 [CTO 패치] 나의 최고 기록 상태 추가 (낙관적 UI용)
+    const [myRecordData, setMyRecordData] = useState({ score: 0, docId: null });
 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'voca_challenge'), (docSnap) => {
@@ -861,6 +862,24 @@ export default function VocaChallenge({ currentUser }) {
         return () => { if (unsub) unsub(); }
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
+    // 🚀 [CTO 패치] 나의 최고 기록(1개 문서)만 가볍게 읽어옵니다 (비용 최적화)
+    useEffect(() => {
+        if (!isStudent || !studentClassId) return;
+        const q = query(
+            collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
+            where('classId', '==', studentClassId),
+            where('studentId', '==', currentUser.id)
+        );
+        const unsub = onSnapshot(q, snap => {
+            if (!snap.empty) {
+                setMyRecordData({ score: snap.docs[0].data().score || 0, docId: snap.docs[0].id });
+            } else {
+                setMyRecordData({ score: 0, docId: null });
+            }
+        });
+        return unsub;
+    }, [isStudent, studentClassId, currentUser.id]);
+
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
@@ -881,69 +900,64 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
-    // 🚀 [CTO 패치] useRef를 활용한 방탄 통신망 (Stale Closure 완벽 방어)
+    // 🚀 [CTO 패치] 낙관적 UI(Optimistic UI) 및 Read-Cost 0원 통신망 구축
     const studentClassIdRef = useRef(studentClassId);
     const currentUserRef = useRef(currentUser);
     const classesRef = useRef(classes);
+    const myRecordDataRef = useRef(myRecordData); // Firebase 조회 비용 제거를 위한 로컬 캐시
 
-    // 컴포넌트가 리렌더링될 때마다 최신 값을 거울(Ref)에 즉시 동기화합니다.
     useEffect(() => { studentClassIdRef.current = studentClassId; }, [studentClassId]);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
     useEffect(() => { classesRef.current = classes; }, [classes]);
+    useEffect(() => { myRecordDataRef.current = myRecordData; }, [myRecordData]);
 
     useEffect(() => {
         const handleMessage = async (event) => {
             if (!event.data) return;
 
-            // 이벤트 1: 나가기 버튼 누름
             if (event.data.type === 'CLOSE_GAME') {
                 setIsGameActive(false);
                 return;
             }
 
-            // 이벤트 2: 게임 오버 시 찰나의 순간에 백그라운드 최고 기록 경신 처리
             if (event.data.type === 'VOCA_GAME_OVER') {
                 const finalScore = Number(event.data.score) || 0;
-                if (finalScore === 0) return; // 0점은 랭킹판 혼탁 방지를 위해 버림 (최적화)
+                if (finalScore === 0) return; 
 
                 try {
-                    // 과거 스냅샷이 아닌, '현재 순간'의 거울(Ref) 값을 읽어옵니다.
                     const sClassId = studentClassIdRef.current;
                     const cUser = currentUserRef.current;
                     const cList = classesRef.current;
+                    const { score: currentBest, docId: myDocId } = myRecordDataRef.current;
                     
                     if (!sClassId || !cUser || !cUser.id) return; 
 
                     const myClassObj = cList.find(c => c.id === sClassId);
                     
-                    const q = query(
-                        collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
-                        where('classId', '==', sClassId),
-                        where('studentId', '==', cUser.id)
-                    );
-                    const snap = await getDocs(q);
-                    
-                    if (!snap.empty) {
-                        const docRef = snap.docs[0].ref;
-                        const pastScore = snap.docs[0].data().score || 0;
-                        // 과거 내 기록보다 높은 신기록일 때만 DB에 덮어씁니다. (불필요한 과금 100% 방어)
-                        if (finalScore > pastScore) {
-                            await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
+                    // 🚀 Firebase Read 쿼리($)를 제거하고, 메모리에 캐싱된 내 기록과 즉시 비교합니다.
+                    if (finalScore > currentBest) {
+                        // 1. 낙관적 UI 업데이트 (학생에게 0.001초 만에 피드백 제공)
+                        setMyRecordData({ score: finalScore, docId: myDocId }); 
+                        
+                        // 2. 백그라운드 DB 덮어쓰기 (Write 연산만 수행)
+                        if (myDocId) {
+                            await updateDoc(doc(db, `artifacts/${APP_ID}/public/data/voca_rankings`, myDocId), { 
+                                score: finalScore, 
+                                updatedAt: serverTimestamp() 
+                            });
+                        } else {
+                            await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
+                                classId: sClassId,
+                                className: myClassObj?.name || '알수없음',
+                                studentId: cUser.id,
+                                studentName: cUser.name,
+                                score: finalScore,
+                                createdAt: serverTimestamp()
+                            });
                         }
-                    } else {
-                        await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
-                            classId: sClassId,
-                            className: myClassObj?.name || '알수없음',
-                            studentId: cUser.id,
-                            studentName: cUser.name,
-                            score: finalScore,
-                            createdAt: serverTimestamp()
-                        });
                     }
-                    
-                    // 🚀 주의: 게임 흐름을 방해하는 alert는 의도적으로 제거했습니다. 백그라운드에서 조용히 저장됩니다.
                 } catch (e) {
-                    console.error("Score auto-save error (Background):", e);
+                    console.error("Optimistic score sync error:", e);
                 }
             }
         };
@@ -1084,15 +1098,21 @@ export default function VocaChallenge({ currentUser }) {
 
                 <div className="w-full mt-12 bg-white/5 rounded-2xl p-5 border border-white/10 text-left z-10">
                     <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 실시간 명예의 전당 TOP 5</h3>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                         {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
                             rankings.slice(0, 5).map((r, i) => (
-                                <div key={r.id} className="flex justify-between text-sm items-center border-b border-white/5 pb-2">
-                                    <span className="font-bold text-white/90">{i+1}. {r.studentName}</span>
-                                    <span className="font-mono text-yellow-200 font-bold">{r.score?.toLocaleString() || 0} pt</span>
+                                <div key={r.id} className={`flex justify-between text-sm items-center border-b pb-2 ${r.studentId === currentUser.id ? 'border-yellow-400/50' : 'border-white/5'}`}>
+                                    <span className={`font-bold ${r.studentId === currentUser.id ? 'text-yellow-400' : 'text-white/90'}`}>{i+1}. {r.studentName} {r.studentId === currentUser.id && '(나)'}</span>
+                                    <span className={`font-mono font-bold ${r.studentId === currentUser.id ? 'text-yellow-400' : 'text-yellow-200'}`}>{r.score?.toLocaleString() || 0} pt</span>
                                 </div>
                             ))
                         }
+                    </div>
+
+                    {/* 🚀 [CTO 패치] 나의 최고 기록 패널 (동기부여 제공) */}
+                    <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center bg-indigo-500/20 p-4 rounded-xl border border-indigo-400/30">
+                        <span className="font-bold text-indigo-200">⭐ 나의 최고 기록</span>
+                        <span className="font-black text-2xl text-white font-mono">{myRecordData.score.toLocaleString()} pt</span>
                     </div>
                 </div>
             </div>
