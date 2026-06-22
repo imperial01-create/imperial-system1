@@ -1,6 +1,6 @@
 /* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.0
-   - (🚀 CTO 패치: 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재)
-   - 최고 점수 경신 시에만 DB를 업데이트하여 Firestore 비용을 최적화하고 랭킹 도배를 방지합니다. */
+   - (🚀 CTO 패치: Cloudflare 빌드 충돌을 일으키는 eslint 주석을 완벽히 제거한 클린 빌드 버전입니다.)
+   - 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재 */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen, ChevronRight } from 'lucide-react';
@@ -251,7 +251,6 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] CSV에서 Day(범위) 정보를 함께 추출하는 파싱 엔진
 const processRawCSV = (csvText) => {
     const rows = [];
     let currentRow = [];
@@ -294,7 +293,6 @@ const processRawCSV = (csvText) => {
       const antStr = row[4];
       if (!word) continue;
       
-      // Day 추출 로직 (예: NVH2_D08_281 -> Day 8)
       let dayMatch = wordId.match(/_D(\d+)_/);
       let dayNum = dayMatch ? parseInt(dayMatch[1], 10) : 1;
 
@@ -339,7 +337,6 @@ export default function VocaChallenge({ currentUser }) {
     const { classes, enrollments } = useData();
     const isStudent = currentUser.role === 'student';
 
-    // 🚀 [CTO 패치] 영어 과목(Subject) 반만 필터링 (Zero Trust)
     const englishClasses = useMemo(() => {
         return classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
     }, [classes]);
@@ -351,8 +348,8 @@ export default function VocaChallenge({ currentUser }) {
     const [rankings, setRankings] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const [gameState, setGameState] = useState('intro'); // 'intro', 'playing', 'result'
-    const [overlayState, setOverlayState] = useState('none'); // 'none', 'countdown', 'round'
+    const [gameState, setGameState] = useState('intro'); 
+    const [overlayState, setOverlayState] = useState('none'); 
     const [countdownNum, setCountdownNum] = useState(3);
     const [roundInfo, setRoundInfo] = useState({ round: 1, time: 15 });
 
@@ -365,13 +362,11 @@ export default function VocaChallenge({ currentUser }) {
 
     const vocaDataAll = useMemo(() => processRawCSV(RAW_CSV_DATA), []);
     
-    // 🚀 [CTO 패치] 학습 범위(Day) 선택 상태
     const availableDays = useMemo(() => {
         return [...new Set(vocaDataAll.map(v => v.day))].sort((a,b) => a-b);
     }, [vocaDataAll]);
     const [selectedDays, setSelectedDays] = useState([]);
 
-    // 현재 선택된 Day의 단어 데이터
     const activeVocaData = useMemo(() => {
         return vocaDataAll.filter(v => selectedDays.includes(v.day));
     }, [vocaDataAll, selectedDays]);
@@ -384,10 +379,8 @@ export default function VocaChallenge({ currentUser }) {
             script.async = true;
             document.body.appendChild(script);
         }
-        // 초기 Day 전체 선택
         setSelectedDays(availableDays);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [availableDays]);
 
     useEffect(() => {
         const unsub = onSnapshot(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'voca_challenge'), (docSnap) => {
@@ -433,9 +426,6 @@ export default function VocaChallenge({ currentUser }) {
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
 
-    // ==========================================
-    // 강사/관리자 로직
-    // ==========================================
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
@@ -456,17 +446,12 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
-
-    // ==========================================
-    // 학생 게임 로직 (동적 스코어링 & 라운드)
-    // ==========================================
     const toggleDaySelection = (day) => {
         setSelectedDays(prev => 
             prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a,b)=>a-b)
         );
     };
 
-    // 🚀 동적 라운드 설정 및 스코어링 (원장님 기획 완벽 반영)
     const getRoundConfig = (qNum) => {
         const multiplier = selectedDays.length || 1;
         const basePoints = multiplier * 10;
@@ -602,7 +587,6 @@ export default function VocaChallenge({ currentUser }) {
             const nextQNum = questionNum + 1;
             setQuestionNum(nextQNum);
 
-            // 라운드 진입 체크 (11번, 21번 문제일 때 트랜지션)
             if (nextQNum === 11 || nextQNum === 21) {
                 const nextConfig = getRoundConfig(nextQNum);
                 setOverlayState('round');
@@ -616,12 +600,10 @@ export default function VocaChallenge({ currentUser }) {
                 generateQuestion(nextQNum);
             }
         } else {
-            // 🚀 서든 데스 룰 (한 번 틀리면 즉시 아웃)
             endGame(false); 
         }
     };
 
-    // 🚀 [CTO 패치] 리더보드 N+1 도배 방지 및 최고점수 업데이트 로직
     const saveRankingToDB = async (finalScore) => {
         const myClassObj = classes.find(c => c.id === studentClassId);
         const className = myClassObj?.name || '알수없음';
@@ -635,14 +617,12 @@ export default function VocaChallenge({ currentUser }) {
             const snap = await getDocs(q);
             
             if (!snap.empty) {
-                // 기존 기록이 있을 경우 점수가 더 높을 때만 업데이트
                 const docRef = snap.docs[0].ref;
                 const pastScore = snap.docs[0].data().score;
                 if (finalScore > pastScore) {
                     await updateDoc(docRef, { score: finalScore, updatedAt: serverTimestamp() });
                 }
             } else {
-                // 첫 기록일 경우 신규 생성
                 await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
                     classId: studentClassId,
                     className: className,
@@ -668,19 +648,13 @@ export default function VocaChallenge({ currentUser }) {
         if (gameState === 'playing' && overlayState === 'none' && timeLeft > 0) {
             timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
         } else if (gameState === 'playing' && overlayState === 'none' && timeLeft === 0) {
-            endGame(false); // 시간 초과 시 아웃
+            endGame(false); 
         }
         return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gameState, overlayState, timeLeft]);
 
-
-    // ==========================================
-    // UI 렌더링
-    // ==========================================
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
 
-    // --- 강사/관리자 뷰 ---
     if (!isStudent) {
         return (
             <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in relative">
@@ -773,7 +747,6 @@ export default function VocaChallenge({ currentUser }) {
         );
     }
 
-    // --- 학생 뷰 ---
     if (!studentClassId) {
         return (
             <div className="flex flex-col items-center justify-center h-[70vh] text-gray-400 space-y-4 animate-in fade-in">
@@ -787,7 +760,6 @@ export default function VocaChallenge({ currentUser }) {
     return (
         <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in pb-20 relative">
             
-            {/* 🚀 카운트다운 & 라운드 트랜지션 오버레이 */}
             {overlayState === 'countdown' && (
                 <div className="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center animate-in fade-in duration-200">
                     <div className="text-9xl font-black text-yellow-400 animate-bounce drop-shadow-[0_0_30px_rgba(250,204,21,0.6)]">
@@ -805,8 +777,6 @@ export default function VocaChallenge({ currentUser }) {
                 </div>
             )}
 
-
-            {/* 학생 - 인트로 화면 */}
             {gameState === 'intro' && (
                 <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-indigo-500/30">
                     <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200}/></div>
@@ -815,7 +785,6 @@ export default function VocaChallenge({ currentUser }) {
                     <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">단어 관계<br/><span className="text-yellow-400">서바이벌</span></h1>
                     <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
                     
-                    {/* 🚀 Day 선택 UI 복원 */}
                     <div className="w-full max-w-md bg-white/5 rounded-2xl p-5 border border-white/10 mb-8 z-10">
                         <p className="text-sm font-bold text-indigo-300 mb-3">📚 학습할 범위를 선택하세요 (다중 선택)</p>
                         <div className="flex flex-wrap gap-2 justify-center">
@@ -852,7 +821,6 @@ export default function VocaChallenge({ currentUser }) {
                 </div>
             )}
 
-            {/* 학생 - 게임 플레이 화면 */}
             {gameState === 'playing' && (
                 <div className="bg-white rounded-3xl p-6 md:p-10 shadow-2xl min-h-[70vh] flex flex-col border-t-8 border-indigo-600">
                     <div className="flex justify-between items-center mb-6">
@@ -893,7 +861,6 @@ export default function VocaChallenge({ currentUser }) {
                 </div>
             )}
 
-            {/* 학생 - 결과 화면 (오답 노트 포함) */}
             {gameState === 'result' && (
                 <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-rose-500">
                     <div className="bg-rose-500 text-white p-4 rounded-full mb-6 animate-pulse">
@@ -906,7 +873,6 @@ export default function VocaChallenge({ currentUser }) {
                         {score.toLocaleString()}
                     </div>
 
-                    {/* 오답 노트 영역 */}
                     {currentQuestion && currentQuestion.targetWordData && (
                         <div className="w-full max-w-lg bg-white rounded-2xl p-6 text-left mb-8 shadow-xl">
                             <h3 className="text-rose-600 font-black text-lg mb-3 flex items-center gap-2"><BookOpen size={20}/> 핵심 단어 오답 노트</h3>
