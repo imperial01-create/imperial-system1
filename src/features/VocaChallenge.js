@@ -1,5 +1,5 @@
 /* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v2.1
-   - (🚀 CTO 패치: 런타임 에러(White Screen)를 원천 차단하는 방탄(Bulletproof) 설계 및 예외 처리 도입)
+   - (🚀 CTO 패치: Cloudflare 빌드 크래시를 유발하는 모든 eslint 예외 처리 주석을 완벽히 제거했습니다.)
    - 과목 자동 필터링, Day 범위 기반 동적 스코어링, 라운드 트랜지션 및 랭킹 무결성 로직 탑재 */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -332,7 +332,6 @@ const shuffleArray = (array) => {
     return arr;
 };
 
-// 🚀 안전한 배열 랜덤 추출 함수 (빈 배열 시 예외 처리)
 const safePick = (arr) => arr && arr.length > 0 ? arr[Math.floor(Math.random() * arr.length)] : "없음";
 
 export default function VocaChallenge({ currentUser }) {
@@ -498,7 +497,6 @@ export default function VocaChallenge({ currentUser }) {
         }, 2500);
     };
 
-    // 🚀 [CTO 패치] 방탄 에러 방어(Try-Catch) 및 안전 변수 추출 로직
     const generateQuestion = (qNum) => {
         try {
             const config = getRoundConfig(qNum);
@@ -560,7 +558,6 @@ export default function VocaChallenge({ currentUser }) {
                     bgPool = activeVocaData.filter(w => w.syn.length > 0);
                 }
 
-                // 🚀 빈 풀(Empty Pool)에서 추출 시 undefined 방지
                 let targetData = shuffleArray(targetPool)[0];
                 if (!targetData) targetData = activeVocaData[0]; 
                 
@@ -583,7 +580,6 @@ export default function VocaChallenge({ currentUser }) {
                 }
             }
 
-            // 만약 옵션이 5개가 안 채워졌을 경우의 보험
             while (options.length < 5) {
                 options.push({ text: "데이터 부족 (임시 보기)", isCorrect: false });
             }
@@ -593,7 +589,6 @@ export default function VocaChallenge({ currentUser }) {
 
         } catch (error) {
             console.error("Voca Challenge Engine Error:", error);
-            // 🚀 시스템 크래시를 막고 임시 문제 출력
             setCurrentQuestion({
                 title: "⚠️ 단어 추출 오류가 발생했습니다. (임시 문제)",
                 options: [
@@ -684,7 +679,6 @@ export default function VocaChallenge({ currentUser }) {
             endGame(false); 
         }
         return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gameState, overlayState, timeLeft]);
 
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-blue-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
