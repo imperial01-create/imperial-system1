@@ -8,7 +8,7 @@ import {
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
   Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2, UserCheck,
-  ChevronDown, ChevronRight
+  ChevronDown, ChevronRight, Gamepad2 // 🚀 여기에 Gamepad2 추가
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -376,8 +376,7 @@ const Dashboard = ({ currentUser }) => {
         { path: '/voca', label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어'), desc: currentUser.role === 'student' ? '나만의 맞춤형 단어장과 숨겨진 약점을 투명하게 확인하세요.' : '영단어 시험지를 발급하고 고속 채점을 통해 스탯을 관리합니다.', color: 'text-violet-600', bg: 'bg-violet-100', hoverBg: 'group-hover:bg-violet-600' },
         
         // 🚀 [CTO 패치] 영단어 챌린지 대시보드 카드 추가
-        { path: '/voca-challenge', label: '영단어 챌린지', icon: Target, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'], desc: '게이미피케이션 기반 영단어 암기 서바이벌 챌린지입니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
-        
+        { path: '/voca-challenge', label: '영단어 챌린지', icon: Gamepad2, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'], desc: '게이미피케이션 기반 영단어 암기 서바이벌 챌린지입니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
         { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'], desc: '학원의 다양한 소식과 커뮤니티 랭킹을 확인합니다.', color: 'text-amber-600', bg: 'bg-amber-100', hoverBg: 'group-hover:bg-amber-600' },
         { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'], desc: '성적표, 결제 안내 등 대량 문자를 템플릿으로 발송합니다.', color: 'text-red-600', bg: 'bg-red-100', hoverBg: 'group-hover:bg-red-600' },
         { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'], desc: '학원 구성원(학생, 학부모, 강사 등)의 계정과 권한을 관리합니다.', color: 'text-slate-600', bg: 'bg-slate-100', hoverBg: 'group-hover:bg-slate-600' },
@@ -453,7 +452,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
     { category: '학습 및 수강', path: '/voca', label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어') },
     
     // 🚀 [CTO 패치] 영단어 챌린지 사이드바 메뉴 추가
-    { category: '학습 및 수강', path: '/voca-challenge', label: '영단어 챌린지', icon: Target, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
+    { category: '학습 및 수강', path: '/voca-challenge', label: '영단어 챌린지', icon: Gamepad2, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
     
     { category: '학습 및 수강', path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
     { category: '학습 및 수강', path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },

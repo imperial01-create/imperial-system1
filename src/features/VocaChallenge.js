@@ -4,7 +4,7 @@
    - 틀리는 순간 즉시 게임이 종료되는 서든 데스(Sudden Death) 룰 적용 */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { Trophy, Play, Clock, Flame, Lock, Crown, Settings, AlertCircle, CheckCircle, XCircle, Loader, BookOpen } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where, addDoc, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
