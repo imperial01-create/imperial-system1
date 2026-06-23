@@ -275,7 +275,6 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 // ============================================================================
 // [기능 8] Gemini Vision AI 기반 시험지 정밀 분석기
 // ============================================================================
-// 이미 글로벌 리전이 선언되었으므로 옵션 병합
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
 
@@ -335,5 +334,116 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async
     } catch (error) {
         console.error("🔥 Gemini API Error:", error);
         throw new HttpsError('failed-precondition', `AI 분석 중단됨: ${error.message}`);
+    }
+});
+
+// ============================================================================
+// 🚀 [기능 9] S25 울트라 통화 요약 AI 파싱 및 3-Way 자동 라우팅 엔진
+// ============================================================================
+exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_call_logs/{logId}`, async (event) => {
+    const snap = event.data;
+    if (!snap) return null;
+    
+    const rawData = snap.data();
+    const studentId = rawData.studentId;
+    const studentName = rawData.studentName;
+    const rawText = rawData.rawText;
+
+    // 대기 상태(pending_ai_parsing)인 데이터만 처리
+    if (!rawText || rawData.status !== 'pending_ai_parsing') return null;
+
+    try {
+        const genAI = new GoogleGenerativeAI(getGeminiKey());
+        const model = genAI.getGenerativeModel({ 
+            model: "gemini-1.5-flash",
+            generationConfig: { responseMimeType: "application/json" } // JSON 강제 출력으로 파싱 에러 원천 차단
+        });
+
+        const prompt = `
+        너는 학원 데스크의 통화 요약본을 분석하는 AI 어시스턴트야.
+        다음 텍스트를 분석하여 지정된 JSON 형식으로만 반환해.
+        
+        텍스트: "${rawText}"
+        
+        [출력 JSON 구조 및 조건]
+        {
+          "dailyAttendance": {
+            "status": "absent", // "absent" 또는 "late" 중 하나 (해당 없으면 null)
+            "reason": "결석/지각 사유 짧게 요약"
+          },
+          "longTermContext": {
+            "type": "medical_psych", // "medical_psych", "parental", "emotional", "admin", "general" 중 하나 (해당 없으면 null)
+            "tag": "3~4단어 이내 핵심 (예: 영어 학습 편식)",
+            "message": "강사에게 전달할 핵심 내용 1~2줄 요약"
+          },
+          "task": {
+            "title": "강사/조교가 처리해야 할 행동 지침 (해당 없으면 null)"
+          }
+        }
+        `;
+
+        const result = await model.generateContent(prompt);
+        const parsedData = JSON.parse(result.response.text());
+
+        const db = admin.firestore();
+        const batch = db.batch();
+        
+        // KST(한국 시간) 기준으로 날짜 계산
+        const now = new Date();
+        const kstOffset = 9 * 60 * 60 * 1000;
+        const kstDate = new Date(now.getTime() + kstOffset);
+        const dateStr = `${kstDate.getUTCFullYear()}-${String(kstDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kstDate.getUTCDate()).padStart(2, '0')}`;
+
+        // [경로 A] 당일 출결 반영 (일별 운영 관제 즉시 반영)
+        if (parsedData.dailyAttendance && parsedData.dailyAttendance.status) {
+            const attRef = db.collection(`artifacts/${APP_ID}/public/data/attendance_logs`).doc(`${dateStr}_${studentId}`);
+            batch.set(attRef, {
+                studentId: studentId,
+                date: dateStr,
+                status: parsedData.dailyAttendance.status,
+                reason: parsedData.dailyAttendance.reason,
+                method: 'ai_call_log',
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+        }
+
+        // [경로 B] 장기 CRM 컨텍스트 (강사 화면에 뱃지로 뜰 데이터) - 덮어쓰기 병합
+        if (parsedData.longTermContext && parsedData.longTermContext.type) {
+            const ctxRef = db.collection(`artifacts/${APP_ID}/public/data/student_context`).doc(studentId);
+            batch.set(ctxRef, {
+                studentId: studentId,
+                studentName: studentName,
+                type: parsedData.longTermContext.type,
+                tag: parsedData.longTermContext.tag,
+                message: parsedData.longTermContext.message,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+        }
+
+        // [경로 C] 선생님/조교 할 일 (Task Board 연동)
+        if (parsedData.task && parsedData.task.title) {
+            const taskRef = db.collection(`artifacts/${APP_ID}/public/data/clinic_tasks`).doc();
+            batch.set(taskRef, {
+                studentId: studentId,
+                studentName: studentName,
+                taskName: parsedData.task.title,
+                status: 'pending',
+                source: 'ai_call_log',
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+        }
+
+        // [완료 처리] 원본 로그 상태 업데이트
+        batch.update(event.data.ref, { 
+            status: 'parsed_success',
+            parsedResult: parsedData 
+        });
+
+        await batch.commit();
+        console.log(`[Success] AI Routing completed for student: ${studentName}`);
+
+    } catch (error) {
+        console.error("🔥 AI Parsing failed:", error);
+        await event.data.ref.update({ status: 'error', errorMsg: error.message });
     }
 });

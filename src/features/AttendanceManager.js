@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v14.0 (CRM 2.0 탑재)
-   1. AI 통화 로그 연동 (CRM): S25 Ultra에서 전송된 통화 요약본이 학생별 [학습/정서/학부모/행정] 4대 태그로 분류되어 노출됩니다.
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v14.1 (CRM 2.0 실시간 연동)
+   1. AI 통화 로그 연동 (CRM): S25 Ultra에서 전송된 통화 요약본이 실시간(Real-time)으로 반영됩니다.
    2. 인지 부하 제어: 강사들은 수업 전 '일별 운영 관제' 탭에서 학생 이름 밑에 달린 AI 태그만 보고도 오늘 어떻게 학생을 대해야 할지 1초 만에 파악합니다.
-   🚀 CTO 최적화: 툴팁(Tooltip)을 이용해 텍스트가 UI를 해치지 않도록 숨김 처리했으며, O(1) 매핑으로 렌더링 성능 저하를 막았습니다. */
+   🚀 CTO 최적화: 가짜 데이터(Mock)를 제거하고 Firestore 실시간 구독(onSnapshot)으로 완벽 교체했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -65,7 +65,7 @@ export default function AttendanceManager({ currentUser }) {
     const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
 
-    // 🚀 [CTO 아키텍처] S25 울트라 통화 요약본 (가상 데이터 스키마 - 실제 DB 연동 전 UI 테스트용)
+    // 🚀 [CTO 패치] 서버에서 수신받을 실제 AI 통화 요약(CRM) 데이터
     const [aiInsights, setAiInsights] = useState([]);
 
     const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -106,7 +106,7 @@ export default function AttendanceManager({ currentUser }) {
         return teacherColorMap[name] || 'bg-gray-100 border-gray-300 text-gray-800';
     };
 
-    // 실시간 데이터 구독 갱신
+    // 실시간 데이터 구독 갱신 (출결, 면제, 세션)
     useEffect(() => {
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', selectedDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
@@ -128,23 +128,15 @@ export default function AttendanceManager({ currentUser }) {
         return () => unsubSession();
     }, [selectedDateStr]);
 
-    // 🚀 [CTO 패치] AI Insight(콜로그) 데이터 로드 시뮬레이션
+    // 🚀 [CTO 패치] AI CRM 데이터 실시간 구독 연결 (진짜 데이터)
     useEffect(() => {
-        // 실제로는 Firebase Firestore에서 'student_context' 컬렉션을 구독합니다.
-        // 현재는 UI 시각화를 위해 가상의 데이터를 생성합니다.
-        const mockAiData = [
-            { studentId: 'student_1', type: 'medical_psych', tag: 'ADHD 성향', message: '집중력이 짧으니 푸시보다는 온화한 칭찬 유도 요망' },
-            { studentId: 'student_2', type: 'parental', tag: '성적 예민', message: '어머니께서 성적 하락에 예민하심. 테스트 결과 중심 피드백 필요' },
-            { studentId: 'student_3', type: 'emotional', tag: '교우 관계', message: '어제 친구와 다툼. 우울해 보이니 조용한 자리 배정 요망' },
-            { studentId: 'student_4', type: 'admin', tag: '교재 수령', message: '오늘 학원 등원 시 데스크에서 새 교재 수령해야 함' }
-        ];
-        // 실제 운영 환경에서는 users 배열을 기반으로 임의 매핑 (시연용)
-        const mappedInsights = users.filter(u => u.role === 'student').slice(0, 4).map((u, i) => ({
-            ...mockAiData[i],
-            studentId: u.id
-        }));
-        setAiInsights(mappedInsights);
-    }, [users]);
+        const qContext = query(collection(db, `artifacts/${APP_ID}/public/data/student_context`));
+        const unsubContext = onSnapshot(qContext, s => {
+            const insights = s.docs.map(d => ({ id: d.id, ...d.data() }));
+            setAiInsights(insights);
+        });
+        return () => unsubContext();
+    }, []);
 
     useEffect(() => {
         if (activeTab === 'student' && selectedStudentId) {
@@ -204,7 +196,7 @@ export default function AttendanceManager({ currentUser }) {
                 totalExpected++; 
             }
 
-            // 🚀 [CTO 패치] 학생 데이터에 AI Insight(통화 요약본) 매핑
+            // 🚀 [CTO 패치] 서버에서 온 진짜 AI Insight 매핑
             const insight = aiInsights.find(ai => ai.studentId === enroll.studentId);
 
             const studentData = { 
@@ -630,7 +622,7 @@ export default function AttendanceManager({ currentUser }) {
                                                     </div>
                                                 </div>
 
-                                                {/* 🚀 [CTO 패치] 일별 운영 관제에 AI 인사이트 CRM 뱃지 시각화 적용 */}
+                                                {/* 🚀 [CTO 패치] AI Insight(콜로그) 뱃지 시각화 적용 */}
                                                 <div className="flex flex-wrap gap-2">
                                                     {group.students.map(student => {
                                                         const insightUI = student.insight ? getInsightUI(student.insight.type) : null;
