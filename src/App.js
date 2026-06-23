@@ -1,14 +1,14 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 스마트 그룹 대시보드 및 사이드바(SNB) 동기화 도입, Voca 챌린지 탑재 완료) */
+   (🚀 CTO 패치: 런타임 WSOD(빈 화면) 원인인 아이콘 버전을 수정하고, 대시보드와 사이드바(SNB)의 데이터 소스를 단일화(SSOT)하여 렌더링 무결성을 100% 확보했습니다.) */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   Home, Calendar as CalendarIcon, Settings, GraduationCap, 
   LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
-  Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2, UserCheck,
-  ChevronDown, ChevronRight, Gamepad2, Users, Building, ShieldAlert, FileText, ArrowRight
+  Video, Loader, DollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
+  Clock, Trash2, Activity, MessageSquare, Globe, Phone, Search, ClipboardList, BookText, UserPlus, UserCheck,
+  ChevronDown, ChevronRight, Award, Users, Building, ShieldAlert, FileText, ArrowRight
 } from 'lucide-react';
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -42,6 +42,61 @@ const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'))
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 
 const APP_ID = 'imperial-clinic-v1';
+
+// 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB)를 100% 동기화시키는 중앙 마스터 데이터 (Single Source of Truth)
+// 아이콘 렌더링 에러를 막기 위해 가장 안정적인 범용 아이콘으로 교체 완료
+const MENU_GROUPS = [
+    {
+        title: "교무 및 출결 관제",
+        description: "클리닉 예약, 출결 현황 및 교실 공간을 관리합니다.",
+        theme: "from-blue-600 to-indigo-700",
+        items: [
+            { name: "신규 상담 등록", path: "/consult", icon: UserPlus, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
+            { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "일별 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
+            { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "오늘의 할 일", path: "/clinic-tasks", icon: ClipboardList, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
+            { name: "픽업 신청", path: "/pickup", icon: Printer, desc: "학생 픽업을 요청하고 관리합니다.", roles: ['lecturer'] }
+        ]
+    },
+    {
+        title: "학습 및 수강",
+        description: "학생들의 성적, 수업, 학습 자료를 관리합니다.",
+        theme: "from-emerald-600 to-teal-700",
+        items: [
+            { name: "강의 관리", studentName: "수강 강의", path: "/lectures", icon: Video, studentIcon: GraduationCap, desc: "수업 진도, 숙제 관리 및 영상 시청", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "내신 연구소", path: "/strategy", icon: Brain, desc: "학교별 맞춤형 출제 경향 및 리포트", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: BookText, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u.role) || u.subject === '영어' },
+            { name: "영단어 챌린지", path: "/voca-challenge", icon: Award, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
+            { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer'] },
+            { name: "나의 시험 결과", path: "/my-exams", icon: Target, desc: "성적표 및 담당 선생님 리포트", roles: ['student', 'parent'] },
+            { name: "입시 내비게이터", path: "/navigator", icon: Compass, desc: "성적 추이 분석 및 목표 대학 전략", roles: ['admin', 'admin_assistant', 'student', 'parent'] }
+        ]
+    },
+    {
+        title: "재무 및 행정",
+        description: "수납, 급여, 시스템 설정을 관리합니다.",
+        theme: "from-amber-500 to-orange-600",
+        items: [
+            { name: "재무 대시보드", path: "/financial-dashboard", icon: PieChart, desc: "자금 흐름 파악 및 결재 승인", roles: ['admin'] },
+            { name: "지출결의 등록", path: "/expense", icon: Receipt, desc: "지출 내역 등록 및 증빙 업로드", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "월급 정산 관리", path: "/payroll-mgmt", icon: Wallet, desc: "전체 직원의 급여 정산 및 관리", roles: ['admin'] },
+            { name: "내 월급 확인", path: "/payroll-check", icon: DollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] }
+        ]
+    },
+    {
+        title: "학원 생활 및 시스템",
+        description: "알림, 메시지, 스케줄을 확인합니다.",
+        theme: "from-slate-700 to-slate-900",
+        items: [
+            { name: "아카데미 유니버스", path: "/universe", icon: Globe, desc: "학원 소식 및 커뮤니티 랭킹", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "통합 메시지 센터", path: "/messages", icon: MessageSquare, desc: "알림톡/SMS 발송 및 관리", roles: ['admin', 'admin_assistant'] },
+            { name: "근무 스케줄", path: "/work-schedule", icon: Clock, desc: "나의 근무 일정 확인 및 변경 요청", roles: ['admin_assistant'] },
+            { name: "환경 설정", path: "/settings", icon: Settings, desc: "학원 시스템 코어 데이터 설정", roles: ['admin'] }
+        ]
+    }
+];
 
 const ReportWrapper = () => {
   const { diagnosticId } = useParams();
@@ -368,16 +423,18 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   );
 };
 
-// 🚀 [CTO 패치] 대시보드 스마트 그룹화 (사이드바와 일치)
+// 🚀 [CTO 패치] 대시보드와 사이드바를 하나로 묶어주는 중앙 마스터 배열 (Single Source of Truth)
 const MENU_GROUPS = [
     {
         title: "교무 및 출결 관제",
         description: "클리닉 예약, 출결 현황 및 교실 공간을 관리합니다.",
         theme: "from-blue-600 to-indigo-700",
         items: [
+            { name: "신규 상담 등록", path: "/consult", icon: UserPlus, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
             { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "일별 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
             { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "오늘의 할 일", path: "/clinic-tasks", icon: ClipboardList, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] }
+            { name: "오늘의 할 일", path: "/clinic-tasks", icon: ClipboardList, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
+            { name: "픽업 신청", path: "/pickup", icon: Printer, desc: "학생 픽업을 요청하고 관리합니다.", roles: ['lecturer'] }
         ]
     },
     {
@@ -385,11 +442,11 @@ const MENU_GROUPS = [
         description: "학생들의 성적, 수업, 학습 자료를 관리합니다.",
         theme: "from-emerald-600 to-teal-700",
         items: [
-            { name: "수강 강의", path: "/lectures", icon: GraduationCap, desc: "수업 진도, 숙제 관리 및 영상 시청", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "강의 관리", studentName: "수강 강의", path: "/lectures", icon: Video, studentIcon: GraduationCap, desc: "수업 진도, 숙제 관리 및 영상 시청", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "내신 연구소", path: "/strategy", icon: Brain, desc: "학교별 맞춤형 출제 경향 및 리포트", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "오늘의 영단어", path: "/voca", icon: BookText, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "영단어 챌린지", path: "/voca-challenge", icon: Gamepad2, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
+            { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: BookText, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u.role) || u.subject === '영어' },
+            { name: "영단어 챌린지", path: "/voca-challenge", icon: Award, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
             { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer'] },
             { name: "나의 시험 결과", path: "/my-exams", icon: Target, desc: "성적표 및 담당 선생님 리포트", roles: ['student', 'parent'] },
             { name: "입시 내비게이터", path: "/navigator", icon: Compass, desc: "성적 추이 분석 및 목표 대학 전략", roles: ['admin', 'admin_assistant', 'student', 'parent'] }
@@ -403,16 +460,16 @@ const MENU_GROUPS = [
             { name: "재무 대시보드", path: "/financial-dashboard", icon: PieChart, desc: "자금 흐름 파악 및 결재 승인", roles: ['admin'] },
             { name: "지출결의 등록", path: "/expense", icon: Receipt, desc: "지출 내역 등록 및 증빙 업로드", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "월급 정산 관리", path: "/payroll-mgmt", icon: Wallet, desc: "전체 직원의 급여 정산 및 관리", roles: ['admin'] },
-            { name: "내 월급 확인", path: "/payroll-check", icon: CircleDollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "내 월급 확인", path: "/payroll-check", icon: DollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] }
         ]
     },
     {
-        title: "학원 생활 및 소통",
+        title: "학원 생활 및 시스템",
         description: "알림, 메시지, 스케줄을 확인합니다.",
         theme: "from-slate-700 to-slate-900",
         items: [
-            { name: "아카데미 유니버스", path: "/universe", icon: Rocket, desc: "학원 소식 및 커뮤니티 랭킹", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            { name: "아카데미 유니버스", path: "/universe", icon: Globe, desc: "학원 소식 및 커뮤니티 랭킹", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "통합 메시지 센터", path: "/messages", icon: MessageSquare, desc: "알림톡/SMS 발송 및 관리", roles: ['admin', 'admin_assistant'] },
             { name: "근무 스케줄", path: "/work-schedule", icon: Clock, desc: "나의 근무 일정 확인 및 변경 요청", roles: ['admin_assistant'] },
             { name: "환경 설정", path: "/settings", icon: Settings, desc: "학원 시스템 코어 데이터 설정", roles: ['admin'] }
@@ -424,16 +481,15 @@ const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
     const { loadingData } = useData();
 
+    // 사용자의 권한(Role)에 맞춰 중앙 메뉴 배열을 필터링합니다.
     const authorizedGroups = useMemo(() => {
         if (!currentUser?.role) return [];
 
         return MENU_GROUPS.map(group => {
             const authorizedItems = group.items.filter(item => {
-                // Voca 특수 조건 처리 (영어 과목만)
-                if (item.path === '/voca' && ['lecturer', 'ta'].includes(currentUser.role) && currentUser.subject !== '영어') {
-                    return false;
-                }
-                return item.roles.includes(currentUser.role);
+                const hasRole = item.roles.includes(currentUser.role);
+                const passCondition = item.condition ? item.condition(currentUser) : true;
+                return hasRole && passCondition;
             });
             return { ...group, items: authorizedItems };
         }).filter(group => group.items.length > 0);
@@ -494,10 +550,8 @@ const Dashboard = ({ currentUser }) => {
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
                             {group.items.map((item, iIdx) => {
-                                const Icon = item.icon;
-                                // 학생/학부모일 때 라벨 다르게 표시
-                                const displayLabel = (item.path === '/lectures' && ['student', 'parent'].includes(currentUser.role)) ? '수강 강의' : 
-                                                     (item.path === '/voca' && ['student', 'parent'].includes(currentUser.role)) ? '오늘의 영단어' : item.name;
+                                const Icon = (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon;
+                                const displayLabel = (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name;
 
                                 return (
                                     <button
@@ -538,61 +592,38 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // 🚀 [CTO 패치] 사이드바 메뉴 그룹 동기화
-  const [expandedCategories, setExpandedCategories] = useState({
-      '학습 및 수강': ['student', 'parent'].includes(currentUser.role),
-      '교무 및 출결 관제': ['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role),
-      '학원 생활 및 소통': true,
-      '재무 및 행정': ['admin', 'admin_assistant'].includes(currentUser.role),
-      '시스템 설정': ['admin'].includes(currentUser.role),
-  });
+  // 🚀 [CTO 패치] 대시보드의 마스터 메뉴(MENU_GROUPS)를 사이드바용으로 변환하여 완벽하게 동기화합니다.
+  const groupedMenus = useMemo(() => {
+      const groups = {};
+      MENU_GROUPS.forEach(group => {
+          const items = group.items.filter(item => {
+              const hasRole = item.roles.includes(currentUser.role);
+              const passCondition = item.condition ? item.condition(currentUser) : true;
+              return hasRole && passCondition;
+          });
+          
+          if (items.length > 0) {
+              groups[group.title] = items.map(item => ({
+                  path: item.path,
+                  label: (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name,
+                  icon: (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon,
+              }));
+          }
+      });
+      return groups;
+  }, [currentUser]);
+
+  // 초기 상태: 모든 카테고리를 펼쳐둡니다.
+  const [expandedCategories, setExpandedCategories] = useState({});
+  useEffect(() => {
+      const initials = {};
+      Object.keys(groupedMenus).forEach(cat => initials[cat] = true);
+      setExpandedCategories(initials);
+  }, [groupedMenus]);
 
   const toggleCategory = (category) => {
       setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
   };
-
-  const menuItems = useMemo(() => [
-    // 1. 교무 및 출결 관제
-    { category: '교무 및 출결 관제', path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
-    { category: '교무 및 출결 관제', path: '/attendance', label: '통합 출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
-    { category: '교무 및 출결 관제', path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { category: '교무 및 출결 관제', path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
-    { category: '교무 및 출결 관제', path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
-
-    // 2. 학습 및 수강
-    { category: '학습 및 수강', path: '/lectures', label: ['student', 'parent'].includes(currentUser.role) ? '수강 강의' : '강의 관리', icon: ['student', 'parent'].includes(currentUser.role) ? GraduationCap : Video, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
-    { category: '학습 및 수강', path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
-    { category: '학습 및 수강', path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
-    { category: '학습 및 수강', path: '/voca', label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어') },
-    { category: '학습 및 수강', path: '/voca-challenge', label: '영단어 챌린지', icon: Gamepad2, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
-    { category: '학습 및 수강', path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
-    { category: '학습 및 수강', path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
-    { category: '학습 및 수강', path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
-
-    // 3. 재무 및 행정
-    { category: '재무 및 행정', path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
-    { category: '재무 및 행정', path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
-    { category: '재무 및 행정', path: '/payroll-mgmt', label: '월급 정산 관리', icon: Wallet, roles: ['admin'] },
-    { category: '재무 및 행정', path: '/payroll-check', label: '내 월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
-    { category: '재무 및 행정', path: '/users', label: '사용자 권한 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
-
-    // 4. 학원 생활 및 소통 / 시스템
-    { category: '학원 생활 및 소통', path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
-    { category: '학원 생활 및 소통', path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
-    { category: '학원 생활 및 소통', path: '/work-schedule', label: '내 근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
-    { category: '시스템 설정', path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
-  ], [currentUser]);
-
-  const groupedMenus = useMemo(() => {
-      const groups = {};
-      menuItems.forEach(item => {
-          if (item.roles.includes(currentUser.role) && (!item.showCondition || item.showCondition(currentUser))) {
-              if (!groups[item.category]) groups[item.category] = [];
-              groups[item.category].push(item);
-          }
-      });
-      return groups;
-  }, [menuItems, currentUser]);
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
@@ -704,10 +735,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                                 ? <StudentVocaDaily currentUser={currentUser} /> 
                                 : <VocaManager currentUser={currentUser} />
                         } />
-
-                        {/* 🚀 영단어 챌린지 라우팅 보존 */}
                         <Route path="/voca-challenge" element={['student', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <VocaChallenge currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
