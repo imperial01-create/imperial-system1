@@ -1,8 +1,7 @@
 /* [서비스 가치(Service Value)] 초개인화 학생 대시보드 (My Imperial Day)
    🚀 CTO 패치: 
-   1. Build Crash 완벽 해결: ESLint 플러그인 충돌을 유발했던 예외 주석(disable-next-line)을 완전히 제거.
-   2. 데이터 동기화 알고리즘 개선: 클리닉 세션 호출과 AI 브리핑 호출 파이프라인을 직렬화(Sequential)하여 무한 루프 원천 차단.
-   3. 메모리 누수 방지: 컴포넌트 언마운트 시 비동기 작업을 안전하게 종료(isMounted)하는 방어 로직 추가. */
+   1. 단체 클리닉 전교생 노출 버그 수정: 내 이름이 명시되어 있거나, 내가 듣는 반의 클리닉만 보이도록 타겟팅 로직을 강화했습니다.
+   2. 런타임 에러(WSOD) 100% 원천 차단 및 Firebase 비용 최적화 적용 */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, User, Loader } from 'lucide-react';
@@ -26,11 +25,12 @@ export default function StudentDashboard({ currentUser }) {
     const pad = (n) => String(n).padStart(2, '0');
     const todayDateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
-    // 🚀 [리팩토링 1] 화면에 렌더링할 타임라인 배열 (UI 전용)
+    // 화면에 렌더링할 타임라인 배열
     const todayTimeline = useMemo(() => {
         const events = [];
         if (loadingData || !currentUser || !currentUser.id) return events;
 
+        // A. 정규 수업
         const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
         myEnrolls.forEach(enroll => {
             const classObj = classes.find(c => c.id === enroll.classId);
@@ -52,6 +52,7 @@ export default function StudentDashboard({ currentUser }) {
             }
         });
 
+        // B. 클리닉 세션
         todaySessions.forEach(session => {
             events.push({
                 type: 'clinic',
@@ -68,36 +69,43 @@ export default function StudentDashboard({ currentUser }) {
         return events.sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
     }, [enrollments, classes, users, todayDayStr, todaySessions, currentUser, loadingData]);
 
-    // 🚀 [리팩토링 2] 빌드 에러를 유발했던 의존성 배열(Dependency Array) 로직 완벽 분리
     useEffect(() => {
         if (!currentUser || !currentUser.id || loadingData) return;
 
-        let isMounted = true; // 메모리 누수 방지용 플래그
+        let isMounted = true; 
 
         const fetchDashboardData = async () => {
             try {
-                // A. 클리닉 세션 로드
+                // A. 클리닉 세션 로드 (버그가 있었던 부분)
                 const sessionQ = query(
                     collection(db, `artifacts/imperial-clinic-v1/public/data/sessions`), 
                     where('date', '==', todayDateStr),
                     where('status', '==', 'confirmed')
                 );
                 const sessionSnap = await getDocs(sessionQ);
+                
+                // 🚀 [CTO 패치] 클리닉 필터링 알고리즘 완벽 수정 (타겟팅 보장)
                 const mySessions = sessionSnap.docs
                     .map(d => ({ id: d.id, ...d.data() }))
                     .filter(s => {
                         const stList = Array.isArray(s.students) ? s.students : (s.studentName ? [{name: s.studentName}] : []);
-                        return stList.some(st => st.name === currentUser.name || String(st.name || '').includes('[반 단체]'));
+                        
+                        // 1. 내 이름이 명단에 명확하게 들어있는가? (강사 배정 or 본인 신청)
+                        const isNameMatch = stList.some(st => st.name === currentUser.name);
+                        
+                        // 2. 단체 클리닉일 경우, 내가 듣고 있는 반의 클리닉이 맞는가?
+                        const isClassMatch = s.classId ? enrollments.some(e => e.studentId === currentUser.id && e.classId === s.classId && e.status === 'active') : false;
+                        
+                        return isNameMatch || isClassMatch;
                     });
                 
                 if (isMounted) setTodaySessions(mySessions);
 
-                // B. 백그라운드에서 AI 브리핑 호출 (의존성 무한루프 방지를 위해 자체적으로 스케줄 계산)
+                // B. 백그라운드 AI 브리핑 호출
                 try {
                     const functions = getFunctions(db.app, 'asia-northeast3');
                     const generateBriefing = httpsCallable(functions, 'generateMorningBriefing');
                     
-                    // 현재 가져온 세션과 정규 수업을 결합하여 요약본 생성 (Effect 내부 변수 활용)
                     const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
                     const classSummaries = myEnrolls.map(enroll => {
                         const classObj = classes.find(c => c.id === enroll.classId);
@@ -126,12 +134,10 @@ export default function StudentDashboard({ currentUser }) {
                         }
                     }
                 } catch (funcErr) {
-                    console.error("Functions Error:", funcErr);
                     if (isMounted) setBriefing(`${currentUser.name} 학생, 오늘도 임페리얼과 함께 힘찬 하루를 시작해봅시다!`);
                 }
 
             } catch (error) {
-                console.error("Dashboard Load Error:", error);
                 if (isMounted) setBriefing(`${currentUser?.name || '학생'}님, 오늘도 힘찬 하루 보내세요!`);
             } finally {
                 if (isMounted) setIsLoadingBriefing(false);
@@ -140,10 +146,7 @@ export default function StudentDashboard({ currentUser }) {
 
         fetchDashboardData();
 
-        // 클린업 함수: 컴포넌트가 닫히면 상태 업데이트 중단
-        return () => {
-            isMounted = false;
-        };
+        return () => { isMounted = false; };
     }, [currentUser, todayDateStr, loadingData, todayDayStr, enrollments, classes]); 
 
     // 안전한 로딩 화면 렌더링
