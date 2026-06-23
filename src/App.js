@@ -1,16 +1,18 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 학생(student) 로그인 시 기본 대시보드 대신 초개인화된 [My Imperial Day] 화면으로 
-    자동 연결되도록 스마트 라우팅 및 동적 사이드바 메뉴를 적용했습니다.) */
+   🚀 CTO 패치: 
+   1. 빈 화면(WSOD) 원천 차단: 강제 리다이렉트 시 발생하는 데이터 Hydration 병목을 해소했습니다.
+   2. 'My Imperial Day' 메뉴 독립: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 
+      직접 메뉴를 클릭하여 초개인화 대시보드를 즐길 수 있도록 UX를 개편했습니다. */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-// 🚀 [CTO 패치] 에러의 원인이었던 아이콘 Import 누락을 완벽히 해결한 100% 동기화 리스트
+// 🚀 [CTO 패치] Sparkles 아이콘 추가 등 모든 의존성 완벽 동기화
 import { 
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
   Clock, Trash2, MessageSquare, Globe, Phone, Search, Clipboard, Book, Users, Star, ArrowRight, ChevronDown, ChevronRight,
-  PieChart, UserPlus, UserCheck, Brain, GraduationCap
+  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles
 } from 'lucide-react';
 
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
@@ -44,13 +46,22 @@ const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 
-// 🚀 [신규 추가] 학생 전용 초개인화 대시보드 컴포넌트 로드
+// 🚀 학생 전용 초개인화 대시보드
 const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB)를 동기화시키는 중앙 마스터 데이터
+// 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB) 마스터 데이터
 const MENU_GROUPS = [
+    // 🚀 [신규 추가] 학생의 시선이 가장 먼저 닿는 곳에 '나의 학원 생활' 탭을 신설하여 스케줄러를 배치합니다.
+    {
+        title: "나의 학원 생활",
+        description: "오늘의 스케줄과 AI 브리핑을 확인합니다.",
+        theme: "from-indigo-600 to-blue-700",
+        items: [
+            { name: "My Imperial Day", path: "/my-day", icon: Sparkles, desc: "오늘의 완벽한 스케줄과 AI 멘토링", roles: ['student'] }
+        ]
+    },
     {
         title: "교무 및 출결 관제",
         description: "클리닉 예약, 출결 현황 및 교실 공간을 관리합니다.",
@@ -582,12 +593,12 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar pb-24">
-            {/* 🚀 [CTO 패치] 학생인 경우 홈 버튼 텍스트를 'My Imperial Day'로 변경합니다. */}
             <button 
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-700 hover:bg-gray-50 font-medium'}`}
             >
-                <Home size={20} /> {currentUser?.role === 'student' ? 'My Imperial Day' : '대시보드 홈'}
+                {/* 🚀 [CTO 패치] 기본 홈버튼 복구: 헷갈리지 않도록 명칭을 일원화 */}
+                <Home size={20} /> 대시보드 홈
             </button>
 
             {Object.entries(groupedMenus).map(([category, items]) => (
@@ -655,11 +666,11 @@ const AppLayout = ({ currentUser, handleLogout }) => {
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
-                        {/* 🚀 [CTO 패치] 대시보드 접근 시 Role 검사로 학생용 뷰와 일반 뷰를 분기합니다. */}
-                        <Route 
-                            path="/dashboard" 
-                            element={currentUser.role === 'student' ? <StudentDashboard currentUser={currentUser} /> : <Dashboard currentUser={currentUser} />} 
-                        />
+                        {/* 🚀 [CTO 패치] 모든 권한이 공평하게 기본 Dashboard 컴포넌트를 사용합니다. (강제 리다이렉트 완전 제거로 WSOD 방지) */}
+                        <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        
+                        {/* 🚀 [신규 추가] 학생 전용 My Imperial Day 라우팅 설정 */}
+                        <Route path="/my-day" element={currentUser.role === 'student' ? <StudentDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
                         
@@ -695,7 +706,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
-                        {/* 🚀 루트 접속 시 기본적으로 대시보드로 떨어지며, 대시보드에서 롤에 따라 다시 분기됩니다. */}
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
