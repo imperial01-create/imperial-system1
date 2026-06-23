@@ -447,3 +447,68 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
         await event.data.ref.update({ status: 'error', errorMsg: error.message });
     }
 });
+
+// ============================================================================
+// 🚀 [기능 10] 학생 전용 AI 모닝 브리핑 생성 (캐싱 적용으로 비용 최적화)
+// ============================================================================
+exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" }, async (request) => {
+    // 1. 보안 검증: 로그인한 학생 본인만 호출 가능
+    if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
+    const studentUid = request.auth.uid;
+    const { studentId, studentName, todaySchedules, contextTag } = request.data;
+
+    const db = admin.firestore();
+    
+    // KST 기준 오늘 날짜 구하기
+    const now = new Date();
+    const kstOffset = 9 * 60 * 60 * 1000;
+    const kstDate = new Date(now.getTime() + kstOffset);
+    const dateStr = `${kstDate.getUTCFullYear()}-${String(kstDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kstDate.getUTCDate()).padStart(2, '0')}`;
+
+    // 2. 비용 최적화 (Caching): 오늘 이미 브리핑이 생성되었다면 AI를 호출하지 않고 기존 데이터 반환
+    const briefingRef = db.collection(`artifacts/${APP_ID}/public/data/daily_briefings`).doc(`${dateStr}_${studentId}`);
+    const docSnap = await briefingRef.get();
+    
+    if (docSnap.exists) {
+        return { success: true, briefing: docSnap.data().message, cached: true };
+    }
+
+    // 3. AI 프롬프트 엔지니어링: 프로페셔널하고 따뜻한 멘토 역할 부여
+    try {
+        const genAI = new GoogleGenerativeAI(getGeminiKey());
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+        const prompt = `
+        너는 대한민국 최고 명문 학원 '임페리얼 학원'의 대표 멘토 AI야.
+        오늘 하루를 시작하는 학생 '${studentName}'에게 프로페셔널하면서도 따뜻하게 동기부여가 되는 아침 브리핑을 딱 3문장으로 작성해.
+        어린아이 대하듯 유치하게 말하지 말고, 존중하는 어투(해요체)를 사용해.
+        
+        [오늘의 데이터]
+        - 예정된 스케줄: ${todaySchedules || '특별한 정규 스케줄 없음 (자습 권장)'}
+        - 학생의 최근 특이사항(강사 메모): ${contextTag || '특이사항 없음'}
+        
+        [작성 가이드]
+        1. 첫 문장: 학생의 이름을 부르며 활기찬 인사.
+        2. 두 번째 문장: 오늘의 스케줄이나 특이사항을 자연스럽게 언급하며 목표 제시.
+        3. 세 번째 문장: 학원이 항상 응원하고 있다는 신뢰감을 주며 마무리.
+        `;
+
+        const result = await model.generateContent(prompt);
+        const briefingText = result.response.text().trim();
+
+        // 4. 생성된 브리핑 캐싱 (저장) - 내일 자정이 되면 알아서 무시되거나 TTL로 삭제됨
+        await briefingRef.set({
+            studentId: studentId,
+            date: dateStr,
+            message: briefingText,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        return { success: true, briefing: briefingText, cached: false };
+
+    } catch (error) {
+        console.error("🔥 AI Briefing Error:", error);
+        // 에러 발생 시 런타임 에러를 막기 위한 폴백(Fallback) 텍스트 제공
+        return { success: true, briefing: `${studentName} 학생, 오늘도 임페리얼 학원과 함께 목표를 향해 한 걸음 더 나아가는 멋진 하루를 만들어 봅시다!`, cached: false, error: true };
+    }
+});

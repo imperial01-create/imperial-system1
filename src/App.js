@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 인지 부하(Cognitive Load) 최소화를 위해 대시보드 상단의 중복 CTA 버튼을 제거하고, 
-    핵심 모듈 카드에 시선이 집중되도록 UX를 최적화했습니다. 런타임 에러 차단 로직 100% 유지 중) */
+   (🚀 CTO 패치: 학생(student) 로그인 시 기본 대시보드 대신 초개인화된 [My Imperial Day] 화면으로 
+    자동 연결되도록 스마트 라우팅 및 동적 사이드바 메뉴를 적용했습니다.) */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -43,6 +43,9 @@ const ConsultationManager = React.lazy(() => import('./features/ConsultationMana
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
+
+// 🚀 [신규 추가] 학생 전용 초개인화 대시보드 컴포넌트 로드
+const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -470,7 +473,6 @@ const Dashboard = ({ currentUser }) => {
         <div className="max-w-screen-2xl mx-auto space-y-8 animate-in fade-in pb-20">
             <div className="bg-gradient-to-r from-slate-900 to-indigo-900 rounded-[32px] p-8 md:p-10 shadow-2xl relative overflow-hidden">
                 <div className="absolute right-0 top-0 w-64 h-64 bg-indigo-500/20 rounded-full blur-[80px]"></div>
-                {/* 🚀 [CTO 패치] 불필요한 버튼을 제거하고 텍스트에만 온전히 집중하도록 레이아웃 정리 */}
                 <div className="relative z-10">
                     <span className="inline-block px-3 py-1 bg-white/10 border border-white/20 text-white text-xs font-black rounded-full mb-3">
                         {currentUser.role.toUpperCase()} MODE
@@ -494,7 +496,6 @@ const Dashboard = ({ currentUser }) => {
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
                             {group.items.map((item, iIdx) => {
-                                // 🚀 방탄 렌더링: 아이콘 누락 시 기본값 적용
                                 const IconObj = (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon;
                                 const SafeIcon = IconObj || Activity;
                                 const displayLabel = (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name;
@@ -534,7 +535,6 @@ const Dashboard = ({ currentUser }) => {
 };
 
 const AppLayout = ({ currentUser, handleLogout }) => {
-  // 🚀 [CTO 패치] 에러의 주범이었던 users 변수 호출을 최상단에서 복원했습니다.
   const { users } = useData(); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
@@ -582,11 +582,12 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </div>
         
         <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar pb-24">
+            {/* 🚀 [CTO 패치] 학생인 경우 홈 버튼 텍스트를 'My Imperial Day'로 변경합니다. */}
             <button 
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-700 hover:bg-gray-50 font-medium'}`}
             >
-                <Home size={20} /> 대시보드 홈
+                <Home size={20} /> {currentUser?.role === 'student' ? 'My Imperial Day' : '대시보드 홈'}
             </button>
 
             {Object.entries(groupedMenus).map(([category, items]) => (
@@ -603,7 +604,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <div className="space-y-1 animate-in slide-in-from-top-2 duration-200">
                             {items.map((item) => {
                                 const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-                                // 🚀 방탄 아이콘 안전망
                                 const SafeIcon = item.icon || Activity;
                                 return (
                                     <button 
@@ -655,7 +655,12 @@ const AppLayout = ({ currentUser, handleLogout }) => {
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
-                        <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
+                        {/* 🚀 [CTO 패치] 대시보드 접근 시 Role 검사로 학생용 뷰와 일반 뷰를 분기합니다. */}
+                        <Route 
+                            path="/dashboard" 
+                            element={currentUser.role === 'student' ? <StudentDashboard currentUser={currentUser} /> : <Dashboard currentUser={currentUser} />} 
+                        />
+                        
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
                         
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/attendance" element={<AttendanceManager currentUser={currentUser} />} />}
@@ -689,6 +694,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
+                        
+                        {/* 🚀 루트 접속 시 기본적으로 대시보드로 떨어지며, 대시보드에서 롤에 따라 다시 분기됩니다. */}
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
