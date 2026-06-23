@@ -1,13 +1,13 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.1
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.2
    1. 타임머신 관제: 상단 캘린더(Date Picker)를 통해 과거/미래 스케줄을 자유롭게 탐색합니다.
    2. 스마트 매트릭스: 정규 수업과 TA(조교) 협업 클리닉이 겹칠 경우, 클라이언트 엔진이 이를 자동 병합하여 [TA 협업] 배지로 시각화(Visual Hierarchy)합니다.
-   🚀 CTO 패치: 구버전 아이콘 호환성 문제와 Null 데이터 파싱 시 발생하는 치명적 런타임 에러(WSOD)를 완벽히 방어했습니다. */
+   🚀 CTO 패치: 덮어씌워졌던 '강사별 고유 색상(Dynamic Teacher Colors)'을 정규 수업 및 TA 협업 모드에 완벽히 복구했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, Phone, AlertTriangle, Check,
-    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, RefreshCw, Plus, X, Building
+    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, RefreshCw, Plus, X, Building, ShieldCheck
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -129,7 +129,7 @@ const AttendanceManager = ({ currentUser }) => {
             const fetchLogs = async () => {
                 const q = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
                 const snap = await getDocs(q);
-                // 🚀 [CTO 패치] undefined에 의한 localeCompare 오류 차단
+                // 🚀 undefined에 의한 localeCompare 오류 차단
                 const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
                 setStudentLogs(logs);
             };
@@ -160,6 +160,7 @@ const AttendanceManager = ({ currentUser }) => {
 
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             
+            // 🚀 방어 패치: enroll.className이 없을 경우 대비
             if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
             const isExamLeave = examLeaves.some(leave => {
@@ -206,7 +207,7 @@ const AttendanceManager = ({ currentUser }) => {
             classGroups[groupKey].students.push(studentData);
         });
 
-        // 🚀 [CTO 패치] localeCompare 사용 시 값이 비어있을 때 터지는 버그 완벽 차단
+        // 🚀 localeCompare 사용 시 값이 비어있을 때 터지는 버그 완벽 차단
         const sortedGroups = Object.values(classGroups).sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
         sortedGroups.forEach(g => g.students.sort((a, b) => String(a.studentName || '').localeCompare(String(b.studentName || ''))));
         emergencyList.sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
@@ -214,7 +215,7 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser]);
 
-    // 🚀 [CTO 패치] 교실 매트릭스 엔진 (정규 수업과 반 단체 클리닉 병합 렌더링 & RowSpan 파괴 방어)
+    // 🚀 교실 매트릭스 엔진
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
@@ -282,8 +283,9 @@ const AttendanceManager = ({ currentUser }) => {
                     headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, 
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal'),
-                    clinicSessions: []
+                    clinicSessions: [] // 클리닉 정보를 담을 배열 (TA 협업 확인용)
                 };
+                // RowSpan된 나머지 시간대는 skip 처리
                 for (let i = startIndex + 1; i < endIndex; i++) {
                     if (TIME_SLOTS[i]) grid[todaySch.room][TIME_SLOTS[i]] = { skip: true };
                 }
@@ -309,6 +311,7 @@ const AttendanceManager = ({ currentUser }) => {
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
                 let targetCell = grid[session.classroom][snappedStart];
 
+                // 이미 다른 수업이 병합되어 skip 처리된 시간이라면, 상위 부모 셀을 찾아 병합
                 if (targetCell && targetCell.skip) {
                     for (let i = startIndex - 1; i >= 0; i--) {
                         const prevCell = grid[session.classroom][TIME_SLOTS[i]];
@@ -319,6 +322,7 @@ const AttendanceManager = ({ currentUser }) => {
                     }
                 }
 
+                // ✅ CASE 1: 해당 시간에 이미 정규 수업(class)이 있는 경우 -> 클리닉을 배열에 추가 (TA 협업 모드로 렌더링)
                 if (targetCell && targetCell.type === 'class') {
                     targetCell.clinicSessions.push({
                         ...session,
@@ -328,6 +332,7 @@ const AttendanceManager = ({ currentUser }) => {
                     return; 
                 }
 
+                // 빈 공간인지 확인 (해당 범위에 다른 예약이나 클래스가 있으면 충돌 처리)
                 let isOverlap = false;
                 for (let i = startIndex; i < endIndex; i++) {
                     if (grid[session.classroom][TIME_SLOTS[i]] !== null && grid[session.classroom][TIME_SLOTS[i]] !== targetCell) {
@@ -343,6 +348,7 @@ const AttendanceManager = ({ currentUser }) => {
                     return;
                 }
 
+                // ✅ CASE 3, 4: 단독 클리닉인 경우 (일반/반 단체)
                 let displayTitle = session.topic || '보충/직보';
                 if (session.status === 'open') displayTitle = '💡 대기중 (예약가능)';
 
@@ -856,8 +862,10 @@ const AttendanceManager = ({ currentUser }) => {
                                                 const rName = typeof room === 'string' ? room : room.name;
                                                 const cellData = matrixGrid[rName]?.[time];
                                                 
+                                                // 병합되어 숨겨진 셀 처리
                                                 if (cellData?.skip) return null;
 
+                                                // 🚀 1. 빈 교실 렌더링
                                                 if (!cellData) {
                                                     return (
                                                         <td key={rIdx} 
@@ -869,7 +877,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                     );
                                                 }
 
-                                                // 정규 수업 + TA 협업 렌더링
+                                                // 🚀 2. 정규 수업 + TA 협업 분기 렌더링
                                                 if (cellData.type === 'class') {
                                                     const classGroupClinic = cellData.clinicSessions?.find(s => {
                                                         const stList = Array.isArray(s.students) ? s.students : [];
@@ -877,23 +885,35 @@ const AttendanceManager = ({ currentUser }) => {
                                                         return String(names || '').includes('[반 단체]') || (s.studentName && String(s.studentName || '').includes('[반 단체]'));
                                                     });
 
+                                                    // [CTO 패치] 기본 배경색을 강사별 고유 색상으로 지정합니다. (단독, 협업 모두 해당)
+                                                    const baseColorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : getTeacherColor(cellData.lecturer);
+
                                                     if (classGroupClinic) {
+                                                        // [CASE 1: 정규 수업 + TA 협업]
                                                         return (
-                                                            <td key={rIdx} rowSpan={cellData.rowSpan} className="p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer bg-blue-50 border-blue-400 text-blue-900 shadow-sm relative">
+                                                            <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer shadow-sm relative ${baseColorClass}`}>
                                                                 <div className="absolute top-0 right-0 bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
-                                                                    <CheckCircle size={10} /> TA 협업
+                                                                    <ShieldCheck size={10} /> TA 협업
                                                                 </div>
-                                                                <div className="font-black text-sm leading-tight break-keep pr-14 mt-1">{cellData.title}</div>
-                                                                <div className="text-xs font-bold opacity-80 mt-1 flex justify-between items-end">
-                                                                    <span>{cellData.lecturer} 강사</span>
-                                                                    <span className="text-[10px] text-blue-600 bg-blue-100 px-1 rounded">조교: {classGroupClinic.taName}</span>
+                                                                <div className="h-full flex flex-col gap-1 relative mt-1">
+                                                                    <div className="flex justify-between items-start mb-1">
+                                                                        <span className="bg-white/90 border-white text-slate-800 text-[10px] font-black px-1.5 py-0.5 rounded shadow-sm border">
+                                                                            📚 정규
+                                                                        </span>
+                                                                        {cellData.warn === 'over' && <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm border border-rose-600">초과</span>}
+                                                                    </div>
+                                                                    <div className="font-black text-sm leading-tight break-keep pr-14">{cellData.title}</div>
+                                                                    <div className="text-xs font-bold opacity-80 mt-1 flex justify-between items-end">
+                                                                        <span>{cellData.lecturer} 강사</span>
+                                                                        <span className="text-[10px] text-indigo-700 bg-white/70 px-1.5 py-0.5 rounded shadow-sm border border-indigo-100">조교: {classGroupClinic.taName}</span>
+                                                                    </div>
                                                                 </div>
                                                             </td>
                                                         );
                                                     } else {
-                                                        const colorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : 'bg-slate-100 border-slate-300 text-slate-800';
+                                                        // [CASE 2: 정규 수업 단독]
                                                         return (
-                                                            <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
+                                                            <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${baseColorClass}`}>
                                                                 <div className="h-full flex flex-col gap-1 relative">
                                                                     <div className="flex justify-between items-start mb-1">
                                                                         <span className="bg-white/90 border-white text-slate-800 text-[10px] font-black px-1.5 py-0.5 rounded shadow-sm border">
@@ -910,11 +930,12 @@ const AttendanceManager = ({ currentUser }) => {
                                                     }
                                                 }
 
-                                                // 단독 반 단체 클리닉 & 개별 클리닉 렌더링
+                                                // 🚀 3. 단독 반 단체 클리닉 & 개별 클리닉 분기 렌더링
                                                 if (cellData.type === 'clinic') {
                                                     const isClassGroup = cellData.studentNames?.some(n => String(n||'').includes('[반 단체]')) || (cellData.sessionData?.studentName && String(cellData.sessionData.studentName||'').includes('[반 단체]'));
 
                                                     if (isClassGroup) {
+                                                        // [CASE 3: 단독 반 단체 클리닉 (대관/보강)]
                                                         const rawNames = (cellData.studentNames && cellData.studentNames.length > 0) 
                                                             ? cellData.studentNames.join(', ') 
                                                             : (cellData.sessionData?.studentName || '');
@@ -935,6 +956,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                             </td>
                                                         );
                                                     } else {
+                                                        // [CASE 4: 일반 개별 클리닉 (1:N)]
                                                         const colorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : getTeacherColor(cellData.lecturer);
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
