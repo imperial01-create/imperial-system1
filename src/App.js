@@ -1,18 +1,15 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 아이콘 참조 에러(Reference Error)로 인한 백지 화면(WSOD)을 원천 차단하기 위해 
-    import 목록과 변수 사용을 100% 동기화하고 가장 안정적인 코어 아이콘으로 교체했습니다.) */
-
+   (🚀 CTO 패치: Voca 출제/관리 기능 복구, CAT 시험 UI 완전 제거, '출결 관리' 격상,
+   UX 심리학을 적용한 '스마트 카테고리 아코디언 메뉴' 도입 및 '영단어 챌린지' 독립 메뉴 신규 탑재) */
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
-
-// 🚀 [CTO 패치] 에러의 원인이었던 아이콘 Import 누락을 완벽히 해결한 100% 동기화 리스트
 import { 
-  Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
-  Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
-  Clock, Trash2, MessageSquare, Globe, Phone, Search, Clipboard, Book, Users, Star, ArrowRight, ChevronDown, ChevronRight,
-  PieChart
+  Home, Calendar as CalendarIcon, Settings, GraduationCap, 
+  LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
+  Video, Loader, CircleDollarSign, Wallet, Printer, BookOpen, User, Brain, Target, Compass, Receipt, PieChart,
+  Clock, Trash2, Activity, MessageSquare, Rocket, Phone, Search, ClipboardList, BookText, UserPlus2, UserCheck,
+  ChevronDown, ChevronRight, Gamepad2 // 🚀 여기에 Gamepad2 추가
 } from 'lucide-react';
-
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
@@ -42,64 +39,11 @@ const AcademyUniverse = React.lazy(() => import('./features/AcademyUniverse'));
 const ConsultationManager = React.lazy(() => import('./features/ConsultationManager'));
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
+
+// 🚀 [CTO 패치] 게이미피케이션 영단어 챌린지 라우트 추가
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 
 const APP_ID = 'imperial-clinic-v1';
-
-// 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB)를 동기화시키는 중앙 마스터 데이터
-// (참조 에러 방지를 위해 반드시 위에서 import된 아이콘만 사용합니다.)
-const MENU_GROUPS = [
-    {
-        title: "교무 및 출결 관제",
-        description: "클리닉 예약, 출결 현황 및 교실 공간을 관리합니다.",
-        theme: "from-blue-600 to-indigo-700",
-        items: [
-            { name: "신규 상담 등록", path: "/consult", icon: User, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            { name: "통합 출결 관리", path: "/attendance", icon: User, desc: "일별 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "오늘의 할 일", path: "/clinic-tasks", icon: Clipboard, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
-            { name: "픽업 신청", path: "/pickup", icon: Printer, desc: "학생 픽업을 요청하고 관리합니다.", roles: ['lecturer'] }
-        ]
-    },
-    {
-        title: "학습 및 수강",
-        description: "학생들의 성적, 수업, 학습 자료를 관리합니다.",
-        theme: "from-emerald-600 to-teal-700",
-        items: [
-            { name: "강의 관리", studentName: "수강 강의", path: "/lectures", icon: Video, studentIcon: BookOpen, desc: "수업 진도, 숙제 관리 및 영상 시청", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "내신 연구소", path: "/strategy", icon: Activity, desc: "학교별 맞춤형 출제 경향 및 리포트", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || u?.subject === '영어' },
-            { name: "영단어 챌린지", path: "/voca-challenge", icon: Star, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
-            { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            { name: "나의 시험 결과", path: "/my-exams", icon: Target, desc: "성적표 및 담당 선생님 리포트", roles: ['student', 'parent'] },
-            { name: "입시 내비게이터", path: "/navigator", icon: Compass, desc: "성적 추이 분석 및 목표 대학 전략", roles: ['admin', 'admin_assistant', 'student', 'parent'] }
-        ]
-    },
-    {
-        title: "재무 및 행정",
-        description: "수납, 급여, 시스템 설정을 관리합니다.",
-        theme: "from-amber-500 to-orange-600",
-        items: [
-            { name: "재무 대시보드", path: "/financial-dashboard", icon: PieChart, desc: "자금 흐름 파악 및 결재 승인", roles: ['admin'] },
-            { name: "지출결의 등록", path: "/expense", icon: FileText, desc: "지출 내역 등록 및 증빙 업로드", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "월급 정산 관리", path: "/payroll-mgmt", icon: Briefcase, desc: "전체 직원의 급여 정산 및 관리", roles: ['admin'] },
-            { name: "내 월급 확인", path: "/payroll-check", icon: DollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] }
-        ]
-    },
-    {
-        title: "학원 생활 및 시스템",
-        description: "알림, 메시지, 스케줄을 확인합니다.",
-        theme: "from-slate-700 to-slate-900",
-        items: [
-            { name: "아카데미 유니버스", path: "/universe", icon: Globe, desc: "학원 소식 및 커뮤니티 랭킹", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
-            { name: "통합 메시지 센터", path: "/messages", icon: MessageSquare, desc: "알림톡/SMS 발송 및 관리", roles: ['admin', 'admin_assistant'] },
-            { name: "근무 스케줄", path: "/work-schedule", icon: Clock, desc: "나의 근무 일정 확인 및 변경 요청", roles: ['admin_assistant'] },
-            { name: "환경 설정", path: "/settings", icon: Settings, desc: "학원 시스템 코어 데이터 설정", roles: ['admin'] }
-        ]
-    }
-];
 
 const ReportWrapper = () => {
   const { diagnosticId } = useParams();
@@ -167,6 +111,7 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false); 
+    // 🚀 과목(subject)의 초기값을 비워두어 드롭다운 유효성 검사가 작동하게 합니다.
     const [form, setForm] = useState({ role: 'student', userId: '', password: '', name: '', phone: '', schoolName: '', grade: '1학년', childName: '', subject: '' });
     const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -223,6 +168,8 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
     const handleSignUp = async (e) => {
         e.preventDefault();
+        
+        // 🚀 [방어적 코딩] 역할별 필수 데이터 누락 완벽 차단
         if (!smsAuth.verified) return setLoginErrorModal({ isOpen: true, msg: '먼저 휴대폰 본인 인증을 완료해주세요.' });
         if (!form.userId || !form.password || !form.name) return setLoginErrorModal({ isOpen: true, msg: '필수 정보를 모두 입력해주세요.' });
         if (form.password.length < 6) return setLoginErrorModal({ isOpen: true, msg: '비밀번호는 6자리 이상이어야 합니다.' });
@@ -247,10 +194,10 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 payload.attendancePin = cleanPhone.slice(-4); 
             } else if (form.role === 'parent') { 
                 payload.childName = form.childName; 
-                payload.schoolName = form.schoolName; 
-                payload.grade = form.grade;           
+                payload.schoolName = form.schoolName; // 🚀 학부모의 자녀 학교 정보 저장
+                payload.grade = form.grade;           // 🚀 학부모의 자녀 학년 정보 저장
             } else if (['ta', 'lecturer'].includes(form.role)) { 
-                payload.subject = form.subject;       
+                payload.subject = form.subject;       // 🚀 규격화된 과목 데이터 저장
             }
 
             await setDoc(docRef, payload);
@@ -313,6 +260,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 {smsAuth.verified && <div className="text-sm font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={16}/> 인증이 완료되었습니다.</div>}
             </div>
 
+            {/* 🚀 학생 & 학부모 공통 UI 블록 (학교/학년 통합) */}
             {['student', 'parent'].includes(form.role) && (
                 <div className="grid grid-cols-1 gap-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
                     {form.role === 'parent' && (
@@ -349,6 +297,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 </div>
             )}
 
+            {/* 🚀 강사 & 수업조교 UI 블록 (담당 과목 드롭다운) */}
             {['ta', 'lecturer'].includes(form.role) && (
                 <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
                     <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">담당 과목</label>
@@ -428,112 +377,65 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
 
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
-    const { loadingData } = useData() || { loadingData: false }; 
+    if (!currentUser) return null;
 
-    const authorizedGroups = useMemo(() => {
-        if (!currentUser?.role) return [];
+    const DASHBOARD_CARDS = [
+        { path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'], desc: '신규 원생 상담 데이터를 입력하고 초기 세팅을 진행합니다.', color: 'text-indigo-600', bg: 'bg-indigo-100', hoverBg: 'group-hover:bg-indigo-600' },
+        { path: '/attendance', label: '출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '일별 운영 관제와 원생별 출결 통계 및 시험결석을 통합 관리합니다.', color: 'text-emerald-600', bg: 'bg-emerald-100', hoverBg: 'group-hover:bg-emerald-600' },
+        { path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'], desc: '학원의 자금 흐름을 파악하고 지출결의서를 승인/반려합니다.', color: 'text-blue-600', bg: 'bg-blue-100', hoverBg: 'group-hover:bg-blue-600' },
+        { path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '법인카드 및 개인 지출 내역을 등록하고 증빙을 업로드합니다.', color: 'text-teal-600', bg: 'bg-teal-100', hoverBg: 'group-hover:bg-teal-600' },
+        { path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'], desc: '학교별 맞춤형 출제 경향과 분석 리포트를 확인하세요.', color: 'text-purple-600', bg: 'bg-purple-100', hoverBg: 'group-hover:bg-purple-600' },
+        { path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'], desc: '학생의 시험 결과를 입력하고 프리미엄 분석 리포트를 생성합니다.', color: 'text-rose-600', bg: 'bg-rose-100', hoverBg: 'group-hover:bg-rose-600' },
+        { path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'], desc: '지금까지 치른 시험의 성적과 담당 선생님의 리포트를 확인하세요.', color: 'text-rose-600', bg: 'bg-rose-100', hoverBg: 'group-hover:bg-rose-600' },
+        { path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'], desc: '목표 대학 및 학과 진학을 위한 성적 분석 및 전략을 수립합니다.', color: 'text-cyan-600', bg: 'bg-cyan-100', hoverBg: 'group-hover:bg-cyan-600' },
+        { path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'], desc: ['admin', 'admin_assistant'].includes(currentUser.role) ? '학생들의 클리닉 예약을 관리하고 조교 일정을 통제합니다.' : '1:1 맞춤형 학습 클리닉을 예약하고 피드백을 확인합니다.', color: 'text-orange-600', bg: 'bg-orange-100', hoverBg: 'group-hover:bg-orange-600' },
+        { path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'], desc: '클리닉/보충 지시를 확인하고 학생들의 미션 수행률을 기록합니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
+        { path: '/work-schedule', label: '근무 스케줄', icon: Clock, roles: ['admin_assistant'], desc: '나의 근무 일정을 확인하고 추가/취소를 요청합니다.', color: 'text-lime-600', bg: 'bg-lime-100', hoverBg: 'group-hover:bg-lime-600' },
+        { path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'], desc: '학생 픽업을 요청하고 관리합니다.', color: 'text-pink-600', bg: 'bg-pink-100', hoverBg: 'group-hover:bg-pink-600' },
+        { path: '/lectures', label: ['student', 'parent'].includes(currentUser.role) ? '수강 강의' : '강의 관리', icon: ['student', 'parent'].includes(currentUser.role) ? GraduationCap : Video, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'], desc: ['student', 'parent'].includes(currentUser.role) ? '배정된 강의 진도를 확인하고 영상 학습을 진행하세요.' : '수업 진도와 숙제를 관리하고 강의 영상을 업로드하세요.', color: 'text-fuchsia-600', bg: 'bg-fuchsia-100', hoverBg: 'group-hover:bg-fuchsia-600' },
+        { path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'], desc: '학교별 기출문제와 분석 자료를 가장 빠르게 확인하세요.', color: 'text-sky-600', bg: 'bg-sky-100', hoverBg: 'group-hover:bg-sky-600' },
+        { path: '/voca', label: currentUser.role === 'student' ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어'), desc: currentUser.role === 'student' ? '나만의 맞춤형 단어장과 숨겨진 약점을 투명하게 확인하세요.' : '영단어 시험지를 발급하고 고속 채점을 통해 스탯을 관리합니다.', color: 'text-violet-600', bg: 'bg-violet-100', hoverBg: 'group-hover:bg-violet-600' },
+        
+        // 🚀 [CTO 패치] 영단어 챌린지 대시보드 카드 추가
+        { path: '/voca-challenge', label: '영단어 챌린지', icon: Gamepad2, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'], desc: '게이미피케이션 기반 영단어 암기 서바이벌 챌린지입니다.', color: 'text-yellow-600', bg: 'bg-yellow-100', hoverBg: 'group-hover:bg-yellow-600' },
+        { path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'], desc: '학원의 다양한 소식과 커뮤니티 랭킹을 확인합니다.', color: 'text-amber-600', bg: 'bg-amber-100', hoverBg: 'group-hover:bg-amber-600' },
+        { path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'], desc: '성적표, 결제 안내 등 대량 문자를 템플릿으로 발송합니다.', color: 'text-red-600', bg: 'bg-red-100', hoverBg: 'group-hover:bg-red-600' },
+        { path: '/users', label: '사용자 관리', icon: User, roles: ['admin', 'admin_assistant'], desc: '학원 구성원(학생, 학부모, 강사 등)의 계정과 권한을 관리합니다.', color: 'text-slate-600', bg: 'bg-slate-100', hoverBg: 'group-hover:bg-slate-600' },
+        { path: '/payroll-mgmt', label: '월급 관리', icon: Wallet, roles: ['admin'], desc: '전체 직원의 급여를 정산하고 관리합니다.', color: 'text-stone-600', bg: 'bg-stone-100', hoverBg: 'group-hover:bg-stone-600' },
+        { path: '/payroll-check', label: '월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'], desc: '이번 달 급여 명세서와 정산 내역을 확인합니다.', color: 'text-stone-600', bg: 'bg-stone-100', hoverBg: 'group-hover:bg-stone-600' },
+        { path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'], desc: '학원 시스템의 전반적인 환경과 코어 데이터를 설정합니다.', color: 'text-zinc-600', bg: 'bg-zinc-100', hoverBg: 'group-hover:bg-zinc-600' },
+    ];
 
-        return MENU_GROUPS.map(group => {
-            const authorizedItems = group.items.filter(item => {
-                if (item.path === '/voca' && ['lecturer', 'ta'].includes(currentUser.role) && currentUser.subject !== '영어') {
-                    return false;
-                }
-                const hasRole = item.roles.includes(currentUser.role);
-                const passCondition = item.condition ? item.condition(currentUser) : true;
-                return hasRole && passCondition;
-            });
-            return { ...group, items: authorizedItems };
-        }).filter(group => group.items.length > 0);
-    }, [currentUser]);
-
-    if (loadingData || !currentUser) {
-        return (
-            <div className="flex flex-col justify-center items-center h-[70vh] animate-pulse">
-                <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
-                <p className="text-slate-500 font-bold">나만의 대시보드를 구성 중입니다...</p>
-            </div>
-        );
-    }
-
-    const getWelcomeMessage = () => {
-        switch (currentUser.role) {
-            case 'admin': return "오늘도 임페리얼 학원의 성장을 이끌어주세요.";
-            case 'lecturer': return "선생님의 열정적인 강의를 응원합니다.";
-            case 'ta': return "원생들의 든든한 멘토가 되어주셔서 감사합니다.";
-            case 'admin_assistant': return "완벽한 학원 운영을 위한 컨트롤 타워입니다.";
-            case 'parent': return "자녀의 학습 현황과 성장을 한눈에 확인하세요.";
-            case 'student': return "오늘도 목표를 향해 힘차게 달려볼까요?";
-            default: return "환영합니다.";
-        }
-    };
+    const visibleCards = DASHBOARD_CARDS.filter(card => 
+        card.roles.includes(currentUser.role) && 
+        (!card.showCondition || card.showCondition(currentUser))
+    );
 
     return (
-        <div className="max-w-screen-2xl mx-auto space-y-8 animate-in fade-in pb-20">
-            <div className="bg-gradient-to-r from-slate-900 to-indigo-900 rounded-[32px] p-8 md:p-10 shadow-2xl relative overflow-hidden">
-                <div className="absolute right-0 top-0 w-64 h-64 bg-indigo-500/20 rounded-full blur-[80px]"></div>
-                <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                    <div>
-                        <span className="inline-block px-3 py-1 bg-white/10 border border-white/20 text-white text-xs font-black rounded-full mb-3">
-                            {currentUser.role.toUpperCase()} MODE
-                        </span>
-                        <h1 className="text-3xl md:text-4xl font-black text-white mb-2 tracking-tight">
-                            안녕하세요, {currentUser.name}님! 👋
-                        </h1>
-                        <p className="text-indigo-200 font-medium text-base md:text-lg">
-                            {getWelcomeMessage()}
-                        </p>
-                    </div>
-                    {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
-                        <button onClick={() => navigate('/consult')} className="bg-indigo-600 text-white hover:bg-indigo-500 font-black px-6 py-4 rounded-2xl flex items-center gap-2 shadow-lg transition-all active:scale-95 whitespace-nowrap">
-                            ⚡ 10초 빠른 신규 상담 등록
-                        </button>
-                    )}
+        <div className="space-y-6 animate-in fade-in pb-10">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-8 rounded-3xl shadow-lg flex justify-between items-center flex-wrap gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold mb-2">안녕하세요, {currentUser.name}님! 👋</h1>
+                    <p className="opacity-90 text-lg">오늘도 임페리얼 시스템과 함께 효율적인 하루 보내세요.</p>
                 </div>
+                {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
+                    <button onClick={() => navigate('/consult')} className="bg-indigo-900/40 text-white border border-indigo-200/30 px-6 py-4 rounded-2xl font-black text-base shadow-lg hover:bg-indigo-900/60 active:scale-95 transition-all flex items-center gap-2">
+                        ⚡ 10초 빠른 신규 상담 등록
+                    </button>
+                )}
             </div>
 
-            <div className="space-y-10">
-                {authorizedGroups.map((group, gIdx) => (
-                    <section key={gIdx} className="space-y-4">
-                        <div className="flex items-end gap-3 px-2">
-                            <h2 className="text-xl font-black text-slate-800">{group.title}</h2>
-                            <p className="text-sm font-bold text-slate-400 hidden md:block pb-0.5">{group.description}</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {visibleCards.map((card, index) => (
+                    <div key={index} onClick={() => navigate(card.path)} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md hover:border-blue-200 cursor-pointer group active:scale-95 transition-all flex flex-col h-full">
+                        <div className="flex items-center gap-4 mb-3">
+                            <div className={`p-3 rounded-xl transition-colors ${card.bg} ${card.color} ${card.hoverBg} group-hover:text-white`}>
+                                <card.icon size={28} />
+                            </div>
+                            <h2 className="text-lg font-bold text-gray-800">{card.label}</h2>
                         </div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
-                            {group.items.map((item, iIdx) => {
-                                // 🚀 방탄 렌더링: 아이콘 누락 시 기본값 적용
-                                const IconObj = (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon;
-                                const SafeIcon = IconObj || Activity;
-                                const displayLabel = (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name;
-
-                                return (
-                                    <button
-                                        key={iIdx}
-                                        onClick={() => navigate(item.path)}
-                                        className="group relative bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 text-left flex flex-col justify-between h-40 hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-hidden"
-                                    >
-                                        <div className={`absolute -right-6 -top-6 w-24 h-24 bg-gradient-to-br ${group.theme} opacity-5 rounded-full group-hover:scale-150 transition-transform duration-500`}></div>
-                                        
-                                        <div className="relative z-10">
-                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 bg-gradient-to-br ${group.theme} text-white shadow-md group-hover:scale-110 transition-transform duration-300`}>
-                                                <SafeIcon size={24} />
-                                            </div>
-                                            <h3 className="font-black text-slate-800 text-lg group-hover:text-indigo-600 transition-colors">
-                                                {displayLabel}
-                                            </h3>
-                                        </div>
-                                        
-                                        <div className="relative z-10 flex justify-between items-end w-full mt-2">
-                                            <p className="text-xs font-bold text-slate-500 leading-relaxed pr-4 line-clamp-2">
-                                                {item.desc}
-                                            </p>
-                                            <ArrowRight size={18} className="text-slate-300 group-hover:text-indigo-600 transform group-hover:translate-x-1 transition-all shrink-0" />
-                                        </div>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </section>
+                        <p className="text-sm text-gray-500 leading-relaxed flex-1">{card.desc}</p>
+                    </div>
                 ))}
             </div>
         </div>
@@ -541,40 +443,65 @@ const Dashboard = ({ currentUser }) => {
 };
 
 const AppLayout = ({ currentUser, handleLogout }) => {
+  const { users } = useData(); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
-  const groupedMenus = useMemo(() => {
-      const groups = {};
-      MENU_GROUPS.forEach(group => {
-          const items = group.items.filter(item => {
-              const hasRole = item.roles.includes(currentUser.role);
-              const passCondition = item.condition ? item.condition(currentUser) : true;
-              return hasRole && passCondition;
-          });
-          
-          if (items.length > 0) {
-              groups[group.title] = items.map(item => ({
-                  path: item.path,
-                  label: (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name,
-                  icon: (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon,
-              }));
-          }
-      });
-      return groups;
-  }, [currentUser]);
-
-  const [expandedCategories, setExpandedCategories] = useState({});
-  useEffect(() => {
-      const initials = {};
-      Object.keys(groupedMenus).forEach(cat => initials[cat] = true);
-      setExpandedCategories(initials);
-  }, [groupedMenus]);
+  const [expandedCategories, setExpandedCategories] = useState({
+      '학습 및 수강': ['student', 'parent'].includes(currentUser.role),
+      '학원 관제탑': ['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role),
+      '학원 생활/소통': true,
+      '재무 및 행정': ['admin', 'admin_assistant'].includes(currentUser.role),
+      '시스템 설정': ['admin'].includes(currentUser.role),
+  });
 
   const toggleCategory = (category) => {
       setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
   };
+
+  const menuItems = useMemo(() => [
+    { category: '학원 관제탑', path: '/consult', label: '신규 상담 등록', icon: UserPlus2, roles: ['admin', 'admin_assistant', 'lecturer'] },
+    { category: '학원 관제탑', path: '/attendance', label: '통합 출결 관리', icon: UserCheck, roles: ['admin', 'lecturer', 'admin_assistant'] }, 
+    { category: '학원 관제탑', path: '/clinic', label: '클리닉 센터', icon: CalendarIcon, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { category: '학원 관제탑', path: '/clinic-tasks', label: '오늘의 할 일', icon: ClipboardList, roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
+    { category: '학원 관제탑', path: '/pickup', label: '픽업 신청', icon: Printer, roles: ['lecturer'] },
+
+    { category: '학습 및 수강', path: '/lectures', label: ['student', 'parent'].includes(currentUser.role) ? '수강 강의' : '강의 관리', icon: ['student', 'parent'].includes(currentUser.role) ? GraduationCap : Video, roles: ['admin', 'lecturer', 'student', 'parent', 'ta', 'admin_assistant'] },
+    { category: '학습 및 수강', path: '/strategy', label: '내신 연구소', icon: Brain, roles: ['student', 'parent', 'ta', 'lecturer', 'admin', 'admin_assistant'] },
+    { category: '학습 및 수강', path: '/exams', label: '기출 아카이브', icon: BookOpen, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] }, 
+    { category: '학습 및 수강', path: '/voca', label: ['student', 'parent'].includes(currentUser.role) ? '오늘의 영단어' : 'Voca 출제/관리', icon: BookText, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], showCondition: (user) => user.role === 'admin' || user.role === 'admin_assistant' || user.role === 'student' || user.role === 'parent' || (['lecturer', 'ta'].includes(user.role) && user.subject === '영어') },
+    
+    // 🚀 [CTO 패치] 영단어 챌린지 사이드바 메뉴 추가
+    { category: '학습 및 수강', path: '/voca-challenge', label: '영단어 챌린지', icon: Gamepad2, roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
+    
+    { category: '학습 및 수강', path: '/exam-diagnostics', label: '시험 진단 입력', icon: Target, roles: ['admin', 'lecturer', 'admin_assistant'] },
+    { category: '학습 및 수강', path: '/my-exams', label: '나의 시험 결과', icon: Target, roles: ['student', 'parent'] },
+    { category: '학습 및 수강', path: '/navigator', label: '입시 내비게이터', icon: Compass, roles: ['student', 'parent', 'admin', 'admin_assistant'] },
+
+    { category: '학원 생활/소통', path: '/universe', label: '아카데미 유니버스', icon: Rocket, roles: ['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'] },
+    { category: '학원 생활/소통', path: '/messages', label: '통합 메시지 센터', icon: MessageSquare, roles: ['admin', 'admin_assistant'] }, 
+    { category: '학원 생활/소통', path: '/work-schedule', label: '내 근무 스케줄', icon: Clock, roles: ['admin_assistant'] }, 
+
+    { category: '재무 및 행정', path: '/financial-dashboard', label: '재무 대시보드', icon: PieChart, roles: ['admin'] }, 
+    { category: '재무 및 행정', path: '/expense', label: '지출결의 등록', icon: Receipt, roles: ['admin', 'lecturer', 'ta', 'admin_assistant'] },
+    { category: '재무 및 행정', path: '/payroll-mgmt', label: '월급 정산 관리', icon: Wallet, roles: ['admin'] },
+    { category: '재무 및 행정', path: '/payroll-check', label: '내 월급 확인', icon: CircleDollarSign, roles: ['admin', 'ta', 'lecturer', 'admin_assistant'] },
+    { category: '재무 및 행정', path: '/users', label: '사용자 권한 관리', icon: User, roles: ['admin', 'admin_assistant'] }, 
+
+    { category: '시스템 설정', path: '/settings', label: '환경 설정', icon: Settings, roles: ['admin'] }, 
+  ], [currentUser]);
+
+  const groupedMenus = useMemo(() => {
+      const groups = {};
+      menuItems.forEach(item => {
+          if (item.roles.includes(currentUser.role) && (!item.showCondition || item.showCondition(currentUser))) {
+              if (!groups[item.category]) groups[item.category] = [];
+              groups[item.category].push(item);
+          }
+      });
+      return groups;
+  }, [menuItems, currentUser]);
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
@@ -608,15 +535,13 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <div className="space-y-1 animate-in slide-in-from-top-2 duration-200">
                             {items.map((item) => {
                                 const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
-                                // 🚀 방탄 렌더링: 사이드바 아이콘 에러 차단
-                                const SafeIcon = item.icon || Activity;
                                 return (
                                     <button 
                                         key={item.path} 
                                         onClick={() => { navigate(item.path); setIsSidebarOpen(false); }} 
                                         className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all ${isActive ? 'bg-blue-50 text-blue-600 font-bold shadow-sm' : 'text-gray-600 hover:bg-gray-50'}`}
                                     >
-                                        <SafeIcon size={18} className={isActive ? 'text-blue-600' : 'text-gray-400'} /> 
+                                        <item.icon size={18} className={isActive ? 'text-blue-600' : 'text-gray-400'} /> 
                                         <span className="text-sm">{item.label}</span>
                                     </button>
                                 );
@@ -629,11 +554,11 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         
         <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
             <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
-                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser?.name?.[0] || 'U'}</div>
+                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser.name?.[0]}</div>
                 <div className="flex flex-col text-left flex-1">
-                    <span className="font-bold text-sm text-gray-900 leading-tight">{currentUser?.name || '사용자'}</span>
+                    <span className="font-bold text-sm text-gray-900 leading-tight">{currentUser.name}</span>
                     <span className="text-xs text-gray-500 uppercase">
-                        {currentUser?.role === 'admin_assistant' ? 'ADMIN ASSISTANT' : currentUser?.role}
+                        {currentUser.role === 'admin_assistant' ? 'ADMIN ASSISTANT' : currentUser.role}
                     </span>
                 </div>
             </div>
@@ -689,6 +614,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                                 : <VocaManager currentUser={currentUser} />
                         } />
 
+                        {/* 🚀 [CTO 패치] 영단어 챌린지 라우팅 추가 */}
                         <Route path="/voca-challenge" element={['student', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <VocaChallenge currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
 
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -790,14 +716,14 @@ const AppContent = () => {
 
                   if (originalDocId && originalDocId !== finalSafeId) {
                       setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
-                          .then(() => {
-                              const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
-                              deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
-                          })
-                          .catch(e => console.error("Self-healing failed:", e));
+                         .then(() => {
+                             const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
+                             deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
+                         })
+                         .catch(e => console.error("Self-healing failed:", e));
                   } else {
                       updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
-                          .catch(e => console.error("Last login update failed:", e));
+                         .catch(e => console.error("Last login update failed:", e));
                   }
 
                   setCurrentUser(userData);
