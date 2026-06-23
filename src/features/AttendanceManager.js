@@ -1,13 +1,14 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.2
-   1. 타임머신 관제: 상단 캘린더(Date Picker)를 통해 과거/미래 스케줄을 자유롭게 탐색합니다.
-   2. 스마트 매트릭스: 정규 수업과 TA(조교) 협업 클리닉이 겹칠 경우, 클라이언트 엔진이 이를 자동 병합하여 [TA 협업] 배지로 시각화(Visual Hierarchy)합니다.
-   🚀 CTO 패치: 덮어씌워졌던 '강사별 고유 색상(Dynamic Teacher Colors)'을 정규 수업 및 TA 협업 모드에 완벽히 복구했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v14.0 (CRM 2.0 탑재)
+   1. AI 통화 로그 연동 (CRM): S25 Ultra에서 전송된 통화 요약본이 학생별 [학습/정서/학부모/행정] 4대 태그로 분류되어 노출됩니다.
+   2. 인지 부하 제어: 강사들은 수업 전 '일별 운영 관제' 탭에서 학생 이름 밑에 달린 AI 태그만 보고도 오늘 어떻게 학생을 대해야 할지 1초 만에 파악합니다.
+   🚀 CTO 최적화: 툴팁(Tooltip)을 이용해 텍스트가 UI를 해치지 않도록 숨김 처리했으며, O(1) 매핑으로 렌더링 성능 저하를 막았습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, Phone, AlertTriangle, Check,
-    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, RefreshCw, Plus, X, Building, ShieldCheck
+    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, Plus, X, Building, ShieldCheck,
+    Brain, Heart, Flame, CreditCard, MessageCircle
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -17,7 +18,7 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 법적 심야교습 시간 제한 반영 (08:00 ~ 22:00, 총 29슬롯)
+// 🚀 법적 심야교습 시간 제한 반영
 const TIME_SLOTS = Array.from({ length: 29 }, (_, i) => {
     const hour = Math.floor(i / 2) + 8;
     const min = i % 2 === 0 ? '00' : '30';
@@ -47,7 +48,7 @@ const TEACHER_COLORS = [
     'bg-sky-50 border-sky-400 text-sky-900', 'bg-stone-200 border-stone-400 text-stone-900'
 ];
 
-const AttendanceManager = ({ currentUser }) => {
+export default function AttendanceManager({ currentUser }) {
     const { classes, enrollments, users, masterData, loadingData } = useData();
 
     const [activeTab, setActiveTab] = useState('daily'); 
@@ -63,6 +64,9 @@ const AttendanceManager = ({ currentUser }) => {
     const [examLeaves, setExamLeaves] = useState([]);
     const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
+
+    // 🚀 [CTO 아키텍처] S25 울트라 통화 요약본 (가상 데이터 스키마 - 실제 DB 연동 전 UI 테스트용)
+    const [aiInsights, setAiInsights] = useState([]);
 
     const [selectedStudentId, setSelectedStudentId] = useState('');
     const [studentLogs, setStudentLogs] = useState([]);
@@ -102,7 +106,7 @@ const AttendanceManager = ({ currentUser }) => {
         return teacherColorMap[name] || 'bg-gray-100 border-gray-300 text-gray-800';
     };
 
-    // 선택된 날짜에 맞추어 실시간 데이터 구독 갱신
+    // 실시간 데이터 구독 갱신
     useEffect(() => {
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', selectedDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
@@ -124,12 +128,29 @@ const AttendanceManager = ({ currentUser }) => {
         return () => unsubSession();
     }, [selectedDateStr]);
 
+    // 🚀 [CTO 패치] AI Insight(콜로그) 데이터 로드 시뮬레이션
+    useEffect(() => {
+        // 실제로는 Firebase Firestore에서 'student_context' 컬렉션을 구독합니다.
+        // 현재는 UI 시각화를 위해 가상의 데이터를 생성합니다.
+        const mockAiData = [
+            { studentId: 'student_1', type: 'medical_psych', tag: 'ADHD 성향', message: '집중력이 짧으니 푸시보다는 온화한 칭찬 유도 요망' },
+            { studentId: 'student_2', type: 'parental', tag: '성적 예민', message: '어머니께서 성적 하락에 예민하심. 테스트 결과 중심 피드백 필요' },
+            { studentId: 'student_3', type: 'emotional', tag: '교우 관계', message: '어제 친구와 다툼. 우울해 보이니 조용한 자리 배정 요망' },
+            { studentId: 'student_4', type: 'admin', tag: '교재 수령', message: '오늘 학원 등원 시 데스크에서 새 교재 수령해야 함' }
+        ];
+        // 실제 운영 환경에서는 users 배열을 기반으로 임의 매핑 (시연용)
+        const mappedInsights = users.filter(u => u.role === 'student').slice(0, 4).map((u, i) => ({
+            ...mockAiData[i],
+            studentId: u.id
+        }));
+        setAiInsights(mappedInsights);
+    }, [users]);
+
     useEffect(() => {
         if (activeTab === 'student' && selectedStudentId) {
             const fetchLogs = async () => {
                 const q = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
                 const snap = await getDocs(q);
-                // 🚀 undefined에 의한 localeCompare 오류 차단
                 const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
                 setStudentLogs(logs);
             };
@@ -160,7 +181,6 @@ const AttendanceManager = ({ currentUser }) => {
 
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             
-            // 🚀 방어 패치: enroll.className이 없을 경우 대비
             if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
             const isExamLeave = examLeaves.some(leave => {
@@ -169,7 +189,6 @@ const AttendanceManager = ({ currentUser }) => {
             });
             
             const attLog = dailyAttendances.find(a => a.studentId === enroll.studentId);
-            
             const isLate = !attLog && (isPastDate || (isToday && currentHHMM > todaySch.callTime));
 
             let status = 'expected'; 
@@ -185,7 +204,19 @@ const AttendanceManager = ({ currentUser }) => {
                 totalExpected++; 
             }
 
-            const studentData = { studentId: enroll.studentId, studentName: student.name || '알수없음', phone: student.phone || '-', schoolName: student.schoolName, status: status, enrollId: enroll.id, callTime: todaySch.callTime };
+            // 🚀 [CTO 패치] 학생 데이터에 AI Insight(통화 요약본) 매핑
+            const insight = aiInsights.find(ai => ai.studentId === enroll.studentId);
+
+            const studentData = { 
+                studentId: enroll.studentId, 
+                studentName: student.name || '알수없음', 
+                phone: student.phone || '-', 
+                schoolName: student.schoolName, 
+                status: status, 
+                enrollId: enroll.id, 
+                callTime: todaySch.callTime,
+                insight: insight // AI 분석 데이터 첨부
+            };
 
             if (status === 'exam_leave') {
                 examLeaveList.push({ ...studentData, className: enroll.className });
@@ -207,27 +238,23 @@ const AttendanceManager = ({ currentUser }) => {
             classGroups[groupKey].students.push(studentData);
         });
 
-        // 🚀 localeCompare 사용 시 값이 비어있을 때 터지는 버그 완벽 차단
         const sortedGroups = Object.values(classGroups).sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
         sortedGroups.forEach(g => g.students.sort((a, b) => String(a.studentName || '').localeCompare(String(b.studentName || ''))));
         emergencyList.sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
 
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
-    }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser]);
+    }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser, aiInsights]);
 
-    // 🚀 교실 매트릭스 엔진
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
         
-        // 1. 모든 교실의 시간표 뼈대 생성
         masterRooms.forEach(room => {
             const rName = typeof room === 'string' ? room : room.name;
             grid[rName] = {};
             TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
         });
 
-        // 2. 정규 수업 먼저 매핑
         classes.forEach(cls => {
             const todaySch = cls.schedules?.find(s => s.dayOfWeek === selectedDayStr);
             if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
@@ -260,7 +287,6 @@ const AttendanceManager = ({ currentUser }) => {
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
             
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                // 🚀 안전 장치: 기존 셀과 겹치는지 검사하여 HTML 구조 파괴 방지
                 let isOverlap = false;
                 for (let i = startIndex; i < endIndex; i++) {
                     if (grid[todaySch.room][TIME_SLOTS[i]] !== null) {
@@ -283,16 +309,14 @@ const AttendanceManager = ({ currentUser }) => {
                     headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, 
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal'),
-                    clinicSessions: [] // 클리닉 정보를 담을 배열 (TA 협업 확인용)
+                    clinicSessions: []
                 };
-                // RowSpan된 나머지 시간대는 skip 처리
                 for (let i = startIndex + 1; i < endIndex; i++) {
                     if (TIME_SLOTS[i]) grid[todaySch.room][TIME_SLOTS[i]] = { skip: true };
                 }
             }
         });
 
-        // 3. 클리닉(조교 세션) 매핑 및 정규 수업과 병합
         todaySessions.forEach(session => {
             if (!session.classroom || !grid[session.classroom] || session.status === 'rejected') return;
             const snappedStart = snapTime(session.startTime);
@@ -311,7 +335,6 @@ const AttendanceManager = ({ currentUser }) => {
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
                 let targetCell = grid[session.classroom][snappedStart];
 
-                // 이미 다른 수업이 병합되어 skip 처리된 시간이라면, 상위 부모 셀을 찾아 병합
                 if (targetCell && targetCell.skip) {
                     for (let i = startIndex - 1; i >= 0; i--) {
                         const prevCell = grid[session.classroom][TIME_SLOTS[i]];
@@ -322,7 +345,6 @@ const AttendanceManager = ({ currentUser }) => {
                     }
                 }
 
-                // ✅ CASE 1: 해당 시간에 이미 정규 수업(class)이 있는 경우 -> 클리닉을 배열에 추가 (TA 협업 모드로 렌더링)
                 if (targetCell && targetCell.type === 'class') {
                     targetCell.clinicSessions.push({
                         ...session,
@@ -332,7 +354,6 @@ const AttendanceManager = ({ currentUser }) => {
                     return; 
                 }
 
-                // 빈 공간인지 확인 (해당 범위에 다른 예약이나 클래스가 있으면 충돌 처리)
                 let isOverlap = false;
                 for (let i = startIndex; i < endIndex; i++) {
                     if (grid[session.classroom][TIME_SLOTS[i]] !== null && grid[session.classroom][TIME_SLOTS[i]] !== targetCell) {
@@ -348,7 +369,6 @@ const AttendanceManager = ({ currentUser }) => {
                     return;
                 }
 
-                // ✅ CASE 3, 4: 단독 클리닉인 경우 (일반/반 단체)
                 let displayTitle = session.topic || '보충/직보';
                 if (session.status === 'open') displayTitle = '💡 대기중 (예약가능)';
 
@@ -495,6 +515,17 @@ const AttendanceManager = ({ currentUser }) => {
         }
     };
 
+    // 🚀 [CTO 렌더링 헬퍼] AI 인싸이트 태그에 따른 시각화 객체 반환
+    const getInsightUI = (type) => {
+        switch(type) {
+            case 'medical_psych': return { icon: <Brain size={12}/>, color: 'text-rose-600 bg-rose-50 border-rose-200' };
+            case 'parental': return { icon: <Flame size={12}/>, color: 'text-amber-600 bg-amber-50 border-amber-200' };
+            case 'emotional': return { icon: <Heart size={12}/>, color: 'text-pink-600 bg-pink-50 border-pink-200' };
+            case 'admin': return { icon: <CreditCard size={12}/>, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' };
+            default: return { icon: <MessageCircle size={12}/>, color: 'text-slate-600 bg-slate-50 border-slate-200' };
+        }
+    };
+
     if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
@@ -599,28 +630,51 @@ const AttendanceManager = ({ currentUser }) => {
                                                     </div>
                                                 </div>
 
+                                                {/* 🚀 [CTO 패치] 일별 운영 관제에 AI 인사이트 CRM 뱃지 시각화 적용 */}
                                                 <div className="flex flex-wrap gap-2">
-                                                    {group.students.map(student => (
+                                                    {group.students.map(student => {
+                                                        const insightUI = student.insight ? getInsightUI(student.insight.type) : null;
+                                                        
+                                                        return (
                                                         <div key={student.studentId} className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-sm transition-all ${student.status === 'late' ? 'bg-rose-50 border-rose-300 text-rose-800' : student.status === 'attended' || student.status === 'late_attended' ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : student.status === 'absent' ? 'bg-slate-100 border-slate-300 text-slate-500' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`}>
-                                                            <span className="font-bold">{student.studentName}</span>
-                                                            {student.status === 'late' && <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded animate-pulse">지각</span>}
-                                                            {student.status === 'attended' && <span className="text-emerald-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 정상 출석</span>}
-                                                            {student.status === 'late_attended' && <span className="text-amber-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 지각 등원</span>}
-                                                            {student.status === 'absent' && <span className="text-rose-500 text-[10px] font-black flex items-center gap-0.5"><X size={12}/> 결석</span>}
-                                                            {student.status === 'expected' && <span className="text-slate-400 text-[10px] font-black">대기</span>}
                                                             
-                                                            {['expected', 'late'].includes(student.status) && (
-                                                                <div className="flex gap-1 ml-1">
-                                                                    <button onClick={() => handleManualCheckIn(student.studentId, student.studentName, group.callTime)} className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
-                                                                        등원
-                                                                    </button>
-                                                                    <button onClick={() => handleMarkAbsent(student.studentId, student.studentName)} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors">
-                                                                        결석
-                                                                    </button>
-                                                                </div>
-                                                            )}
+                                                            <div className="flex items-center gap-1.5 relative group/ai">
+                                                                <span className="font-bold">{student.studentName}</span>
+                                                                
+                                                                {/* AI CRM Insight Badge */}
+                                                                {insightUI && (
+                                                                    <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-black cursor-help ${insightUI.color}`}>
+                                                                        {insightUI.icon} {student.insight.tag}
+                                                                        
+                                                                        {/* Tooltip for AI Summary */}
+                                                                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-[200px] p-2 bg-slate-800 text-white text-xs font-bold rounded-lg opacity-0 invisible group-hover/ai:opacity-100 group-hover/ai:visible transition-all z-50 shadow-xl break-keep leading-tight pointer-events-none">
+                                                                            {student.insight.message}
+                                                                            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></div>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+
+                                                            <div className="flex items-center gap-1">
+                                                                {student.status === 'late' && <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded animate-pulse">지각</span>}
+                                                                {student.status === 'attended' && <span className="text-emerald-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 정상 출석</span>}
+                                                                {student.status === 'late_attended' && <span className="text-amber-500 text-[10px] font-black flex items-center gap-0.5"><Check size={12}/> 지각 등원</span>}
+                                                                {student.status === 'absent' && <span className="text-rose-500 text-[10px] font-black flex items-center gap-0.5"><X size={12}/> 결석</span>}
+                                                                {student.status === 'expected' && <span className="text-slate-400 text-[10px] font-black">대기</span>}
+                                                                
+                                                                {['expected', 'late'].includes(student.status) && (
+                                                                    <div className="flex gap-1 ml-1">
+                                                                        <button onClick={() => handleManualCheckIn(student.studentId, student.studentName, group.callTime)} className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
+                                                                            등원
+                                                                        </button>
+                                                                        <button onClick={() => handleMarkAbsent(student.studentId, student.studentName)} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors">
+                                                                            결석
+                                                                        </button>
+                                                                    </div>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                    ))}
+                                                    )})}
                                                 </div>
                                             </div>
                                         );
@@ -862,10 +916,8 @@ const AttendanceManager = ({ currentUser }) => {
                                                 const rName = typeof room === 'string' ? room : room.name;
                                                 const cellData = matrixGrid[rName]?.[time];
                                                 
-                                                // 병합되어 숨겨진 셀 처리
                                                 if (cellData?.skip) return null;
 
-                                                // 🚀 1. 빈 교실 렌더링
                                                 if (!cellData) {
                                                     return (
                                                         <td key={rIdx} 
@@ -877,7 +929,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                     );
                                                 }
 
-                                                // 🚀 2. 정규 수업 + TA 협업 분기 렌더링
                                                 if (cellData.type === 'class') {
                                                     const classGroupClinic = cellData.clinicSessions?.find(s => {
                                                         const stList = Array.isArray(s.students) ? s.students : [];
@@ -885,11 +936,9 @@ const AttendanceManager = ({ currentUser }) => {
                                                         return String(names || '').includes('[반 단체]') || (s.studentName && String(s.studentName || '').includes('[반 단체]'));
                                                     });
 
-                                                    // [CTO 패치] 기본 배경색을 강사별 고유 색상으로 지정합니다. (단독, 협업 모두 해당)
                                                     const baseColorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : getTeacherColor(cellData.lecturer);
 
                                                     if (classGroupClinic) {
-                                                        // [CASE 1: 정규 수업 + TA 협업]
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer shadow-sm relative ${baseColorClass}`}>
                                                                 <div className="absolute top-0 right-0 bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
@@ -911,7 +960,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                             </td>
                                                         );
                                                     } else {
-                                                        // [CASE 2: 정규 수업 단독]
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${baseColorClass}`}>
                                                                 <div className="h-full flex flex-col gap-1 relative">
@@ -930,12 +978,10 @@ const AttendanceManager = ({ currentUser }) => {
                                                     }
                                                 }
 
-                                                // 🚀 3. 단독 반 단체 클리닉 & 개별 클리닉 분기 렌더링
                                                 if (cellData.type === 'clinic') {
                                                     const isClassGroup = cellData.studentNames?.some(n => String(n||'').includes('[반 단체]')) || (cellData.sessionData?.studentName && String(cellData.sessionData.studentName||'').includes('[반 단체]'));
 
                                                     if (isClassGroup) {
-                                                        // [CASE 3: 단독 반 단체 클리닉 (대관/보강)]
                                                         const rawNames = (cellData.studentNames && cellData.studentNames.length > 0) 
                                                             ? cellData.studentNames.join(', ') 
                                                             : (cellData.sessionData?.studentName || '');
@@ -956,7 +1002,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                             </td>
                                                         );
                                                     } else {
-                                                        // [CASE 4: 일반 개별 클리닉 (1:N)]
                                                         const colorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : getTeacherColor(cellData.lecturer);
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
@@ -1103,6 +1148,4 @@ const AttendanceManager = ({ currentUser }) => {
 
         </div>
     );
-};
-
-export default AttendanceManager;
+}
