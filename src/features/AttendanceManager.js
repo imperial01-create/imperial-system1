@@ -1,6 +1,7 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.0
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.1
    1. 타임머신 관제: 상단 캘린더(Date Picker)를 통해 과거/미래 스케줄을 자유롭게 탐색합니다.
-   2. 스마트 매트릭스: 정규 수업과 TA(조교) 협업 클리닉이 겹칠 경우, 클라이언트 엔진이 이를 자동 병합하여 [TA 협업] 배지로 시각화(Visual Hierarchy)합니다. */
+   2. 스마트 매트릭스: 정규 수업과 TA(조교) 협업 클리닉이 겹칠 경우, 클라이언트 엔진이 이를 자동 병합하여 [TA 협업] 배지로 시각화(Visual Hierarchy)합니다.
+   🚀 CTO 패치: 매트릭스 RowSpan HTML 구조 파괴 및 Null String 치명적 오류를 완벽히 방어하는 안전망 탑재 */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -34,6 +35,17 @@ const snapTime = (timeStr) => {
     const snappedM = m < 30 ? '00' : '30';
     return `${String(h).padStart(2, '0')}:${snappedM}`;
 };
+
+const TEACHER_COLORS = [
+    'bg-indigo-50 border-indigo-400 text-indigo-900', 'bg-emerald-50 border-emerald-400 text-emerald-900',
+    'bg-amber-50 border-amber-400 text-amber-900', 'bg-rose-50 border-rose-400 text-rose-900',
+    'bg-cyan-50 border-cyan-400 text-cyan-900', 'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
+    'bg-lime-50 border-lime-400 text-lime-900', 'bg-orange-50 border-orange-400 text-orange-900',
+    'bg-blue-50 border-blue-400 text-blue-900', 'bg-purple-50 border-purple-400 text-purple-900',
+    'bg-pink-50 border-pink-400 text-pink-900', 'bg-teal-50 border-teal-400 text-teal-900',
+    'bg-yellow-50 border-yellow-500 text-yellow-900', 'bg-red-50 border-red-400 text-red-900',
+    'bg-sky-50 border-sky-400 text-sky-900', 'bg-stone-200 border-stone-400 text-stone-900'
+];
 
 const AttendanceManager = ({ currentUser }) => {
     const { classes, enrollments, users, masterData, loadingData } = useData();
@@ -72,6 +84,23 @@ const AttendanceManager = ({ currentUser }) => {
         });
         return Array.from(schools).sort();
     }, [users]);
+
+    const teacherColorMap = useMemo(() => {
+        const map = {};
+        const teacherNames = [...new Set(
+            users.filter(u => ['lecturer', 'ta', 'admin_assistant'].includes(u.role)).map(u => u.name)
+        )].sort(); 
+
+        teacherNames.forEach((name, index) => {
+            map[name] = TEACHER_COLORS[index % TEACHER_COLORS.length];
+        });
+        return map;
+    }, [users]);
+
+    const getTeacherColor = (name) => {
+        if (!name || name === '미지정') return 'bg-slate-100 border-slate-300 text-slate-700';
+        return teacherColorMap[name] || 'bg-gray-100 border-gray-300 text-gray-800';
+    };
 
     // 선택된 날짜에 맞추어 실시간 데이터 구독 갱신
     useEffect(() => {
@@ -129,7 +158,9 @@ const AttendanceManager = ({ currentUser }) => {
             if (!student) return;
 
             const lecturer = users.find(u => u.id === enroll.lecturerId);
-            if (searchQuery && !student.name.includes(searchQuery) && !enroll.className.includes(searchQuery)) return;
+            
+            // 🚀 [CTO 방어 패치] enroll.className이 없을 경우 대비
+            if (searchQuery && !student.name.includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
             const isExamLeave = examLeaves.some(leave => {
                 const isTargetMatch = leave.schoolName ? (leave.schoolName === student.schoolName) : (leave.studentId === student.id);
@@ -182,7 +213,7 @@ const AttendanceManager = ({ currentUser }) => {
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser]);
 
-    // 🚀 [CTO 패치] 교실 매트릭스 엔진 (정규 수업과 반 단체 클리닉 병합 렌더링)
+    // 🚀 [CTO 패치] 교실 매트릭스 엔진 (정규 수업과 반 단체 클리닉 병합 렌더링 & RowSpan 파괴 방어)
     const matrixGrid = useMemo(() => {
         const grid = {};
         const masterRooms = masterData?.classrooms || [];
@@ -227,6 +258,24 @@ const AttendanceManager = ({ currentUser }) => {
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
             
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+                // 🚀 안전 장치: 기존 셀과 겹치는지 검사하여 HTML 구조 파괴(빈 화면) 방지
+                let isOverlap = false;
+                for (let i = startIndex; i < endIndex; i++) {
+                    if (grid[todaySch.room][TIME_SLOTS[i]] !== null) {
+                        isOverlap = true;
+                        break;
+                    }
+                }
+
+                if (isOverlap) {
+                    if (!grid[todaySch.room][snappedStart]) {
+                        grid[todaySch.room][snappedStart] = { skip: false, type: 'class', conflict: true, title: '배정 중복', lecturer: '오류', rowSpan: 1, clinicSessions: [] };
+                    } else if (!grid[todaySch.room][snappedStart].skip) {
+                        grid[todaySch.room][snappedStart].conflict = true;
+                    }
+                    return;
+                }
+
                 grid[todaySch.room][snappedStart] = {
                     type: 'class', title: cls.name, lecturer: lecturer?.name || '미지정', 
                     headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, 
@@ -234,6 +283,7 @@ const AttendanceManager = ({ currentUser }) => {
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal'),
                     clinicSessions: [] // 클리닉 정보를 담을 배열 (TA 협업 확인용)
                 };
+                // RowSpan된 나머지 시간대는 skip 처리
                 for (let i = startIndex + 1; i < endIndex; i++) {
                     if (TIME_SLOTS[i]) grid[todaySch.room][TIME_SLOTS[i]] = { skip: true };
                 }
@@ -257,21 +307,42 @@ const AttendanceManager = ({ currentUser }) => {
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
 
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                const existingCell = grid[session.classroom][snappedStart];
+                let targetCell = grid[session.classroom][snappedStart];
+
+                // 🚀 안전 장치: 이미 다른 수업이 병합되어 skip 처리된 시간이라면, 상위 부모 셀을 찾아 병합
+                if (targetCell && targetCell.skip) {
+                    for (let i = startIndex - 1; i >= 0; i--) {
+                        const prevCell = grid[session.classroom][TIME_SLOTS[i]];
+                        if (prevCell && !prevCell.skip) {
+                            targetCell = prevCell;
+                            break;
+                        }
+                    }
+                }
 
                 // ✅ CASE 1: 해당 시간에 이미 정규 수업(class)이 있는 경우 -> 클리닉을 배열에 추가 (TA 협업 모드로 렌더링)
-                if (existingCell && existingCell.type === 'class') {
-                    existingCell.clinicSessions.push({
+                if (targetCell && targetCell.type === 'class') {
+                    targetCell.clinicSessions.push({
                         ...session,
                         headcount: currentHeadcount,
                         studentNames: expectedStudentNames
                     });
-                    return; // 덮어쓰지 않고 병합만 수행
+                    return; // 덮어쓰지 않고 병합만 수행하여 구조 보존
                 }
 
-                // ✅ CASE 2: 해당 시간에 완전히 다른 클리닉이 있는 경우 -> 충돌(Conflict) 처리
-                if (existingCell && existingCell.type === 'clinic') {
-                    existingCell.conflict = true;
+                // 🚀 안전 장치: 빈 공간인지 확인 (해당 범위에 다른 예약이나 클래스가 있으면 충돌 처리)
+                let isOverlap = false;
+                for (let i = startIndex; i < endIndex; i++) {
+                    if (grid[session.classroom][TIME_SLOTS[i]] !== null && grid[session.classroom][TIME_SLOTS[i]] !== targetCell) {
+                        isOverlap = true;
+                        break;
+                    }
+                }
+
+                if (isOverlap) {
+                    if (targetCell && !targetCell.skip) {
+                        targetCell.conflict = true;
+                    }
                     return;
                 }
 
@@ -715,7 +786,7 @@ const AttendanceManager = ({ currentUser }) => {
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {examLeaves.map(leave => {
-                                        const isExpired = todayDateStr > leave.endDate;
+                                        const isExpired = selectedDateStr > leave.endDate;
                                         const displayName = leave.schoolName ? `${leave.schoolName} 전체` : `${leave.studentName} 학생 (구버전)`;
                                         const iconMode = leave.schoolName ? <School size={16} className="text-indigo-500 mr-1 inline"/> : <User size={16} className="text-gray-400 mr-1 inline"/>;
                                         
@@ -756,9 +827,9 @@ const AttendanceManager = ({ currentUser }) => {
                             <p className="opacity-90 text-sm">강사별 고유 색상 식별. 빈 칸을 클릭하여 직보/보충을 즉시 배정하세요.</p>
                         </div>
                         <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/60 rounded-sm"></span> 정규반</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/20 rounded-sm"></span> 클리닉/직보</span>
-                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/50 border border-slate-300 rounded-sm"></span> 빈 교실</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/90 rounded-sm"></span> 정규반</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/40 rounded-sm"></span> 클리닉/직보</span>
+                            <span className="flex items-center gap-1"><span className="w-3 h-3 bg-purple-500 rounded-sm"></span> 단체 대관</span>
                         </div>
                     </div>
 
@@ -789,9 +860,10 @@ const AttendanceManager = ({ currentUser }) => {
                                                 const rName = typeof room === 'string' ? room : room.name;
                                                 const cellData = matrixGrid[rName]?.[time];
                                                 
+                                                // 병합되어 숨겨진 셀 처리
                                                 if (cellData?.skip) return null;
 
-                                                // 🚀 [CTO 패치] 빈 교실 렌더링
+                                                // 🚀 [CTO 패치] 1. 빈 교실 렌더링
                                                 if (!cellData) {
                                                     return (
                                                         <td key={rIdx} 
@@ -803,9 +875,8 @@ const AttendanceManager = ({ currentUser }) => {
                                                     );
                                                 }
 
-                                                // 🚀 [CTO 패치] TA 협업, 단체 보강, 정규 수업 분기 렌더링
+                                                // 🚀 [CTO 패치] 2. 정규 수업 + TA 협업 분기 렌더링
                                                 if (cellData.type === 'class') {
-                                                    // 해당 정규 수업 시간에 '[반 단체]' 클리닉이 겹쳐 있는지 확인 (TA 협업 모드)
                                                     const classGroupClinic = cellData.clinicSessions?.find(s => {
                                                         const stList = Array.isArray(s.students) ? s.students : [];
                                                         const names = stList.map(st => st.name).join('');
@@ -816,7 +887,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                         // [CASE 1: 정규 수업 + TA 협업]
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className="p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer bg-blue-50 border-blue-400 text-blue-900 shadow-sm relative">
-                                                                <div className="absolute top-0 right-0 bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg rounded-tr-md flex items-center gap-0.5 shadow-sm">
+                                                                <div className="absolute top-0 right-0 bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
                                                                     <ShieldCheck size={10} /> TA 협업
                                                                 </div>
                                                                 <div className="font-black text-sm leading-tight break-keep pr-14 mt-1">{cellData.title}</div>
@@ -837,6 +908,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                                             📚 정규
                                                                         </span>
                                                                         {cellData.warn === 'over' && <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm border border-rose-600">초과</span>}
+                                                                        {cellData.conflict && <span className="bg-rose-600 text-white text-[10px] px-1.5 py-0.5 rounded font-black shadow-sm flex items-center gap-1 border border-rose-800"><AlertTriangle size={10}/> 중복</span>}
                                                                     </div>
                                                                     <div className="font-black text-sm leading-tight break-keep">{cellData.title}</div>
                                                                     <div className="text-xs font-bold opacity-80">{cellData.lecturer} 강사</div>
@@ -846,17 +918,20 @@ const AttendanceManager = ({ currentUser }) => {
                                                     }
                                                 }
 
+                                                // 🚀 [CTO 패치] 3. 단독 반 단체 클리닉 & 개별 클리닉 분기 렌더링
                                                 if (cellData.type === 'clinic') {
                                                     const isClassGroup = cellData.studentNames?.some(n => n.includes('[반 단체]')) || (cellData.sessionData?.studentName && cellData.sessionData.studentName.includes('[반 단체]'));
 
                                                     if (isClassGroup) {
                                                         // [CASE 3: 단독 반 단체 클리닉 (대관/보강)]
-                                                        const rawNames = cellData.studentNames.join(', ') || cellData.sessionData.studentName;
-                                                        const cleanName = rawNames.replace(/\[반 단체\] /g, '');
+                                                        const rawNames = (cellData.studentNames && cellData.studentNames.length > 0) 
+                                                            ? cellData.studentNames.join(', ') 
+                                                            : (cellData.sessionData?.studentName || '');
+                                                        const cleanName = String(rawNames || '').replace(/\[반 단체\]\s*/g, '').trim() || '반 단체 예약';
                                                         
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className="p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer bg-purple-100 border-purple-400 text-purple-900 shadow-sm relative">
-                                                                <div className="absolute top-0 right-0 bg-purple-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg rounded-tr-md">
+                                                                <div className="absolute top-0 right-0 bg-purple-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg">
                                                                     단체 대관
                                                                 </div>
                                                                 <div className="flex items-center gap-1.5 font-black text-sm mb-1 mt-2">
@@ -886,8 +961,8 @@ const AttendanceManager = ({ currentUser }) => {
                                                                     <div className="text-xs font-bold opacity-80">{cellData.lecturer} T</div>
                                                                     
                                                                     <div className="mt-auto pt-2 flex items-center justify-between">
-                                                                        <div className="relative group/tooltip">
-                                                                            <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30 cursor-help block">
+                                                                        <div className="relative group/tooltip w-full">
+                                                                            <span className="text-[10px] font-bold bg-white/50 px-1.5 py-0.5 rounded border border-white/30 cursor-help block w-fit">
                                                                                 예약: {cellData.headcount}명
                                                                             </span>
                                                                             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-max min-w-[60px] max-w-[120px] bg-slate-800 text-white text-[11px] p-2 rounded-lg opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-[100] shadow-xl pointer-events-none">

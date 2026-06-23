@@ -1,13 +1,15 @@
-/* [서비스 가치] 입시 내비게이터 3.0 (개인화 큐레이션 엔진 탑재)
+/* [서비스 가치] 입시 내비게이터 3.1 (개인화 큐레이션 엔진 + 스마트 폼 + 관리자 권한)
    - Null 데이터 처리 무결점화 (예측 불가 대응)
+   - 조건부 연동 드롭다운 (내신/모의고사 분리) 및 관리자 한정 데이터 삭제(휴지통) 기능
    - 학생의 '관심 학과' 키워드를 추출하여 타겟 전공 위주의 상향/적정/하향 맞춤형 정렬 제공 */
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Compass, TrendingUp, Camera, CheckCircle, ChevronRight, 
   X, Plus, Loader, History, Search, Trash2, Target, Lock,
   MapPin, Info, Sparkles, Flame, ArrowUpRight, ArrowDownRight, Calculator
 } from 'lucide-react';
-import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
@@ -16,12 +18,19 @@ import { useParams, useNavigate } from 'react-router-dom';
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 [CTO 패치] 시험 구분에 따른 조건부 드롭다운 매핑 데이터
+const EXAM_TYPES = {
+    'school': ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'],
+    'mock': ['3월 모의고사', '4월 모의고사', '6월 모의고사', '7월 모의고사', '9월 모의고사', '10월 모의고사', '11월 모의고사']
+};
+
 const CollegeNavigator = ({ currentUser }) => {
   const { studentId } = useParams(); 
   const navigate = useNavigate();
   const { users } = useData();
   
   const isAdminView = ['admin', 'admin_assistant', 'lecturer'].includes(currentUser?.role);
+  const isAdminOrAssistant = ['admin', 'admin_assistant'].includes(currentUser?.role); // 삭제 권한 전용
   
   const [searchInput, setSearchInput] = useState('');
   const [searchModalOpen, setSearchModalOpen] = useState(false);
@@ -62,7 +71,7 @@ const CollegeNavigator = ({ currentUser }) => {
     if (!activeStudentId) { setGrades([]); return; }
     const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), where('studentId', '==', activeStudentId));
     const unsub = onSnapshot(q, (snapshot) => {
-        setGrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.createdAt?.seconds - b.createdAt?.seconds));
+        setGrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => b.createdAt?.seconds - a.createdAt?.seconds));
     });
     return () => unsub();
   }, [activeStudentId]);
@@ -108,6 +117,16 @@ const CollegeNavigator = ({ currentUser }) => {
       if (pct <= 10) return 1; if (pct <= 34) return 2; if (pct <= 66) return 3; if (pct <= 90) return 4; return 5;
   };
 
+  // 🚀 [CTO 패치] 시험 구분 변경 시, 종류 드롭다운 자동 스위칭 적용
+  const handleTypeChange = (e) => {
+      const newType = e.target.value;
+      setInputForm({
+          ...inputForm,
+          type: newType,
+          termExam: EXAM_TYPES[newType][0] // 해당 타입의 첫 번째 옵션으로 자동 변경
+      });
+  };
+
   const handleSubjectChange = (idx, field, val) => {
       if (isReadOnly) return;
       const newSubjects = [...inputForm.subjects];
@@ -124,7 +143,7 @@ const CollegeNavigator = ({ currentUser }) => {
   };
 
   const handleEditEntry = (g) => {
-      let parsedGrade = '1학년', parsedExam = '1학기 중간고사';
+      let parsedGrade = '1학년', parsedExam = g.type === 'school' ? '1학기 중간고사' : '3월 모의고사';
       if (g.term) {
           const parts = g.term.split(' ');
           if (parts.length >= 2) { parsedGrade = parts[0]; parsedExam = parts.slice(1).join(' '); }
@@ -132,6 +151,19 @@ const CollegeNavigator = ({ currentUser }) => {
       setInputForm({ id: g.id, type: g.type, termGrade: parsedGrade, termExam: parsedExam, subjects: g.subjects || [] });
       setIsInputOpen(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // 🚀 [CTO 패치] 관리자용 성적 삭제 기능
+  const handleDeleteGrade = async (e, gradeId) => {
+      e.stopPropagation(); // 클릭 시 수정 창이 열리지 않도록 차단
+      if (!isAdminOrAssistant) return alert("삭제 권한이 없습니다.");
+      if (!window.confirm("정말로 이 성적 기록을 완전히 삭제하시겠습니까?\n삭제된 데이터는 복구할 수 없습니다.")) return;
+
+      try {
+          await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'grades', gradeId));
+      } catch (error) {
+          alert(`삭제 실패: ${error.message}`);
+      }
   };
 
   const handleFileChange = async (e) => {
@@ -216,10 +248,8 @@ const CollegeNavigator = ({ currentUser }) => {
       }
   };
 
-  // 🚀 [패치] 유효성 검사 헬퍼 함수 (null, 0 등을 예측불가로 처리)
   const isValidCut = (cut) => cut !== null && cut !== undefined && !isNaN(cut) && cut > 0;
 
-  // 목표 학과 검색 리스트 (검색 결과에는 '예측 불가'도 노출)
   const searchResultsNav = useMemo(() => {
     if (!searchUniv && !searchDept) return [];
     if (!Array.isArray(admissionsDB)) return [];
@@ -230,7 +260,6 @@ const CollegeNavigator = ({ currentUser }) => {
     }).slice(0, 50); 
   }, [admissionsDB, searchUniv, searchDept]);
 
-  // 목표 대학과의 Gap 분석 로직
   const gapAnalysis = useMemo(() => {
       if (!targetDept || myGpa === 0) return null;
       if (!isValidCut(targetDept.cut)) return { status: 'unknown', text: '데이터 예측 불가', message: '💡 현재 내신 데이터 기준 예측 불가', gapText: '모집 요강 변동 등으로 데이터가 부족합니다.' };
@@ -250,54 +279,43 @@ const CollegeNavigator = ({ currentUser }) => {
       return { status, message, gapText, diff };
   }, [targetDept, myGpa]);
 
-  // 🚀 [패치] 관심 전공 키워드 추출기 (예: "컴퓨터공학과" -> "컴퓨터")
   const interestKeyword = useMemo(() => {
       let rawText = targetDept ? targetDept.dept : searchDept;
       if (!rawText) return "";
-      // 학과, 학부, 전공 등의 단어를 잘라내어 핵심 키워드만 추출
       return rawText.replace(/(학과|학부|전공|과)$/g, '').trim();
   }, [targetDept, searchDept]);
 
-  // 🚀 [패치] 관심사 기반 개인화 알고리즘 + Null 원천 차단
   const categorizedList = useMemo(() => {
       if (myGpa === 0 || !Array.isArray(admissionsDB) || admissionsDB.length === 0) return { safety: [], match: [], reach: [] };
       const safety = []; const match = []; const reach = [];
       
       admissionsDB.forEach(d => {
-          // 🚨 Null, 0 등 잘못된 데이터는 추천에서 완벽하게 배제
           if (!isValidCut(d.cut)) return;
-
-          if (isValidCut(d.min) && myGpa <= d.min) safety.push(d);            // 하향 (안정지원)
-          else if (myGpa <= d.cut) match.push(d);                             // 적정 (주력지원)
-          else if (isValidCut(d.max) && myGpa <= d.max) reach.push(d);        // 상향 (소신/스나이핑)
+          if (isValidCut(d.min) && myGpa <= d.min) safety.push(d);            
+          else if (myGpa <= d.cut) match.push(d);                             
+          else if (isValidCut(d.max) && myGpa <= d.max) reach.push(d);        
       });
 
-      // 🌟 스마트 큐레이션 정렬 엔진
       const smartSort = (array) => {
           return array.sort((a, b) => {
               let scoreA = 0; let scoreB = 0;
-              
-              // 1. 관심 키워드(전공)가 일치하면 압도적 가중치(+100점)
               if (interestKeyword) {
                   if (a.dept.includes(interestKeyword)) scoreA += 100;
                   if (b.dept.includes(interestKeyword)) scoreB += 100;
               }
-              // 2. 내 점수와 컷이 가까운 대학 우선 (+점수)
               scoreA += (10 - Math.abs(myGpa - a.cut));
               scoreB += (10 - Math.abs(myGpa - b.cut));
-              // 3. 동점일 경우 섞기 위한 미세한 랜덤 값
               scoreA += Math.random();
               scoreB += Math.random();
-              
-              return scoreB - scoreA; // 내림차순 정렬
-          }).slice(0, 7); // 상위 7개만 노출
+              return scoreB - scoreA; 
+          }).slice(0, 7); 
       };
 
       return { safety: smartSort(safety), match: smartSort(match), reach: smartSort(reach) };
   }, [myGpa, admissionsDB, interestKeyword]);
 
   const renderGraph = (type) => {
-      const targetGrades = grades.filter(g => g.type === type);
+      const targetGrades = grades.filter(g => g.type === type).reverse(); // 렌더링을 위해 시간순 정렬
       if (targetGrades.length < 2) return <div className="text-center text-sm text-gray-400 py-8 bg-gray-50 rounded-xl border border-dashed w-full mx-4 flex items-center justify-center">데이터가 2회 이상 누적되면 생성됩니다.</div>;
 
       const maxGrade = type === 'school' ? 5 : 9;
@@ -331,7 +349,8 @@ const CollegeNavigator = ({ currentUser }) => {
       );
   };
 
-  // --- 관리자 학생 검색 UI ---
+  if (isLoading) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
+
   if (isAdminView && !activeStudentId) {
       return (
         <div className="max-w-[1400px] mx-auto space-y-8 animate-in fade-in pb-20 px-2 sm:px-4">
@@ -396,10 +415,22 @@ const CollegeNavigator = ({ currentUser }) => {
                             const subs = g.subjects || [];
                             const avg = subs.length > 0 ? (subs.reduce((a,b)=>a+(Number(b.grade)||0),0)/subs.length).toFixed(2) : '-';
                             return (
-                            <div key={g.id} onClick={() => handleEditEntry(g)} className={`p-4 rounded-2xl border transition-all cursor-pointer group ${inputForm.id === g.id ? 'bg-blue-50 border-blue-400 shadow-md ring-2 ring-blue-100' : 'bg-slate-50 border-slate-100 hover:border-blue-200'}`}>
-                                <div className={`text-[10px] font-black mb-1 ${g.type==='school'?'text-indigo-500':'text-blue-500'}`}>{g.type === 'school' ? '학교내신' : '모의고사'}</div>
-                                <div className="font-black text-slate-800 text-sm sm:text-base">{g.term}</div>
-                                <div className="text-sm font-bold text-slate-500 mt-1">평균 <span className="text-slate-800">{avg}</span>등급</div>
+                            <div key={g.id} onClick={() => handleEditEntry(g)} className={`p-4 rounded-2xl border transition-all cursor-pointer group flex justify-between items-center ${inputForm.id === g.id ? 'bg-blue-50 border-blue-400 shadow-md ring-2 ring-blue-100' : 'bg-slate-50 border-slate-100 hover:border-blue-200'}`}>
+                                <div>
+                                    <div className={`text-[10px] font-black mb-1 ${g.type==='school'?'text-indigo-500':'text-blue-500'}`}>{g.type === 'school' ? '내신 5등급제' : '모의고사 9등급제'}</div>
+                                    <div className="font-black text-slate-800 text-sm sm:text-base">{g.term}</div>
+                                    <div className="text-sm font-bold text-slate-500 mt-1">평균 <span className="text-slate-800">{avg}</span>등급</div>
+                                </div>
+                                {/* 🚀 [CTO 패치] 관리자용 삭제(휴지통) 버튼 */}
+                                {isAdminOrAssistant && (
+                                    <button 
+                                        onClick={(e) => handleDeleteGrade(e, g.id)}
+                                        className="p-2 text-slate-400 hover:bg-rose-100 hover:text-rose-600 rounded-lg transition-colors"
+                                        title="기록 삭제"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                )}
                             </div>
                         )})}
                     </div>
@@ -414,9 +445,26 @@ const CollegeNavigator = ({ currentUser }) => {
                             <button onClick={()=>setIsInputOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:text-slate-600"><X size={20}/></button>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">시험구분</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-slate-50 font-black text-blue-600 outline-none disabled:opacity-60" value={inputForm.type} onChange={e => setInputForm({...inputForm, type: e.target.value})}><option value="school">내신 5등급제</option><option value="mock">모의고사 9등급제</option></select></div>
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">학년</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termGrade} onChange={e => setInputForm({...inputForm, termGrade: e.target.value})}><option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option></select></div>
-                            <div><label className="block text-xs font-black text-slate-500 mb-2">종류</label><select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termExam} onChange={e => setInputForm({...inputForm, termExam: e.target.value})}><option value="1학기 중간고사">1학기 중간고사</option><option value="1학기 기말고사">1학기 기말고사</option><option value="2학기 중간고사">2학기 중간고사</option><option value="2학기 기말고사">2학기 기말고사</option><option value="모의고사">모의고사</option></select></div>
+                            {/* 🚀 [CTO 패치] 스마트 조건부 드롭다운 연결 */}
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 mb-2">시험구분</label>
+                                <select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-slate-50 font-black text-blue-600 outline-none disabled:opacity-60" value={inputForm.type} onChange={handleTypeChange}>
+                                    <option value="school">내신 5등급제</option>
+                                    <option value="mock">모의고사 9등급제</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 mb-2">학년</label>
+                                <select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termGrade} onChange={e => setInputForm({...inputForm, termGrade: e.target.value})}>
+                                    <option value="1학년">1학년</option><option value="2학년">2학년</option><option value="3학년">3학년</option><option value="N수생">N수생</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-black text-slate-500 mb-2">종류</label>
+                                <select disabled={isReadOnly} className="w-full border-2 rounded-2xl p-3 bg-white font-black outline-none disabled:opacity-60" value={inputForm.termExam} onChange={e => setInputForm({...inputForm, termExam: e.target.value})}>
+                                    {EXAM_TYPES[inputForm.type].map(name => <option key={name} value={name}>{name}</option>)}
+                                </select>
+                            </div>
                         </div>
 
                         {!isReadOnly && (
@@ -454,7 +502,7 @@ const CollegeNavigator = ({ currentUser }) => {
                         </div>
                         
                         {isReadOnly ? (
-                            <div className="text-center p-5 bg-slate-100 rounded-2xl text-slate-500 font-bold"><Lock className="inline mb-1" /> 열람 전용 모드</div>
+                            <div className="text-center p-5 bg-slate-100 rounded-2xl text-slate-500 font-bold"><Lock className="inline mb-1" /> 열람 전용 모드 (권한 필요)</div>
                         ) : (
                             <Button className="w-full py-5 text-lg font-black bg-blue-600 hover:bg-blue-700 shadow-xl rounded-2xl" onClick={handleSaveClick}>성적 안전하게 저장하기</Button>
                         )}
@@ -510,7 +558,7 @@ const CollegeNavigator = ({ currentUser }) => {
                                                 <p className="font-bold text-xs mt-1">{gapAnalysis?.gapText}</p>
                                             </div>
 
-                                            {/* 시각적 Gap 게이지 바 (유효한 데이터일 때만 표시) */}
+                                            {/* 시각적 Gap 게이지 바 */}
                                             {isValidCut(targetDept.cut) && (
                                                 <div className="mt-8 mb-4 px-2 relative cursor-pointer" onClick={() => setSelectedUnivForNextExam(targetDept)} title="클릭하여 다음 시험 목표 확인">
                                                     <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
