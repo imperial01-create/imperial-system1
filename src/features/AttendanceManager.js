@@ -1,13 +1,13 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v13.1
    1. 타임머신 관제: 상단 캘린더(Date Picker)를 통해 과거/미래 스케줄을 자유롭게 탐색합니다.
    2. 스마트 매트릭스: 정규 수업과 TA(조교) 협업 클리닉이 겹칠 경우, 클라이언트 엔진이 이를 자동 병합하여 [TA 협업] 배지로 시각화(Visual Hierarchy)합니다.
-   🚀 CTO 패치: 매트릭스 RowSpan HTML 구조 파괴 및 Null String 치명적 오류를 완벽히 방어하는 안전망 탑재 */
+   🚀 CTO 패치: 구버전 아이콘 호환성 문제와 Null 데이터 파싱 시 발생하는 치명적 런타임 에러(WSOD)를 완벽히 방어했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
-    User, Users, Search, Loader, PhoneCall, ShieldAlert, Check,
-    CalendarDays, UserCheck, AlertTriangle, Trash2, LayoutGrid, ArrowRightLeft, Plus, X, School, ShieldCheck
+    User, Users, Search, Loader, Phone, AlertTriangle, Check,
+    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, RefreshCw, Plus, X, Building
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -88,7 +88,7 @@ const AttendanceManager = ({ currentUser }) => {
     const teacherColorMap = useMemo(() => {
         const map = {};
         const teacherNames = [...new Set(
-            users.filter(u => ['lecturer', 'ta', 'admin_assistant'].includes(u.role)).map(u => u.name)
+            users.filter(u => ['lecturer', 'ta', 'admin_assistant'].includes(u.role) && u.name).map(u => u.name)
         )].sort(); 
 
         teacherNames.forEach((name, index) => {
@@ -129,7 +129,8 @@ const AttendanceManager = ({ currentUser }) => {
             const fetchLogs = async () => {
                 const q = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
                 const snap = await getDocs(q);
-                const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.date.localeCompare(a.date));
+                // 🚀 [CTO 패치] undefined에 의한 localeCompare 오류 차단
+                const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
                 setStudentLogs(logs);
             };
             fetchLogs();
@@ -159,8 +160,7 @@ const AttendanceManager = ({ currentUser }) => {
 
             const lecturer = users.find(u => u.id === enroll.lecturerId);
             
-            // 🚀 [CTO 방어 패치] enroll.className이 없을 경우 대비
-            if (searchQuery && !student.name.includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
+            if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
             const isExamLeave = examLeaves.some(leave => {
                 const isTargetMatch = leave.schoolName ? (leave.schoolName === student.schoolName) : (leave.studentId === student.id);
@@ -184,7 +184,7 @@ const AttendanceManager = ({ currentUser }) => {
                 totalExpected++; 
             }
 
-            const studentData = { studentId: enroll.studentId, studentName: student.name, phone: student.phone || '-', schoolName: student.schoolName, status: status, enrollId: enroll.id, callTime: todaySch.callTime };
+            const studentData = { studentId: enroll.studentId, studentName: student.name || '알수없음', phone: student.phone || '-', schoolName: student.schoolName, status: status, enrollId: enroll.id, callTime: todaySch.callTime };
 
             if (status === 'exam_leave') {
                 examLeaveList.push({ ...studentData, className: enroll.className });
@@ -206,9 +206,10 @@ const AttendanceManager = ({ currentUser }) => {
             classGroups[groupKey].students.push(studentData);
         });
 
-        const sortedGroups = Object.values(classGroups).sort((a, b) => a.callTime.localeCompare(b.callTime));
-        sortedGroups.forEach(g => g.students.sort((a, b) => a.studentName.localeCompare(b.studentName)));
-        emergencyList.sort((a, b) => a.callTime.localeCompare(b.callTime));
+        // 🚀 [CTO 패치] localeCompare 사용 시 값이 비어있을 때 터지는 버그 완벽 차단
+        const sortedGroups = Object.values(classGroups).sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
+        sortedGroups.forEach(g => g.students.sort((a, b) => String(a.studentName || '').localeCompare(String(b.studentName || ''))));
+        emergencyList.sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
 
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
     }, [enrollments, users, dailyAttendances, examLeaves, selectedDayStr, selectedDateStr, searchQuery, currentUser]);
@@ -258,7 +259,7 @@ const AttendanceManager = ({ currentUser }) => {
             const endIndex = TIME_SLOTS.indexOf(snappedEnd);
             
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-                // 🚀 안전 장치: 기존 셀과 겹치는지 검사하여 HTML 구조 파괴(빈 화면) 방지
+                // 🚀 안전 장치: 기존 셀과 겹치는지 검사하여 HTML 구조 파괴 방지
                 let isOverlap = false;
                 for (let i = startIndex; i < endIndex; i++) {
                     if (grid[todaySch.room][TIME_SLOTS[i]] !== null) {
@@ -281,9 +282,8 @@ const AttendanceManager = ({ currentUser }) => {
                     headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, 
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : (currentHeadcount < capacity * 0.3 ? 'under' : 'normal'),
-                    clinicSessions: [] // 클리닉 정보를 담을 배열 (TA 협업 확인용)
+                    clinicSessions: []
                 };
-                // RowSpan된 나머지 시간대는 skip 처리
                 for (let i = startIndex + 1; i < endIndex; i++) {
                     if (TIME_SLOTS[i]) grid[todaySch.room][TIME_SLOTS[i]] = { skip: true };
                 }
@@ -309,7 +309,6 @@ const AttendanceManager = ({ currentUser }) => {
             if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
                 let targetCell = grid[session.classroom][snappedStart];
 
-                // 🚀 안전 장치: 이미 다른 수업이 병합되어 skip 처리된 시간이라면, 상위 부모 셀을 찾아 병합
                 if (targetCell && targetCell.skip) {
                     for (let i = startIndex - 1; i >= 0; i--) {
                         const prevCell = grid[session.classroom][TIME_SLOTS[i]];
@@ -320,17 +319,15 @@ const AttendanceManager = ({ currentUser }) => {
                     }
                 }
 
-                // ✅ CASE 1: 해당 시간에 이미 정규 수업(class)이 있는 경우 -> 클리닉을 배열에 추가 (TA 협업 모드로 렌더링)
                 if (targetCell && targetCell.type === 'class') {
                     targetCell.clinicSessions.push({
                         ...session,
                         headcount: currentHeadcount,
                         studentNames: expectedStudentNames
                     });
-                    return; // 덮어쓰지 않고 병합만 수행하여 구조 보존
+                    return; 
                 }
 
-                // 🚀 안전 장치: 빈 공간인지 확인 (해당 범위에 다른 예약이나 클래스가 있으면 충돌 처리)
                 let isOverlap = false;
                 for (let i = startIndex; i < endIndex; i++) {
                     if (grid[session.classroom][TIME_SLOTS[i]] !== null && grid[session.classroom][TIME_SLOTS[i]] !== targetCell) {
@@ -346,7 +343,6 @@ const AttendanceManager = ({ currentUser }) => {
                     return;
                 }
 
-                // ✅ CASE 3: 빈 강의실인 경우 -> 일반/반 단체 클리닉 모드로 삽입
                 let displayTitle = session.topic || '보충/직보';
                 if (session.status === 'open') displayTitle = '💡 대기중 (예약가능)';
 
@@ -355,7 +351,7 @@ const AttendanceManager = ({ currentUser }) => {
                     headcount: currentHeadcount, studentNames: expectedStudentNames, capacity: capacity, 
                     rowSpan: endIndex - startIndex,
                     warn: currentHeadcount > capacity ? 'over' : 'normal',
-                    sessionData: session // 원본 데이터 보존
+                    sessionData: session 
                 };
                 for (let i = startIndex + 1; i < endIndex; i++) {
                     if (TIME_SLOTS[i]) grid[session.classroom][TIME_SLOTS[i]] = { skip: true };
@@ -418,7 +414,7 @@ const AttendanceManager = ({ currentUser }) => {
     };
 
     const handleCellClick = (room, time) => {
-        const currentCell = matrixGrid[room][time];
+        const currentCell = matrixGrid[room]?.[time];
         if (currentCell) return; 
         
         let endTime = '22:00';
@@ -464,7 +460,7 @@ const AttendanceManager = ({ currentUser }) => {
             const cap = typeof rObj === 'string' ? 999 : (rObj?.capacity || 999);
             if (cap < reqHeadcount) return false; 
             for (const slot of requiredSlots) {
-                if (matrixGrid[roomName][slot] !== null) return false;
+                if (matrixGrid[roomName]?.[slot] !== null) return false;
             }
             return true;
         };
@@ -505,7 +501,7 @@ const AttendanceManager = ({ currentUser }) => {
                     </h1>
                     
                     <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
-                        <CalendarDays size={18} className="text-slate-500 ml-2" />
+                        <CalendarIcon size={18} className="text-slate-500 ml-2" />
                         <input 
                             type="date" 
                             value={selectedDateStr}
@@ -630,7 +626,7 @@ const AttendanceManager = ({ currentUser }) => {
                         <div className="w-full lg:w-80 shrink-0 flex flex-col gap-4">
                             <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-5 shadow-sm flex flex-col h-1/2 min-h-[300px]">
                                 <h2 className="text-lg font-black text-rose-800 mb-3 flex items-center gap-2">
-                                    <ShieldAlert size={20} className="animate-pulse"/> 긴급 콜 리스트
+                                    <AlertTriangle size={20} className="animate-pulse"/> 긴급 콜 리스트
                                 </h2>
                                 <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 space-y-3">
                                     {radarData.emergencyList.length === 0 ? (
@@ -647,7 +643,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                 <div className="text-[11px] font-bold text-slate-500 mb-2 truncate">{data.className}</div>
                                                 <div className="bg-slate-50 p-2 rounded-lg flex justify-between items-center border border-slate-200">
                                                     <div className="font-mono text-xs font-bold text-slate-700">{data.phone || '번호없음'}</div>
-                                                    <a href={`tel:${data.phone}`} className="w-7 h-7 bg-green-100 text-green-600 rounded-full flex items-center justify-center hover:bg-green-500 hover:text-white"><PhoneCall size={14} /></a>
+                                                    <a href={`tel:${data.phone}`} className="w-7 h-7 bg-green-100 text-green-600 rounded-full flex items-center justify-center hover:bg-green-500 hover:text-white"><Phone size={14} /></a>
                                                 </div>
                                             </div>
                                         ))
@@ -657,7 +653,7 @@ const AttendanceManager = ({ currentUser }) => {
                             
                             <div className="bg-slate-50 border-2 border-slate-300 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
                                 <h2 className="text-sm font-black text-slate-700 mb-3 flex items-center gap-2">
-                                    <CalendarDays size={18} className="text-slate-500"/> 자동 출석 면제 현황
+                                    <CalendarIcon size={18} className="text-slate-500"/> 자동 출석 면제 현황
                                 </h2>
                                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
                                     {radarData.examLeaveList.length === 0 ? (
@@ -694,9 +690,9 @@ const AttendanceManager = ({ currentUser }) => {
                                     학생 이름을 검색해주세요.
                                 </div>
                             ) : (
-                                users.filter(u => u.role === 'student' && (u.name.includes(searchQuery) || (u.schoolName||'').includes(searchQuery))).map(student => (
+                                users.filter(u => u.role === 'student' && (String(u.name||'').includes(searchQuery) || String(u.schoolName||'').includes(searchQuery))).map(student => (
                                     <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border-2 border-blue-400 shadow-sm' : 'hover:bg-slate-50 border-2 border-transparent'}`}>
-                                        <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{student.name[0]}</div>
+                                        <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{String(student.name||'?')[0]}</div>
                                         <div>
                                             <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-slate-800'}`}>{student.name}</div>
                                             <div className="text-xs text-slate-500 mt-0.5">{student.schoolName}</div>
@@ -780,7 +776,7 @@ const AttendanceManager = ({ currentUser }) => {
                         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                             {examLeaves.length === 0 ? (
                                 <div className="text-center py-20 text-slate-400 font-bold flex flex-col items-center">
-                                    <CalendarDays size={48} className="opacity-20 mb-4"/>
+                                    <CalendarIcon size={48} className="opacity-20 mb-4"/>
                                     현재 설정된 시험 기간/면제 학교가 없습니다.
                                 </div>
                             ) : (
@@ -788,7 +784,7 @@ const AttendanceManager = ({ currentUser }) => {
                                     {examLeaves.map(leave => {
                                         const isExpired = selectedDateStr > leave.endDate;
                                         const displayName = leave.schoolName ? `${leave.schoolName} 전체` : `${leave.studentName} 학생 (구버전)`;
-                                        const iconMode = leave.schoolName ? <School size={16} className="text-indigo-500 mr-1 inline"/> : <User size={16} className="text-gray-400 mr-1 inline"/>;
+                                        const iconMode = leave.schoolName ? <Building size={16} className="text-indigo-500 mr-1 inline"/> : <User size={16} className="text-gray-400 mr-1 inline"/>;
                                         
                                         return (
                                             <div key={leave.id} className={`border-2 rounded-2xl p-5 relative overflow-hidden transition-all ${isExpired ? 'bg-slate-50 border-slate-300 opacity-60' : 'bg-white border-rose-300 shadow-sm'}`}>
@@ -860,10 +856,8 @@ const AttendanceManager = ({ currentUser }) => {
                                                 const rName = typeof room === 'string' ? room : room.name;
                                                 const cellData = matrixGrid[rName]?.[time];
                                                 
-                                                // 병합되어 숨겨진 셀 처리
                                                 if (cellData?.skip) return null;
 
-                                                // 🚀 [CTO 패치] 1. 빈 교실 렌더링
                                                 if (!cellData) {
                                                     return (
                                                         <td key={rIdx} 
@@ -875,20 +869,19 @@ const AttendanceManager = ({ currentUser }) => {
                                                     );
                                                 }
 
-                                                // 🚀 [CTO 패치] 2. 정규 수업 + TA 협업 분기 렌더링
+                                                // 정규 수업 + TA 협업 렌더링
                                                 if (cellData.type === 'class') {
                                                     const classGroupClinic = cellData.clinicSessions?.find(s => {
                                                         const stList = Array.isArray(s.students) ? s.students : [];
                                                         const names = stList.map(st => st.name).join('');
-                                                        return names.includes('[반 단체]') || (s.studentName && s.studentName.includes('[반 단체]'));
+                                                        return String(names || '').includes('[반 단체]') || (s.studentName && String(s.studentName || '').includes('[반 단체]'));
                                                     });
 
                                                     if (classGroupClinic) {
-                                                        // [CASE 1: 정규 수업 + TA 협업]
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className="p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer bg-blue-50 border-blue-400 text-blue-900 shadow-sm relative">
                                                                 <div className="absolute top-0 right-0 bg-amber-400 text-amber-950 text-[10px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
-                                                                    <ShieldCheck size={10} /> TA 협업
+                                                                    <CheckCircle size={10} /> TA 협업
                                                                 </div>
                                                                 <div className="font-black text-sm leading-tight break-keep pr-14 mt-1">{cellData.title}</div>
                                                                 <div className="text-xs font-bold opacity-80 mt-1 flex justify-between items-end">
@@ -898,7 +891,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                             </td>
                                                         );
                                                     } else {
-                                                        // [CASE 2: 정규 수업 단독]
                                                         const colorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : 'bg-slate-100 border-slate-300 text-slate-800';
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
@@ -918,12 +910,11 @@ const AttendanceManager = ({ currentUser }) => {
                                                     }
                                                 }
 
-                                                // 🚀 [CTO 패치] 3. 단독 반 단체 클리닉 & 개별 클리닉 분기 렌더링
+                                                // 단독 반 단체 클리닉 & 개별 클리닉 렌더링
                                                 if (cellData.type === 'clinic') {
-                                                    const isClassGroup = cellData.studentNames?.some(n => n.includes('[반 단체]')) || (cellData.sessionData?.studentName && cellData.sessionData.studentName.includes('[반 단체]'));
+                                                    const isClassGroup = cellData.studentNames?.some(n => String(n||'').includes('[반 단체]')) || (cellData.sessionData?.studentName && String(cellData.sessionData.studentName||'').includes('[반 단체]'));
 
                                                     if (isClassGroup) {
-                                                        // [CASE 3: 단독 반 단체 클리닉 (대관/보강)]
                                                         const rawNames = (cellData.studentNames && cellData.studentNames.length > 0) 
                                                             ? cellData.studentNames.join(', ') 
                                                             : (cellData.sessionData?.studentName || '');
@@ -944,7 +935,6 @@ const AttendanceManager = ({ currentUser }) => {
                                                             </td>
                                                         );
                                                     } else {
-                                                        // [CASE 4: 일반 개별 클리닉 (1:N)]
                                                         const colorClass = cellData.conflict ? 'bg-rose-100 border-rose-500 text-rose-900 animate-pulse' : getTeacherColor(cellData.lecturer);
                                                         return (
                                                             <td key={rIdx} rowSpan={cellData.rowSpan} className={`p-2 border-2 align-top transition-all hover:brightness-95 cursor-pointer ${colorClass}`}>
@@ -968,7 +958,7 @@ const AttendanceManager = ({ currentUser }) => {
                                                                             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-max min-w-[60px] max-w-[120px] bg-slate-800 text-white text-[11px] p-2 rounded-lg opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-all z-[100] shadow-xl pointer-events-none">
                                                                                 {cellData.studentNames?.length > 0 ? (
                                                                                     <div className="flex flex-col gap-0.5">
-                                                                                        {cellData.studentNames.map((n, i) => <span key={i} className="text-center truncate">{n}</span>)}
+                                                                                        {cellData.studentNames.map((n, i) => <span key={i} className="text-center truncate">{String(n||'')}</span>)}
                                                                                     </div>
                                                                                 ) : '명단 없음'}
                                                                                 <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></div>
@@ -1031,7 +1021,7 @@ const AttendanceManager = ({ currentUser }) => {
                 </div>
             </Modal>
 
-            {/* [Auto-Resolver] 퀵 등록 모달 */}
+            {/* 퀵 배정 모달 */}
             <Modal isOpen={isQuickAddModalOpen} onClose={() => setIsQuickAddModalOpen(false)} title="직전 보충 / 클리닉 퀵 배정">
                 <div className="space-y-4">
                     <div className="bg-emerald-50 p-4 rounded-xl text-emerald-800 font-bold text-sm border border-emerald-300">
