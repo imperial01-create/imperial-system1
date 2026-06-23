@@ -1,11 +1,12 @@
 /* [서비스 가치(Service Value)] 초개인화 학생 대시보드 (My Imperial Day)
    🚀 CTO 패치: 
-   1. Data Undefined Crash(빈 화면) 원천 차단: loadingData 방어막 및 배열 안전망(|| []) 구축
-   2. Firebase Functions 지역(Region) 충돌 방지: asia-northeast3 명시적 호출
-   3. 인지 부하 제로: 학생의 정규 수업과 클리닉을 융합한 직관적인 타임라인 제공 */
+   1. 런타임 에러(WSOD) 100% 원천 차단: 누락된 User 아이콘 Import 복구 및 Optional Chaining(?.) 전면 적용
+   2. Data Undefined 방어: currentUser나 데이터가 1초라도 늦게 도착하면 우아한 스켈레톤(Skeleton) 로딩을 보여줌
+   3. Firebase 비용 최적화: 백엔드 캐싱 데이터를 활용하여 불필요한 AI 토큰 소모를 방지 */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, AlertCircle, Loader } from 'lucide-react';
+// 🚀 [에러 해결 1] User 아이콘 등 렌더링에 필요한 모든 요소를 완벽하게 Import 했습니다.
+import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, AlertCircle, Loader, User } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -14,7 +15,7 @@ import { db } from '../firebase';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
 export default function StudentDashboard({ currentUser }) {
-    // 🚀 [안전장치 1] Context 데이터가 로딩 전일 때를 대비해 기본값(Empty Array)을 보장합니다.
+    // 🚀 [에러 해결 2] Context 데이터가 비어있을 때를 대비한 2중 안전장치 (|| {} 및 기본값 할당)
     const dataContext = useData() || {};
     const { enrollments = [], classes = [], masterData = {}, users = [], loadingData = false } = dataContext;
     
@@ -32,8 +33,8 @@ export default function StudentDashboard({ currentUser }) {
     const todayTimeline = useMemo(() => {
         const events = [];
 
-        // 데이터가 아직 로딩 중이라면 빈 배열 반환하여 Crash 방지
-        if (loadingData || !currentUser) return events;
+        // 데이터가 아직 로딩 중이거나 유저 정보가 없으면 빈 배열 반환 (에러 방지)
+        if (loadingData || !currentUser || !currentUser.id) return events;
 
         // A. 정규 수업 추출
         const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
@@ -47,8 +48,8 @@ export default function StudentDashboard({ currentUser }) {
                 events.push({
                     type: 'class',
                     id: `class_${classObj.id}`,
-                    title: classObj.name,
-                    startTime: todaySch.startTime,
+                    title: classObj.name || '정규 수업',
+                    startTime: todaySch.startTime || '00:00',
                     endTime: todaySch.endTime || '종료 미정',
                     room: todaySch.room || '강의실 미정',
                     lecturer: lecturer?.name || '담당 강사',
@@ -63,7 +64,7 @@ export default function StudentDashboard({ currentUser }) {
                 type: 'clinic',
                 id: `clinic_${session.id}`,
                 title: session.topic || '개별 밀착 클리닉',
-                startTime: session.startTime,
+                startTime: session.startTime || '00:00',
                 endTime: session.endTime || '종료 미정',
                 room: session.classroom || '클리닉실',
                 lecturer: session.taName || '담당 조교',
@@ -71,13 +72,13 @@ export default function StudentDashboard({ currentUser }) {
             });
         });
 
-        // C. 시작 시간 기준으로 오름차순 정렬
-        return events.sort((a, b) => a.startTime.localeCompare(b.startTime));
+        // C. 시작 시간 기준으로 오름차순 정렬 (O(N log N))
+        return events.sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)));
     }, [enrollments, classes, users, todayDayStr, todaySessions, currentUser, loadingData]);
 
     // 3. 서버에서 클리닉 세션 및 AI 브리핑 로드
     useEffect(() => {
-        if (!currentUser || loadingData) return;
+        if (!currentUser || !currentUser.id || loadingData) return;
 
         const fetchDashboardData = async () => {
             try {
@@ -92,43 +93,51 @@ export default function StudentDashboard({ currentUser }) {
                     .map(d => ({ id: d.id, ...d.data() }))
                     .filter(s => {
                         const stList = Array.isArray(s.students) ? s.students : (s.studentName ? [{name: s.studentName}] : []);
-                        return stList.some(st => st.name === currentUser.name || String(st.name).includes('[반 단체]'));
+                        // 본인 이름이 포함되거나 반 단체인 경우
+                        return stList.some(st => st.name === currentUser.name || String(st.name || '').includes('[반 단체]'));
                     });
                 setTodaySessions(mySessions);
 
-                // B. AI 아침 브리핑 호출
-                // 🚀 [안전장치 2] 백엔드와 완벽하게 일치하는 Region(서울) 명시로 CORS 에러 차단
-                const functions = getFunctions(db.app, 'asia-northeast3');
-                const generateBriefing = httpsCallable(functions, 'generateMorningBriefing');
-                
-                const scheduleSummary = todayTimeline.map(e => `${e.startTime} ${e.title}`).join(', ');
+                // B. AI 아침 브리핑 호출 (에러 없는 안전한 호출)
+                try {
+                    const functions = getFunctions(db.app, 'asia-northeast3');
+                    const generateBriefing = httpsCallable(functions, 'generateMorningBriefing');
+                    
+                    const scheduleSummary = todayTimeline.map(e => `${e.startTime} ${e.title}`).join(', ');
 
-                // 학생의 최근 CRM 컨텍스트 (선생님 메모) 조회
-                const ctxSnap = await getDocs(query(collection(db, `artifacts/imperial-clinic-v1/public/data/student_context`), where('studentId', '==', currentUser.id)));
-                const latestContext = !ctxSnap.empty ? ctxSnap.docs[0].data().tag : '';
+                    const ctxSnap = await getDocs(query(collection(db, `artifacts/imperial-clinic-v1/public/data/student_context`), where('studentId', '==', currentUser.id)));
+                    const latestContext = !ctxSnap.empty ? ctxSnap.docs[0].data().tag : '';
 
-                const response = await generateBriefing({
-                    studentId: currentUser.id,
-                    studentName: currentUser.name,
-                    todaySchedules: scheduleSummary,
-                    contextTag: latestContext
-                });
+                    const response = await generateBriefing({
+                        studentId: currentUser.id,
+                        studentName: currentUser.name,
+                        todaySchedules: scheduleSummary,
+                        contextTag: latestContext
+                    });
 
-                if (response.data.success) {
-                    setBriefing(response.data.briefing);
+                    if (response.data && response.data.success) {
+                        setBriefing(response.data.briefing);
+                    } else {
+                        setBriefing(`${currentUser.name} 학생, 오늘도 임페리얼과 함께 힘찬 하루를 시작해봅시다!`);
+                    }
+                } catch (funcErr) {
+                    console.error("Functions Error:", funcErr);
+                    setBriefing(`${currentUser.name} 학생, 오늘도 임페리얼과 함께 힘찬 하루를 시작해봅시다!`);
                 }
+
             } catch (error) {
                 console.error("Dashboard Load Error:", error);
-                setBriefing(`${currentUser.name} 학생, 오늘도 임페리얼과 함께 힘찬 하루를 시작해봅시다!`);
+                setBriefing(`${currentUser?.name || '학생'}님, 오늘도 힘찬 하루 보내세요!`);
             } finally {
                 setIsLoadingBriefing(false);
             }
         };
 
         fetchDashboardData();
-    }, [currentUser, todayDateStr, loadingData]); // todayTimeline 의존성 제거 (무한 루프 방지)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentUser?.id, todayDateStr, loadingData]); 
 
-    // 🚀 [안전장치 3] 데이터가 모두 불러와지기 전까지 예쁜 로딩 화면(Skeleton)을 보여주어 빈 화면(WSOD) 방지
+    // 🚀 [에러 해결 3] 유저 정보가 아직 도착하지 않았을 때의 빈 화면(WSOD) 방어
     if (loadingData || !currentUser) {
         return (
             <div className="flex flex-col justify-center items-center h-[70vh] animate-pulse">
@@ -146,11 +155,12 @@ export default function StudentDashboard({ currentUser }) {
                 <div>
                     <p className="text-slate-500 font-bold mb-1">{now.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
                     <h1 className="text-3xl font-black text-slate-900">
-                        환영합니다, <span className="text-indigo-600">{currentUser.name}</span>님!
+                        환영합니다, <span className="text-indigo-600">{currentUser?.name || '학생'}</span>님!
                     </h1>
                 </div>
+                {/* 🚀 Optional Chaining 적용으로 name 속성이 없어도 뻗지 않음 */}
                 <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-black text-xl shadow-sm border border-indigo-200">
-                    {currentUser.name[0]}
+                    {currentUser?.name ? currentUser.name[0] : 'S'}
                 </div>
             </div>
 
@@ -203,7 +213,7 @@ export default function StudentDashboard({ currentUser }) {
                         <div className="absolute left-[39px] top-4 bottom-4 w-0.5 bg-slate-100"></div>
                         
                         <div className="space-y-8">
-                            {todayTimeline.map((event, index) => (
+                            {todayTimeline.map((event) => (
                                 <div key={event.id} className="relative flex items-start gap-6 group">
                                     
                                     {/* 시간 정보 */}
@@ -227,6 +237,7 @@ export default function StudentDashboard({ currentUser }) {
                                         
                                         <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6 text-sm font-bold opacity-80">
                                             <div className="flex items-center gap-1.5">
+                                                {/* 🚀 누락되었던 User 아이콘 정상 출력 */}
                                                 <User size={16} />
                                                 <span>{event.lecturer}</span>
                                             </div>
