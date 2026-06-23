@@ -1,20 +1,23 @@
 /* [서비스 가치(Service Value)] 초개인화 학생 대시보드 (My Imperial Day)
-   1. AI 모닝 브리핑: 등원 전 학생의 마인드셋을 잡아주는 개인화된 멘토링 메시지를 제공합니다.
-   2. 통합 타임라인: 정규 수업과 TA 클리닉을 시간순으로 자동 정렬하여, 학생이 '내가 오늘 무엇을 해야 하는가'를 1초 만에 파악하게 합니다. (인지 부하 제로)
-   🚀 CTO 최적화: 스케줄 통합 및 정렬 알고리즘을 O(N log N)으로 최적화하여 렌더링 지연을 막고, AI 응답 대기 중 스켈레톤 UI를 제공합니다. */
+   🚀 CTO 패치: 
+   1. Data Undefined Crash(빈 화면) 원천 차단: loadingData 방어막 및 배열 안전망(|| []) 구축
+   2. Firebase Functions 지역(Region) 충돌 방지: asia-northeast3 명시적 호출
+   3. 인지 부하 제로: 학생의 정규 수업과 클리닉을 융합한 직관적인 타임라인 제공 */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, AlertCircle } from 'lucide-react';
+import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, AlertCircle, Loader } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Card } from '../components/UI';
 
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
 export default function StudentDashboard({ currentUser }) {
-    const { enrollments, classes, masterData, users } = useData();
+    // 🚀 [안전장치 1] Context 데이터가 로딩 전일 때를 대비해 기본값(Empty Array)을 보장합니다.
+    const dataContext = useData() || {};
+    const { enrollments = [], classes = [], masterData = {}, users = [], loadingData = false } = dataContext;
+    
     const [briefing, setBriefing] = useState('');
     const [isLoadingBriefing, setIsLoadingBriefing] = useState(true);
     const [todaySessions, setTodaySessions] = useState([]);
@@ -25,9 +28,12 @@ export default function StudentDashboard({ currentUser }) {
     const pad = (n) => String(n).padStart(2, '0');
     const todayDateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
-    // 2. 오늘의 스케줄 (정규 수업 + 클리닉) 조립 및 정렬 (시간 복잡도 최적화)
+    // 2. 오늘의 스케줄 (정규 수업 + 클리닉) 조립 및 정렬
     const todayTimeline = useMemo(() => {
         const events = [];
+
+        // 데이터가 아직 로딩 중이라면 빈 배열 반환하여 Crash 방지
+        if (loadingData || !currentUser) return events;
 
         // A. 정규 수업 추출
         const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
@@ -67,10 +73,12 @@ export default function StudentDashboard({ currentUser }) {
 
         // C. 시작 시간 기준으로 오름차순 정렬
         return events.sort((a, b) => a.startTime.localeCompare(b.startTime));
-    }, [enrollments, classes, users, todayDayStr, todaySessions, currentUser.id]);
+    }, [enrollments, classes, users, todayDayStr, todaySessions, currentUser, loadingData]);
 
     // 3. 서버에서 클리닉 세션 및 AI 브리핑 로드
     useEffect(() => {
+        if (!currentUser || loadingData) return;
+
         const fetchDashboardData = async () => {
             try {
                 // A. 오늘의 클리닉 세션 로드
@@ -84,20 +92,18 @@ export default function StudentDashboard({ currentUser }) {
                     .map(d => ({ id: d.id, ...d.data() }))
                     .filter(s => {
                         const stList = Array.isArray(s.students) ? s.students : (s.studentName ? [{name: s.studentName}] : []);
-                        // 본인 이름이 포함된 클리닉이거나 단체 클리닉인 경우 필터링
                         return stList.some(st => st.name === currentUser.name || String(st.name).includes('[반 단체]'));
                     });
                 setTodaySessions(mySessions);
 
                 // B. AI 아침 브리핑 호출
-                const functions = getFunctions();
-                // 프론트엔드와 백엔드 리전 통일 (CORS 에러 방지)
-                const generateBriefing = httpsCallable(functions, 'generateMorningBriefing', { region: 'asia-northeast3' });
+                // 🚀 [안전장치 2] 백엔드와 완벽하게 일치하는 Region(서울) 명시로 CORS 에러 차단
+                const functions = getFunctions(db.app, 'asia-northeast3');
+                const generateBriefing = httpsCallable(functions, 'generateMorningBriefing');
                 
-                // 프롬프트에 넘겨줄 스케줄 요약본 생성
                 const scheduleSummary = todayTimeline.map(e => `${e.startTime} ${e.title}`).join(', ');
 
-                // 학생의 최근 CRM 컨텍스트 (어제 선생님이 남긴 메모 등) 조회
+                // 학생의 최근 CRM 컨텍스트 (선생님 메모) 조회
                 const ctxSnap = await getDocs(query(collection(db, `artifacts/imperial-clinic-v1/public/data/student_context`), where('studentId', '==', currentUser.id)));
                 const latestContext = !ctxSnap.empty ? ctxSnap.docs[0].data().tag : '';
 
@@ -120,7 +126,17 @@ export default function StudentDashboard({ currentUser }) {
         };
 
         fetchDashboardData();
-    }, [currentUser, todayDateStr, todayTimeline]);
+    }, [currentUser, todayDateStr, loadingData]); // todayTimeline 의존성 제거 (무한 루프 방지)
+
+    // 🚀 [안전장치 3] 데이터가 모두 불러와지기 전까지 예쁜 로딩 화면(Skeleton)을 보여주어 빈 화면(WSOD) 방지
+    if (loadingData || !currentUser) {
+        return (
+            <div className="flex flex-col justify-center items-center h-[70vh] animate-pulse">
+                <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                <p className="text-slate-500 font-bold">나만의 완벽한 하루를 준비하고 있습니다...</p>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in">
@@ -225,20 +241,6 @@ export default function StudentDashboard({ currentUser }) {
                         </div>
                     </div>
                 )}
-            </div>
-
-            {/* School Event Banner (Bypass Data 연동) - 예시: 시험기간 */}
-            <div className="bg-rose-50 rounded-2xl p-4 border border-rose-200 flex items-center justify-between shadow-sm cursor-pointer hover:bg-rose-100 transition-colors">
-                <div className="flex items-center gap-3">
-                    <div className="bg-rose-500 text-white p-2 rounded-xl">
-                        <AlertCircle size={20} />
-                    </div>
-                    <div>
-                        <p className="text-xs font-bold text-rose-500 mb-0.5">School Event</p>
-                        <p className="font-black text-rose-900">우리 학교 기말고사 대비 기간</p>
-                    </div>
-                </div>
-                <ChevronRight className="text-rose-300" />
             </div>
 
         </div>
