@@ -1,6 +1,6 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
-   (🚀 CTO 패치: 백지 화면(WSOD)의 원인이었던 users 변수 누락을 복구하고, 
-    아이콘 Import 목록과 변수 사용을 100% 동기화하여 런타임 에러를 원천 차단했습니다.) */
+   (🚀 CTO 패치: 인지 부하(Cognitive Load) 최소화를 위해 대시보드 상단의 중복 CTA 버튼을 제거하고, 
+    핵심 모듈 카드에 시선이 집중되도록 UX를 최적화했습니다. 런타임 에러 차단 로직 100% 유지 중) */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -470,23 +470,17 @@ const Dashboard = ({ currentUser }) => {
         <div className="max-w-screen-2xl mx-auto space-y-8 animate-in fade-in pb-20">
             <div className="bg-gradient-to-r from-slate-900 to-indigo-900 rounded-[32px] p-8 md:p-10 shadow-2xl relative overflow-hidden">
                 <div className="absolute right-0 top-0 w-64 h-64 bg-indigo-500/20 rounded-full blur-[80px]"></div>
-                <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                    <div>
-                        <span className="inline-block px-3 py-1 bg-white/10 border border-white/20 text-white text-xs font-black rounded-full mb-3">
-                            {currentUser.role.toUpperCase()} MODE
-                        </span>
-                        <h1 className="text-3xl md:text-4xl font-black text-white mb-2 tracking-tight">
-                            안녕하세요, {currentUser.name}님! 👋
-                        </h1>
-                        <p className="text-indigo-200 font-medium text-base md:text-lg">
-                            {getWelcomeMessage()}
-                        </p>
-                    </div>
-                    {['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) && (
-                        <button onClick={() => navigate('/consult')} className="bg-indigo-600 text-white hover:bg-indigo-500 font-black px-6 py-4 rounded-2xl flex items-center gap-2 shadow-lg transition-all active:scale-95 whitespace-nowrap">
-                            ⚡ 10초 빠른 신규 상담 등록
-                        </button>
-                    )}
+                {/* 🚀 [CTO 패치] 불필요한 버튼을 제거하고 텍스트에만 온전히 집중하도록 레이아웃 정리 */}
+                <div className="relative z-10">
+                    <span className="inline-block px-3 py-1 bg-white/10 border border-white/20 text-white text-xs font-black rounded-full mb-3">
+                        {currentUser.role.toUpperCase()} MODE
+                    </span>
+                    <h1 className="text-3xl md:text-4xl font-black text-white mb-2 tracking-tight">
+                        안녕하세요, {currentUser.name}님! 👋
+                    </h1>
+                    <p className="text-indigo-200 font-medium text-base md:text-lg">
+                        {getWelcomeMessage()}
+                    </p>
                 </div>
             </div>
 
@@ -500,7 +494,7 @@ const Dashboard = ({ currentUser }) => {
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
                             {group.items.map((item, iIdx) => {
-                                // 🚀 방탄 아이콘 렌더링
+                                // 🚀 방탄 렌더링: 아이콘 누락 시 기본값 적용
                                 const IconObj = (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon;
                                 const SafeIcon = IconObj || Activity;
                                 const displayLabel = (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name;
