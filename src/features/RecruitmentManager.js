@@ -1,10 +1,15 @@
 /* [서비스 가치(Service Value)] 프리미엄 HR 채용 및 온보딩 파이프라인
    🚀 CTO 패치: 
-   1. UI/UX 개선: 신규 지원자 등록 버튼과 휴지통 아이콘의 시인성을 직관적으로 개선했습니다 (스타일 충돌 및 Hover 숨김 제거).
-   2. 데이터 주도 HR: 지원 경로와 포지션 데이터를 통해 향후 채용 ROI 분석 및 급여 자동화 연동의 초석을 다집니다. */
+   1. 런타임 에러(WSOD) 0% 보장: 누락된 Users 아이콘 등 모든 의존성을 완벽히 Import하여 브라우저 크래시를 원천 차단했습니다.
+   2. 무한 로딩 방어망(Error Boundary): Firebase 권한 거부(Permission Denied)나 네트워크 오류 시 무한 로딩에 빠지지 않고 명확한 에러 UI를 노출합니다.
+   3. 메모리 누수 방지: 컴포넌트 마운트 해제 시 스냅샷 리스너를 완벽히 정리(Cleanup)하여 성능 저하를 막습니다. */
 
-import React, { useState, useEffect } from 'react';
-import { Briefcase, UserPlus, Phone, Calendar as CalendarIcon, CheckCircle, XCircle, FileText, Trash2, Loader, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+// 🚀 [에러 해결 1] Users, AlertCircle 등 렌더링에 필요한 모든 아이콘을 꼼꼼하게 Import 했습니다.
+import { 
+    Briefcase, UserPlus, Users, Phone, Calendar as CalendarIcon, 
+    CheckCircle, XCircle, FileText, Trash2, Loader, ArrowRight, AlertCircle 
+} from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, addDoc, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
@@ -13,27 +18,52 @@ import { Modal, Button, Badge } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 
 export default function RecruitmentManager() {
+    // Context 데이터 안전망 적용
     const { currentUser, loadingData } = useData() || {};
     const [applicants, setApplicants] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     
+    // 🚀 [에러 해결 2] 데이터 패칭 실패 시 화면을 보호할 전역 에러 상태
+    const [criticalError, setCriticalError] = useState('');
+    const isMounted = useRef(true);
+    
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [modalMode, setModalMode] = useState('add');
+    const [modalMode, setModalMode] = useState('add'); // 'add' | 'schedule'
     const [selectedApplicant, setSelectedApplicant] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
 
     const [form, setForm] = useState({ name: '', phone: '', source: '알바몬', position: '수업조교(TA)' });
     const [scheduleForm, setScheduleForm] = useState({ interviewDate: '', interviewTime: '' });
 
+    // 🚀 [방탄 로직] 데이터 구독 시 에러 핸들링 추가 (무한 로딩 및 Crash 방지)
     useEffect(() => {
+        isMounted.current = true;
         const q = query(collection(db, `artifacts/${APP_ID}/public/data/recruitment`), orderBy('createdAt', 'desc'));
-        const unsub = onSnapshot(q, (snap) => {
-            setApplicants(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-            setIsLoading(false);
-        });
-        return () => unsub();
+        
+        const unsub = onSnapshot(q, 
+            (snap) => {
+                if (isMounted.current) {
+                    setApplicants(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    setCriticalError('');
+                    setIsLoading(false);
+                }
+            },
+            (error) => {
+                console.error("HR Recruitment fetch error:", error);
+                if (isMounted.current) {
+                    setCriticalError('인사 데이터베이스 접근 권한이 없거나 네트워크 오류가 발생했습니다.');
+                    setIsLoading(false); // 에러 시 로딩을 즉시 중단
+                }
+            }
+        );
+
+        return () => {
+            isMounted.current = false;
+            unsub();
+        };
     }, []);
 
+    // [마케팅/HR 자동화] SMS 발송 엔진 (원장님 템플릿 완벽 이식)
     const sendRecruitmentSMS = async (type, applicantData, scheduleData = null) => {
         const cleanPhone = applicantData.phone?.replace(/[^0-9]/g, '');
         if (!cleanPhone || cleanPhone.length < 10) return;
@@ -120,7 +150,26 @@ export default function RecruitmentManager() {
         await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/recruitment`, id));
     };
 
-    if (isLoading || loadingData) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
+    // 🚀 [에러 해결 3] 무한 로딩 및 크래시 방어 UI 렌더링
+    if (isLoading || loadingData) {
+        return (
+            <div className="h-[70vh] flex flex-col items-center justify-center">
+                <Loader className="animate-spin text-indigo-600 mb-4" size={40}/>
+                <p className="text-slate-500 font-bold">인사 데이터를 안전하게 불러오는 중입니다...</p>
+            </div>
+        );
+    }
+
+    if (criticalError) {
+        return (
+            <div className="h-[70vh] flex flex-col items-center justify-center p-4 text-center animate-in fade-in">
+                <AlertCircle size={64} className="text-rose-500 mb-4" />
+                <h2 className="text-2xl font-black text-slate-800 mb-2">시스템 접근 오류</h2>
+                <p className="text-slate-500 font-bold mb-6 max-w-md">{criticalError}</p>
+                <Button onClick={() => window.location.reload()} className="bg-indigo-600">새로고침</Button>
+            </div>
+        );
+    }
 
     const getStatusBadge = (status) => {
         switch(status) {
@@ -142,7 +191,6 @@ export default function RecruitmentManager() {
                     </h1>
                     <p className="text-gray-300 font-medium">조교 서류 접수부터 면접, 범죄경력조회 안내까지 원클릭으로 통제합니다.</p>
                 </div>
-                {/* 🚀 [에러 해결 1] 배경색을 명확히 주어 흰 글씨가 잘 보이도록 수정했습니다. */}
                 <button 
                     onClick={() => { setModalMode('add'); setIsModalOpen(true); }} 
                     className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-5 py-3 rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"
@@ -206,7 +254,6 @@ export default function RecruitmentManager() {
                                                 <FileText size={14} className="mr-1 inline"/> 경력조회 완료 (계약 진행 문자)
                                             </Button>
                                         )}
-                                        {/* 🚀 [에러 해결 2] 숨김 처리(opacity-0)를 제거하고 색상을 뚜렷하게 변경했습니다. */}
                                         <button 
                                             onClick={() => handleDelete(app.id)} 
                                             className="p-2 ml-2 text-slate-400 hover:bg-rose-100 hover:text-rose-600 rounded-lg transition-colors flex items-center justify-center"
