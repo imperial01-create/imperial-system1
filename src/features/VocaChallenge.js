@@ -1,7 +1,6 @@
 /* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v4.0
-   - (🚀 CTO 패치: 낙관적 UI(Optimistic UI) 업데이트를 적용하여 게임 종료 즉시 도파민(성취감)을 제공합니다.)
-   - Firebase 최적화: 불필요한 Read 쿼리를 제거하고 메모리 캐싱을 통해 과금을 방어합니다. 
-   - UX 개선: '나의 최고 기록' 패널을 추가하여 중하위권 학생들의 동기부여를 유도합니다. */
+   - (🚀 CTO 패치 1: 글로벌 명예의 전당을 Top 5로 압축하여 희소성 부여 및 Firebase 비용 절감)
+   - (🚀 CTO 패치 2: 정답 시 기본/시간/콤보 점수를 명시하는 1.5초의 '도파민 피드백' 애니메이션 부활) */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
@@ -12,7 +11,7 @@ import { Card, Button, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 원장님 제공 실제 CSV 데이터 (수정 금지)
+// 🚀 원장님 제공 실제 CSV 데이터 (보존 완료)
 const RAW_CSV_DATA = `NVH2_D08_281,maintain,M1,preserve,
 NVH2_D08_281,maintain,M2,assert,
 NVH2_D08_282,undermine,M1,weaken,strengthen
@@ -269,6 +268,7 @@ const GET_GAME_HTML = () => `
     .header { background-color: #4f46e5; color: white; padding: 15px; text-align: center; font-size: 20px; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .status-bar { display: flex; justify-content: space-between; padding: 15px 20px; font-size: 18px; font-weight: 900; background: white; color: #1f2937; border-bottom: 2px solid #e5e7eb; }
     .score-highlight { color: #4f46e5; }
+    
     .timer-container { width: 100%; height: 10px; background-color: #e5e7eb; }
     .timer-bar { height: 100%; background-color: #10b981; transition: width 1s linear, background-color 0.3s; }
     .timer-warning { background-color: #ef4444 !important; }
@@ -317,7 +317,7 @@ const GET_GAME_HTML = () => `
     .overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.95); flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
     .overlay.active { display: flex; }
     .countdown-text { font-size: 150px; font-weight: 900; color: #facc15; animation: pop 1s infinite; text-shadow: 0 0 30px rgba(250,204,21,0.5);}
-    .feedback-title { font-size: 50px; font-weight: 900; margin-bottom: 15px; text-shadow: 2px 2px 10px rgba(0,0,0,0.5); text-align: center; word-break: keep-all; line-height: 1.2; color: #60a5fa;}
+    .feedback-title { font-size: 60px; font-weight: 900; margin-bottom: 15px; text-shadow: 2px 2px 10px rgba(0,0,0,0.5); text-align: center; word-break: keep-all; line-height: 1.2; }
     .feedback-time { font-size: 24px; color: white; margin-bottom: 5px; font-weight: bold; text-align: center; background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 30px;}
     
     @keyframes pop { 0% { transform: scale(0.8); opacity: 0.5; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
@@ -325,7 +325,6 @@ const GET_GAME_HTML = () => `
 </head>
 <body>
 
-  <!-- 인트로 화면 -->
   <div id="startScreen" class="screen active" style="justify-content: center;">
     <div class="start-container">
       <span style="background: #6366f1; color: white; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px;">우리 반 한정 챌린지</span>
@@ -346,7 +345,6 @@ const GET_GAME_HTML = () => `
     </div>
   </div>
 
-  <!-- 게임 플레이 화면 -->
   <div id="gameScreen" style="display: none; height: 100%; flex-direction: column;">
     <div class="header" id="roundText">Round 1 - Q.1</div>
     <div class="status-bar">
@@ -365,7 +363,6 @@ const GET_GAME_HTML = () => `
     </div>
   </div>
 
-  <!-- 결과 화면 -->
   <div id="resultScreen" class="screen" style="justify-content: center;">
     <div class="result-title" id="resultTitle">💀 게임 오버 💀</div>
     <div class="result-msg" id="resultMsg">당신의 최종 점수는...</div>
@@ -375,7 +372,6 @@ const GET_GAME_HTML = () => `
         🚀 최고 기록 경신 시 자동으로 명예의 전당에 반영됩니다.
     </div>
 
-    <!-- 오답 노트 -->
     <div id="explanationBox" class="explanation-box">
       <div class="exp-label">💡 핵심 단어 오답 노트</div>
       <div id="expDetail" class="exp-detail" style="margin-bottom: 15px;"></div>
@@ -383,7 +379,6 @@ const GET_GAME_HTML = () => `
       <div id="expOptions" class="exp-options"></div>
     </div>
 
-    <!-- 액션 버튼 -->
     <div class="btn-group">
       <button onclick="retryGame()" class="action-btn btn-primary">🔥 챌린지 한 번 더!</button>
       <button onclick="exitGame()" class="action-btn btn-secondary">🏆 명예의 전당 보러가기 (나가기)</button>
@@ -395,20 +390,31 @@ const GET_GAME_HTML = () => `
   </div>
 
   <div id="roundTransitionOverlay" class="overlay">
-    <div id="roundTransitionTitle" class="feedback-title">1라운드 시작!</div>
+    <div id="roundTransitionTitle" class="feedback-title" style="color:#60a5fa;">1라운드 시작!</div>
     <div id="roundTransitionDesc" class="feedback-time">문제당 15초의 시간이 주어집니다.</div>
   </div>
 
   <div id="feedbackOverlay" class="overlay">
-    <div id="feedbackTitle" class="feedback-title">정답!</div>
-    <div id="feedbackTime" class="feedback-time" style="display: none;"></div>
-    <div id="feedbackScore" class="feedback-score"></div>
-    <div id="feedbackBonus" class="feedback-bonus" style="display: none;"></div>
+    <div id="feedbackTitle" class="feedback-title">PERFECT!</div>
+    <div id="feedbackDetail" style="background: white; padding: 25px; border-radius: 20px; margin-top: 20px; color: #1f2937; text-align: left; width: 300px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div style="display:flex; justify-content:space-between; margin-bottom: 12px; font-size: 18px; font-weight: bold;">
+            <span style="color: #4b5563;">기본 점수</span> <span id="fbBase"></span>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom: 12px; font-size: 18px; font-weight: bold;">
+            <span style="color: #3b82f6;">스피드 보너스</span> <span id="fbTime"></span>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom: 12px; font-size: 18px; font-weight: bold;">
+            <span id="fbComboText" style="color: #f97316;">콤보 보너스</span> <span id="fbCombo" style="color: #f97316;"></span>
+        </div>
+        <hr style="border: 0; border-top: 2px solid #e5e7eb; margin: 15px 0;">
+        <div style="display:flex; justify-content:space-between; font-size: 24px; font-weight: 900; color: #10b981;">
+            <span>Total</span> <span id="fbTotal"></span>
+        </div>
+    </div>
   </div>
 
   <script>
     const rawCsvString = \`${RAW_CSV_DATA}\`;
-
     function processRawCSV(csvText) {
       const rows = [];
       let currentRow = [];
@@ -450,7 +456,6 @@ const GET_GAME_HTML = () => `
         let dayMatch = word_id.match(/_D(\\d+)_/);
         let day = dayMatch ? parseInt(dayMatch[1], 10) : 1;
         if (!wordMap[word]) wordMap[word] = { word: word, synSet: new Set(), antSet: new Set(), day: day };
-        
         if (syn) syn.split(',').forEach(s => { if(s.trim()) wordMap[word].synSet.add(s.trim()); });
         if (ant) ant.split(',').forEach(a => { if(a.trim()) wordMap[word].antSet.add(a.trim()); });
       }
@@ -470,6 +475,7 @@ const GET_GAME_HTML = () => `
     let selectedDays = [];
     let currentTotalQuestion = 1;
     let score = 0;
+    let combo = 0; // 🚀 콤보 변수 추가
     let timeLeft = 0;
     let timerInterval;
     let maxTime = 15;
@@ -539,7 +545,6 @@ const GET_GAME_HTML = () => `
       document.getElementById('startScreen').classList.remove('active');
       document.getElementById('resultScreen').classList.remove('active');
       document.getElementById('gameScreen').style.display = 'flex';
-      
       const overlay = document.getElementById('countdownOverlay');
       const numberText = document.getElementById('countdownNumber');
       overlay.classList.add('active');
@@ -564,6 +569,7 @@ const GET_GAME_HTML = () => `
     function startGame() {
       currentTotalQuestion = 1;
       score = 0;
+      combo = 0; // 시작 시 콤보 초기화
       isTransitioning = false;
       document.getElementById('explanationBox').style.display = 'none'; 
       showRoundTransition();
@@ -639,7 +645,6 @@ const GET_GAME_HTML = () => `
           shuffle(targetSyns);
           currentCorrectAnswerText = makeThreeWordString(targetData.word, targetSyns[0], targetSyns[1]);
           options.push({ text: currentCorrectAnswerText, isCorrect: true });
-
           const backgroundData = poolMixed.slice(0, 4);
           backgroundData.forEach(w => {
             options.push({ text: makeThreeWordString(w.word, pickOneRandomWord(w.syn), pickOneRandomWord(w.ant)), isCorrect: false });
@@ -723,23 +728,61 @@ const GET_GAME_HTML = () => `
       }
     }
 
+    // 🚀 [CTO 패치] 도파민 폭발 피드백 (1.5초) 및 콤보 로직 완벽 복구
     function handleAnswer(isCorrect, isTimeout) {
       if (isTransitioning) return;
       isTransitioning = true;
       clearInterval(timerInterval); 
 
       if (isCorrect) {
+        combo++;
         const config = getRoundConfig();
-        const bonusPoints = timeLeft * config.bonus;
-        const earnedScore = config.baseScore + bonusPoints;
+        const basePoints = config.baseScore;
+        const timeBonus = timeLeft * config.bonus;
+        const comboBonus = (combo - 1) * 20; // 콤보 1회당 20점 보너스
+        const earnedScore = basePoints + timeBonus + comboBonus;
+        
         score += earnedScore;
         document.getElementById('scoreText').innerText = score.toLocaleString() + ' pt';
         
-        currentTotalQuestion++; 
-        isTransitioning = false;
-        showRoundTransition();
+        // 긍정적 피드백 화면 출력
+        document.getElementById('feedbackTitle').innerText = 'PERFECT!';
+        document.getElementById('feedbackTitle').style.color = '#4ade80';
+        document.getElementById('fbBase').innerText = '+' + basePoints;
+        document.getElementById('fbTime').innerText = '+' + timeBonus;
+        document.getElementById('fbComboText').innerText = combo > 1 ? combo + ' COMBO!' : '콤보 보너스';
+        document.getElementById('fbCombo').innerText = '+' + comboBonus;
+        document.getElementById('fbTotal').innerText = '+' + earnedScore;
+        
+        document.getElementById('feedbackDetail').style.display = 'block';
+        const overlay = document.getElementById('feedbackOverlay');
+        overlay.classList.add('active');
+
+        // 1.5초 후 다음 문제로 진행
+        setTimeout(() => {
+            overlay.classList.remove('active');
+            currentTotalQuestion++; 
+            isTransitioning = false;
+            showRoundTransition();
+        }, 1500);
+
       } else {
-        endGame(false);
+        combo = 0; // 오답 시 콤보 박탈
+        
+        // 부정적 피드백 화면 출력
+        document.getElementById('feedbackTitle').innerText = isTimeout ? 'TIME OUT!' : 'OOPS!';
+        document.getElementById('feedbackTitle').style.color = '#f87171';
+        document.getElementById('feedbackDetail').style.display = 'none';
+
+        const overlay = document.getElementById('feedbackOverlay');
+        overlay.classList.add('active');
+
+        // 1.5초 후 게임 오버 화면으로 이동
+        setTimeout(() => {
+            overlay.classList.remove('active');
+            document.getElementById('feedbackDetail').style.display = 'block'; // 초기화
+            endGame(false);
+        }, 1500);
       }
     }
 
@@ -754,12 +797,11 @@ const GET_GAME_HTML = () => `
       const expBox = document.getElementById('explanationBox');
       
       document.getElementById('finalScore').innerText = score.toLocaleString();
-      
       if (isWin) {
         title.innerText = "🎉 챌린지 클리어! 🎉";
         title.style.color = "#10b981";
         msg.innerHTML = "영일고의 자랑!<br>모든 단어를 완벽하게 숙지하셨군요!";
-        expBox.style.display = "none"; 
+        expBox.style.display = "none";
         if (typeof confetti === "function") {
             confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
         }
@@ -781,7 +823,6 @@ const GET_GAME_HTML = () => `
         expBox.style.display = "block";
       }
 
-      // 🚀 백그라운드에서 React(부모) 창으로 점수 조용히 전송
       window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
     }
 
@@ -802,25 +843,19 @@ export default function VocaChallenge({ currentUser }) {
     const { classes = [], enrollments = [] } = useData() || {};
     const isStudent = currentUser.role === 'student';
 
-    // 🚀 [CTO 패치] Role(역할) 기반 접근 제어 (RBAC) 및 과목 필터링 최적화
     const englishClasses = useMemo(() => {
-        // 1. 1차 필터링: 영어 과목 반만 추출
         const baseEnglishClasses = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
         
-        // 2. 2차 필터링: 권한에 따른 노출 제어 (Zero Trust)
         if (['admin', 'admin_assistant'].includes(currentUser.role)) {
-            // 관리자 및 행정조교: 모든 영어 반 관제 가능
             return baseEnglishClasses;
         } else if (['lecturer', 'ta'].includes(currentUser.role)) {
-            // 강사 및 수업조교: 본인이 담당하는 반만 노출 (다양한 스키마 호환성 방어 로직 적용)
             return baseEnglishClasses.filter(c => 
                 c.lecturerId === currentUser.id || 
                 c.teacherId === currentUser.id || 
                 (c.taIds && Array.isArray(c.taIds) && c.taIds.includes(currentUser.id)) ||
-                c.teacher === currentUser.name // 기존 시스템 호환성(Fallback) 유지
+                c.teacher === currentUser.name
             );
         }
-        // 예외 상황 방어
         return [];
     }, [classes, currentUser]);
 
@@ -830,11 +865,8 @@ export default function VocaChallenge({ currentUser }) {
     
     const [rankings, setRankings] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-
     const [studentClassId, setStudentClassId] = useState(null); 
     const [isGameActive, setIsGameActive] = useState(false);
-    
-    // 🚀 [CTO 패치] 나의 최고 기록 상태 추가 (낙관적 UI용)
     const [myRecordData, setMyRecordData] = useState({ score: 0, docId: null });
 
     useEffect(() => {
@@ -860,11 +892,13 @@ export default function VocaChallenge({ currentUser }) {
 
     const loadRankings = useCallback((targetClassId) => {
         if (!targetClassId) return;
+        
+        // 🚀 [CTO 패치 1] 명예의 전당 Top 5 노출 (Read 비용 절약 및 희소성 부여)
         const q = query(
             collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
             where('classId', '==', targetClassId),
             orderBy('score', 'desc'),
-            limit(15)
+            limit(5) // <--- Top 15에서 Top 5로 완벽하게 축소
         );
         const unsub = onSnapshot(q, snap => {
             setRankings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -880,7 +914,6 @@ export default function VocaChallenge({ currentUser }) {
         return () => { if (unsub) unsub(); }
     }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
 
-    // 🚀 [CTO 패치] 나의 최고 기록(1개 문서)만 가볍게 읽어옵니다 (비용 최적화)
     useEffect(() => {
         if (!isStudent || !studentClassId) return;
         const q = query(
@@ -902,7 +935,6 @@ export default function VocaChallenge({ currentUser }) {
         const newActive = activeClasses.includes(classId) 
             ? activeClasses.filter(id => id !== classId)
             : [...activeClasses, classId];
-        
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'voca_challenge'), {
             activeClassIds: newActive, updatedAt: serverTimestamp()
         }, { merge: true });
@@ -918,11 +950,10 @@ export default function VocaChallenge({ currentUser }) {
         alert("랭킹이 초기화 되었습니다.");
     };
 
-    // 🚀 [CTO 패치] 낙관적 UI(Optimistic UI) 및 Read-Cost 0원 통신망 구축
     const studentClassIdRef = useRef(studentClassId);
     const currentUserRef = useRef(currentUser);
     const classesRef = useRef(classes);
-    const myRecordDataRef = useRef(myRecordData); // Firebase 조회 비용 제거를 위한 로컬 캐시
+    const myRecordDataRef = useRef(myRecordData);
 
     useEffect(() => { studentClassIdRef.current = studentClassId; }, [studentClassId]);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
@@ -952,12 +983,8 @@ export default function VocaChallenge({ currentUser }) {
 
                     const myClassObj = cList.find(c => c.id === sClassId);
                     
-                    // 🚀 Firebase Read 쿼리($)를 제거하고, 메모리에 캐싱된 내 기록과 즉시 비교합니다.
                     if (finalScore > currentBest) {
-                        // 1. 낙관적 UI 업데이트 (학생에게 0.001초 만에 피드백 제공)
-                        setMyRecordData({ score: finalScore, docId: myDocId }); 
-                        
-                        // 2. 백그라운드 DB 덮어쓰기 (Write 연산만 수행)
+                        setMyRecordData({ score: finalScore, docId: myDocId });
                         if (myDocId) {
                             await updateDoc(doc(db, `artifacts/${APP_ID}/public/data/voca_rankings`, myDocId), { 
                                 score: finalScore, 
@@ -979,11 +1006,9 @@ export default function VocaChallenge({ currentUser }) {
                 }
             }
         };
-
         window.addEventListener('message', handleMessage);
         return () => window.removeEventListener('message', handleMessage);
     }, []); 
-
 
     if (isLoading) return <div className="p-10 text-center flex flex-col items-center justify-center h-full"><Loader className="animate-spin text-indigo-600 mb-4" size={40}/><p className="font-bold text-gray-500">챌린지 로딩 중...</p></div>;
 
@@ -1060,7 +1085,7 @@ export default function VocaChallenge({ currentUser }) {
                             <div className="bg-slate-900 rounded-3xl p-6 md:p-10 text-white shadow-2xl relative overflow-hidden">
                                 <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400"></div>
                                 <h3 className="text-3xl font-black text-center mb-8 text-yellow-400 flex items-center justify-center gap-3">
-                                    <Crown size={36}/> 명예의 전당
+                                    <Crown size={36}/> 명예의 전당 (Top 5)
                                 </h3>
                                 
                                 {rankings.length === 0 ? (
@@ -1118,7 +1143,7 @@ export default function VocaChallenge({ currentUser }) {
                     <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 실시간 명예의 전당 TOP 5</h3>
                     <div className="space-y-3">
                         {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
-                            rankings.slice(0, 5).map((r, i) => (
+                            rankings.map((r, i) => (
                                 <div key={r.id} className={`flex justify-between text-sm items-center border-b pb-2 ${r.studentId === currentUser.id ? 'border-yellow-400/50' : 'border-white/5'}`}>
                                     <span className={`font-bold ${r.studentId === currentUser.id ? 'text-yellow-400' : 'text-white/90'}`}>{i+1}. {r.studentName} {r.studentId === currentUser.id && '(나)'}</span>
                                     <span className={`font-mono font-bold ${r.studentId === currentUser.id ? 'text-yellow-400' : 'text-yellow-200'}`}>{r.score?.toLocaleString() || 0} pt</span>
@@ -1127,7 +1152,6 @@ export default function VocaChallenge({ currentUser }) {
                         }
                     </div>
 
-                    {/* 🚀 [CTO 패치] 나의 최고 기록 패널 (동기부여 제공) */}
                     <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center bg-indigo-500/20 p-4 rounded-xl border border-indigo-400/30">
                         <span className="font-bold text-indigo-200">⭐ 나의 최고 기록</span>
                         <span className="font-black text-2xl text-white font-mono">{myRecordData.score.toLocaleString()} pt</span>
