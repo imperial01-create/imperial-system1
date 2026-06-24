@@ -1,6 +1,8 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
    🚀 CTO 패치: 
-   학부모/학생에게는 '나의 케어 리포트'로, 직원에게는 '원생 케어 분석'으로 권한별 동적 라우팅을 적용하여 학원의 밀착 관리(Care)를 강력하게 시각화했습니다. */
+   1. 메뉴명 동적 분기: 'CareReportManager'를 학생/학부모에게는 [출결 상황]으로, 강사/관리자에게는 [원생별 출결관리]로 분리하여 노출합니다.
+   2. 통합 출결 관리 최적화: '통합 출결 관리'의 설명을 일별 관제 및 매트릭스 전용으로 수정했습니다.
+   3. 학사일정 마스터 및 HR 파이프라인 등 이전의 모든 코어 메뉴 라우팅이 완벽히 유지됩니다. */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -45,13 +47,11 @@ const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
 const RecruitmentManager = React.lazy(() => import('./features/RecruitmentManager'));
 const AcademicCalendarManager = React.lazy(() => import('./features/AcademicCalendarManager'));
-
-// 🚀 [신규 추가] 밀착 케어 리포트
 const CareReportManager = React.lazy(() => import('./features/CareReportManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 메뉴 생성 함수 (동적 이름 할당을 위해 함수 형태로 변경)
+// 메뉴 생성 함수 (권한에 따라 동적으로 메뉴명을 할당합니다)
 const getMenuGroups = (currentUser) => [
     {
         title: "나의 학원 생활",
@@ -59,8 +59,8 @@ const getMenuGroups = (currentUser) => [
         theme: "from-indigo-600 to-blue-700",
         items: [
             { name: "My Imperial Day", path: "/my-day", icon: Sparkles, desc: "오늘의 완벽한 스케줄과 AI 멘토링", roles: ['student'] },
-            // 🚀 학부모/학생 관점의 리포트 메뉴
-            { name: "나의 케어 리포트", path: "/care-report", icon: PieChart, desc: "학원의 밀착 케어 내역과 출결 통계", roles: ['student', 'parent'] }
+            // 🚀 [CTO 패치] 학부모/학생용 메뉴명 변경
+            { name: "출결 상황", path: "/care-report", icon: PieChart, desc: "학원의 밀착 케어 내역과 출결 통계", roles: ['student', 'parent'] }
         ]
     },
     {
@@ -69,9 +69,9 @@ const getMenuGroups = (currentUser) => [
         theme: "from-blue-600 to-indigo-700",
         items: [
             { name: "신규 상담 등록", path: "/consult", icon: UserPlus, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "일별 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            // 🚀 직원(Staff) 관점의 리포트 메뉴
-            { name: "원생 케어 분석", path: "/care-report", icon: PieChart, desc: "원생별 누적 학습 시간 및 상담 데이터", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "당일 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
+            // 🚀 [CTO 패치] 강사/관리자용 메뉴명 변경 (원생별 출결관리)
+            { name: "원생별 출결관리", path: "/care-report", icon: PieChart, desc: "원생별 누적 학습 시간 및 출결 데이터", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "학사일정 마스터", path: "/academic-calendar", icon: CalendarDays, desc: "학교별 학사일정 및 D-Day 관리", roles: ['admin', 'admin_assistant'] },
             { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "오늘의 할 일", path: "/clinic-tasks", icon: Clipboard, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
@@ -666,13 +666,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
-                        
                         <Route path="/my-day" element={currentUser.role === 'student' ? <StudentDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-                        
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
-                        
                         {['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) && <Route path="/attendance" element={<AttendanceManager currentUser={currentUser} />} />}
-                        
                         <Route path="/lectures" element={ ['admin', 'admin_assistant'].includes(currentUser.role) ? <AdminLectureManager /> : currentUser.role === 'lecturer' ? <LecturerDashboard currentUser={currentUser} /> : <StudentClassroom currentUser={currentUser} /> } />
                         <Route path="/messages" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <MessageCenter currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/users" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <UserManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -690,15 +686,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/report/:diagnosticId" element={<ReportWrapper />} />
                         <Route path="/my-exams" element={['student', 'parent'].includes(currentUser.role) ? <StudentExamList currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-
-                        <Route path="/voca" element={
-                            ['student', 'parent'].includes(currentUser.role) 
-                                ? <StudentVocaDaily currentUser={currentUser} /> 
-                                : <VocaManager currentUser={currentUser} />
-                        } />
-
+                        <Route path="/voca" element={['student', 'parent'].includes(currentUser.role) ? <StudentVocaDaily currentUser={currentUser} /> : <VocaManager currentUser={currentUser} />} />
                         <Route path="/voca-challenge" element={['student', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <VocaChallenge currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
-
                         <Route path="/navigator" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
@@ -706,7 +695,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/recruitment" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <RecruitmentManager /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/academic-calendar" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <AcademicCalendarManager /> : <Navigate to="/dashboard" replace />} />
                         
-                        {/* 🚀 [신규 마스터] 밀착 케어 리포트 (전체 유저 접속 가능, UI는 내부에서 역할별 분기) */}
+                        {/* 🚀 [신규 마스터] 밀착 케어 리포트 라우팅 추가 */}
                         <Route path="/care-report" element={<CareReportManager />} />
 
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />

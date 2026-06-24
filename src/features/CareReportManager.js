@@ -1,7 +1,7 @@
 /* [서비스 가치(Service Value)] 프리미엄 밀착 케어 리포트 엔진
    🚀 CTO 패치: 
-   1. Role-based Access Control (RBAC): 학생(본인만), 학부모(자녀만), 강사(본인 수강생만), 관리자(전체)로 데이터 접근 및 검색 권한을 철저히 격리했습니다.
-   2. UI/UX 전문화: 시즌 명칭을 전문적인 용어(윈터시즌, 서머시즌 등)로 변경하고, 권한에 맞지 않는 불필요한 검색창이나 에러 메시지를 완전히 제거했습니다. */
+   1. UX/UI 최적화: 학생 및 학부모 접속 시 발생하는 비동기 딜레이 동안 관리자용 메시지가 노출되는 버그를 제거하고, 맞춤형 로딩 UI를 제공합니다.
+   2. 권한별 네이밍: 메뉴명을 '출결 상황(학생용)'과 '원생별 출결관리(직원용)'로 이원화하여 페르소나에 맞는 사용자 경험을 제공합니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -15,7 +15,6 @@ import { Card, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 전문화된 6시즌 파티셔닝 데이터 (이모지 제거, 윈터/서머 명칭 변경)
 const SEASONS = [
     { id: 'winter', name: '윈터시즌 (1~2월)', start: '01-01', end: '02-28' },
     { id: 'sem1_mid', name: '1학기 중간고사 (3~4월)', start: '03-01', end: '04-30' },
@@ -25,7 +24,6 @@ const SEASONS = [
     { id: 'sem2_fin', name: '2학기 기말고사 (11~12월)', start: '11-01', end: '12-31' }
 ];
 
-// 초경량 커스텀 SVG 도넛 차트 컴포넌트
 const CustomDonutChart = ({ data }) => {
     let cumulativePercent = 0;
     const getCoordinatesForPercent = (percent) => {
@@ -63,7 +61,6 @@ const CustomDonutChart = ({ data }) => {
 export default function CareReportManager() {
     const { currentUser, users, enrollments, classes, loadingData } = useData() || {};
     
-    // 역할 확인 변수
     const isStudent = currentUser?.role === 'student';
     const isParent = currentUser?.role === 'parent';
     const isLecturer = currentUser?.role === 'lecturer';
@@ -71,7 +68,7 @@ export default function CareReportManager() {
 
     const currentYear = new Date().getFullYear();
     const [selectedYear, setSelectedYear] = useState(currentYear);
-    const [selectedSeason, setSelectedSeason] = useState(SEASONS[1]); // 기본값: 1학기 중간
+    const [selectedSeason, setSelectedSeason] = useState(SEASONS[1]);
     const [selectedStudentId, setSelectedStudentId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -82,7 +79,6 @@ export default function CareReportManager() {
         careTime: { regular: 0, clinic: 0, total: 0 }
     });
 
-    // 🚀 [CTO 패치] 강사(Lecturer)일 경우 본인이 가르치는 학생 ID 목록만 추출
     const myStudentIds = useMemo(() => {
         if (!isLecturer) return [];
         const myClassIds = classes?.filter(c => c.lecturerId === currentUser.id).map(c => c.id) || [];
@@ -90,24 +86,21 @@ export default function CareReportManager() {
         return [...new Set(myEnrolls.map(e => e.studentId))];
     }, [classes, enrollments, currentUser, isLecturer]);
 
-    // 🚀 검색 가능한 학생 목록 동적 필터링
     const searchableStudents = useMemo(() => {
         if (!users) return [];
         return users.filter(u => {
             if (u.role !== 'student') return false;
             if (searchQuery && !u.name?.includes(searchQuery)) return false;
-            if (isLecturer) return myStudentIds.includes(u.id); // 강사는 본인 학생만
-            return true; // 관리자는 모두 검색 가능
+            if (isLecturer) return myStudentIds.includes(u.id);
+            return true;
         });
     }, [users, searchQuery, isLecturer, myStudentIds]);
 
-    // 학부모의 연결된 자녀 목록
     const parentChildren = useMemo(() => {
         if (!isParent || !users) return [];
         return users.filter(u => currentUser.linkedChildrenIds?.includes(u.id));
     }, [users, currentUser, isParent]);
 
-    // 🚀 [초기 렌더링 세팅] 권한에 따른 자동 학생 선택
     useEffect(() => {
         if (!currentUser || loadingData) return;
         
@@ -118,7 +111,6 @@ export default function CareReportManager() {
         }
     }, [currentUser, loadingData, isStudent, isParent, parentChildren, selectedStudentId]);
 
-    // 시간 계산 헬퍼 함수
     const calculateHours = (start, end) => {
         if (!start || !end) return 0;
         const [sH, sM] = start.split(':').map(Number);
@@ -127,7 +119,6 @@ export default function CareReportManager() {
         return hours > 0 ? hours : 0;
     };
 
-    // 리포트 데이터 패칭
     useEffect(() => {
         if (!selectedStudentId || loadingData) return;
         
@@ -199,12 +190,12 @@ export default function CareReportManager() {
 
     return (
         <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
-            {/* 헤더 영역 */}
             <div className="bg-gradient-to-r from-indigo-900 to-blue-900 rounded-3xl p-6 md:p-8 shadow-xl text-white flex flex-col md:flex-row justify-between md:items-center gap-6">
                 <div>
                     <h1 className="text-2xl md:text-3xl font-black mb-2 flex items-center gap-2">
                         <PieChart size={28} /> 
-                        {isStaffType ? '원생 케어 및 출결 분석' : '나의 밀착 케어 리포트'}
+                        {/* 🚀 [변경] 권한별 메뉴명 이원화 */}
+                        {isStaffType ? '원생별 출결관리' : '출결 상황'}
                     </h1>
                     <p className="text-indigo-200 font-medium">
                         {isStaffType ? '데이터 기반의 학부모 상담을 위해 학생별 케어 시간과 출결 현황을 분석합니다.' : '임페리얼 학원이 학생에게 투자한 완벽한 시간과 성장을 눈으로 확인하세요.'}
@@ -212,10 +203,7 @@ export default function CareReportManager() {
                 </div>
             </div>
 
-            {/* 필터링 바 */}
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 items-center z-20 relative">
-                
-                {/* 1. 강사/관리자용 검색창 */}
                 {isStaffType && (
                     <div className="relative w-full md:w-1/3">
                         <input 
@@ -242,7 +230,6 @@ export default function CareReportManager() {
                     </div>
                 )}
 
-                {/* 2. 학부모용 자녀 선택 드롭다운 */}
                 {isParent && (
                     <div className="w-full md:w-1/3">
                         <select 
@@ -257,7 +244,6 @@ export default function CareReportManager() {
                     </div>
                 )}
                 
-                {/* 3. 공통 시즌 필터 */}
                 <div className="flex w-full md:w-auto gap-2 flex-1 md:justify-end">
                     <select className="border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-indigo-500 font-bold bg-white" value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))}>
                         <option value={currentYear}>{currentYear}년도</option>
@@ -270,19 +256,24 @@ export default function CareReportManager() {
                 </div>
             </div>
 
-            {/* 메인 리포트 렌더링 영역 */}
             {!selectedStudentId ? (
-                // 강사/관리자가 검색 전일 때만 노출 (학생/학부모는 무조건 ID가 세팅되므로 안 보임)
-                <div className="bg-white rounded-3xl p-16 text-center border border-slate-200 shadow-sm flex flex-col items-center">
-                    <User size={64} className="text-slate-200 mb-4"/>
-                    <h3 className="text-xl font-black text-slate-700">원생을 검색해주세요</h3>
-                    <p className="text-slate-500 mt-2 font-bold">상단 검색창에서 원생 이름을 입력하면 리포트가 생성됩니다.</p>
-                </div>
+                // 🚀 [CTO 패치] 관리자/강사일 때만 "검색해주세요" 노출, 학생/학부모는 데이터 로딩 스켈레톤 노출
+                isStaffType ? (
+                    <div className="bg-white rounded-3xl p-16 text-center border border-slate-200 shadow-sm flex flex-col items-center">
+                        <User size={64} className="text-slate-200 mb-4"/>
+                        <h3 className="text-xl font-black text-slate-700">원생을 검색해주세요</h3>
+                        <p className="text-slate-500 mt-2 font-bold">상단 검색창에서 원생 이름을 입력하면 리포트가 생성됩니다.</p>
+                    </div>
+                ) : (
+                    <div className="h-64 flex flex-col items-center justify-center bg-white rounded-3xl border border-slate-200 shadow-sm">
+                        <Loader className="animate-spin text-indigo-600 mb-4" size={40}/>
+                        <p className="font-bold text-slate-500">데이터를 안전하게 불러오는 중입니다...</p>
+                    </div>
+                )
             ) : isLoading ? (
                 <div className="h-64 flex items-center justify-center bg-white rounded-3xl border border-slate-200 shadow-sm"><Loader className="animate-spin text-indigo-600" size={40}/></div>
             ) : (
                 <div className="space-y-6">
-                    {/* 최상단 요약 (Total Care Time) */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <Card className="lg:col-span-2 bg-gradient-to-br from-indigo-50 to-blue-50 border-2 border-indigo-100 flex flex-col md:flex-row items-center justify-between p-6 md:p-8 gap-6 relative overflow-hidden">
                             <div className="absolute right-0 top-0 opacity-5 -translate-y-1/4 translate-x-1/4 pointer-events-none">
@@ -318,7 +309,6 @@ export default function CareReportManager() {
                             </div>
                         </Card>
 
-                        {/* 출결 상태 도넛 차트 */}
                         <Card className="flex flex-col items-center justify-center p-6 bg-white border border-slate-200">
                             <h2 className="text-sm font-black text-slate-700 w-full mb-4 flex items-center gap-2"><PieChart size={16}/> 출결 달성률</h2>
                             <div className="relative flex items-center justify-center mb-4">
@@ -338,7 +328,6 @@ export default function CareReportManager() {
                         </Card>
                     </div>
 
-                    {/* 상세 내역 테이블 */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <Card className="p-0 overflow-hidden border border-slate-200 flex flex-col h-[400px]">
                             <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">

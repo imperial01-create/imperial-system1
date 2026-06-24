@@ -1,16 +1,16 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
    🚀 CTO 패치: 
-   1. 아키텍처 분리 (Separation of Concerns): 학사일정 등록/관리 UI를 완전히 도려내어 신규 '학사일정 마스터' 메뉴로 권한을 이관했습니다.
-   2. 데이터 동기화 유지: 입력 UI는 제거했지만, 시스템 백그라운드에서는 마스터 데이터를 실시간으로 읽어와(Read-only) '출결 자동 면제(Bypass)' 로직을 완벽하게 수행합니다. */
+   1. 아키텍처 분리 (Separation of Concerns): 신규 '원생별 출결관리(CareReportManager)'로 이관된 원생별 출결 조회 탭을 완전히 제거하여 컴포넌트를 경량화했습니다.
+   2. 본연의 기능 집중: 이제 이 메뉴는 '당일 출결 현황'과 '교실 공간 매트릭스' 관제에만 100% 리소스를 집중합니다. */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, Phone, AlertTriangle, Check,
-    Calendar as CalendarIcon, UserCheck, LayoutGrid, Plus, X, Building, ShieldCheck,
+    Calendar as CalendarIcon, UserCheck, LayoutGrid, X, ShieldCheck,
     Brain, Heart, Flame, CreditCard, MessageCircle
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Button, Modal } from '../components/UI';
@@ -49,6 +49,7 @@ const TEACHER_COLORS = [
 export default function AttendanceManager({ currentUser }) {
     const { classes, enrollments, users, masterData, loadingData } = useData();
 
+    // 🚀 'student' 탭이 제거되고 daily와 matrix만 남았습니다.
     const [activeTab, setActiveTab] = useState('daily'); 
     
     const [selectedDateObj, setSelectedDateObj] = useState(new Date());
@@ -58,15 +59,11 @@ export default function AttendanceManager({ currentUser }) {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [dailyAttendances, setDailyAttendances] = useState([]); 
-    // 🚀 [CTO 패치] 학사일정 마스터 데이터를 읽기 전용으로만 가져옵니다.
     const [academicCalendars, setAcademicCalendars] = useState([]); 
     const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
 
     const [aiInsights, setAiInsights] = useState([]);
-
-    const [selectedStudentId, setSelectedStudentId] = useState('');
-    const [studentLogs, setStudentLogs] = useState([]);
 
     const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
@@ -97,7 +94,6 @@ export default function AttendanceManager({ currentUser }) {
         return () => unsubAtt();
     }, [selectedDateStr]);
 
-    // 🚀 [읽기 전용] 학사일정 데이터만 읽어옵니다.
     useEffect(() => {
         const qCal = query(collection(db, `artifacts/${APP_ID}/public/data/academic_calendars`));
         const unsubCal = onSnapshot(qCal, s => setAcademicCalendars(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -117,18 +113,6 @@ export default function AttendanceManager({ currentUser }) {
         });
         return () => unsubContext();
     }, []);
-
-    useEffect(() => {
-        if (activeTab === 'student' && selectedStudentId) {
-            const fetchLogs = async () => {
-                const q = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
-                const snap = await getDocs(q);
-                const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-                setStudentLogs(logs);
-            };
-            fetchLogs();
-        }
-    }, [activeTab, selectedStudentId]);
 
     const radarData = useMemo(() => {
         const classGroups = {};
@@ -155,7 +139,6 @@ export default function AttendanceManager({ currentUser }) {
             
             if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
-            // 🚀 백그라운드 출결 면제 로직 작동 (UI는 없어도 로직은 돌아갑니다)
             const isExamLeave = academicCalendars.some(cal => {
                 const isTargetMatch = cal.schoolName === student.schoolName;
                 return isTargetMatch && selectedDateStr >= cal.startDate && selectedDateStr <= cal.endDate && cal.isAttendanceExempt;
@@ -511,13 +494,12 @@ export default function AttendanceManager({ currentUser }) {
                     </div>
                 </div>
                 
-                {/* 🚀 [CTO 패치] 학사일정 관리 탭 버튼이 제거되었습니다. (3개 탭만 유지) */}
+                {/* 🚀 [CTO 패치] '원생별 출결' 탭이 제거되어 버튼 2개만 깔끔하게 남았습니다. */}
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
                     <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>일별 운영 관제</button>
                     <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <LayoutGrid size={16}/> 교실 매트릭스
                     </button>
-                    <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>원생별 출결</button>
                 </div>
             </div>
 
@@ -670,7 +652,6 @@ export default function AttendanceManager({ currentUser }) {
                                 </div>
                             </div>
                             
-                            {/* 🚀 [CTO 패치] 출석 면제 현황판은 그대로 유지 (학사일정 데이터와 실시간 연동됨) */}
                             <div className="bg-slate-50 border-2 border-slate-300 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
                                 <h2 className="text-sm font-black text-slate-700 mb-3 flex items-center gap-2">
                                     <CalendarIcon size={18} className="text-slate-500"/> 자동 출석 면제 현황
@@ -693,93 +674,7 @@ export default function AttendanceManager({ currentUser }) {
                 </div>
             )}
 
-            {/* TAB 2: 원생별 출결 현황 */}
-            {activeTab === 'student' && (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full min-h-0">
-                    <div className="lg:col-span-1 bg-white border border-slate-300 rounded-2xl shadow-sm flex flex-col h-full">
-                        <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-2xl">
-                            <div className="relative">
-                                <input type="text" placeholder="이름, 학교 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-blue-500 text-sm font-bold bg-white"/>
-                                <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                            {searchQuery.trim().length === 0 ? (
-                                <div className="text-center py-10 text-slate-400 font-bold text-sm flex flex-col items-center">
-                                    <Search size={32} className="mb-3 opacity-20"/>
-                                    학생 이름을 검색해주세요.
-                                </div>
-                            ) : (
-                                users.filter(u => u.role === 'student' && (String(u.name||'').includes(searchQuery) || String(u.schoolName||'').includes(searchQuery))).map(student => (
-                                    <button key={student.id} onClick={() => setSelectedStudentId(student.id)} className={`w-full text-left p-3 rounded-xl transition-all flex items-center gap-3 mb-1 ${selectedStudentId === student.id ? 'bg-blue-50 border-2 border-blue-400 shadow-sm' : 'hover:bg-slate-50 border-2 border-transparent'}`}>
-                                        <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-black shrink-0">{String(student.name||'?')[0]}</div>
-                                        <div>
-                                            <div className={`font-bold ${selectedStudentId === student.id ? 'text-blue-900' : 'text-slate-800'}`}>{student.name}</div>
-                                            <div className="text-xs text-slate-500 mt-0.5">{student.schoolName}</div>
-                                        </div>
-                                    </button>
-                                ))
-                            )}
-                        </div>
-                    </div>
-                    
-                    <div className="lg:col-span-2 bg-white border border-slate-300 rounded-2xl shadow-sm flex flex-col h-full overflow-hidden">
-                        {!selectedStudentId ? (
-                            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-3">
-                                <UserCheck size={48} className="opacity-20" />
-                                <p className="font-bold">좌측에서 학생을 검색 및 선택하면 상세 출결을 봅니다.</p>
-                            </div>
-                        ) : (
-                            <>
-                                <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-blue-50/30">
-                                    <div>
-                                        <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
-                                            {users.find(u=>u.id===selectedStudentId)?.name} <span className="text-sm font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200">출결 통계</span>
-                                        </h2>
-                                    </div>
-                                    <div className="bg-white border border-slate-300 px-4 py-2 rounded-xl text-center shadow-sm">
-                                        <div className="text-xs text-slate-500 font-bold">누적 기록 횟수</div>
-                                        <div className="text-xl font-black text-blue-600">{studentLogs.length}회</div>
-                                    </div>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-slate-50">
-                                    {studentLogs.length === 0 ? (
-                                        <div className="text-center py-16 text-slate-400 font-bold border-2 border-dashed border-slate-300 rounded-2xl bg-white">기록이 없습니다.</div>
-                                    ) : (
-                                        <div className="space-y-3">
-                                            {studentLogs.map(log => {
-                                                const isAbsent = log.status === 'absent';
-                                                const isLate = log.status === 'late';
-                                                return (
-                                                <div key={log.id} className="bg-white border border-slate-300 rounded-xl p-4 flex justify-between items-center shadow-sm">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center border ${isAbsent ? 'bg-rose-100 text-rose-600 border-rose-200' : isLate ? 'bg-amber-100 text-amber-600 border-amber-200' : 'bg-emerald-100 text-emerald-600 border-emerald-200'}`}>
-                                                            {isAbsent ? <X size={20}/> : isLate ? <AlertTriangle size={20}/> : <CheckCircle size={20}/>}
-                                                        </div>
-                                                        <div>
-                                                            <div className="font-black text-slate-800">{log.date}</div>
-                                                            <div className="text-xs text-slate-500 font-bold mt-1">
-                                                                상태: <span className={isAbsent ? 'text-rose-600' : isLate ? 'text-amber-600' : 'text-emerald-600'}>{isAbsent ? '결석' : isLate ? '지각' : '정상 출석'}</span>
-                                                                <span className="mx-2 text-slate-300">|</span>
-                                                                방식: {log.method === 'manual_desk' ? '데스크 수동 인증' : '키패드 인증'}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="text-sm font-mono text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 font-bold">
-                                                        {new Date(log.timestamp?.seconds * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
-                                                    </div>
-                                                </div>
-                                            )})}
-                                        </div>
-                                    )}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* TAB 3: 교실 매트릭스 */}
+            {/* TAB 2: 교실 매트릭스 */}
             {activeTab === 'matrix' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
