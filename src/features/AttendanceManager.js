@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진 v14.1 (CRM 2.0 실시간 연동)
-   1. AI 통화 로그 연동 (CRM): S25 Ultra에서 전송된 통화 요약본이 실시간(Real-time)으로 반영됩니다.
-   2. 인지 부하 제어: 강사들은 수업 전 '일별 운영 관제' 탭에서 학생 이름 밑에 달린 AI 태그만 보고도 오늘 어떻게 학생을 대해야 할지 1초 만에 파악합니다.
-   🚀 CTO 최적화: 가짜 데이터(Mock)를 제거하고 Firestore 실시간 구독(onSnapshot)으로 완벽 교체했습니다. */
+/* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
+   🚀 CTO 패치: 
+   1. 그룹핑 최적화: 콜타임(등원시간)이 다르더라도 동일한 '반(Class)'이면 무조건 하나의 통합 카드로 병합하여 시각적 분절을 제거했습니다.
+   2. 정렬 알고리즘 변경: 클래스 카드는 '본수업 시간' 순으로 정렬되며, 카드 내부의 학생들은 '개별 등원 시간' 순으로 정렬됩니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -18,7 +18,6 @@ import { Card, Button, Modal } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
-// 🚀 법적 심야교습 시간 제한 반영
 const TIME_SLOTS = Array.from({ length: 29 }, (_, i) => {
     const hour = Math.floor(i / 2) + 8;
     const min = i % 2 === 0 ? '00' : '30';
@@ -53,7 +52,6 @@ export default function AttendanceManager({ currentUser }) {
 
     const [activeTab, setActiveTab] = useState('daily'); 
     
-    // 날짜 변경(타임머신) State
     const [selectedDateObj, setSelectedDateObj] = useState(new Date());
     const selectedDayStr = DAYS_OF_WEEK[selectedDateObj.getDay()];
     const selectedDateStr = getLocalDateStr(selectedDateObj);
@@ -65,7 +63,6 @@ export default function AttendanceManager({ currentUser }) {
     const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
 
-    // 🚀 [CTO 패치] 서버에서 수신받을 실제 AI 통화 요약(CRM) 데이터
     const [aiInsights, setAiInsights] = useState([]);
 
     const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -82,9 +79,7 @@ export default function AttendanceManager({ currentUser }) {
     const uniqueSchools = useMemo(() => {
         const schools = new Set();
         users.forEach(u => {
-            if (u.role === 'student' && u.schoolName) {
-                schools.add(u.schoolName);
-            }
+            if (u.role === 'student' && u.schoolName) schools.add(u.schoolName);
         });
         return Array.from(schools).sort();
     }, [users]);
@@ -94,7 +89,6 @@ export default function AttendanceManager({ currentUser }) {
         const teacherNames = [...new Set(
             users.filter(u => ['lecturer', 'ta', 'admin_assistant'].includes(u.role) && u.name).map(u => u.name)
         )].sort(); 
-
         teacherNames.forEach((name, index) => {
             map[name] = TEACHER_COLORS[index % TEACHER_COLORS.length];
         });
@@ -106,7 +100,6 @@ export default function AttendanceManager({ currentUser }) {
         return teacherColorMap[name] || 'bg-gray-100 border-gray-300 text-gray-800';
     };
 
-    // 실시간 데이터 구독 갱신 (출결, 면제, 세션)
     useEffect(() => {
         const qAtt = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('date', '==', selectedDateStr));
         const unsubAtt = onSnapshot(qAtt, s => {
@@ -128,12 +121,10 @@ export default function AttendanceManager({ currentUser }) {
         return () => unsubSession();
     }, [selectedDateStr]);
 
-    // 🚀 [CTO 패치] AI CRM 데이터 실시간 구독 연결 (진짜 데이터)
     useEffect(() => {
         const qContext = query(collection(db, `artifacts/${APP_ID}/public/data/student_context`));
         const unsubContext = onSnapshot(qContext, s => {
-            const insights = s.docs.map(d => ({ id: d.id, ...d.data() }));
-            setAiInsights(insights);
+            setAiInsights(s.docs.map(d => ({ id: d.id, ...d.data() })));
         });
         return () => unsubContext();
     }, []);
@@ -196,7 +187,6 @@ export default function AttendanceManager({ currentUser }) {
                 totalExpected++; 
             }
 
-            // 🚀 [CTO 패치] 서버에서 온 진짜 AI Insight 매핑
             const insight = aiInsights.find(ai => ai.studentId === enroll.studentId);
 
             const studentData = { 
@@ -206,8 +196,8 @@ export default function AttendanceManager({ currentUser }) {
                 schoolName: student.schoolName, 
                 status: status, 
                 enrollId: enroll.id, 
-                callTime: todaySch.callTime,
-                insight: insight // AI 분석 데이터 첨부
+                callTime: todaySch.callTime, // 개별 등원시간
+                insight: insight
             };
 
             if (status === 'exam_leave') {
@@ -219,19 +209,32 @@ export default function AttendanceManager({ currentUser }) {
                 emergencyList.push({ ...studentData, className: enroll.className });
             }
 
-            const groupKey = `${enroll.classId}_${todaySch.callTime}`;
+            // 🚀 [CTO 패치] 무조건 classId(반) 기준으로만 하나로 묶습니다.
+            const groupKey = enroll.classId; 
             if (!classGroups[groupKey]) {
                 classGroups[groupKey] = {
-                    classId: enroll.classId, className: enroll.className, lecturerName: lecturer?.name || '미지정',
-                    callTime: todaySch.callTime, classTime: todaySch.startTime, endTime: todaySch.endTime, room: todaySch.room || '미정',
+                    classId: enroll.classId, 
+                    className: enroll.className, 
+                    lecturerName: lecturer?.name || '미지정',
+                    classTime: todaySch.startTime, // 대표 시간은 본수업 시간으로 표시
+                    endTime: todaySch.endTime, 
+                    room: todaySch.room || '미정',
                     students: []
                 };
             }
             classGroups[groupKey].students.push(studentData);
         });
 
-        const sortedGroups = Object.values(classGroups).sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
-        sortedGroups.forEach(g => g.students.sort((a, b) => String(a.studentName || '').localeCompare(String(b.studentName || ''))));
+        // 클래스 카드 정렬: 본수업(classTime) 빠른 순
+        const sortedGroups = Object.values(classGroups).sort((a, b) => String(a.classTime || '').localeCompare(String(b.classTime || '')));
+        
+        // 카드 내부 학생 정렬: 등원시간(callTime) 빠른 순 -> 동일하면 이름순
+        sortedGroups.forEach(g => g.students.sort((a, b) => {
+            const timeCompare = String(a.callTime || '').localeCompare(String(b.callTime || ''));
+            if (timeCompare !== 0) return timeCompare;
+            return String(a.studentName || '').localeCompare(String(b.studentName || ''));
+        }));
+
         emergencyList.sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
 
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
@@ -507,7 +510,6 @@ export default function AttendanceManager({ currentUser }) {
         }
     };
 
-    // 🚀 [CTO 렌더링 헬퍼] AI 인싸이트 태그에 따른 시각화 객체 반환
     const getInsightUI = (type) => {
         switch(type) {
             case 'medical_psych': return { icon: <Brain size={12}/>, color: 'text-rose-600 bg-rose-50 border-rose-200' };
@@ -590,7 +592,7 @@ export default function AttendanceManager({ currentUser }) {
                     <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
                         <div className="flex-1 bg-white border border-slate-300 rounded-3xl shadow-sm flex flex-col min-h-[400px]">
                             <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 bg-slate-50 rounded-t-3xl shrink-0">
-                                <h2 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18}/> 콜 타임(Call Time)별 타임라인</h2>
+                                <h2 className="font-bold text-slate-800 flex items-center gap-2"><Users size={18}/> 반별 통합 출결 보드</h2>
                                 <div className="relative w-full sm:w-64">
                                     <input type="text" placeholder="학생 이름, 반 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold bg-white"/>
                                     <Search className="absolute left-3 top-2.5 text-slate-400" size={16}/>
@@ -611,8 +613,13 @@ export default function AttendanceManager({ currentUser }) {
                                                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 mb-4 pb-3 border-b border-slate-200">
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-1">
-                                                            <span className={`text-xs font-black px-2 py-0.5 rounded-md ${hasLate ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>콜타임 {group.callTime}</span>
-                                                            <span className="text-xs font-bold text-slate-500">본수업 {group.classTime}</span>
+                                                            {/* 🚀 [CTO 패치] 카드 헤더에는 반의 본수업 시간과 총원만 표시합니다. */}
+                                                            <span className="text-xs font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md flex items-center gap-1">
+                                                                본수업 {group.classTime}
+                                                            </span>
+                                                            <span className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                                                                <Users size={12}/> 총 {group.students.length}명
+                                                            </span>
                                                         </div>
                                                         <h3 className="text-lg font-black text-slate-900">{group.className}</h3>
                                                     </div>
@@ -622,7 +629,6 @@ export default function AttendanceManager({ currentUser }) {
                                                     </div>
                                                 </div>
 
-                                                {/* 🚀 [CTO 패치] AI Insight(콜로그) 뱃지 시각화 적용 */}
                                                 <div className="flex flex-wrap gap-2">
                                                     {group.students.map(student => {
                                                         const insightUI = student.insight ? getInsightUI(student.insight.type) : null;
@@ -633,12 +639,16 @@ export default function AttendanceManager({ currentUser }) {
                                                             <div className="flex items-center gap-1.5 relative group/ai">
                                                                 <span className="font-bold">{student.studentName}</span>
                                                                 
-                                                                {/* AI CRM Insight Badge */}
+                                                                {/* 🚀 [CTO 패치] 개별 학생의 콜타임(등원 시간)을 이름 바로 옆에 배지 형태로 노출합니다. */}
+                                                                {student.callTime && (
+                                                                    <span className="text-[10px] bg-slate-100 border border-slate-200 text-slate-500 px-1.5 py-0.5 rounded ml-0.5 font-black tracking-tighter">
+                                                                        {student.callTime}
+                                                                    </span>
+                                                                )}
+
                                                                 {insightUI && (
                                                                     <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-black cursor-help ${insightUI.color}`}>
                                                                         {insightUI.icon} {student.insight.tag}
-                                                                        
-                                                                        {/* Tooltip for AI Summary */}
                                                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-[200px] p-2 bg-slate-800 text-white text-xs font-bold rounded-lg opacity-0 invisible group-hover/ai:opacity-100 group-hover/ai:visible transition-all z-50 shadow-xl break-keep leading-tight pointer-events-none">
                                                                             {student.insight.message}
                                                                             <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-800 rotate-45"></div>
@@ -656,7 +666,7 @@ export default function AttendanceManager({ currentUser }) {
                                                                 
                                                                 {['expected', 'late'].includes(student.status) && (
                                                                     <div className="flex gap-1 ml-1">
-                                                                        <button onClick={() => handleManualCheckIn(student.studentId, student.studentName, group.callTime)} className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
+                                                                        <button onClick={() => handleManualCheckIn(student.studentId, student.studentName, student.callTime)} className={`text-[10px] font-bold px-1.5 py-0.5 rounded transition-colors ${student.status === 'late' ? 'bg-rose-100 text-rose-600 hover:bg-rose-600 hover:text-white' : 'bg-slate-100 text-slate-500 hover:bg-emerald-500 hover:text-white'}`}>
                                                                             등원
                                                                         </button>
                                                                         <button onClick={() => handleMarkAbsent(student.studentId, student.studentName)} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors">
@@ -863,7 +873,7 @@ export default function AttendanceManager({ currentUser }) {
                 </div>
             )}
 
-            {/* 🚀 TAB 4: 교실 매트릭스 (Room Matrix View) */}
+            {/* TAB 4: 교실 매트릭스 */}
             {activeTab === 'matrix' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
