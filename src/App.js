@@ -1,13 +1,12 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
    🚀 CTO 패치: 
-   1. 빈 화면(WSOD) 원천 차단: 강제 리다이렉트 시 발생하는 데이터 Hydration 병목을 해소했습니다.
-   2. 'My Imperial Day' 메뉴 독립: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 
-      직접 메뉴를 클릭하여 초개인화 대시보드를 즐길 수 있도록 UX를 개편했습니다. */
+   1. HR 파이프라인 연동: 최고 관리자 전용 '채용 및 인사 관리' 메뉴를 독립 라우터로 분리하여 민감 정보를 안전하게 격리했습니다.
+   2. 'My Imperial Day' 유지: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 대시보드를 즐길 수 있도록 UX를 개편했습니다. */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-// 🚀 [CTO 패치] Sparkles 아이콘 추가 등 모든 의존성 완벽 동기화
+// 🚀 [CTO 패치] Briefcase 아이콘 등 모든 의존성 완벽 동기화
 import { 
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
@@ -46,14 +45,15 @@ const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 
-// 🚀 학생 전용 초개인화 대시보드
 const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
+
+// 🚀 [HR 추가] 채용 관리 컴포넌트 로드
+const RecruitmentManager = React.lazy(() => import('./features/RecruitmentManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
 // 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB) 마스터 데이터
 const MENU_GROUPS = [
-    // 🚀 [신규 추가] 학생의 시선이 가장 먼저 닿는 곳에 '나의 학원 생활' 탭을 신설하여 스케줄러를 배치합니다.
     {
         title: "나의 학원 생활",
         description: "오늘의 스케줄과 AI 브리핑을 확인합니다.",
@@ -98,7 +98,9 @@ const MENU_GROUPS = [
             { name: "지출결의 등록", path: "/expense", icon: FileText, desc: "지출 내역 등록 및 증빙 업로드", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "월급 정산 관리", path: "/payroll-mgmt", icon: Briefcase, desc: "전체 직원의 급여 정산 및 관리", roles: ['admin'] },
             { name: "내 월급 확인", path: "/payroll-check", icon: DollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] }
+            { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] },
+            // 🚀 [HR 추가] 채용 파이프라인 메뉴 (admin, admin_assistant 한정)
+            { name: "채용 및 인사 관리", path: "/recruitment", icon: Briefcase, desc: "조교/강사 채용 및 온보딩 파이프라인", roles: ['admin', 'admin_assistant'] }
         ]
     },
     {
@@ -597,7 +599,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-700 hover:bg-gray-50 font-medium'}`}
             >
-                {/* 🚀 [CTO 패치] 기본 홈버튼 복구: 헷갈리지 않도록 명칭을 일원화 */}
                 <Home size={20} /> 대시보드 홈
             </button>
 
@@ -666,10 +667,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
-                        {/* 🚀 [CTO 패치] 모든 권한이 공평하게 기본 Dashboard 컴포넌트를 사용합니다. (강제 리다이렉트 완전 제거로 WSOD 방지) */}
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
                         
-                        {/* 🚀 [신규 추가] 학생 전용 My Imperial Day 라우팅 설정 */}
                         <Route path="/my-day" element={currentUser.role === 'student' ? <StudentDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
                         <Route path="/consult" element={['admin', 'admin_assistant', 'lecturer'].includes(currentUser.role) ? <ConsultationManager /> : <Navigate to="/dashboard" replace />} />
@@ -706,6 +705,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
+                        {/* 🚀 [HR 추가] 채용 파이프라인 라우팅 설정 */}
+                        <Route path="/recruitment" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <RecruitmentManager /> : <Navigate to="/dashboard" replace />} />
+
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
