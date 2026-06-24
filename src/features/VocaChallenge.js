@@ -1,9 +1,10 @@
-/* [서비스 가치] 게이미피케이션(Gamification)을 통한 영단어 암기 몰입도 극대화 엔진 v4.0
-   - (🚀 CTO 패치 1: 글로벌 명예의 전당을 Top 5로 압축하여 희소성 부여 및 Firebase 비용 절감)
-   - (🚀 CTO 패치 2: 정답 시 기본/시간/콤보 점수를 명시하는 1.5초의 '도파민 피드백' 애니메이션 부활) */
+/* [서비스 가치(Service Value)] 게이미피케이션 기반 영단어 챌린지 엔진
+   🚀 CTO 패치: 
+   1. 글로벌 명예의 전당(Global Leaderboard) 도입: 반별 필터링을 제거하여 전교생 통합 Top 5 랭킹을 구현했습니다. (Composite Index 에러 완벽 해결)
+   2. 도파민 피드백 부활: Iframe 내부 로직을 수정하여 정답 시 [기본/시간/콤보] 보너스가 1.5초간 화려하게 팝업되도록 복구했습니다. */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle, Medal } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, addDoc, orderBy, limit, deleteDoc, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
@@ -11,7 +12,7 @@ import { Card, Button, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 원장님 제공 실제 CSV 데이터 (보존 완료)
+// 🚀 원장님 제공 실제 CSV 데이터
 const RAW_CSV_DATA = `NVH2_D08_281,maintain,M1,preserve,
 NVH2_D08_281,maintain,M2,assert,
 NVH2_D08_282,undermine,M1,weaken,strengthen
@@ -251,7 +252,7 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 HTML (내부적으로 React와 통신)
+// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 HTML (도파민 피드백 화면 완벽 복구)
 const GET_GAME_HTML = () => `
 <!DOCTYPE html>
 <html lang="ko">
@@ -327,7 +328,7 @@ const GET_GAME_HTML = () => `
 
   <div id="startScreen" class="screen active" style="justify-content: center;">
     <div class="start-container">
-      <span style="background: #6366f1; color: white; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px;">우리 반 한정 챌린지</span>
+      <span style="background: #6366f1; color: white; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px;">임페리얼 전교생 통합 챌린지</span>
       <h1 style="font-size: 50px; font-weight: 900; margin-bottom: 10px; word-break: keep-all; line-height: 1.1;">영단어<br><span style="color: #facc15;">챌린지</span></h1>
       <p style="margin-bottom: 30px; color: #9ca3af; font-weight: bold; font-size: 16px; line-height: 1.5;">
         단어의 유의어와 반의어 관계를 파악하여<br>혼자 튀는 하나를 찾아라!<br>
@@ -475,7 +476,7 @@ const GET_GAME_HTML = () => `
     let selectedDays = [];
     let currentTotalQuestion = 1;
     let score = 0;
-    let combo = 0; // 🚀 콤보 변수 추가
+    let combo = 0; // 🚀 콤보 변수 활성화
     let timeLeft = 0;
     let timerInterval;
     let maxTime = 15;
@@ -728,7 +729,7 @@ const GET_GAME_HTML = () => `
       }
     }
 
-    // 🚀 [CTO 패치] 도파민 폭발 피드백 (1.5초) 및 콤보 로직 완벽 복구
+    // 🚀 [CTO 패치 2] 도파민 폭발 1.5초 피드백 화면 부활
     function handleAnswer(isCorrect, isTimeout) {
       if (isTransitioning) return;
       isTransitioning = true;
@@ -739,13 +740,12 @@ const GET_GAME_HTML = () => `
         const config = getRoundConfig();
         const basePoints = config.baseScore;
         const timeBonus = timeLeft * config.bonus;
-        const comboBonus = (combo - 1) * 20; // 콤보 1회당 20점 보너스
+        const comboBonus = (combo - 1) * 20; 
         const earnedScore = basePoints + timeBonus + comboBonus;
         
         score += earnedScore;
         document.getElementById('scoreText').innerText = score.toLocaleString() + ' pt';
         
-        // 긍정적 피드백 화면 출력
         document.getElementById('feedbackTitle').innerText = 'PERFECT!';
         document.getElementById('feedbackTitle').style.color = '#4ade80';
         document.getElementById('fbBase').innerText = '+' + basePoints;
@@ -758,7 +758,6 @@ const GET_GAME_HTML = () => `
         const overlay = document.getElementById('feedbackOverlay');
         overlay.classList.add('active');
 
-        // 1.5초 후 다음 문제로 진행
         setTimeout(() => {
             overlay.classList.remove('active');
             currentTotalQuestion++; 
@@ -767,9 +766,8 @@ const GET_GAME_HTML = () => `
         }, 1500);
 
       } else {
-        combo = 0; // 오답 시 콤보 박탈
+        combo = 0; 
         
-        // 부정적 피드백 화면 출력
         document.getElementById('feedbackTitle').innerText = isTimeout ? 'TIME OUT!' : 'OOPS!';
         document.getElementById('feedbackTitle').style.color = '#f87171';
         document.getElementById('feedbackDetail').style.display = 'none';
@@ -777,10 +775,9 @@ const GET_GAME_HTML = () => `
         const overlay = document.getElementById('feedbackOverlay');
         overlay.classList.add('active');
 
-        // 1.5초 후 게임 오버 화면으로 이동
         setTimeout(() => {
             overlay.classList.remove('active');
-            document.getElementById('feedbackDetail').style.display = 'block'; // 초기화
+            document.getElementById('feedbackDetail').style.display = 'block'; 
             endGame(false);
         }, 1500);
       }
@@ -861,11 +858,9 @@ export default function VocaChallenge({ currentUser }) {
 
     const [activeClasses, setActiveClasses] = useState([]);
     const [adminTab, setAdminTab] = useState('settings'); 
-    const [adminSelectedClass, setAdminSelectedClass] = useState('');
     
     const [rankings, setRankings] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [studentClassId, setStudentClassId] = useState(null); 
     const [isGameActive, setIsGameActive] = useState(false);
     const [myRecordData, setMyRecordData] = useState({ score: 0, docId: null });
 
@@ -878,58 +873,37 @@ export default function VocaChallenge({ currentUser }) {
         return () => unsub();
     }, []);
 
+    // 🚀 [CTO 패치 1] 글로벌 전교생 랭킹 (Top 5)으로 교체하여 Composite Index 에러 원천 차단
     useEffect(() => {
-        if (isStudent && enrollments && activeClasses.length > 0) {
-            const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
-            const myActiveChallenge = myEnrolls.find(e => activeClasses.includes(e.classId));
-            if (myActiveChallenge) {
-                setStudentClassId(myActiveChallenge.classId);
-            } else {
-                setStudentClassId(null);
-            }
-        }
-    }, [isStudent, enrollments, activeClasses, currentUser.id]);
-
-    const loadRankings = useCallback((targetClassId) => {
-        if (!targetClassId) return;
-        
-        // 🚀 [CTO 패치 1] 명예의 전당 Top 5 노출 (Read 비용 절약 및 희소성 부여)
         const q = query(
             collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
-            where('classId', '==', targetClassId),
             orderBy('score', 'desc'),
-            limit(5) // <--- Top 15에서 Top 5로 완벽하게 축소
+            limit(5) // 학원 통합 5등까지만 노출
         );
         const unsub = onSnapshot(q, snap => {
             setRankings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
-        return unsub;
+        return () => unsub();
     }, []);
 
+    // 나의 최고 기록 조회 (단일 필드 검색으로 Index 에러 없음)
     useEffect(() => {
-        let unsub = null;
-        if (!isStudent && adminSelectedClass) unsub = loadRankings(adminSelectedClass);
-        else if (isStudent && studentClassId) unsub = loadRankings(studentClassId);
-        
-        return () => { if (unsub) unsub(); }
-    }, [isStudent, adminSelectedClass, studentClassId, loadRankings]);
-
-    useEffect(() => {
-        if (!isStudent || !studentClassId) return;
+        if (!isStudent) return;
         const q = query(
             collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
-            where('classId', '==', studentClassId),
             where('studentId', '==', currentUser.id)
         );
         const unsub = onSnapshot(q, snap => {
             if (!snap.empty) {
-                setMyRecordData({ score: snap.docs[0].data().score || 0, docId: snap.docs[0].id });
+                // 여러 기록이 있다면 가장 높은 점수를 내 기록으로 설정
+                const bestDoc = snap.docs.sort((a,b) => b.data().score - a.data().score)[0];
+                setMyRecordData({ score: bestDoc.data().score || 0, docId: bestDoc.id });
             } else {
                 setMyRecordData({ score: 0, docId: null });
             }
         });
         return unsub;
-    }, [isStudent, studentClassId, currentUser.id]);
+    }, [isStudent, currentUser.id]);
 
     const toggleClassActive = async (classId) => {
         const newActive = activeClasses.includes(classId) 
@@ -941,23 +915,18 @@ export default function VocaChallenge({ currentUser }) {
     };
 
     const handleClearRankings = async () => {
-        if (!adminSelectedClass) return;
-        if (!window.confirm("이 반의 랭킹 기록을 모두 초기화 하시겠습니까?")) return;
+        if (!window.confirm("🚨 전교생의 랭킹 기록을 모두 초기화 하시겠습니까?")) return;
         
-        const q = query(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), where('classId', '==', adminSelectedClass));
+        const q = query(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`));
         const snap = await getDocs(q);
         snap.forEach(d => deleteDoc(d.ref));
-        alert("랭킹이 초기화 되었습니다.");
+        alert("글로벌 랭킹이 모두 초기화 되었습니다.");
     };
 
-    const studentClassIdRef = useRef(studentClassId);
     const currentUserRef = useRef(currentUser);
-    const classesRef = useRef(classes);
     const myRecordDataRef = useRef(myRecordData);
 
-    useEffect(() => { studentClassIdRef.current = studentClassId; }, [studentClassId]);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
-    useEffect(() => { classesRef.current = classes; }, [classes]);
     useEffect(() => { myRecordDataRef.current = myRecordData; }, [myRecordData]);
 
     useEffect(() => {
@@ -974,14 +943,10 @@ export default function VocaChallenge({ currentUser }) {
                 if (finalScore === 0) return; 
 
                 try {
-                    const sClassId = studentClassIdRef.current;
                     const cUser = currentUserRef.current;
-                    const cList = classesRef.current;
                     const { score: currentBest, docId: myDocId } = myRecordDataRef.current;
                     
-                    if (!sClassId || !cUser || !cUser.id) return; 
-
-                    const myClassObj = cList.find(c => c.id === sClassId);
+                    if (!cUser || !cUser.id) return; 
                     
                     if (finalScore > currentBest) {
                         setMyRecordData({ score: finalScore, docId: myDocId });
@@ -992,8 +957,6 @@ export default function VocaChallenge({ currentUser }) {
                             });
                         } else {
                             await addDoc(collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`), {
-                                classId: sClassId,
-                                className: myClassObj?.name || '알수없음',
                                 studentId: cUser.id,
                                 studentName: cUser.name,
                                 score: finalScore,
@@ -1073,55 +1036,38 @@ export default function VocaChallenge({ currentUser }) {
 
                 {adminTab === 'leaderboard' && (
                     <Card className="space-y-6">
-                        <div className="flex gap-4 items-center">
-                            <select className="border-2 border-gray-200 rounded-xl p-3 font-bold text-gray-800 outline-none focus:border-purple-500 flex-1" value={adminSelectedClass} onChange={e => setAdminSelectedClass(e.target.value)}>
-                                <option value="">랭킹을 조회할 영어 반을 선택하세요</option>
-                                {englishClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
-                            <Button onClick={handleClearRankings} variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 font-bold whitespace-nowrap">랭킹 초기화</Button>
+                        <div className="flex justify-end mb-4">
+                            <Button onClick={handleClearRankings} variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 font-bold">전체 랭킹 초기화</Button>
                         </div>
-
-                        {adminSelectedClass && (
-                            <div className="bg-slate-900 rounded-3xl p-6 md:p-10 text-white shadow-2xl relative overflow-hidden">
-                                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400"></div>
-                                <h3 className="text-3xl font-black text-center mb-8 text-yellow-400 flex items-center justify-center gap-3">
-                                    <Crown size={36}/> 명예의 전당 (Top 5)
-                                </h3>
-                                
-                                {rankings.length === 0 ? (
-                                    <div className="text-center py-10 text-gray-500 font-bold">아직 이 반에서 챌린지에 참가한 학생이 없습니다.</div>
-                                ) : (
-                                    <div className="space-y-3 max-w-2xl mx-auto">
-                                        {rankings.map((rank, idx) => (
-                                            <div key={rank.id} className="flex justify-between items-center bg-white/10 p-4 md:p-5 rounded-2xl backdrop-blur-sm border border-white/5 hover:bg-white/20 transition-colors">
-                                                <div className="flex items-center gap-4">
-                                                    <span className={`w-8 text-center font-black ${idx === 0 ? 'text-yellow-400 text-3xl drop-shadow-md' : idx === 1 ? 'text-gray-300 text-2xl' : idx === 2 ? 'text-amber-600 text-2xl' : 'text-gray-500 text-xl'}`}>
-                                                        {idx + 1}
-                                                    </span>
-                                                    <span className="font-bold text-white text-xl">{rank.studentName}</span>
-                                                </div>
-                                                <div className="text-right">
-                                                    <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score.toLocaleString()}</span>
-                                                    <span className="text-sm text-yellow-400/50 font-bold ml-1">pt</span>
-                                                </div>
+                        <div className="bg-slate-900 rounded-3xl p-6 md:p-10 text-white shadow-2xl relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400"></div>
+                            <h3 className="text-3xl font-black text-center mb-8 text-yellow-400 flex items-center justify-center gap-3">
+                                <Crown size={36}/> 임페리얼 명예의 전당 (Top 5)
+                            </h3>
+                            
+                            {rankings.length === 0 ? (
+                                <div className="text-center py-10 text-gray-500 font-bold">아직 챌린지에 참가한 학생이 없습니다.</div>
+                            ) : (
+                                <div className="space-y-3 max-w-2xl mx-auto">
+                                    {rankings.map((rank, idx) => (
+                                        <div key={rank.id} className="flex justify-between items-center bg-white/10 p-4 md:p-5 rounded-2xl backdrop-blur-sm border border-white/5 hover:bg-white/20 transition-colors">
+                                            <div className="flex items-center gap-4">
+                                                <span className={`w-8 text-center font-black ${idx === 0 ? 'text-yellow-400 text-3xl drop-shadow-md' : idx === 1 ? 'text-gray-300 text-2xl' : idx === 2 ? 'text-amber-600 text-2xl' : 'text-gray-500 text-xl'}`}>
+                                                    {idx + 1}
+                                                </span>
+                                                <span className="font-bold text-white text-xl">{rank.studentName}</span>
                                             </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                                            <div className="text-right">
+                                                <span className="font-black text-2xl text-yellow-400 tracking-wider font-mono">{rank.score.toLocaleString()}</span>
+                                                <span className="text-sm text-yellow-400/50 font-bold ml-1">pt</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </Card>
                 )}
-            </div>
-        );
-    }
-
-    if (!studentClassId) {
-        return (
-            <div className="flex flex-col items-center justify-center h-[70vh] text-gray-400 space-y-4 animate-in fade-in">
-                <Lock size={64} className="opacity-20"/>
-                <h2 className="text-2xl font-black text-gray-600">현재 오픈된 챌린지가 없습니다</h2>
-                <p className="font-bold">강사님이 우리 반의 챌린지를 오픈하면 이곳에서 도전할 수 있습니다.</p>
             </div>
         );
     }
@@ -1131,7 +1077,7 @@ export default function VocaChallenge({ currentUser }) {
             <div className="bg-slate-900 rounded-3xl p-8 text-white shadow-2xl relative overflow-hidden flex flex-col items-center justify-center min-h-[70vh] text-center border-4 border-indigo-500/30">
                 <div className="absolute top-0 right-0 p-8 opacity-10"><Trophy size={200}/></div>
                 
-                <Badge className="bg-indigo-500 text-white mb-6 border-0 text-sm py-1.5 px-4 rounded-full">우리 반 한정 챌린지</Badge>
+                <Badge className="bg-indigo-500 text-white mb-6 border-0 text-sm py-1.5 px-4 rounded-full tracking-widest">임페리얼 전교생 통합 챌린지</Badge>
                 <h1 className="text-4xl md:text-5xl font-black mb-4 tracking-tight leading-tight">영단어<br/><span className="text-yellow-400">챌린지</span></h1>
                 <p className="text-indigo-200 mb-8 font-medium leading-relaxed">단어의 유의어와 반의어 관계를 파악하여 혼자 튀는 하나를 찾아라!<br/><span className="text-rose-400 font-bold bg-rose-900/50 px-2 py-1 rounded">※ 한 번 틀리면 즉시 게임 오버</span></p>
                 
@@ -1140,7 +1086,7 @@ export default function VocaChallenge({ currentUser }) {
                 </button>
 
                 <div className="w-full mt-12 bg-white/5 rounded-2xl p-5 border border-white/10 text-left z-10">
-                    <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 실시간 명예의 전당 TOP 5</h3>
+                    <h3 className="font-bold text-yellow-400 mb-3 flex items-center gap-1.5"><Crown size={16}/> 실시간 통합 명예의 전당 (Top 5)</h3>
                     <div className="space-y-3">
                         {rankings.length === 0 ? <p className="text-white/40 text-sm font-bold">아직 기록이 없습니다. 1등을 선점하세요!</p> :
                             rankings.map((r, i) => (
