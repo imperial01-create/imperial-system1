@@ -1,12 +1,13 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
    🚀 CTO 패치: 
    1. HR 파이프라인 연동: 최고 관리자 전용 '채용 및 인사 관리' 메뉴를 독립 라우터로 분리하여 민감 정보를 안전하게 격리했습니다.
-   2. 'My Imperial Day' 유지: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 대시보드를 즐길 수 있도록 UX를 개편했습니다. */
+   2. 사이드바 스크롤 최적화: SNB 메뉴가 길어졌을 때 하단 로그아웃 영역에 가려지지 않도록 Flexbox 기반 레이아웃으로 전면 수정했습니다.
+   3. 'My Imperial Day' 유지: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 대시보드를 즐길 수 있도록 UX를 개편했습니다.
+*/
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 
-// 🚀 [CTO 패치] Briefcase 아이콘 등 모든 의존성 완벽 동기화
 import { 
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
@@ -14,10 +15,9 @@ import {
   PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles
 } from 'lucide-react';
 
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth, db } from './firebase';
-
 import { DataProvider, useData } from './contexts/DataContext';
 
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -44,15 +44,11 @@ const ConsultationManager = React.lazy(() => import('./features/ConsultationMana
 const VocaManager = React.lazy(() => import('./features/VocaManager'));
 const StudentVocaDaily = React.lazy(() => import('./features/StudentVocaDaily'));
 const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
-
 const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
-
-// 🚀 [HR 추가] 채용 관리 컴포넌트 로드
 const RecruitmentManager = React.lazy(() => import('./features/RecruitmentManager'));
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 아키텍처] 대시보드와 사이드바(SNB) 마스터 데이터
 const MENU_GROUPS = [
     {
         title: "나의 학원 생활",
@@ -99,7 +95,6 @@ const MENU_GROUPS = [
             { name: "월급 정산 관리", path: "/payroll-mgmt", icon: Briefcase, desc: "전체 직원의 급여 정산 및 관리", roles: ['admin'] },
             { name: "내 월급 확인", path: "/payroll-check", icon: DollarSign, desc: "이번 달 급여 명세서 확인", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "사용자 관리", path: "/users", icon: Users, desc: "모든 계정 승인 및 권한 관리", roles: ['admin', 'admin_assistant'] },
-            // 🚀 [HR 추가] 채용 파이프라인 메뉴 (admin, admin_assistant 한정)
             { name: "채용 및 인사 관리", path: "/recruitment", icon: Briefcase, desc: "조교/강사 채용 및 온보딩 파이프라인", roles: ['admin', 'admin_assistant'] }
         ]
     },
@@ -127,7 +122,6 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 
     const schools = schoolsData[schoolType] || [];
     const favorites = schoolsData.favorites || [];
-    
     const pinned = schools.filter(s => favorites.includes(s) && s.includes(search));
     const others = schools.filter(s => !favorites.includes(s) && s.includes(search));
 
@@ -185,7 +179,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [form, setForm] = useState({ role: 'student', userId: '', password: '', name: '', phone: '', schoolName: '', grade: '1학년', childName: '', subject: '' });
     const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
-    const [schoolType, setSchoolType] = useState('high'); 
+    const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false); 
 
     useEffect(() => {
@@ -241,7 +235,6 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
         if (!smsAuth.verified) return setLoginErrorModal({ isOpen: true, msg: '먼저 휴대폰 본인 인증을 완료해주세요.' });
         if (!form.userId || !form.password || !form.name) return setLoginErrorModal({ isOpen: true, msg: '필수 정보를 모두 입력해주세요.' });
         if (form.password.length < 6) return setLoginErrorModal({ isOpen: true, msg: '비밀번호는 6자리 이상이어야 합니다.' });
-        
         if (['student', 'parent'].includes(form.role) && !form.schoolName) return setLoginErrorModal({ isOpen: true, msg: '학교를 정확히 선택하거나 입력해주세요.' });
         if (form.role === 'parent' && !form.childName) return setLoginErrorModal({ isOpen: true, msg: '자녀 이름을 입력해주세요.' });
         if (['ta', 'lecturer'].includes(form.role) && !form.subject) return setLoginErrorModal({ isOpen: true, msg: '담당 과목을 선택해주세요.' });
@@ -255,17 +248,16 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
             const cleanPhone = form.phone.replace(/[^0-9]/g, '');
             const payload = { id: safeId, userId: form.userId, name: form.name, phone: cleanPhone, role: form.role, password: form.password, status: 'pending', createdAt: serverTimestamp() };
-
             if (form.role === 'student') { 
-                payload.schoolName = form.schoolName; 
+                payload.schoolName = form.schoolName;
                 payload.grade = form.grade; 
                 payload.attendancePin = cleanPhone.slice(-4); 
             } else if (form.role === 'parent') { 
-                payload.childName = form.childName; 
+                payload.childName = form.childName;
                 payload.schoolName = form.schoolName; 
                 payload.grade = form.grade;           
             } else if (['ta', 'lecturer'].includes(form.role)) { 
-                payload.subject = form.subject;       
+                payload.subject = form.subject;
             }
 
             await setDoc(docRef, payload);
@@ -391,7 +383,6 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   const [showPassword, setShowPassword] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
-
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 border border-gray-100">
@@ -435,7 +426,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
                 <h3 className="text-xl font-bold leading-relaxed whitespace-pre-wrap">{loginErrorModal.msg}</h3>
                 <button className="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold" onClick={() => setLoginErrorModal({ isOpen: false, msg: '' })}>확인</button>
             </div>
-        </div>
+         </div>
       )}
     </div>
   );
@@ -443,8 +434,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
 
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
-    const { loadingData } = useData() || { loadingData: false }; 
-
+    const { loadingData } = useData() || { loadingData: false };
     const authorizedGroups = useMemo(() => {
         if (!currentUser?.role) return [];
 
@@ -506,13 +496,11 @@ const Dashboard = ({ currentUser }) => {
                             <h2 className="text-xl font-black text-slate-800">{group.title}</h2>
                             <p className="text-sm font-bold text-slate-400 hidden md:block pb-0.5">{group.description}</p>
                         </div>
-                        
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
                             {group.items.map((item, iIdx) => {
                                 const IconObj = (item.studentIcon && ['student', 'parent'].includes(currentUser.role)) ? item.studentIcon : item.icon;
                                 const SafeIcon = IconObj || Activity;
                                 const displayLabel = (item.studentName && ['student', 'parent'].includes(currentUser.role)) ? item.studentName : item.name;
-
                                 return (
                                     <button
                                         key={iIdx}
@@ -520,7 +508,6 @@ const Dashboard = ({ currentUser }) => {
                                         className="group relative bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-xl transition-all duration-300 text-left flex flex-col justify-between h-40 hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-indigo-500 overflow-hidden"
                                     >
                                         <div className={`absolute -right-6 -top-6 w-24 h-24 bg-gradient-to-br ${group.theme} opacity-5 rounded-full group-hover:scale-150 transition-transform duration-500`}></div>
-                                        
                                         <div className="relative z-10">
                                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 bg-gradient-to-br ${group.theme} text-white shadow-md group-hover:scale-110 transition-transform duration-300`}>
                                                 <SafeIcon size={24} />
@@ -529,7 +516,6 @@ const Dashboard = ({ currentUser }) => {
                                                 {displayLabel}
                                             </h3>
                                         </div>
-                                        
                                         <div className="relative z-10 flex justify-between items-end w-full mt-2">
                                             <p className="text-xs font-bold text-slate-500 leading-relaxed pr-4 line-clamp-2">
                                                 {item.desc}
@@ -548,11 +534,10 @@ const Dashboard = ({ currentUser }) => {
 };
 
 const AppLayout = ({ currentUser, handleLogout }) => {
-  const { users } = useData(); 
+  const { users } = useData();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-
   const groupedMenus = useMemo(() => {
       const groups = {};
       MENU_GROUPS.forEach(group => {
@@ -572,29 +557,28 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       });
       return groups;
   }, [currentUser]);
-
   const [expandedCategories, setExpandedCategories] = useState({});
   useEffect(() => {
       const initials = {};
       Object.keys(groupedMenus).forEach(cat => initials[cat] = true);
       setExpandedCategories(initials);
   }, [groupedMenus]);
-
   const toggleCategory = (category) => {
       setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
   };
-
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
       
+      {/* 사이드바 전체 컨테이너 */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r transform transition-transform duration-300 md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}>
         <div className="p-6 border-b flex justify-between items-center shrink-0">
           <h1 className="text-xl font-bold text-blue-600 flex items-center gap-2"><LayoutDashboard /> Imperial</h1>
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><X /></button>
         </div>
         
-        <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar pb-24">
+        {/* 🚀 [해결 1] pb-24 제거 (스크롤 영역) */}
+        <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar">
             <button 
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${location.pathname === '/dashboard' ? 'bg-blue-50 text-blue-600 font-bold' : 'text-gray-700 hover:bg-gray-50 font-medium'}`}
@@ -634,7 +618,8 @@ const AppLayout = ({ currentUser, handleLogout }) => {
             ))}
         </nav>
         
-        <div className="absolute bottom-0 w-full p-4 border-t bg-white shrink-0 z-10">
+        {/* 🚀 [해결 2] absolute 제거 및 mt-auto 적용 (하단 고정) */}
+        <div className="p-4 border-t bg-white shrink-0 z-10 mt-auto">
             <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
                 <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser?.name?.[0] || 'U'}</div>
                 <div className="flex flex-col text-left flex-1">
@@ -777,7 +762,7 @@ const AppContent = () => {
               let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
               let userDoc = await getDoc(userDocRef);
               let docData = null;
-              let originalDocId = null; 
+              let originalDocId = null;
               
               if (!userDoc.exists()) {
                   const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
@@ -818,7 +803,7 @@ const AppContent = () => {
                   sessionStorage.setItem('imperial_user', JSON.stringify(userData));
                   navigate('/dashboard'); 
               } else { 
-                  setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' }); 
+                  setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' });
               }
           } catch (dbErr) {
               console.error("Firestore Permission Denied:", dbErr);
@@ -826,7 +811,7 @@ const AppContent = () => {
           }
       } catch (e) { 
           console.error("Login Final Error:", e);
-          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' }); 
+          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' });
       } 
       finally { setLoginProcessing(false); }
   };
@@ -839,7 +824,7 @@ const AppContent = () => {
   };
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
-  
+
   return (
     <Routes>
       <Route path="/kiosk/consult" element={
