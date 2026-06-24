@@ -1,10 +1,9 @@
 /* [서비스 가치(Service Value)] 초개인화 학생 대시보드 (My Imperial Day)
-   🚀 CTO 패치: 
-   1. 단체 클리닉 전교생 노출 버그 수정: 내 이름이 명시되어 있거나, 내가 듣는 반의 클리닉만 보이도록 타겟팅 로직을 강화했습니다.
-   2. 런타임 에러(WSOD) 100% 원천 차단 및 Firebase 비용 최적화 적용 */
+   🚀 CTO 패치 (학사일정 연동): 
+   학원 전체의 'academic_calendars' 마스터 데이터를 실시간으로 읽어와, 본인 학교의 시험 D-Day가 30일 이내로 떨어지면 최상단에 압도적인 텐션의 붉은색 경고 배너를 노출하여 내신 몰입도를 극대화합니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, User, Loader } from 'lucide-react';
+import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, User, Loader, Target, Flame, AlertTriangle } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -19,18 +18,20 @@ export default function StudentDashboard({ currentUser }) {
     const [briefing, setBriefing] = useState('');
     const [isLoadingBriefing, setIsLoadingBriefing] = useState(true);
     const [todaySessions, setTodaySessions] = useState([]);
+    
+    // 🚀 학사일정 D-Day 상태
+    const [upcomingExam, setUpcomingExam] = useState(null);
+    const [dDayCount, setDDayCount] = useState(null);
 
     const now = new Date();
     const todayDayStr = DAYS_OF_WEEK[now.getDay()];
     const pad = (n) => String(n).padStart(2, '0');
     const todayDateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
-    // 화면에 렌더링할 타임라인 배열
     const todayTimeline = useMemo(() => {
         const events = [];
         if (loadingData || !currentUser || !currentUser.id) return events;
 
-        // A. 정규 수업
         const myEnrolls = enrollments.filter(e => e.studentId === currentUser.id && e.status === 'active');
         myEnrolls.forEach(enroll => {
             const classObj = classes.find(c => c.id === enroll.classId);
@@ -40,28 +41,19 @@ export default function StudentDashboard({ currentUser }) {
             if (todaySch) {
                 const lecturer = users.find(u => u.id === classObj.lecturerId);
                 events.push({
-                    type: 'class',
-                    id: `class_${classObj.id}`,
-                    title: classObj.name || '정규 수업',
-                    startTime: todaySch.startTime || '00:00',
-                    endTime: todaySch.endTime || '종료 미정',
-                    room: todaySch.room || '강의실 미정',
-                    lecturer: lecturer?.name || '담당 강사',
+                    type: 'class', id: `class_${classObj.id}`, title: classObj.name || '정규 수업',
+                    startTime: todaySch.startTime || '00:00', endTime: todaySch.endTime || '종료 미정',
+                    room: todaySch.room || '강의실 미정', lecturer: lecturer?.name || '담당 강사',
                     color: 'bg-blue-50 border-blue-200 text-blue-800'
                 });
             }
         });
 
-        // B. 클리닉 세션
         todaySessions.forEach(session => {
             events.push({
-                type: 'clinic',
-                id: `clinic_${session.id}`,
-                title: session.topic || '개별 밀착 클리닉',
-                startTime: session.startTime || '00:00',
-                endTime: session.endTime || '종료 미정',
-                room: session.classroom || '클리닉실',
-                lecturer: session.taName || '담당 조교',
+                type: 'clinic', id: `clinic_${session.id}`, title: session.topic || '개별 밀착 클리닉',
+                startTime: session.startTime || '00:00', endTime: session.endTime || '종료 미정',
+                room: session.classroom || '클리닉실', lecturer: session.taName || '담당 조교',
                 color: 'bg-purple-50 border-purple-200 text-purple-800'
             });
         });
@@ -71,37 +63,47 @@ export default function StudentDashboard({ currentUser }) {
 
     useEffect(() => {
         if (!currentUser || !currentUser.id || loadingData) return;
-
         let isMounted = true; 
 
         const fetchDashboardData = async () => {
             try {
-                // A. 클리닉 세션 로드 (버그가 있었던 부분)
-                const sessionQ = query(
-                    collection(db, `artifacts/imperial-clinic-v1/public/data/sessions`), 
-                    where('date', '==', todayDateStr),
-                    where('status', '==', 'confirmed')
-                );
+                // 1. 클리닉 세션 로드
+                const sessionQ = query(collection(db, `artifacts/imperial-clinic-v1/public/data/sessions`), where('date', '==', todayDateStr), where('status', '==', 'confirmed'));
                 const sessionSnap = await getDocs(sessionQ);
-                
-                // 🚀 [CTO 패치] 클리닉 필터링 알고리즘 완벽 수정 (타겟팅 보장)
                 const mySessions = sessionSnap.docs
                     .map(d => ({ id: d.id, ...d.data() }))
                     .filter(s => {
                         const stList = Array.isArray(s.students) ? s.students : (s.studentName ? [{name: s.studentName}] : []);
-                        
-                        // 1. 내 이름이 명단에 명확하게 들어있는가? (강사 배정 or 본인 신청)
                         const isNameMatch = stList.some(st => st.name === currentUser.name);
-                        
-                        // 2. 단체 클리닉일 경우, 내가 듣고 있는 반의 클리닉이 맞는가?
                         const isClassMatch = s.classId ? enrollments.some(e => e.studentId === currentUser.id && e.classId === s.classId && e.status === 'active') : false;
-                        
                         return isNameMatch || isClassMatch;
                     });
-                
                 if (isMounted) setTodaySessions(mySessions);
 
-                // B. 백그라운드 AI 브리핑 호출
+                // 🚀 2. [CTO 패치] 내 학교의 다가오는 학사일정(D-Day) 로드
+                if (currentUser.schoolName) {
+                    const calQ = query(collection(db, `artifacts/imperial-clinic-v1/public/data/academic_calendars`), where('schoolName', '==', currentUser.schoolName));
+                    const calSnap = await getDocs(calQ);
+                    const cals = calSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    
+                    // 종료일이 지나지 않은 일정 중 가장 가까운 시작일 찾기
+                    const validExams = cals.filter(c => c.endDate >= todayDateStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
+                    
+                    if (validExams.length > 0) {
+                        const targetExam = validExams[0];
+                        const dDay = Math.ceil((new Date(targetExam.startDate) - new Date()) / (1000 * 60 * 60 * 24));
+                        
+                        // D-Day가 30일 이내로 남았거나 현재 시험기간 중일 때만 노출
+                        if (dDay <= 30) {
+                            if (isMounted) {
+                                setUpcomingExam(targetExam);
+                                setDDayCount(dDay);
+                            }
+                        }
+                    }
+                }
+
+                // 3. 백그라운드 AI 브리핑 호출
                 try {
                     const functions = getFunctions(db.app, 'asia-northeast3');
                     const generateBriefing = httpsCallable(functions, 'generateMorningBriefing');
@@ -136,7 +138,6 @@ export default function StudentDashboard({ currentUser }) {
                 } catch (funcErr) {
                     if (isMounted) setBriefing(`${currentUser.name} 학생, 오늘도 임페리얼과 함께 힘찬 하루를 시작해봅시다!`);
                 }
-
             } catch (error) {
                 if (isMounted) setBriefing(`${currentUser?.name || '학생'}님, 오늘도 힘찬 하루 보내세요!`);
             } finally {
@@ -145,11 +146,9 @@ export default function StudentDashboard({ currentUser }) {
         };
 
         fetchDashboardData();
-
         return () => { isMounted = false; };
     }, [currentUser, todayDateStr, loadingData, todayDayStr, enrollments, classes]); 
 
-    // 안전한 로딩 화면 렌더링
     if (loadingData || !currentUser) {
         return (
             <div className="flex flex-col justify-center items-center h-[70vh] animate-pulse">
@@ -163,7 +162,7 @@ export default function StudentDashboard({ currentUser }) {
         <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in">
             
             {/* Header */}
-            <div className="flex justify-between items-end mb-8">
+            <div className="flex justify-between items-end mb-6">
                 <div>
                     <p className="text-slate-500 font-bold mb-1">{now.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
                     <h1 className="text-3xl font-black text-slate-900">
@@ -174,6 +173,38 @@ export default function StudentDashboard({ currentUser }) {
                     {currentUser?.name ? currentUser.name[0] : 'S'}
                 </div>
             </div>
+
+            {/* 🚀 [초강력 D-Day 배너] 시험 기간 30일 이내에만 렌더링됩니다 */}
+            {upcomingExam && (
+                <div className="bg-gradient-to-r from-rose-600 to-orange-500 rounded-3xl p-6 md:p-8 shadow-2xl text-white relative overflow-hidden group hover:scale-[1.01] transition-transform duration-300">
+                    <div className="absolute right-0 top-0 opacity-10 translate-x-4 -translate-y-4">
+                        <Flame size={180} />
+                    </div>
+                    
+                    <div className="relative z-10 flex flex-col md:flex-row justify-between md:items-center gap-4">
+                        <div>
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="bg-white text-rose-600 text-xs font-black px-2 py-1 rounded-lg uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                                    <Target size={14}/> 내신 초집중 모드
+                                </span>
+                                <span className="text-rose-100 text-sm font-bold">{upcomingExam.schoolName}</span>
+                            </div>
+                            <h2 className="text-2xl md:text-3xl font-black mb-1">{upcomingExam.examName}</h2>
+                            <p className="text-rose-100 font-bold text-sm">
+                                {upcomingExam.isAttendanceExempt ? '※ 시험 집중을 위해 정규 출결이 임시 면제된 상태입니다.' : '※ 마지막까지 최선을 다해 좋은 결과를 만들어봅시다!'}
+                            </p>
+                        </div>
+
+                        <div className="bg-black/20 backdrop-blur-sm rounded-2xl p-5 border border-white/20 text-center shrink-0 min-w-[140px] shadow-inner">
+                            <p className="text-rose-200 text-xs font-black uppercase mb-1 tracking-widest">Countdown</p>
+                            <div className="text-4xl md:text-5xl font-black text-white drop-shadow-md font-mono">
+                                {dDayCount > 0 ? `D-${dDayCount}` : 'D-Day'}
+                            </div>
+                            {dDayCount <= 0 && <p className="text-yellow-300 text-xs font-bold mt-2 animate-pulse">🔥 현재 시험 진행 중</p>}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* AI Morning Briefing Section */}
             <div className="bg-gradient-to-br from-indigo-900 to-blue-800 rounded-3xl p-6 shadow-xl text-white relative overflow-hidden">
@@ -220,23 +251,18 @@ export default function StudentDashboard({ currentUser }) {
                     </div>
                 ) : (
                     <div className="relative">
-                        {/* 수직 타임라인 선 */}
                         <div className="absolute left-[39px] top-4 bottom-4 w-0.5 bg-slate-100"></div>
                         
                         <div className="space-y-8">
                             {todayTimeline.map((event) => (
                                 <div key={event.id} className="relative flex items-start gap-6 group">
-                                    
-                                    {/* 시간 정보 */}
                                     <div className="w-20 shrink-0 text-right pt-1">
                                         <div className="font-black text-slate-800 text-lg">{event.startTime}</div>
                                         <div className="text-xs font-bold text-slate-400">~ {event.endTime}</div>
                                     </div>
 
-                                    {/* 타임라인 점 (Node) */}
                                     <div className={`relative z-10 w-4 h-4 rounded-full mt-2 ring-4 ring-white ${event.type === 'class' ? 'bg-blue-500' : 'bg-purple-500'}`}></div>
 
-                                    {/* 스케줄 카드 */}
                                     <div className={`flex-1 rounded-2xl p-5 border shadow-sm transition-all group-hover:shadow-md ${event.color}`}>
                                         <div className="flex justify-between items-start mb-2">
                                             <span className="text-[10px] font-black px-2 py-0.5 rounded bg-white/60 shadow-sm border border-black/5">
