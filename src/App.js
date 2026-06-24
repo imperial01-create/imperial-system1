@@ -1,18 +1,18 @@
 /* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
    🚀 CTO 패치: 
-   1. HR 파이프라인 연동: 최고 관리자 전용 '채용 및 인사 관리' 메뉴를 독립 라우터로 분리하여 민감 정보를 안전하게 격리했습니다.
-   2. 사이드바 스크롤 최적화: SNB 메뉴가 길어졌을 때 하단 로그아웃 영역에 가려지지 않도록 Flexbox 기반 레이아웃으로 전면 수정했습니다.
-   3. 'My Imperial Day' 유지: 학생이 로그인하면 가벼운 기본 홈에 먼저 안착하여 데이터를 안전하게 로드한 뒤, 대시보드를 즐길 수 있도록 UX를 개편했습니다.
-*/
+   1. 학사일정 마스터 연동: '학사일정 마스터' 메뉴를 교무 그룹에 신설하여 학원 전체의 D-Day 및 출결 면제를 중앙 통제하도록 라우터를 연결했습니다.
+   2. HR 파이프라인 연동: 최고 관리자 전용 '채용 및 인사 관리' 메뉴를 유지합니다.
+   3. 사이드바 스크롤 최적화: SNB 메뉴가 길어졌을 때 하단 로그아웃 영역에 가려지지 않도록 Flexbox 기반 레이아웃을 적용했습니다. */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 
+// 🚀 [CTO 패치] CalendarDays 아이콘 추가 및 의존성 완벽 동기화
 import { 
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
   Clock, Trash2, MessageSquare, Globe, Phone, Search, Clipboard, Book, Users, Star, ArrowRight, ChevronDown, ChevronRight,
-  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles
+  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays
 } from 'lucide-react';
 
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
@@ -47,6 +47,9 @@ const VocaChallenge = React.lazy(() => import('./features/VocaChallenge'));
 const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'));
 const RecruitmentManager = React.lazy(() => import('./features/RecruitmentManager'));
 
+// 🚀 [신규 마스터] 학사일정 및 D-Day 관리 컴포넌트 로드
+const AcademicCalendarManager = React.lazy(() => import('./features/AcademicCalendarManager'));
+
 const APP_ID = 'imperial-clinic-v1';
 
 const MENU_GROUPS = [
@@ -65,6 +68,8 @@ const MENU_GROUPS = [
         items: [
             { name: "신규 상담 등록", path: "/consult", icon: UserPlus, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
             { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "일별 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
+            // 🚀 [신규 추가] 학사일정 마스터 메뉴 
+            { name: "학사일정 마스터", path: "/academic-calendar", icon: CalendarDays, desc: "학교별 학사일정 및 D-Day 관리", roles: ['admin', 'admin_assistant'] },
             { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "오늘의 할 일", path: "/clinic-tasks", icon: Clipboard, desc: "조교 업무 지시 및 진행률 트래킹", roles: ['admin', 'admin_assistant', 'ta', 'lecturer'] },
             { name: "픽업 신청", path: "/pickup", icon: Printer, desc: "학생 픽업을 요청하고 관리합니다.", roles: ['lecturer'] }
@@ -383,6 +388,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
   const [showPassword, setShowPassword] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
   const handleKeyDown = (e) => { if (e.key === 'Enter') onLogin(); };
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl p-8 border border-gray-100">
@@ -435,6 +441,7 @@ const LoginView = ({ form, setForm, onLogin, isLoading, loginErrorModal, setLogi
 const Dashboard = ({ currentUser }) => {
     const navigate = useNavigate();
     const { loadingData } = useData() || { loadingData: false };
+
     const authorizedGroups = useMemo(() => {
         if (!currentUser?.role) return [];
 
@@ -538,6 +545,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+
   const groupedMenus = useMemo(() => {
       const groups = {};
       MENU_GROUPS.forEach(group => {
@@ -557,15 +565,18 @@ const AppLayout = ({ currentUser, handleLogout }) => {
       });
       return groups;
   }, [currentUser]);
+
   const [expandedCategories, setExpandedCategories] = useState({});
   useEffect(() => {
       const initials = {};
       Object.keys(groupedMenus).forEach(cat => initials[cat] = true);
       setExpandedCategories(initials);
   }, [groupedMenus]);
+
   const toggleCategory = (category) => {
       setExpandedCategories(prev => ({ ...prev, [category]: !prev[category] }));
   };
+
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden animate-in fade-in duration-300" onClick={() => setIsSidebarOpen(false)}/>}
@@ -577,7 +588,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
           <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"><X /></button>
         </div>
         
-        {/* 🚀 [해결 1] pb-24 제거 (스크롤 영역) */}
+        {/* 스크롤 영역: pb-24를 제거하고 flex-1과 overflow-y-auto 유지 */}
         <nav className="p-3 space-y-4 flex-1 overflow-y-auto custom-scrollbar">
             <button 
                 onClick={() => { navigate('/dashboard'); setIsSidebarOpen(false); }} 
@@ -618,7 +629,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
             ))}
         </nav>
         
-        {/* 🚀 [해결 2] absolute 제거 및 mt-auto 적용 (하단 고정) */}
+        {/* 하단 고정 영역: absolute와 w-full을 제거하고 mt-auto 적용 */}
         <div className="p-4 border-t bg-white shrink-0 z-10 mt-auto">
             <div className="flex items-center gap-3 mb-4 px-2 p-2 rounded-xl border border-transparent">
                 <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center font-bold text-blue-600 uppercase">{currentUser?.name?.[0] || 'U'}</div>
@@ -690,8 +701,11 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/navigator/:studentId" element={['student', 'parent', 'admin', 'admin_assistant'].includes(currentUser.role) ? <CollegeNavigator currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/universe" element={['student', 'parent', 'admin', 'admin_assistant', 'lecturer', 'ta'].includes(currentUser.role) ? <AcademyUniverse currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         
-                        {/* 🚀 [HR 추가] 채용 파이프라인 라우팅 설정 */}
+                        {/* 🚀 [HR] 채용 파이프라인 라우팅 */}
                         <Route path="/recruitment" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <RecruitmentManager /> : <Navigate to="/dashboard" replace />} />
+
+                        {/* 🚀 [마스터] 학사일정 및 D-Day 관제 센터 라우팅 */}
+                        <Route path="/academic-calendar" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <AcademicCalendarManager /> : <Navigate to="/dashboard" replace />} />
 
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>

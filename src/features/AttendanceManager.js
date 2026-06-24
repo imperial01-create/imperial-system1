@@ -1,19 +1,19 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
-   🚀 CTO 패치 (학사일정 마스터 통합본): 
-   1. 데이터 코어화: 기존의 '시험결석' 기능을 'academic_calendars' 컬렉션으로 승격시켜 학원 전반의 마스터 데이터(D-Day 및 출결면제)로 활용합니다.
-   2. 무결성 보존: 교실 매트릭스, 스마트 퀵 배정, AI 멘토링 툴팁 등 기존의 모든 핵심 기능들을 단 하나도 누락 없이 100% 보존하여 병합했습니다. */
+   🚀 CTO 패치: 
+   1. 아키텍처 분리 (Separation of Concerns): 학사일정 등록/관리 UI를 완전히 도려내어 신규 '학사일정 마스터' 메뉴로 권한을 이관했습니다.
+   2. 데이터 동기화 유지: 입력 UI는 제거했지만, 시스템 백그라운드에서는 마스터 데이터를 실시간으로 읽어와(Read-only) '출결 자동 면제(Bypass)' 로직을 완벽하게 수행합니다. */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, Phone, AlertTriangle, Check,
-    Calendar as CalendarIcon, UserCheck, Trash2, LayoutGrid, Plus, X, Building, ShieldCheck,
-    Brain, Heart, Flame, CreditCard, MessageCircle, Target
+    Calendar as CalendarIcon, UserCheck, LayoutGrid, Plus, X, Building, ShieldCheck,
+    Brain, Heart, Flame, CreditCard, MessageCircle
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-import { Card, Button, Modal } from '../components/UI';
+import { Button, Modal } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
@@ -40,7 +40,6 @@ const TEACHER_COLORS = [
     'bg-indigo-50 border-indigo-400 text-indigo-900', 'bg-emerald-50 border-emerald-400 text-emerald-900',
     'bg-amber-50 border-amber-400 text-amber-900', 'bg-rose-50 border-rose-400 text-rose-900',
     'bg-cyan-50 border-cyan-400 text-cyan-900', 'bg-fuchsia-50 border-fuchsia-400 text-fuchsia-900',
-    'bg-lime-50 border-lime-400 text-lime-900', 'bg-orange-50 border-orange-400 text-orange-900',
     'bg-blue-50 border-blue-400 text-blue-900', 'bg-purple-50 border-purple-400 text-purple-900',
     'bg-pink-50 border-pink-400 text-pink-900', 'bg-teal-50 border-teal-400 text-teal-900',
     'bg-yellow-50 border-yellow-500 text-yellow-900', 'bg-red-50 border-red-400 text-red-900',
@@ -59,7 +58,8 @@ export default function AttendanceManager({ currentUser }) {
     const [searchQuery, setSearchQuery] = useState('');
     
     const [dailyAttendances, setDailyAttendances] = useState([]); 
-    const [academicCalendars, setAcademicCalendars] = useState([]); // 🚀 마스터 데이터로 교체
+    // 🚀 [CTO 패치] 학사일정 마스터 데이터를 읽기 전용으로만 가져옵니다.
+    const [academicCalendars, setAcademicCalendars] = useState([]); 
     const [todaySessions, setTodaySessions] = useState([]); 
     const [localLoading, setLocalLoading] = useState(true);
 
@@ -68,22 +68,9 @@ export default function AttendanceManager({ currentUser }) {
     const [selectedStudentId, setSelectedStudentId] = useState('');
     const [studentLogs, setStudentLogs] = useState([]);
 
-    const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
-    // 🚀 학사일정 마스터 폼
-    const [calendarForm, setCalendarForm] = useState({ schoolName: '', examName: '1학기 기말고사', startDate: '', endDate: '', isAttendanceExempt: true });
-    const [isSavingCalendar, setIsSavingCalendar] = useState(false);
-
     const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
-
-    const uniqueSchools = useMemo(() => {
-        const schools = new Set();
-        users.forEach(u => {
-            if (u.role === 'student' && u.schoolName) schools.add(u.schoolName);
-        });
-        return Array.from(schools).sort();
-    }, [users]);
 
     const teacherColorMap = useMemo(() => {
         const map = {};
@@ -110,7 +97,7 @@ export default function AttendanceManager({ currentUser }) {
         return () => unsubAtt();
     }, [selectedDateStr]);
 
-    // 🚀 학사일정(Academic Calendars) 마스터 데이터 구독
+    // 🚀 [읽기 전용] 학사일정 데이터만 읽어옵니다.
     useEffect(() => {
         const qCal = query(collection(db, `artifacts/${APP_ID}/public/data/academic_calendars`));
         const unsubCal = onSnapshot(qCal, s => setAcademicCalendars(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -168,7 +155,7 @@ export default function AttendanceManager({ currentUser }) {
             
             if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
-            // 🚀 학사일정 마스터 데이터를 참조하여 출결 면제 여부 확인
+            // 🚀 백그라운드 출결 면제 로직 작동 (UI는 없어도 로직은 돌아갑니다)
             const isExamLeave = academicCalendars.some(cal => {
                 const isTargetMatch = cal.schoolName === student.schoolName;
                 return isTargetMatch && selectedDateStr >= cal.startDate && selectedDateStr <= cal.endDate && cal.isAttendanceExempt;
@@ -199,7 +186,7 @@ export default function AttendanceManager({ currentUser }) {
                 schoolName: student.schoolName, 
                 status: status, 
                 enrollId: enroll.id, 
-                callTime: todaySch.callTime, // 개별 등원시간
+                callTime: todaySch.callTime,
                 insight: insight
             };
 
@@ -218,7 +205,7 @@ export default function AttendanceManager({ currentUser }) {
                     classId: enroll.classId, 
                     className: enroll.className, 
                     lecturerName: lecturer?.name || '미지정',
-                    classTime: todaySch.startTime, // 대표 시간은 본수업 시간으로 표시
+                    classTime: todaySch.startTime,
                     endTime: todaySch.endTime, 
                     room: todaySch.room || '미정',
                     students: []
@@ -265,7 +252,6 @@ export default function AttendanceManager({ currentUser }) {
             
             activeEnrolls.forEach(e => {
                 const sObj = users.find(u => u.id === e.studentId);
-                // 🚀 학사일정 마스터 데이터를 참조하여 교실 수용 인원에서 제외
                 const isExamLeave = academicCalendars.some(cal => {
                     const isTargetMatch = cal.schoolName === sObj?.schoolName;
                     return isTargetMatch && selectedDateStr >= cal.startDate && selectedDateStr <= cal.endDate && cal.isAttendanceExempt;
@@ -409,33 +395,6 @@ export default function AttendanceManager({ currentUser }) {
         } catch (e) { alert("결석 처리 실패: " + e.message); }
     };
 
-    // 🚀 학사일정 마스터 저장 로직
-    const handleSaveCalendar = async () => {
-        if (!calendarForm.schoolName || !calendarForm.examName || !calendarForm.startDate || !calendarForm.endDate) return alert("필수 항목을 모두 입력해주세요.");
-        if (calendarForm.startDate > calendarForm.endDate) return alert("시작일이 종료일보다 늦을 수 없습니다.");
-
-        setIsSavingCalendar(true);
-        try {
-            await addDoc(collection(db, `artifacts/${APP_ID}/public/data/academic_calendars`), {
-                schoolName: calendarForm.schoolName, 
-                examName: calendarForm.examName,
-                startDate: calendarForm.startDate, 
-                endDate: calendarForm.endDate,
-                isAttendanceExempt: calendarForm.isAttendanceExempt,
-                createdAt: serverTimestamp(), 
-                createdBy: currentUser.name
-            });
-            setIsCalendarModalOpen(false);
-            setCalendarForm({ schoolName: '', examName: '1학기 기말고사', startDate: '', endDate: '', isAttendanceExempt: true });
-        } catch (error) { alert("저장 실패: " + error.message); } finally { setIsSavingCalendar(false); }
-    };
-
-    const handleDeleteCalendar = async (id) => {
-        if (!window.confirm("이 학사일정을 영구 삭제하시겠습니까?\n출결 면제 및 학생 대시보드 D-Day 기능이 즉시 해제됩니다.")) return;
-        try { await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/academic_calendars`, id)); } 
-        catch (error) { alert("삭제 실패: " + error.message); }
-    };
-
     const handleCellClick = (room, time) => {
         const currentCell = matrixGrid[room]?.[time];
         if (currentCell) return; 
@@ -552,17 +511,13 @@ export default function AttendanceManager({ currentUser }) {
                     </div>
                 </div>
                 
+                {/* 🚀 [CTO 패치] 학사일정 관리 탭 버튼이 제거되었습니다. (3개 탭만 유지) */}
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
                     <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>일별 운영 관제</button>
                     <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <LayoutGrid size={16}/> 교실 매트릭스
                     </button>
                     <button onClick={() => setActiveTab('student')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'student' ? 'bg-white text-blue-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>원생별 출결</button>
-                    
-                    {/* 🚀 신규 마스터 탭 (학사일정 & D-Day 관리) */}
-                    <button onClick={() => setActiveTab('academic_calendar')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'academic_calendar' ? 'bg-white text-rose-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
-                        학사일정 마스터 {academicCalendars.length > 0 && <span className="bg-rose-100 text-rose-600 px-1.5 rounded-full text-[10px]">{academicCalendars.length}</span>}
-                    </button>
                 </div>
             </div>
 
@@ -715,6 +670,7 @@ export default function AttendanceManager({ currentUser }) {
                                 </div>
                             </div>
                             
+                            {/* 🚀 [CTO 패치] 출석 면제 현황판은 그대로 유지 (학사일정 데이터와 실시간 연동됨) */}
                             <div className="bg-slate-50 border-2 border-slate-300 rounded-3xl p-5 shadow-sm flex flex-col flex-1 min-h-[200px]">
                                 <h2 className="text-sm font-black text-slate-700 mb-3 flex items-center gap-2">
                                     <CalendarIcon size={18} className="text-slate-500"/> 자동 출석 면제 현황
@@ -823,72 +779,7 @@ export default function AttendanceManager({ currentUser }) {
                 </div>
             )}
 
-            {/* 🚀 신규 TAB 3: 학사일정 및 D-Day 마스터 관리 */}
-            {activeTab === 'academic_calendar' && (
-                <div className="flex flex-col h-full gap-6 animate-in fade-in">
-                    <Card className="bg-gradient-to-r from-rose-50 to-orange-50 border-2 border-rose-200 w-full shrink-0">
-                        <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                            <div>
-                                <h2 className="text-xl font-black text-rose-900 flex items-center gap-2 mb-2"><Target size={24}/> 학교별 학사일정(D-Day) 마스터</h2>
-                                <p className="text-sm font-bold text-rose-700">이곳에 시험 기간을 등록하면, <strong className="text-rose-900">해당 학교 학생들의 앱 화면에 D-Day 배너가 즉시 노출</strong>되며 출결 면제가 자동 연동됩니다.</p>
-                            </div>
-                            <Button onClick={() => setIsCalendarModalOpen(true)} className="bg-rose-600 hover:bg-rose-700 shadow-md font-bold px-6 py-3" icon={Plus}>새 학사일정 등록</Button>
-                        </div>
-                    </Card>
-
-                    <Card className="flex-1 overflow-hidden p-0 flex flex-col border border-slate-300 bg-slate-50">
-                        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                            {academicCalendars.length === 0 ? (
-                                <div className="text-center py-20 text-slate-400 font-bold flex flex-col items-center">
-                                    <CalendarIcon size={64} className="opacity-20 mb-4"/>
-                                    현재 등록된 다가오는 학사일정이 없습니다.
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                                    {academicCalendars.sort((a,b)=>a.startDate.localeCompare(b.startDate)).map(cal => {
-                                        const now = new Date();
-                                        const todayStr = getLocalDateStr(now);
-                                        const isExpired = todayStr > cal.endDate;
-                                        const dDay = Math.ceil((new Date(cal.startDate) - now) / (1000 * 60 * 60 * 24));
-                                        
-                                        return (
-                                            <div key={cal.id} className={`rounded-3xl p-6 relative overflow-hidden transition-all shadow-sm border-2 ${isExpired ? 'bg-slate-100 border-slate-200 opacity-60' : 'bg-white border-rose-300 hover:border-rose-400 hover:shadow-md'}`}>
-                                                <div className="flex justify-between items-start mb-4">
-                                                    <div>
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <span className="text-xs font-black bg-slate-800 text-white px-2 py-0.5 rounded flex items-center gap-1"><Building size={12}/> {cal.schoolName}</span>
-                                                            {!isExpired && dDay > 0 && <span className="text-xs font-black text-rose-600 bg-rose-100 px-2 py-0.5 rounded animate-pulse">D-{dDay}</span>}
-                                                            {!isExpired && dDay <= 0 && <span className="text-xs font-black text-white bg-rose-500 px-2 py-0.5 rounded animate-pulse">🔥 시험 진행 중</span>}
-                                                        </div>
-                                                        <h3 className="text-xl font-black text-slate-900">{cal.examName}</h3>
-                                                    </div>
-                                                    <button onClick={() => handleDeleteCalendar(cal.id)} className="text-slate-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-xl transition-colors"><Trash2 size={18}/></button>
-                                                </div>
-                                                <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100 space-y-2">
-                                                    <div className="text-sm font-bold text-slate-600 flex justify-between">
-                                                        <span>적용 기간</span> <span className="text-slate-900">{cal.startDate} ~ {cal.endDate}</span>
-                                                    </div>
-                                                    <div className="text-sm font-bold text-slate-600 flex justify-between">
-                                                        <span>학생 화면 D-Day 노출</span> <span className="text-emerald-600 flex items-center gap-1"><CheckCircle size={14}/> 작동 중</span>
-                                                    </div>
-                                                    <div className="text-sm font-bold text-slate-600 flex justify-between">
-                                                        <span>자동 출결 면제 (Bypass)</span> 
-                                                        <span className={cal.isAttendanceExempt ? "text-rose-600" : "text-slate-400"}>
-                                                            {cal.isAttendanceExempt ? '면제 적용 (결석 안 됨)' : '정상 등원 해야 함'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    </Card>
-                </div>
-            )}
-
-            {/* TAB 4: 교실 매트릭스 */}
+            {/* TAB 3: 교실 매트릭스 */}
             {activeTab === 'matrix' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white p-5 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
@@ -1064,55 +955,6 @@ export default function AttendanceManager({ currentUser }) {
                     </div>
                 </div>
             )}
-
-            {/* 🚀 신규 모달: 학사일정 마스터 등록 */}
-            <Modal isOpen={isCalendarModalOpen} onClose={() => setIsCalendarModalOpen(false)} title="🔥 학교별 학사일정 마스터 등록">
-                <div className="space-y-5 p-2">
-                    <div className="bg-rose-50 p-4 rounded-2xl text-rose-800 text-sm font-bold flex items-start gap-2 border border-rose-200 leading-relaxed">
-                        <AlertTriangle size={20} className="shrink-0 mt-0.5 text-rose-600"/>
-                        이곳에 일정을 등록하면 해당 학교 학생들의 앱에 <b>[강력한 D-Day 배너]</b>가 노출되며, 출결 면제 여부를 함께 통제할 수 있습니다.
-                    </div>
-
-                    <div>
-                        <label className="text-xs font-black text-slate-700 mb-2 block">1. 대상 학교 선택 <span className="text-rose-500">*</span></label>
-                        <select className="w-full border-2 border-slate-300 p-4 rounded-xl outline-none focus:border-rose-500 font-black text-lg bg-white" value={calendarForm.schoolName} onChange={e => setCalendarForm({...calendarForm, schoolName: e.target.value})}>
-                            <option value="">학교를 선택해주세요</option>
-                            {uniqueSchools.map(school => <option key={school} value={school}>{school}</option>)}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="text-xs font-black text-slate-700 mb-2 block">2. 학사 일정명 (시험 이름) <span className="text-rose-500">*</span></label>
-                        <input type="text" className="w-full border-2 border-slate-300 p-4 rounded-xl outline-none focus:border-rose-500 font-black text-lg bg-white" value={calendarForm.examName} onChange={e => setCalendarForm({...calendarForm, examName: e.target.value})} placeholder="예: 1학기 기말고사" />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-xs font-black text-slate-700 mb-2 block">3. 시작일 <span className="text-rose-500">*</span></label>
-                            <input type="date" className="w-full border-2 border-slate-300 p-4 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={calendarForm.startDate} onChange={e => setCalendarForm({...calendarForm, startDate: e.target.value})} />
-                        </div>
-                        <div>
-                            <label className="text-xs font-black text-slate-700 mb-2 block">4. 종료일 <span className="text-rose-500">*</span></label>
-                            <input type="date" className="w-full border-2 border-slate-300 p-4 rounded-xl outline-none focus:border-rose-500 font-bold bg-white" value={calendarForm.endDate} onChange={e => setCalendarForm({...calendarForm, endDate: e.target.value})} />
-                        </div>
-                    </div>
-
-                    <div className="pt-2">
-                        <label className="text-xs font-black text-slate-700 mb-2 block">5. 출결 자동 면제 (Bypass) 설정</label>
-                        <label className={`flex items-center gap-3 p-4 border-2 rounded-2xl cursor-pointer transition-all ${calendarForm.isAttendanceExempt ? 'bg-rose-50 border-rose-400 text-rose-900 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
-                            <input type="checkbox" className="w-5 h-5 accent-rose-600" checked={calendarForm.isAttendanceExempt} onChange={(e) => setCalendarForm({...calendarForm, isAttendanceExempt: e.target.checked})} />
-                            <div className="flex flex-col">
-                                <span className="font-black text-base">시험 기간 출결 면제 활성화</span>
-                                <span className="text-xs font-bold mt-1 opacity-80">체크 시, 해당 기간 동안 학원에 오지 않아도 지각/결석 처리되지 않습니다.</span>
-                            </div>
-                        </label>
-                    </div>
-
-                    <Button className="w-full py-5 text-xl font-black bg-rose-600 hover:bg-rose-700 shadow-xl mt-4 tracking-wider" onClick={handleSaveCalendar} disabled={isSavingCalendar}>
-                        {isSavingCalendar ? <Loader className="animate-spin mx-auto"/> : '학사일정(D-Day) 마스터 배포'}
-                    </Button>
-                </div>
-            </Modal>
 
             {/* 퀵 배정 모달 */}
             <Modal isOpen={isQuickAddModalOpen} onClose={() => setIsQuickAddModalOpen(false)} title="직전 보충 / 클리닉 퀵 배정">
