@@ -1,14 +1,10 @@
 /* [서비스 가치(Service Value)] 프리미엄 HR 채용 및 온보딩 파이프라인
-   1. 에러율 0% 보장: 아이콘 Import 누락 문제를 완벽히 해결하고, 데이터 로딩 중 빈 화면이 발생하지 않도록 안전망을 구축했습니다.
-   2. 인사 데이터 격리 (Security): 학생 상담과 직원 채용 도메인을 철저히 분리하여 민감한 HR 정보 유출을 원천 차단합니다.
-   3. SMS 오토메이션 (Efficiency): 면접 예약, 합/불 통보, 범죄경력조회 안내 등 복잡한 채용 커뮤니케이션을 원클릭으로 자동화하여 행정 리소스를 90% 단축합니다. */
+   🚀 CTO 패치: 
+   1. UI/UX 개선: 신규 지원자 등록 버튼과 휴지통 아이콘의 시인성을 직관적으로 개선했습니다 (스타일 충돌 및 Hover 숨김 제거).
+   2. 데이터 주도 HR: 지원 경로와 포지션 데이터를 통해 향후 채용 ROI 분석 및 급여 자동화 연동의 초석을 다집니다. */
 
 import React, { useState, useEffect } from 'react';
-// 🚀 [에러 해결 1] Users, Trash2 등 렌더링에 필요한 모든 아이콘을 완벽하게 Import 했습니다.
-import { 
-    Briefcase, UserPlus, Users, Phone, Calendar as CalendarIcon, 
-    CheckCircle, XCircle, FileText, Trash2, Loader, ArrowRight 
-} from 'lucide-react';
+import { Briefcase, UserPlus, Phone, Calendar as CalendarIcon, CheckCircle, XCircle, FileText, Trash2, Loader, ArrowRight } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, addDoc, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
@@ -17,20 +13,18 @@ import { Modal, Button, Badge } from '../components/UI';
 const APP_ID = 'imperial-clinic-v1';
 
 export default function RecruitmentManager() {
-    // 🚀 [에러 해결 2] Context 데이터가 비어있을 때를 대비한 안전장치 (|| {})
     const { currentUser, loadingData } = useData() || {};
     const [applicants, setApplicants] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [modalMode, setModalMode] = useState('add'); // 'add' | 'schedule'
+    const [modalMode, setModalMode] = useState('add');
     const [selectedApplicant, setSelectedApplicant] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
 
     const [form, setForm] = useState({ name: '', phone: '', source: '알바몬', position: '수업조교(TA)' });
     const [scheduleForm, setScheduleForm] = useState({ interviewDate: '', interviewTime: '' });
 
-    // 데이터 구독
     useEffect(() => {
         const q = query(collection(db, `artifacts/${APP_ID}/public/data/recruitment`), orderBy('createdAt', 'desc'));
         const unsub = onSnapshot(q, (snap) => {
@@ -40,7 +34,6 @@ export default function RecruitmentManager() {
         return () => unsub();
     }, []);
 
-    // [마케팅/HR 자동화] SMS 발송 엔진 (원장님 템플릿 완벽 이식)
     const sendRecruitmentSMS = async (type, applicantData, scheduleData = null) => {
         const cleanPhone = applicantData.phone?.replace(/[^0-9]/g, '');
         if (!cleanPhone || cleanPhone.length < 10) return;
@@ -127,7 +120,6 @@ export default function RecruitmentManager() {
         await deleteDoc(doc(db, `artifacts/${APP_ID}/public/data/recruitment`, id));
     };
 
-    // 🚀 [에러 해결 3] 유저 정보가 아직 도착하지 않았을 때의 빈 화면(WSOD) 방어
     if (isLoading || loadingData) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
 
     const getStatusBadge = (status) => {
@@ -150,9 +142,13 @@ export default function RecruitmentManager() {
                     </h1>
                     <p className="text-gray-300 font-medium">조교 서류 접수부터 면접, 범죄경력조회 안내까지 원클릭으로 통제합니다.</p>
                 </div>
-                <Button onClick={() => { setModalMode('add'); setIsModalOpen(true); }} className="bg-white text-gray-900 hover:bg-gray-100 font-bold px-4 py-2 shadow-md flex items-center gap-2">
+                {/* 🚀 [에러 해결 1] 배경색을 명확히 주어 흰 글씨가 잘 보이도록 수정했습니다. */}
+                <button 
+                    onClick={() => { setModalMode('add'); setIsModalOpen(true); }} 
+                    className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-5 py-3 rounded-xl shadow-md flex items-center justify-center gap-2 transition-all active:scale-95"
+                >
                     <UserPlus size={18}/> 신규 지원자 등록
-                </Button>
+                </button>
             </div>
 
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden min-h-[500px]">
@@ -189,7 +185,7 @@ export default function RecruitmentManager() {
                                         </div>
                                     </div>
 
-                                    <div className="flex flex-wrap gap-2 shrink-0">
+                                    <div className="flex flex-wrap gap-2 shrink-0 items-center">
                                         {app.status === 'applied' && (
                                             <Button onClick={() => { setSelectedApplicant(app); setModalMode('schedule'); setIsModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-xs py-1.5 px-3">
                                                 <CalendarIcon size={14} className="mr-1 inline"/> 면접 일정 잡기
@@ -210,8 +206,13 @@ export default function RecruitmentManager() {
                                                 <FileText size={14} className="mr-1 inline"/> 경력조회 완료 (계약 진행 문자)
                                             </Button>
                                         )}
-                                        <button onClick={() => handleDelete(app.id)} className="p-2 text-slate-300 hover:bg-rose-50 hover:text-rose-500 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
-                                            <Trash2 size={16}/>
+                                        {/* 🚀 [에러 해결 2] 숨김 처리(opacity-0)를 제거하고 색상을 뚜렷하게 변경했습니다. */}
+                                        <button 
+                                            onClick={() => handleDelete(app.id)} 
+                                            className="p-2 ml-2 text-slate-400 hover:bg-rose-100 hover:text-rose-600 rounded-lg transition-colors flex items-center justify-center"
+                                            title="지원자 기록 삭제"
+                                        >
+                                            <Trash2 size={18}/>
                                         </button>
                                     </div>
                                 </div>
