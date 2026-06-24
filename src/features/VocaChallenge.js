@@ -1,7 +1,7 @@
 /* [서비스 가치(Service Value)] 게이미피케이션 기반 영단어 챌린지 엔진
    🚀 CTO 패치: 
-   1. 글로벌 명예의 전당(Global Leaderboard) 도입: 반별 필터링을 제거하여 전교생 통합 Top 5 랭킹을 구현했습니다. (Composite Index 에러 완벽 해결)
-   2. 도파민 피드백 부활: Iframe 내부 로직을 수정하여 정답 시 [기본/시간/콤보] 보너스가 1.5초간 화려하게 팝업되도록 복구했습니다. */
+   1. 엔딩 로직 추가: Round 3의 문제 수를 15개로 지정하여, 총 35문제(10+10+15) 연속 정답 시 '챌린지 클리어' 엔딩을 제공합니다.
+   2. 글로벌 명예의 전당(Top 5) & 도파민 피드백 1.5초 유지 적용 완료 */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRight, AlertCircle, CheckCircle, XCircle, Medal } from 'lucide-react';
@@ -252,7 +252,7 @@ NVH2_D15_598,tease,M1,mock,
 NVH2_D15_599,representative,M1,delegate,
 NVH2_D15_600,auditory,M1,aural,`;
 
-// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 HTML (도파민 피드백 화면 완벽 복구)
+// 🚀 [CTO 패치] 독립된 Iframe 게임 엔진 HTML (내부적으로 React와 통신)
 const GET_GAME_HTML = () => `
 <!DOCTYPE html>
 <html lang="ko">
@@ -476,7 +476,7 @@ const GET_GAME_HTML = () => `
     let selectedDays = [];
     let currentTotalQuestion = 1;
     let score = 0;
-    let combo = 0; // 🚀 콤보 변수 활성화
+    let combo = 0; 
     let timeLeft = 0;
     let timerInterval;
     let maxTime = 15;
@@ -570,12 +570,13 @@ const GET_GAME_HTML = () => `
     function startGame() {
       currentTotalQuestion = 1;
       score = 0;
-      combo = 0; // 시작 시 콤보 초기화
+      combo = 0; 
       isTransitioning = false;
       document.getElementById('explanationBox').style.display = 'none'; 
       showRoundTransition();
     }
 
+    // 🚀 [CTO 패치] 총 35문제로 게임 엔딩 제한 (10 + 10 + 15)
     function getRoundConfig() {
       const multiplier = selectedDays.length;
       const basePoints = multiplier * 10;
@@ -604,6 +605,7 @@ const GET_GAME_HTML = () => `
       const config = getRoundConfig();
       maxTime = config.time;
       timeLeft = maxTime;
+      // 🚀 총 35문제 중 몇 번째인지가 아니라, 라운드 내 번호로 표시합니다. (Round 3 - Q.15가 마지막)
       document.getElementById('roundText').innerText = 'Round ' + config.round + ' - Q.' + config.qNum;
       document.getElementById('scoreText').innerText = score.toLocaleString() + ' pt';
       updateTimerUI();
@@ -729,7 +731,6 @@ const GET_GAME_HTML = () => `
       }
     }
 
-    // 🚀 [CTO 패치 2] 도파민 폭발 1.5초 피드백 화면 부활
     function handleAnswer(isCorrect, isTimeout) {
       if (isTransitioning) return;
       isTransitioning = true;
@@ -758,11 +759,19 @@ const GET_GAME_HTML = () => `
         const overlay = document.getElementById('feedbackOverlay');
         overlay.classList.add('active');
 
+        // 1.5초 후 피드백 화면을 닫고 다음 로직 처리
         setTimeout(() => {
             overlay.classList.remove('active');
-            currentTotalQuestion++; 
-            isTransitioning = false;
-            showRoundTransition();
+            
+            // 🚀 [CTO 엔딩 패치] Round 1(10) + Round 2(10) + Round 3(15) = 총 35문제 달성 시 클리어!
+            const maxQuestions = Math.min(currentVocaData.length, 35);
+            if (currentTotalQuestion >= maxQuestions) {
+                endGame(true); // 35문제를 모두 풀었다면 게임 승리 엔딩!
+            } else {
+                currentTotalQuestion++; 
+                isTransitioning = false;
+                showRoundTransition();
+            }
         }, 1500);
 
       } else {
@@ -778,7 +787,7 @@ const GET_GAME_HTML = () => `
         setTimeout(() => {
             overlay.classList.remove('active');
             document.getElementById('feedbackDetail').style.display = 'block'; 
-            endGame(false);
+            endGame(false); // 오답이면 즉시 게임 오버
         }, 1500);
       }
     }
@@ -797,8 +806,9 @@ const GET_GAME_HTML = () => `
       if (isWin) {
         title.innerText = "🎉 챌린지 클리어! 🎉";
         title.style.color = "#10b981";
-        msg.innerHTML = "영일고의 자랑!<br>모든 단어를 완벽하게 숙지하셨군요!";
+        msg.innerHTML = "임페리얼의 자랑!<br>모든 단어를 완벽하게 숙지하셨군요!";
         expBox.style.display = "none";
+        // 폭죽 터뜨리기
         if (typeof confetti === "function") {
             confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
         }
@@ -820,6 +830,7 @@ const GET_GAME_HTML = () => `
         expBox.style.display = "block";
       }
 
+      // 부모 React 컴포넌트로 점수 전송
       window.parent.postMessage({ type: 'VOCA_GAME_OVER', score: score }, '*');
     }
 
@@ -873,12 +884,12 @@ export default function VocaChallenge({ currentUser }) {
         return () => unsub();
     }, []);
 
-    // 🚀 [CTO 패치 1] 글로벌 전교생 랭킹 (Top 5)으로 교체하여 Composite Index 에러 원천 차단
+    // 글로벌 전교생 랭킹 (Top 5)
     useEffect(() => {
         const q = query(
             collection(db, `artifacts/${APP_ID}/public/data/voca_rankings`),
             orderBy('score', 'desc'),
-            limit(5) // 학원 통합 5등까지만 노출
+            limit(5)
         );
         const unsub = onSnapshot(q, snap => {
             setRankings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -886,7 +897,7 @@ export default function VocaChallenge({ currentUser }) {
         return () => unsub();
     }, []);
 
-    // 나의 최고 기록 조회 (단일 필드 검색으로 Index 에러 없음)
+    // 나의 최고 기록 조회
     useEffect(() => {
         if (!isStudent) return;
         const q = query(
@@ -895,7 +906,6 @@ export default function VocaChallenge({ currentUser }) {
         );
         const unsub = onSnapshot(q, snap => {
             if (!snap.empty) {
-                // 여러 기록이 있다면 가장 높은 점수를 내 기록으로 설정
                 const bestDoc = snap.docs.sort((a,b) => b.data().score - a.data().score)[0];
                 setMyRecordData({ score: bestDoc.data().score || 0, docId: bestDoc.id });
             } else {
