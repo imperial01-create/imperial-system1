@@ -1,8 +1,7 @@
 /* [서비스 가치(Service Value)] 프리미엄 상담 스케줄 & 온보딩 통합 센터
    🚀 CTO 패치: 
-   1. 대형 캘린더 뷰(Monthly Calendar) 탑재: 월간 상담 일정을 한눈에 파악하여 데스크의 스케줄링 인지 부하를 줄이고 병목을 예방합니다.
-   2. 동적 상담자 배정: 시스템의 실제 직원(admin, lecturer 등) 데이터를 연동하여 드롭다운으로 제공, 오기입을 방지하고 책임 소재를 명확히 합니다.
-   3. Firebase 비용 최적화: 현재 보고 있는 '월(Month)'의 상담 데이터만 쿼리하여 Read 비용을 방어합니다. */
+   1. 데이터 유실 방어: 상담 내역 수정(Edit) 시 유형 전환 탭을 비활성화(읽기 전용)하여 데스크 직원의 실수로 인한 학부모 연락처(Lead Data) 증발을 원천 차단했습니다.
+   2. 용어 표준화: 상담자 드롭다운의 직급 명칭을 학원 표준(관리자, 행정조교, 강사, 조교)으로 완벽하게 일치시켜 업무 혼선을 제거했습니다. */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
@@ -26,7 +25,6 @@ const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {
 });
 
 export default function ConsultationManager({ isKiosk = false }) {
-    // 🚀 전역 Context에서 유저 목록(users)도 가져옵니다.
     const { currentUser, users = [], loadingData } = useData() || {};
     const [mainTab, setMainTab] = useState('schedule');
     const isMounted = useRef(true);
@@ -38,18 +36,16 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [isScheduleLoading, setIsScheduleLoading] = useState(true);
     const [criticalError, setCriticalError] = useState('');
     
-    // 캘린더 상태 (현재 보고 있는 연도/월, 선택된 날짜)
     const today = new Date();
     const [currentMonth, setCurrentMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
     const [selectedDate, setSelectedDate] = useState(today.toISOString().split('T')[0]);
     
-    // 모달 및 폼 상태
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalMode, setModalMode] = useState('create');
     const [scheduleErrorMsg, setScheduleErrorMsg] = useState('');
     const [isSavingSchedule, setIsSavingSchedule] = useState(false);
 
-    // 🚀 실제 시스템 직원 목록 필터링 (상담 가능자)
+    // 실제 시스템 직원 목록 필터링 (상담 가능자)
     const availableStaff = useMemo(() => {
         return users.filter(u => ['admin', 'admin_assistant', 'lecturer', 'ta'].includes(u.role));
     }, [users]);
@@ -60,7 +56,6 @@ export default function ConsultationManager({ isKiosk = false }) {
     };
     const [scheduleForm, setScheduleForm] = useState(initialScheduleForm);
 
-    // 🚀 [비용 최적화] 현재 '월'을 기준으로 시작일과 종료일을 계산하여 해당 월의 데이터만 가져옵니다.
     useEffect(() => {
         isMounted.current = true;
         setIsScheduleLoading(true);
@@ -68,12 +63,11 @@ export default function ConsultationManager({ isKiosk = false }) {
         const year = currentMonth.getFullYear();
         const month = currentMonth.getMonth();
         
-        // 이전 달의 마지막 며칠부터 다음 달의 첫 며칠까지 (달력 뷰에 보이는 영역 전체)
         const startDate = new Date(year, month, 1);
-        startDate.setDate(startDate.getDate() - startDate.getDay()); // 달력 첫 주 일요일
+        startDate.setDate(startDate.getDate() - startDate.getDay()); 
         
         const endDate = new Date(year, month + 1, 0);
-        endDate.setDate(endDate.getDate() + (6 - endDate.getDay())); // 달력 마지막 주 토요일
+        endDate.setDate(endDate.getDate() + (6 - endDate.getDay())); 
 
         const pad = (n) => String(n).padStart(2, '0');
         const startStr = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}`;
@@ -103,9 +97,8 @@ export default function ConsultationManager({ isKiosk = false }) {
         );
 
         return () => { isMounted.current = false; unsub(); };
-    }, [currentMonth]); // 달이 바뀔 때마다 다시 쿼리
+    }, [currentMonth]);
 
-    // --- 캘린더 생성 로직 ---
     const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
     const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
 
@@ -116,19 +109,15 @@ export default function ConsultationManager({ isKiosk = false }) {
         const firstDay = getFirstDayOfMonth(year, month);
         
         const days = [];
-        // 이전 달 빈 칸
         for (let i = 0; i < firstDay; i++) {
             days.push({ empty: true, key: `empty-start-${i}` });
         }
-        // 현재 달 날짜
         for (let i = 1; i <= daysInMonth; i++) {
             const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-            // 해당 날짜의 스케줄 개수 및 내역
             const dayConsults = consultations.filter(c => c.date === dateStr);
             days.push({ empty: false, date: i, fullDate: dateStr, consults: dayConsults, key: dateStr });
         }
-        // 다음 달 빈 칸 (격자 맞추기)
-        const remainingCells = 42 - days.length; // 6주 * 7일 = 42칸 기준
+        const remainingCells = 42 - days.length; 
         for (let i = 0; i < remainingCells; i++) {
             days.push({ empty: true, key: `empty-end-${i}` });
         }
@@ -191,7 +180,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                 date: scheduleForm.date,
                 time: scheduleForm.time, 
                 consultantId: scheduleForm.consultantId,
-                consultantName: staff ? staff.name : '', // 편의를 위해 이름도 함께 저장
+                consultantName: staff ? staff.name : '',
                 notes: scheduleForm.notes, 
                 status: 'scheduled', 
                 updatedAt: serverTimestamp()
@@ -226,7 +215,6 @@ export default function ConsultationManager({ isKiosk = false }) {
     const todaysConsultations = useMemo(() => {
         return consultations.filter(c => c.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time));
     }, [consultations, selectedDate]);
-
 
     // =========================================================================
     // 2. [기능 B] 신규 원생 온보딩(계정 발급) 상태 모음
@@ -328,7 +316,6 @@ export default function ConsultationManager({ isKiosk = false }) {
         <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
 
-            {/* 통합 메뉴 탭 */}
             <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-200 flex gap-2">
                 <button 
                     onClick={() => setMainTab('schedule')}
@@ -344,7 +331,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                 </button>
             </div>
 
-            {/* ==================== 탭 1. 상담실 스케줄 관제탑 (대형 캘린더 탑재) ==================== */}
             {mainTab === 'schedule' && (
                 <div className="space-y-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-blue-700 to-indigo-800 rounded-3xl p-6 md:p-8 shadow-xl text-white flex flex-col md:flex-row justify-between md:items-center gap-6">
@@ -360,10 +346,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* 왼쪽: 대형 캘린더 보드 */}
                         <div className="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                            {/* 달력 헤더 */}
                             <div className="p-5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
                                 <div className="flex items-center gap-4">
                                     <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-white rounded-xl transition-colors shadow-sm border border-transparent hover:border-slate-200">
@@ -381,12 +364,10 @@ export default function ConsultationManager({ isKiosk = false }) {
                                 </Button>
                             </div>
 
-                            {/* 요일 헤더 */}
                             <div className="grid grid-cols-7 bg-slate-100 border-b border-slate-200 text-center py-3 text-xs font-black text-slate-500">
                                 <div className="text-rose-500">일</div><div>월</div><div>화</div><div>수</div><div>목</div><div>금</div><div className="text-blue-500">토</div>
                             </div>
 
-                            {/* 달력 그리드 */}
                             {isScheduleLoading ? (
                                 <div className="h-96 flex items-center justify-center"><Loader className="animate-spin text-indigo-500" size={40}/></div>
                             ) : (
@@ -427,7 +408,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                             )}
                         </div>
 
-                        {/* 오른쪽: 선택된 날짜 상세 스케줄 (기존 타임라인) */}
                         <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[650px]">
                             <div className="p-5 bg-indigo-50 border-b border-indigo-100 flex justify-between items-center shrink-0">
                                 <div className="font-black text-indigo-900 flex items-center gap-2 text-lg">
@@ -482,7 +462,6 @@ export default function ConsultationManager({ isKiosk = false }) {
                 </div>
             )}
 
-            {/* ==================== 탭 2. 신규 원생 온보딩 시스템 ==================== */}
             {mainTab === 'onboarding' && (
                 <div className="space-y-6 animate-in fade-in">
                     <div className="text-center md:text-left mb-6 mt-4 pl-2">
@@ -675,10 +654,20 @@ export default function ConsultationManager({ isKiosk = false }) {
                 <div className="space-y-5 p-2">
                     {scheduleErrorMsg && <div className="bg-rose-50 text-rose-600 p-3 rounded-xl text-sm font-bold flex items-center gap-2 border border-rose-200"><AlertCircle size={16} className="shrink-0"/> {scheduleErrorMsg}</div>}
 
-                    <div className="bg-slate-50 p-1.5 rounded-2xl flex border border-slate-200">
-                        <button className={`flex-1 py-2.5 text-sm font-black rounded-xl transition-all ${scheduleForm.type === 'new' ? 'bg-white text-emerald-600 shadow-sm border border-emerald-100' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setScheduleForm({...scheduleForm, type: 'new'})}>신규 학부모 상담 (문자 O)</button>
-                        <button className={`flex-1 py-2.5 text-sm font-black rounded-xl transition-all ${scheduleForm.type === 'existing' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setScheduleForm({...scheduleForm, type: 'existing', parentPhone: ''})}>기존 재원생 상담 (문자 X)</button>
-                    </div>
+                    {/* 🚀 [CTO 패치 1] 모달 모드가 'create(신규 예약)'일 때만 탭이 보이고, 수정일 때는 뱃지만 보입니다. */}
+                    {modalMode === 'create' ? (
+                        <div className="bg-slate-50 p-1.5 rounded-2xl flex border border-slate-200">
+                            <button className={`flex-1 py-2.5 text-sm font-black rounded-xl transition-all ${scheduleForm.type === 'new' ? 'bg-white text-emerald-600 shadow-sm border border-emerald-100' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setScheduleForm({...scheduleForm, type: 'new'})}>신규 학부모 상담 (문자 O)</button>
+                            <button className={`flex-1 py-2.5 text-sm font-black rounded-xl transition-all ${scheduleForm.type === 'existing' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-400 hover:bg-slate-100'}`} onClick={() => setScheduleForm({...scheduleForm, type: 'existing', parentPhone: ''})}>기존 재원생 상담 (문자 X)</button>
+                        </div>
+                    ) : (
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center justify-between">
+                            <span className="text-sm font-bold text-slate-500">상담 유형</span>
+                            <Badge className={scheduleForm.type === 'new' ? 'bg-emerald-100 text-emerald-700 border-0' : 'bg-slate-200 text-slate-700 border-0'}>
+                                {scheduleForm.type === 'new' ? '신규 학부모 상담 (문자 발송됨)' : '기존 재원생 상담'}
+                            </Badge>
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -704,20 +693,28 @@ export default function ConsultationManager({ isKiosk = false }) {
                         </div>
                     </div>
 
-                    {/* 🚀 [CTO 패치] 텍스트 입력이 아닌, 실제 시스템 유저 드롭다운 연동 */}
                     <div>
-                        <label className="text-xs font-bold text-slate-600 mb-1.5 block">배정된 상담자 (강사/원장) <span className="text-rose-500">*</span></label>
+                        <label className="text-xs font-bold text-slate-600 mb-1.5 block">배정된 상담자 (선택) <span className="text-rose-500">*</span></label>
                         <select 
                             className="w-full border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-indigo-500 font-bold bg-white" 
                             value={scheduleForm.consultantId} 
                             onChange={e => setScheduleForm({...scheduleForm, consultantId: e.target.value})}
                         >
                             <option value="" disabled>상담 담당자를 선택해주세요</option>
-                            {availableStaff.map(staff => (
-                                <option key={staff.id} value={staff.id}>
-                                    {staff.name} ({staff.role === 'admin' ? '원장' : staff.role === 'admin_assistant' ? '행정실장' : '강사/조교'})
-                                </option>
-                            ))}
+                            {availableStaff.map(staff => {
+                                // 🚀 [CTO 패치 2] 학원 표준 직급 용어(Terminology)로 매핑합니다.
+                                let roleName = '관계자';
+                                if (staff.role === 'admin') roleName = '관리자';
+                                else if (staff.role === 'admin_assistant') roleName = '행정조교';
+                                else if (staff.role === 'lecturer') roleName = '강사';
+                                else if (staff.role === 'ta') roleName = '조교';
+
+                                return (
+                                    <option key={staff.id} value={staff.id}>
+                                        {staff.name} ({roleName})
+                                    </option>
+                                );
+                            })}
                         </select>
                     </div>
 
