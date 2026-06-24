@@ -512,3 +512,68 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
         return { success: true, briefing: `${studentName} 학생, 오늘도 임페리얼 학원과 함께 목표를 향해 한 걸음 더 나아가는 멋진 하루를 만들어 봅시다!`, cached: false, error: true };
     }
 });
+
+// ============================================================================
+// 🚀 [기능 11] 신규 상담 1일 전 자동 리마인드 발송 (매일 오전 11시 KST)
+// [서비스 가치] 학부모의 깜빡임으로 인한 노쇼(No-Show)를 방지하여 상담 전환율(매출)을 방어합니다.
+// ============================================================================
+exports.consultationReminderCron = onSchedule({
+    schedule: "0 11 * * *", // 매일 오전 11시
+    timeZone: "Asia/Seoul", 
+    timeoutSeconds: 300,
+    memory: "512MiB"
+}, async (event) => {
+    try {
+        const db = admin.firestore();
+        
+        // 내일 날짜 계산 (KST 기준)
+        const now = new Date();
+        const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const kstTime = new Date(utcNow + (9 * 3600000));
+        kstTime.setDate(kstTime.getDate() + 1); 
+        
+        const pad = (n) => String(n).padStart(2, '0');
+        const tomorrowStr = `${kstTime.getFullYear()}-${pad(kstTime.getMonth() + 1)}-${pad(kstTime.getDate())}`;
+        
+        // 내일 예정된 '신규' 상담만 조회 (기존 원생 제외)
+        const consultSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/consultations`)
+            .where('date', '==', tomorrowStr)
+            .where('status', '==', 'scheduled')
+            .where('type', '==', 'new')
+            .get();
+
+        if (consultSnapshot.empty) return null;
+
+        const batch = db.batch();
+        let count = 0;
+
+        consultSnapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            if (!data.parentPhone) return;
+
+            const cleanPhone = data.parentPhone.replace(/[^0-9]/g, '');
+            const ampm = parseInt(data.time.split(':')[0]) >= 12 ? '오후' : '오전';
+            const displayTime = `${data.date} ${ampm} ${data.time}`;
+
+            const message = `[목동임페리얼학원]\n안녕하세요. 목동임페리얼학원입니다.\n\n${data.studentName} 학생의 상담이 내일 ${displayTime}에 예약되었습니다. 일정에 참고하시어, 변경이 필요하신 경우에는 학원으로 연락주시면 감사하겠습니다.\n\n<임페리얼 오시는 길>\n▷영일고등학교 건너편 배드민턴 마켓 건물 4층\n▷임페리얼학원 오시는 길 안내링크\nhttps://blog.naver.com/imperialsys01/223391287204\n\n[목동임페리얼학원]\n☎ 대표전화 : 02-2644-1178\n◆ 대표메일 : imperialsys01@naver.com`;
+
+            const outboxRef = db.collection(`artifacts/${APP_ID}/public/data/sms_outbox`).doc();
+            batch.set(outboxRef, {
+                phoneNumber: cleanPhone,
+                message: message,
+                status: 'pending',
+                type: 'consultation_reminder',
+                studentName: data.studentName,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            count++;
+        });
+
+        if (count > 0) await batch.commit();
+        console.log(`[Success] 발송된 상담 리마인드 건수: ${count}건`);
+
+    } catch (error) {
+        console.error("🔥 상담 리마인드(Cron) 에러:", error);
+    }
+    return null;
+});
