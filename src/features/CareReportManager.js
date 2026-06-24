@@ -1,7 +1,6 @@
 /* [서비스 가치(Service Value)] 프리미엄 밀착 케어 리포트 엔진
    🚀 CTO 패치: 
-   1. UX/UI 최적화: 학생 및 학부모 접속 시 발생하는 비동기 딜레이 동안 관리자용 메시지가 노출되는 버그를 제거하고, 맞춤형 로딩 UI를 제공합니다.
-   2. 권한별 네이밍: 메뉴명을 '출결 상황(학생용)'과 '원생별 출결관리(직원용)'로 이원화하여 페르소나에 맞는 사용자 경험을 제공합니다. */
+   1. 무한 로딩(WSOD) 해결: currentUser 출입증을 Context가 아닌 Prop으로 직접 전달받아, 권한 판별이 지연되거나 실패하는 현상을 완벽하게 해결했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -58,8 +57,9 @@ const CustomDonutChart = ({ data }) => {
     );
 };
 
-export default function CareReportManager() {
-    const { currentUser, users, enrollments, classes, loadingData } = useData() || {};
+// 🚀 [핵심 픽스] currentUser를 외부(App.js)에서 명확하게 건네받습니다.
+export default function CareReportManager({ currentUser }) {
+    const { users, enrollments, classes, loadingData } = useData() || {};
     
     const isStudent = currentUser?.role === 'student';
     const isParent = currentUser?.role === 'parent';
@@ -194,7 +194,6 @@ export default function CareReportManager() {
                 <div>
                     <h1 className="text-2xl md:text-3xl font-black mb-2 flex items-center gap-2">
                         <PieChart size={28} /> 
-                        {/* 🚀 [변경] 권한별 메뉴명 이원화 */}
                         {isStaffType ? '원생별 출결관리' : '출결 상황'}
                     </h1>
                     <p className="text-indigo-200 font-medium">
@@ -257,7 +256,6 @@ export default function CareReportManager() {
             </div>
 
             {!selectedStudentId ? (
-                // 🚀 [CTO 패치] 관리자/강사일 때만 "검색해주세요" 노출, 학생/학부모는 데이터 로딩 스켈레톤 노출
                 isStaffType ? (
                     <div className="bg-white rounded-3xl p-16 text-center border border-slate-200 shadow-sm flex flex-col items-center">
                         <User size={64} className="text-slate-200 mb-4"/>

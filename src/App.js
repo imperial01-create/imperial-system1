@@ -696,7 +696,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/academic-calendar" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <AcademicCalendarManager /> : <Navigate to="/dashboard" replace />} />
                         
                         {/* 🚀 [신규 마스터] 밀착 케어 리포트 라우팅 추가 */}
-                        <Route path="/care-report" element={<CareReportManager />} />
+                        <Route path="/care-report" element={<CareReportManager currentUser={currentUser} />} />
 
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
