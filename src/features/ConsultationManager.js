@@ -1,8 +1,9 @@
 /* [서비스 가치(Service Value)] 프리미엄 상담 스케줄 & 온보딩 통합 센터
-   🚀 CTO 패치: 기존의 '원생 계정 강제 발급(온보딩)' 레거시 코드와 신규 '상담 스케줄 관제탑' 코드를 
-   하나의 컴포넌트 내에서 Tab 스위칭 방식으로 완벽하게 병합(Merge)하여 데스크의 업무 동선을 100% 최적화했습니다. */
+   🚀 CTO 패치: 
+   1. 무한 로딩 원천 차단: Firebase 권한 거부(Permission Denied)나 네트워크 오류 발생 시 무한 로딩에 빠지지 않고 명확한 에러 UI를 노출하는 예외 처리(Error Boundary)를 적용했습니다.
+   2. Zero Trust Security 방어: 컴포넌트 마운트 해제 시 스냅샷 리스너를 완벽히 정리(Cleanup)하여 메모리 누수를 방지합니다. */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
     Calendar, Clock, UserPlus, Users, Phone, Edit2, XCircle, 
     CheckCircle, AlertCircle, Loader, MessageSquare, BookOpen, Calculator, Languages, FlaskConical, Sparkles 
@@ -25,8 +26,9 @@ const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {
 export default function ConsultationManager({ isKiosk = false }) {
     const { currentUser, loadingData } = useData() || {};
     
-    // 🚀 [최상위 네비게이션 탭 상태] 'schedule' (예약 스케줄 관제) | 'onboarding' (신규 원생 계정 발급)
+    // 네비게이션 탭 상태: 'schedule' (예약 스케줄 관제) | 'onboarding' (신규 원생 계정 발급)
     const [mainTab, setMainTab] = useState('schedule');
+    const isMounted = useRef(true);
 
     // =========================================================================
     // 1. [기능 A] 상담 스케줄 관제 상태 모음
@@ -38,6 +40,9 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [modalMode, setModalMode] = useState('create');
     const [scheduleErrorMsg, setScheduleErrorMsg] = useState('');
     const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+    
+    // 🚀 [CTO 방어 로직] 치명적 오류 발생 시 화면을 멈추지 않기 위한 전역 에러 상태
+    const [criticalError, setCriticalError] = useState('');
 
     const initialScheduleForm = {
         id: '', type: 'new', studentName: '', parentPhone: '', date: selectedDate, time: '15:00',
@@ -45,15 +50,33 @@ export default function ConsultationManager({ isKiosk = false }) {
     };
     const [scheduleForm, setScheduleForm] = useState(initialScheduleForm);
 
-    // 스케줄 데이터 구독
+    // 🚀 [핵심 픽스] 스케줄 데이터 구독 시 에러 핸들링 추가
     useEffect(() => {
+        isMounted.current = true;
         const startOfCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).toISOString().split('T')[0];
         const q = query(collection(db, `artifacts/${APP_ID}/public/data/consultations`), where('date', '>=', startOfCurrentMonth));
-        const unsub = onSnapshot(q, (snap) => {
-            setConsultations(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-            setIsScheduleLoading(false);
-        });
-        return () => unsub();
+        
+        const unsub = onSnapshot(q, 
+            (snap) => {
+                if (isMounted.current) {
+                    setConsultations(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    setCriticalError('');
+                    setIsScheduleLoading(false);
+                }
+            },
+            (error) => {
+                console.error("Consultation fetching error:", error);
+                if (isMounted.current) {
+                    setCriticalError('데이터베이스 접근 권한이 없거나 네트워크 오류가 발생했습니다.');
+                    setIsScheduleLoading(false); // 🚀 에러가 나더라도 무한 로딩을 즉시 중단
+                }
+            }
+        );
+
+        return () => {
+            isMounted.current = false;
+            unsub();
+        };
     }, []);
 
     const getDisplayTime = (dateStr, timeStr) => {
@@ -132,7 +155,7 @@ export default function ConsultationManager({ isKiosk = false }) {
 
 
     // =========================================================================
-    // 2. [기능 B] 신규 원생 온보딩(계정 발급) 상태 모음 (기존 레거시 100% 보존)
+    // 2. [기능 B] 신규 원생 온보딩(계정 발급) 상태 모음
     // =========================================================================
     const [toast, setToast] = useState({ message: '', type: 'info' });
     const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
@@ -214,14 +237,32 @@ export default function ConsultationManager({ isKiosk = false }) {
         } catch (e) { showToast(e.message || "등록 처리에 실패했습니다.", "error"); } finally { setIsOnboardingLoading(false); }
     };
 
+    // 🚀 전역 로딩 처리 (에러 발생 시에도 무한 로딩 탈출)
+    if (loadingData || isScheduleLoading) {
+        return (
+            <div className="h-screen flex items-center justify-center">
+                <Loader className="animate-spin text-indigo-600" size={40}/>
+            </div>
+        );
+    }
 
-    if (isScheduleLoading || loadingData) return <div className="h-screen flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
+    // 🚀 치명적 에러 UI 표시
+    if (criticalError) {
+        return (
+            <div className="h-screen flex flex-col items-center justify-center p-4">
+                <AlertCircle size={64} className="text-rose-500 mb-4" />
+                <h2 className="text-2xl font-black text-slate-800 mb-2">시스템 접근 오류</h2>
+                <p className="text-slate-500 font-bold mb-6 text-center">{criticalError}</p>
+                <Button onClick={() => window.location.reload()} className="bg-indigo-600">새로고침</Button>
+            </div>
+        );
+    }
 
     return (
         <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-in fade-in">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
 
-            {/* 🚀 통합 메뉴 탭 (최상단 스위치) */}
+            {/* 통합 메뉴 탭 */}
             <div className="bg-white p-2 rounded-2xl shadow-sm border border-slate-200 flex gap-2">
                 <button 
                     onClick={() => setMainTab('schedule')}
@@ -250,7 +291,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                         
                         <div className="flex items-center gap-3 bg-white/10 p-2 rounded-2xl backdrop-blur-sm border border-white/20">
                             <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="bg-transparent border-none text-white font-black text-lg outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:filter-white"/>
-                            <Button onClick={() => { setForm(initialScheduleForm); setModalMode('create'); setIsModalOpen(true); }} className="bg-white text-indigo-700 hover:bg-indigo-50 font-bold px-4 py-2 shadow-md">
+                            <Button onClick={() => { setScheduleForm(initialScheduleForm); setModalMode('create'); setIsModalOpen(true); }} className="bg-white text-indigo-700 hover:bg-indigo-50 font-bold px-4 py-2 shadow-md">
                                 + 상담 예약
                             </Button>
                         </div>
@@ -313,7 +354,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                 </div>
             )}
 
-            {/* ==================== 탭 2. 신규 원생 온보딩 시스템 (레거시 코드 병합) ==================== */}
+            {/* ==================== 탭 2. 신규 원생 온보딩 시스템 ==================== */}
             {mainTab === 'onboarding' && (
                 <div className="space-y-6 animate-in fade-in">
                     <div className="text-center md:text-left mb-6 mt-4 pl-2">
