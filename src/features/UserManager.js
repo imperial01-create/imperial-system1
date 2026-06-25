@@ -1,15 +1,17 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 80% 이상 절감하고,
-   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다. 
+   모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
    (🚀 최적화 패치: 완벽한 '연쇄 삭제(Cascading Delete)' 알고리즘을 도입하여, 학생 삭제 시 관련된 
-   수강이력, 성적, Voca 스탯, 학부모 연동 데이터를 일괄 소각하여 DB 쓰레기(고아 데이터)를 원천 차단합니다.) */
+   수강이력, 성적, Voca 스탯, 학부모 연동 데이터를 일괄 소각하여 DB 쓰레기(고아 데이터)를 원천 차단합니다.) 
+   (🚀 CTO 패치 2.0: 출결 키오스크 도입에 따른 실시간 PIN 번호 중복 감지 레이더 및 안전 편집 기능 탑재) */
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
-  BookMarked, Clock, Calendar, CheckCircle, Bell
+  BookMarked, Clock, Calendar, CheckCircle, Bell, AlertTriangle
 } from 'lucide-react';
 import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch, addDoc, query, where, getDocs, getDocsFromServer } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { httpsCallable } from 'firebase/functions'; 
+import { httpsCallable } from 'firebase/functions';
 import { db, secondaryAuth, functions } from '../firebase'; 
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
@@ -22,7 +24,6 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 
     const schools = schoolsData[schoolType] || [];
     const favorites = schoolsData.favorites || [];
-    
     const pinned = schools.filter(s => favorites.includes(s) && s.includes(search));
     const others = schools.filter(s => !favorites.includes(s) && s.includes(search));
 
@@ -91,12 +92,11 @@ const UserManager = ({ currentUser }) => {
 
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
-
+    
     const { users, classes, enrollments, masterData, loadingData } = useData();
     
     const [searchQuery, setSearchQuery] = useState('');
-    const [childSearchQuery, setChildSearchQuery] = useState(''); 
-    
+    const [childSearchQuery, setChildSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('student'); 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
@@ -104,7 +104,7 @@ const UserManager = ({ currentUser }) => {
     const [loading, setLoading] = useState(false);
     const [toast, setToast] = useState({ message: '', type: 'info' });
 
-    const [modalTab, setModalTab] = useState('basic'); 
+    const [modalTab, setModalTab] = useState('basic');
     const [isEditMode, setIsEditMode] = useState(false);
     
     const [formData, setFormData] = useState({ 
@@ -112,13 +112,12 @@ const UserManager = ({ currentUser }) => {
         schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
         attendancePin: '', status: 'attending', linkedChildrenIds: []
     });
-
+    
     const initEnrollForm = { classId: '', className: '', lecturerId: '', status: 'active', schedules: [] };
     const [enrollForm, setEnrollForm] = useState(initEnrollForm);
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
     const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
-
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false);
@@ -138,7 +137,7 @@ const UserManager = ({ currentUser }) => {
 
     const studentList = useMemo(() => users.filter(u => u.role === 'student' && u.status !== 'pending'), [users]);
     const pendingUsers = useMemo(() => users.filter(u => u.status === 'pending'), [users]);
-
+    
     const displayedStudents = useMemo(() => {
         return studentList.filter(student => {
             const isLinked = (formData.linkedChildrenIds || []).includes(student.id);
@@ -151,6 +150,28 @@ const UserManager = ({ currentUser }) => {
     }, [studentList, formData.linkedChildrenIds, childSearchQuery]);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
+
+    // 🚀 [CTO 패치 2.0] 전체 학생 대상 출결 번호(PIN) 중복 빈도수 체크 엔진
+    const pinConflictMap = useMemo(() => {
+        const map = {};
+        users.forEach(u => {
+            if (u.role === 'student' && u.status !== 'pending' && u.attendancePin) {
+                map[u.attendancePin] = (map[u.attendancePin] || 0) + 1;
+            }
+        });
+        return map;
+    }, [users]);
+
+    // 🚀 [CTO 패치 2.0] 정보 수정 폼에서 입력 중인 PIN을 다른 학생이 사용 중인지 실시간 검증
+    const currentPinOwner = useMemo(() => {
+        if (!formData.attendancePin || formData.attendancePin.length !== 4 || !formData.id) return null;
+        return users.find(u => 
+            u.role === 'student' && 
+            u.id !== formData.id && // 본인 제외
+            u.attendancePin === formData.attendancePin &&
+            u.status !== 'pending'
+        );
+    }, [formData.attendancePin, users, formData.id]);
 
     const handleForcePasswordReset = async (user) => {
         const newPassword = window.prompt(`[${user.name}] 사용자의 새로운 비밀번호를 입력하세요. (6자리 이상 숫자 권장)`);
@@ -172,9 +193,9 @@ const UserManager = ({ currentUser }) => {
                 authUid: freshAuthUid, 
                 updatedAt: serverTimestamp() 
             }, { merge: true });
-            
             showToast(`✅ 성공적으로 계정이 복구되었으며 비밀번호가 변경되었습니다!`, 'success');
-        } catch (error) { showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error'); } finally { setLoading(false); }
+        } catch (error) { showToast('비밀번호 변경 실패: ' + (error.message || '서버 응답 오류'), 'error');
+        } finally { setLoading(false); }
     };
 
     const handleApproveUser = async (user) => {
@@ -190,15 +211,13 @@ const UserManager = ({ currentUser }) => {
                 authUid = userCredential.user.uid;
                 await signOut(secondaryAuth);
             } catch (authError) {
-                if (authError.code === 'auth/email-already-in-use') { authUid = 'legacy_verified_account'; } 
-                else { throw new Error("인증 서버 등록 실패: " + authError.message); }
+                if (authError.code === 'auth/email-already-in-use') { authUid = 'legacy_verified_account';
+                } else { throw new Error("인증 서버 등록 실패: " + authError.message); }
             }
 
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
             const approvalPayload = { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() };
-            
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), approvalPayload, { merge: true });
-
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
                 await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
@@ -242,9 +261,9 @@ const UserManager = ({ currentUser }) => {
             ...user, id: user.id, password: '', 
             hourlyRate: user.hourlyRate || user.hourlyWage || '', 
             schoolName: user.schoolName || '', grade: user.grade || '1학년', authUid: user.authUid || '', bankName: user.bankName || '',
-            accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', linkedChildrenIds: user.linkedChildrenIds || []
+            accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', 
+            linkedChildrenIds: user.linkedChildrenIds || []
         });
-        
         if (user.schoolName) {
             let foundType = 'high';
             let isCustom = true;
@@ -285,13 +304,25 @@ const UserManager = ({ currentUser }) => {
         if (!formData.name || !formData.userId) return showToast('이름과 아이디를 입력해주세요.', 'error');
         if (!isEditMode && !formData.password) return showToast('신규 생성 시 비밀번호는 필수입니다.', 'error');
         
+        const currentRole = activeTab === 'pending' ? formData.role : activeTab;
+        const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+
+        // 🚀 [CTO 패치 2.0] 수동 입력된 PIN이 중복인지 최종 검증
+        if (currentRole === 'student' && formData.attendancePin) {
+            if (formData.attendancePin.length !== 4) return showToast('출결 PIN은 반드시 4자리 숫자여야 합니다.', 'error');
+            const duplicate = users.find(u => u.role === 'student' && u.id !== targetDocId && u.attendancePin === formData.attendancePin && u.status !== 'pending');
+            if (duplicate) {
+                return showToast(`출결 PIN [${formData.attendancePin}]은(는) 이미 ${duplicate.name} 학생이 사용 중입니다. 다른 번호를 지정해주세요.`, 'error');
+            }
+        }
+        
         setLoading(true);
         try {
-            const payload = { name: formData.name, userId: formData.userId, role: activeTab === 'pending' ? formData.role : activeTab, phone: formData.phone || '', updatedAt: serverTimestamp() };
-            const currentRole = payload.role;
-
+            const payload = { name: formData.name, userId: formData.userId, role: currentRole, phone: formData.phone || '', updatedAt: serverTimestamp() };
+            
             if (currentRole === 'student') { 
-                payload.schoolName = formData.schoolName; payload.grade = formData.grade; 
+                payload.schoolName = formData.schoolName;
+                payload.grade = formData.grade; 
                 payload.attendancePin = formData.attendancePin; payload.status = formData.status;
             }
             if (['ta', 'lecturer', 'admin', 'admin_assistant'].includes(currentRole)) { 
@@ -300,8 +331,6 @@ const UserManager = ({ currentUser }) => {
                 payload.bankName = formData.bankName || ''; payload.accountNumber = formData.accountNumber || '';
             }
             if (currentRole === 'parent') { payload.linkedChildrenIds = formData.linkedChildrenIds || []; }
-
-            const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
             if (isEditMode) {
                 if (formData.authUid) payload.authUid = formData.authUid;
@@ -319,12 +348,13 @@ const UserManager = ({ currentUser }) => {
                     if (authError.code === 'auth/email-already-in-use') throw new Error("이미 인증서버에 등록된 계정입니다.");
                     throw authError;
                 }
-                payload.authUid = authUid; 
+                payload.authUid = authUid;
                 payload.createdAt = serverTimestamp();
                 await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload);
-                setIsEditMode(true); setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
+                setIsEditMode(true);
+                setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
                 showToast('사용자가 성공적으로 생성되었습니다.', 'success');
-                setLoading(false); return; 
+                setLoading(false); return;
             }
             setIsModalOpen(false);
         } catch (e) { showToast(e.message || '저장에 실패했습니다.', 'error'); } finally { setLoading(false); }
@@ -340,26 +370,19 @@ const UserManager = ({ currentUser }) => {
             const batch = writeBatch(db);
             const userRef = doc(db, `artifacts/${APP_ID}/public/data/users`, targetUserId);
             
-            // 삭제 대상 유저의 정보를 확인 (학생인 경우에만 연쇄 삭제 가동)
             const userSnap = await getDoc(userRef);
             if (userSnap.exists() && userSnap.data().role === 'student') {
-                
-                // 1. 해당 학생의 수강 이력(enrollments) 조회 및 일괄 삭제
                 const enrollQ = query(collection(db, `artifacts/${APP_ID}/public/data/enrollments`), where('studentId', '==', targetUserId));
                 const enrollSnap = await getDocs(enrollQ);
                 enrollSnap.forEach(d => batch.delete(d.ref));
 
-                // 2. 해당 학생의 성적 데이터(grades) 일괄 삭제
                 const gradesQ = query(collection(db, `artifacts/${APP_ID}/public/data/grades`), where('studentId', '==', targetUserId));
                 const gradesSnap = await getDocs(gradesQ);
                 gradesSnap.forEach(d => batch.delete(d.ref));
 
-                // 3. Voca 영어 스탯(english_stats) 영구 격리 삭제
-                // (참고: 하위 컬렉션인 word_history는 부모 문서가 사라지면 접근이 불가해지며 시스템에서 고아 처리되어 영향을 주지 않음)
                 const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, targetUserId);
                 batch.delete(statRef);
 
-                // 4. 이 학생을 등록해둔 학부모 계정을 찾아 호적(linkedChildrenIds)에서 파내기
                 const parentsQ = query(collection(db, `artifacts/${APP_ID}/public/data/users`), where('role', '==', 'parent'), where('linkedChildrenIds', 'array-contains', targetUserId));
                 const parentsSnap = await getDocs(parentsQ);
                 parentsSnap.forEach(pDoc => {
@@ -369,25 +392,21 @@ const UserManager = ({ currentUser }) => {
                 });
             }
 
-            // 5. 마지막으로 user 계정 프로필 본체 삭제
             batch.delete(userRef);
-
-            // 전체 일괄 커밋
             await batch.commit();
-
             showToast('사용자 및 연관된 모든 데이터(수강, 성적, Voca, 학부모 연동)가 성공적으로 소각되었습니다.', 'success');
             setIsDeleteConfirmOpen(false);
         } catch (e) { 
-            showToast('연쇄 삭제 실패: ' + e.message, 'error'); 
+            showToast('연쇄 삭제 실패: ' + e.message, 'error');
         } finally { 
             setLoading(false); 
-            setTargetUserId(null); 
+            setTargetUserId(null);
         }
     };
     // =========================================================================================
 
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
-
+    
     const handleClassSelect = (classId) => {
         if (!classId) { setEnrollForm(initEnrollForm); return; }
         const cls = classes.find(c => c.id === classId);
@@ -408,17 +427,15 @@ const UserManager = ({ currentUser }) => {
                 studentId: formData.id, studentName: formData.name, classId: enrollForm.classId, className: enrollForm.className,
                 lecturerId: enrollForm.lecturerId, status: enrollForm.status, schedules: enrollForm.schedules, updatedAt: serverTimestamp()
             };
-
             const eRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'enrollments', enrollmentId);
             const docSnap = await getDoc(eRef);
             if (!docSnap.exists()) payload.enrolledAt = serverTimestamp();
-
             await setDoc(eRef, payload, { merge: true });
             
             setEnrollForm(initEnrollForm); setClassSearchInput(''); setClassSearchQuery('');
             showToast('수강 배정이 성공적으로 저장되었습니다.', 'success');
-        } catch (e) { showToast('수강 배정 실패: ' + e.message, 'error'); } 
-        finally { setLoading(false); }
+        } catch (e) { showToast('수강 배정 실패: ' + e.message, 'error');
+        } finally { setLoading(false); }
     };
 
     const handleDeleteEnrollment = async (enrollId) => {
@@ -435,7 +452,7 @@ const UserManager = ({ currentUser }) => {
     const filteredUsers = activeTab === 'pending' 
         ? pendingUsers.filter(u => u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery))
         : users.filter(u => u.role === activeTab && u.status !== 'pending' && (u.name.includes(searchQuery) || (u.userId||'').includes(searchQuery) || (u.phone||'').includes(searchQuery)));
-
+    
     const getGradeOptions = (type) => {
         if (type === 'elementary') return ['1학년','2학년','3학년','4학년','5학년','6학년'];
         if (type === 'middle') return ['1학년','2학년','3학년'];
@@ -498,12 +515,20 @@ const UserManager = ({ currentUser }) => {
                             {filteredUsers.length === 0 ? <tr><td colSpan="5" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr> :
                             filteredUsers.map(u => {
                                 const myEnrollments = enrollments.filter(e => e.studentId === u.id && e.status === 'active');
+                                // 🚀 [CTO 패치] 출결 번호가 다른 활성 학생과 겹치는지 검사
+                                const isPinConflicted = u.role === 'student' && u.status !== 'pending' && u.attendancePin && (pinConflictMap[u.attendancePin] > 1);
+                                
                                 return (
                                 <tr key={u.id} className={`hover:bg-gray-50 transition-colors ${activeTab === 'pending' ? 'bg-rose-50/20' : ''}`}>
                                     <td className="p-4 font-bold">
                                         {u.name}
                                         {activeTab === 'pending' && <span className="ml-2 bg-rose-100 text-rose-600 text-[10px] px-2 py-0.5 rounded font-black">승인대기</span>}
                                         {u.authUid && u.authUid !== 'legacy_verified_account' && <Shield size={12} className="inline ml-2 text-green-500" title="안전한 계정"/>}
+                                        {isPinConflicted && (
+                                            <span className="ml-2 bg-rose-100 text-rose-700 border border-rose-300 text-[10px] font-black px-1.5 py-0.5 rounded inline-flex items-center gap-0.5 shadow-sm">
+                                                <AlertTriangle size={10}/> PIN 중복
+                                            </span>
+                                        )}
                                     </td>
                                     <td className="p-4">
                                         <div className="flex flex-col gap-1">
@@ -528,7 +553,9 @@ const UserManager = ({ currentUser }) => {
                                                     <div className="flex flex-col gap-1.5">
                                                         <div className="flex items-center gap-2">
                                                             <span className="text-blue-600 font-bold">{u.schoolName} ({u.grade})</span>
-                                                            <span className="font-mono bg-indigo-50 text-indigo-700 px-1.5 rounded font-bold border border-indigo-100 text-xs">PIN: {u.attendancePin || '없음'}</span>
+                                                            <span className={`font-mono px-1.5 rounded font-bold border text-xs ${isPinConflicted ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse' : 'bg-indigo-50 text-indigo-700 border-indigo-100'}`}>
+                                                                PIN: {u.attendancePin || '없음'}
+                                                            </span>
                                                         </div>
                                                         <div className="flex flex-wrap gap-1">
                                                             {myEnrollments.length > 0 ? myEnrollments.map(e => (
@@ -651,8 +678,26 @@ const UserManager = ({ currentUser }) => {
                                     </div>
 
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div><label className="block text-xs font-bold text-indigo-800 mb-1">출결 PIN (4자리)</label><input type="text" maxLength={4} className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold text-indigo-600 bg-indigo-50" value={formData.attendancePin} onChange={e => setFormData({...formData, attendancePin: e.target.value.replace(/[^0-9]/g, '')})} placeholder="뒷자리 자동추출"/></div>
-                                        <div><label className="block text-xs font-bold text-gray-700 mb-1">재원 상태</label><select className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}><option value="attending">재원중 (정상)</option><option value="resting">휴원 (잠시 쉼)</option><option value="dropped">퇴원 (다니지 않음)</option><option value="pending">승인 대기</option></select></div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-indigo-800 mb-1">출결 PIN (4자리)</label>
+                                            <input type="text" maxLength={4} className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none font-mono font-bold text-indigo-600 bg-indigo-50" value={formData.attendancePin} onChange={e => setFormData({...formData, attendancePin: e.target.value.replace(/[^0-9]/g, '')})} placeholder="뒷자리 자동추출"/>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-700 mb-1">재원 상태</label>
+                                            <select className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}>
+                                                <option value="attending">재원중 (정상)</option>
+                                                <option value="resting">휴원 (잠시 쉼)</option>
+                                                <option value="dropped">퇴원 (다니지 않음)</option>
+                                                <option value="pending">승인 대기</option>
+                                            </select>
+                                        </div>
+                                        {/* 🚀 [CTO 패치 2.0] 실시간 2차 중복 충돌 검증 알림 장치 */}
+                                        {currentPinOwner && (
+                                            <div className="col-span-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 font-bold flex items-center gap-2 animate-in slide-in-from-top-2 mt-1">
+                                                <AlertTriangle size={14} className="animate-pulse text-rose-600"/>
+                                                <span>⚠️ 경고: 현재 입력하신 번호는 <strong>{currentPinOwner.name} ({currentPinOwner.schoolName})</strong> 학생이 이미 사용 중입니다! 다른 번호를 지정해 주세요.</span>
+                                            </div>
+                                        )}
                                     </div>
                                 </>
                             )}
@@ -735,7 +780,7 @@ const UserManager = ({ currentUser }) => {
                                 </div>
                             )}
 
-                            <Button className="w-full py-4 text-lg font-bold mt-4" onClick={handleSaveUser} disabled={loading}>
+                            <Button className="w-full py-4 text-lg font-bold mt-4" onClick={handleSaveUser} disabled={loading || !!currentPinOwner}>
                                 {loading ? <Loader className="animate-spin mx-auto"/> : '기본 정보 저장'}
                             </Button>
                         </div>

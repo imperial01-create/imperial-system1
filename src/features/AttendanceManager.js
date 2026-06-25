@@ -1,16 +1,16 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
    🚀 CTO 패치: 
-   1. 아키텍처 분리 (Separation of Concerns): 신규 '원생별 출결관리(CareReportManager)'로 이관된 원생별 출결 조회 탭을 완전히 제거하여 컴포넌트를 경량화했습니다.
-   2. 본연의 기능 집중: 이제 이 메뉴는 '당일 출결 현황'과 '교실 공간 매트릭스' 관제에만 100% 리소스를 집중합니다. */
+   1. 아키텍처 분리: 신규 '원생별 출결관리(CareReportManager)'로 이관된 조회 탭을 제거했습니다.
+   2. PIN 관리 센터 신설: 데스크 업무의 병목을 없애기 위해 '출결 PIN 관리' 전용 탭을 만들어 중복 핀을 실시간으로 감지하고 광속으로 수정(Quick Edit)할 수 있게 고도화했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Activity, Clock, MapPin, CheckCircle, 
     User, Users, Search, Loader, Phone, AlertTriangle, Check,
     Calendar as CalendarIcon, UserCheck, LayoutGrid, X, ShieldCheck,
-    Brain, Heart, Flame, CreditCard, MessageCircle
+    Brain, Heart, Flame, CreditCard, MessageCircle, Key, Edit2
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Button, Modal } from '../components/UI';
@@ -49,7 +49,7 @@ const TEACHER_COLORS = [
 export default function AttendanceManager({ currentUser }) {
     const { classes, enrollments, users, masterData, loadingData } = useData();
 
-    // 🚀 'student' 탭이 제거되고 daily와 matrix만 남았습니다.
+    // 🚀 탭 구성: daily(일별 관제), matrix(교실 매트릭스), pin_mgmt(출결 PIN 관리)
     const [activeTab, setActiveTab] = useState('daily'); 
     
     const [selectedDateObj, setSelectedDateObj] = useState(new Date());
@@ -68,6 +68,12 @@ export default function AttendanceManager({ currentUser }) {
     const [isQuickAddModalOpen, setIsQuickAddModalOpen] = useState(false);
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
+
+    // 🚀 [출결 PIN 관리용 상태]
+    const [pinSearchQuery, setPinSearchQuery] = useState('');
+    const [isPinModalOpen, setIsPinModalOpen] = useState(false);
+    const [selectedStudentForPin, setSelectedStudentForPin] = useState(null);
+    const [newPinValue, setNewPinValue] = useState('');
 
     const teacherColorMap = useMemo(() => {
         const map = {};
@@ -464,6 +470,61 @@ export default function AttendanceManager({ currentUser }) {
         }
     };
 
+    // 🚀 [CTO 패치] 출결 PIN 관리 탭 전용 로직
+    const pinConflictMap = useMemo(() => {
+        const map = {};
+        users.forEach(u => {
+            if (u.role === 'student' && u.status !== 'pending' && u.attendancePin) {
+                map[u.attendancePin] = (map[u.attendancePin] || 0) + 1;
+            }
+        });
+        return map;
+    }, [users]);
+
+    const pinStudents = useMemo(() => {
+        return users
+            .filter(u => u.role === 'student' && u.status !== 'pending')
+            .filter(u => (u.name || '').includes(pinSearchQuery) || (u.phone || '').includes(pinSearchQuery) || (u.attendancePin || '').includes(pinSearchQuery))
+            .sort((a, b) => {
+                // 1순위: 중복 번호가 있는 학생을 무조건 최상단으로 끌어올림
+                const aConflict = a.attendancePin && pinConflictMap[a.attendancePin] > 1 ? 1 : 0;
+                const bConflict = b.attendancePin && pinConflictMap[b.attendancePin] > 1 ? 1 : 0;
+                if (aConflict !== bConflict) return bConflict - aConflict;
+                
+                // 2순위: 이름 가나다순
+                return (a.name || '').localeCompare(b.name || '');
+            });
+    }, [users, pinSearchQuery, pinConflictMap]);
+
+    const handleOpenPinEdit = (student) => {
+        setSelectedStudentForPin(student);
+        setNewPinValue(student.attendancePin || '');
+        setIsPinModalOpen(true);
+    };
+
+    const handleSavePin = async () => {
+        if (newPinValue && newPinValue.length !== 4) {
+            return alert("출결 번호(PIN)는 반드시 숫자 4자리여야 합니다.");
+        }
+        
+        if (newPinValue) {
+            const duplicate = users.find(u => u.role === 'student' && u.id !== selectedStudentForPin.id && u.attendancePin === newPinValue && u.status !== 'pending');
+            if (duplicate) {
+                return alert(`🚨 입력하신 [${newPinValue}] 번호는 이미 '${duplicate.name}(${duplicate.schoolName})' 학생이 사용 중입니다!\n다른 번호를 지정해주세요.`);
+            }
+        }
+
+        try {
+            await updateDoc(doc(db, `artifacts/${APP_ID}/public/data/users`, selectedStudentForPin.id), {
+                attendancePin: newPinValue
+            });
+            setIsPinModalOpen(false);
+            // alert 창 없이 스무스하게 닫힙니다 (UX)
+        } catch(e) {
+            alert("변경 실패: " + e.message);
+        }
+    };
+
     if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
@@ -475,30 +536,35 @@ export default function AttendanceManager({ currentUser }) {
                         <UserCheck className="text-indigo-600" /> 통합 출결 및 공간 관제
                     </h1>
                     
-                    <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
-                        <CalendarIcon size={18} className="text-slate-500 ml-2" />
-                        <input 
-                            type="date" 
-                            value={selectedDateStr}
-                            onChange={(e) => {
-                                const d = new Date(e.target.value);
-                                if (!isNaN(d.getTime())) setSelectedDateObj(d);
-                            }}
-                            className="bg-transparent border-none outline-none font-bold text-slate-700 text-sm cursor-pointer"
-                        />
-                        {selectedDateStr !== getLocalDateStr(new Date()) && (
-                            <button onClick={() => setSelectedDateObj(new Date())} className="text-[10px] font-bold bg-white text-indigo-600 border border-slate-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors shadow-sm mr-1">
-                                오늘
-                            </button>
-                        )}
-                    </div>
+                    {activeTab !== 'pin_mgmt' && (
+                        <div className="flex items-center gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200 shadow-inner">
+                            <CalendarIcon size={18} className="text-slate-500 ml-2" />
+                            <input 
+                                type="date" 
+                                value={selectedDateStr}
+                                onChange={(e) => {
+                                    const d = new Date(e.target.value);
+                                    if (!isNaN(d.getTime())) setSelectedDateObj(d);
+                                }}
+                                className="bg-transparent border-none outline-none font-bold text-slate-700 text-sm cursor-pointer"
+                            />
+                            {selectedDateStr !== getLocalDateStr(new Date()) && (
+                                <button onClick={() => setSelectedDateObj(new Date())} className="text-[10px] font-bold bg-white text-indigo-600 border border-slate-200 px-2 py-1 rounded-lg hover:bg-indigo-50 transition-colors shadow-sm mr-1">
+                                    오늘
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
                 
-                {/* 🚀 [CTO 패치] '원생별 출결' 탭이 제거되어 버튼 2개만 깔끔하게 남았습니다. */}
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 w-full md:w-auto">
                     <button onClick={() => setActiveTab('daily')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm ${activeTab === 'daily' ? 'bg-white text-indigo-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>일별 운영 관제</button>
                     <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <LayoutGrid size={16}/> 교실 매트릭스
+                    </button>
+                    {/* 🚀 신규 추가된 PIN 전용 관리 탭 */}
+                    <button onClick={() => setActiveTab('pin_mgmt')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'pin_mgmt' ? 'bg-white text-rose-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
+                        <Key size={16}/> 출결 PIN 관리
                     </button>
                 </div>
             </div>
@@ -850,6 +916,145 @@ export default function AttendanceManager({ currentUser }) {
                     </div>
                 </div>
             )}
+
+            {/* 🚀 TAB 3: 출결 PIN 관리 (신규) */}
+            {activeTab === 'pin_mgmt' && (
+                <div className="flex flex-col h-full gap-6 animate-in fade-in">
+                    <div className="bg-gradient-to-r from-rose-700 to-pink-800 text-white p-6 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <div className="flex items-center gap-3 mb-1">
+                                <Key size={28} />
+                                <h2 className="text-xl md:text-2xl font-black">원생 출결 PIN 중앙 관리소</h2>
+                            </div>
+                            <p className="opacity-90 text-sm">전교생의 출결 번호 중복을 감지하고 광속으로 수정하여 키패드 에러를 원천 차단합니다.</p>
+                        </div>
+                        <div className="bg-white/20 p-4 rounded-2xl flex items-center gap-5">
+                            <div className="text-center">
+                                <div className="text-xs opacity-80 font-bold mb-1">총 재원생</div>
+                                <div className="text-2xl font-black">{pinStudents.length}명</div>
+                            </div>
+                            <div className="w-px h-10 bg-white/30"></div>
+                            <div className="text-center">
+                                <div className="text-xs text-rose-200 font-bold mb-1">중복 충돌 발생</div>
+                                <div className="text-2xl font-black text-rose-300">
+                                    {pinStudents.filter(s => s.attendancePin && pinConflictMap[s.attendancePin] > 1).length}명
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-3xl shadow-sm border border-slate-300 flex flex-col flex-1 min-h-0 overflow-hidden">
+                        <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 bg-slate-50">
+                            <div className="relative w-full sm:w-80">
+                                <input 
+                                    type="text" 
+                                    placeholder="학생 이름, 연락처, 번호 검색..." 
+                                    value={pinSearchQuery} 
+                                    onChange={e => setPinSearchQuery(e.target.value)} 
+                                    className="w-full pl-9 pr-3 py-2.5 rounded-xl border-2 border-slate-200 outline-none focus:border-rose-500 text-sm font-bold bg-white"
+                                />
+                                <Search className="absolute left-3 top-3 text-slate-400" size={16}/>
+                            </div>
+                            <p className="text-xs font-bold text-slate-500">
+                                * 중복 번호가 있는 학생은 시스템에 의해 <strong className="text-rose-500">목록 최상단으로 자동 정렬</strong>됩니다.
+                            </p>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-0">
+                            <table className="w-full text-left">
+                                <thead className="bg-white sticky top-0 text-xs font-black text-slate-500 shadow-sm z-10">
+                                    <tr>
+                                        <th className="p-4 w-16 text-center border-b border-slate-200">No.</th>
+                                        <th className="p-4 border-b border-slate-200">원생명 (학적)</th>
+                                        <th className="p-4 border-b border-slate-200">연락처</th>
+                                        <th className="p-4 border-b border-slate-200">현재 출결 PIN</th>
+                                        <th className="p-4 text-center border-b border-slate-200">관리</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 text-sm">
+                                    {pinStudents.length === 0 ? (
+                                        <tr><td colSpan="5" className="text-center py-16 text-slate-400 font-bold">해당하는 학생이 없습니다.</td></tr>
+                                    ) : (
+                                        pinStudents.map((student, index) => {
+                                            const isConflict = student.attendancePin && pinConflictMap[student.attendancePin] > 1;
+                                            return (
+                                                <tr key={student.id} className={`hover:bg-slate-50 transition-colors ${isConflict ? 'bg-rose-50/30' : ''}`}>
+                                                    <td className="p-4 text-center font-bold text-slate-400">{index + 1}</td>
+                                                    <td className="p-4">
+                                                        <div className="font-black text-slate-800">{student.name}</div>
+                                                        <div className="text-xs text-slate-500 font-bold">{student.schoolName || '학교미상'} ({student.grade || '학년미상'})</div>
+                                                    </td>
+                                                    <td className="p-4 font-mono font-bold text-slate-600">
+                                                        {student.phone ? student.phone.replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3') : '-'}
+                                                    </td>
+                                                    <td className="p-4">
+                                                        {isConflict ? (
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-mono font-black text-base px-2.5 py-1 rounded-lg border tracking-widest bg-rose-100 text-rose-700 border-rose-300 shadow-inner animate-pulse">
+                                                                    {student.attendancePin}
+                                                                </span>
+                                                                <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-sm">
+                                                                    <AlertTriangle size={10}/> 충돌
+                                                                </span>
+                                                            </div>
+                                                        ) : (
+                                                            <span className="font-mono font-black text-base px-2.5 py-1 rounded-lg border tracking-widest bg-slate-100 text-slate-700 border-slate-300">
+                                                                {student.attendancePin || '없음'}
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td className="p-4 text-center">
+                                                        <button 
+                                                            onClick={() => handleOpenPinEdit(student)} 
+                                                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all border shadow-sm ${isConflict ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-700' : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'}`}
+                                                        >
+                                                            <Edit2 size={14} /> PIN 퀵 수정
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 🚀 출결 PIN 퀵 에디트 모달 */}
+            <Modal isOpen={isPinModalOpen} onClose={() => setIsPinModalOpen(false)} title="🔐 출결 번호 (PIN) 퀵 수정">
+                <div className="space-y-5 p-2">
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                        <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200">
+                            <div>
+                                <span className="font-black text-lg text-slate-800">{selectedStudentForPin?.name}</span>
+                                <span className="text-sm font-bold text-slate-500 ml-2">학생</span>
+                            </div>
+                            <Badge className="bg-slate-200 text-slate-700 border-0">{selectedStudentForPin?.schoolName}</Badge>
+                        </div>
+                        
+                        <div>
+                            <label className="text-xs font-black text-slate-600 mb-2 block text-center">새로운 무인 패드 출결 번호 (4자리)</label>
+                            <input 
+                                type="text" 
+                                maxLength="4"
+                                autoFocus
+                                className="w-full border-2 border-slate-300 p-4 rounded-xl outline-none focus:border-rose-500 font-black text-center text-3xl tracking-[0.5em] bg-white text-slate-900 shadow-inner" 
+                                value={newPinValue} 
+                                onChange={e => setNewPinValue(e.target.value.replace(/[^0-9]/g, ''))} 
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                        <Button variant="secondary" onClick={() => setIsPinModalOpen(false)} className="flex-1 py-4 font-bold border-2 border-slate-200 text-slate-600 rounded-xl">취소</Button>
+                        <Button onClick={handleSavePin} className="flex-1 py-4 font-black bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-md">
+                            저장 및 동기화
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
 
             {/* 퀵 배정 모달 */}
             <Modal isOpen={isQuickAddModalOpen} onClose={() => setIsQuickAddModalOpen(false)} title="직전 보충 / 클리닉 퀵 배정">
