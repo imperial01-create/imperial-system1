@@ -1,6 +1,6 @@
 /* [서비스 가치] 학원의 모든 기초 데이터(SSOT)를 중앙에서 통제합니다.
-   (🚀 CTO 패치: 긴 강의실 이름이 잘리지 않도록 UI 레이아웃을 Grid로 최적화하고, 
-   기존 등록된 강의실의 수용 인원을 원클릭으로 즉시 수정할 수 있는 Inline Edit 기능을 도입했습니다.) */
+   (🚀 CTO 패치: '글로벌 시즌(Season) 관리' 모듈을 추가하여 학원 1년 커리큘럼의 
+   타임라인을 제어하고, 전체 시간표/강의 시스템의 뼈대를 제공합니다.) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -9,14 +9,13 @@ import {
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
   AlertTriangle, Database, School, Trash2, Star, Search,
-  ToggleRight, ToggleLeft, Layers, Users
+  ToggleRight, ToggleLeft, Layers, Users, CalendarDays // 🚀 CalendarDays 추가
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 대분류 및 포함 세부 과목 안내용 데이터
 const DEPT_INFO = [
     { 
         id: 'DEPT_KOR', label: '국어과', color: 'rose',
@@ -54,13 +53,15 @@ const SettingsManager = ({ currentUser }) => {
     const showToast = (message, type = 'success') => setToast({ message, type });
 
     const [settings, setSettings] = useState({
-        academyName: '', businessNumber: '', phone: '', address: '', classrooms: [], subjects: []
+        academyName: '', businessNumber: '', phone: '', address: '', classrooms: [], subjects: [], seasons: [] // 🚀 seasons 추가
     });
 
     const [newClassroomName, setNewClassroomName] = useState('');
     const [newClassroomCapacity, setNewClassroomCapacity] = useState('');
     
-    // 부서(대분류) 활성화 상태
+    // 🚀 [신규] 시즌 생성 폼 상태
+    const [newSeason, setNewSeason] = useState({ name: '', startDate: '', endDate: '' });
+    
     const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -80,9 +81,9 @@ const SettingsManager = ({ currentUser }) => {
                     setSettings({
                         academyName: data.academyName || '', businessNumber: data.businessNumber || '',
                         phone: data.phone || '', address: data.address || '',
-                        // 🚀 하위 호환 자동 마이그레이션 적용
                         classrooms: (data.classrooms || []).map(c => typeof c === 'string' ? { name: c, capacity: 10 } : c), 
-                        subjects: data.subjects || []
+                        subjects: data.subjects || [],
+                        seasons: data.seasons || [] // 🚀 저장된 시즌 데이터 불러오기
                     });
                 }
                 
@@ -120,7 +121,7 @@ const SettingsManager = ({ currentUser }) => {
             batch.set(deptRef, { active: activeDepartments, updatedAt: serverTimestamp() }, { merge: true });
             
             await batch.commit();
-            alert("✅ 학원 환경설정이 성공적으로 저장되었습니다.\n\n등록하신 강의실(인원 포함) 및 부서 리스트는 이제 전체 시스템으로 자동 연동됩니다.");
+            alert("✅ 학원 환경설정이 성공적으로 저장되었습니다.\n\n등록하신 강의실, 시즌 일정 및 부서 리스트는 이제 전체 시스템으로 자동 연동됩니다.");
         } catch (error) { 
             alert("저장 중 오류가 발생했습니다: " + error.message); 
         } finally { 
@@ -157,15 +158,40 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    // 🚀 [CTO 패치] 인라인 수용 인원 수정 핸들러
     const handleUpdateCapacity = (index, value) => {
         setSettings(prev => {
             const arr = [...prev.classrooms];
             const current = arr[index];
             const rName = typeof current === 'string' ? current : current.name;
-            // 빈 문자열 허용 (수정 도중을 위해), 숫자로 파싱
             arr[index] = { name: rName, capacity: value === '' ? '' : (parseInt(value, 10) || 0) };
             return { ...prev, classrooms: arr };
+        });
+    };
+
+    // 🚀 [신규] 시즌 추가 핸들러
+    const addSeason = () => {
+        if (!newSeason.name.trim() || !newSeason.startDate || !newSeason.endDate) {
+            return alert("시즌명, 시작일, 종료일을 모두 입력해주세요.");
+        }
+        if (newSeason.startDate > newSeason.endDate) {
+            return alert("시작일은 종료일보다 이전이어야 합니다.");
+        }
+        
+        const seasonId = `season_${Date.now()}`;
+        setSettings(prev => ({
+            ...prev,
+            seasons: [...(prev.seasons || []), { id: seasonId, name: newSeason.name.trim(), startDate: newSeason.startDate, endDate: newSeason.endDate }]
+        }));
+        setNewSeason({ name: '', startDate: '', endDate: '' });
+    };
+
+    // 🚀 [신규] 시즌 삭제 핸들러
+    const removeSeason = (index) => {
+        if (!window.confirm("이 시즌을 삭제하시겠습니까?\n(이미 이 시즌으로 개설된 강의들은 '과거 데이터'로 분류될 수 있습니다.)")) return;
+        setSettings(prev => {
+            const arr = [...(prev.seasons || [])];
+            arr.splice(index, 1);
+            return { ...prev, seasons: arr };
         });
     };
 
@@ -354,6 +380,60 @@ const SettingsManager = ({ currentUser }) => {
             {/* 탭 1. 기본 인프라 관리 */}
             {activeTab === 'master' && (
                 <div className="space-y-6 animate-in fade-in">
+                    
+                    {/* 🚀 [CTO 신규 탑재] 학사 일정 및 시즌 마스터 관리 */}
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6">
+                        <div className="border-b pb-4">
+                            <h2 className="text-xl font-black text-indigo-900 flex items-center gap-2 mb-2">
+                                <CalendarDays className="text-indigo-600"/> 학사 일정 및 글로벌 시즌 관리
+                            </h2>
+                            <p className="text-sm text-gray-600 leading-relaxed">
+                                학원의 1년 커리큘럼(시즌)을 자유롭게 등록하세요. 설정된 기간에 맞춰 <strong>강사/데스크의 시간표 시스템이 해당 시즌으로 완벽하게 자동 전환(Auto-Routing)</strong>됩니다.
+                            </p>
+                        </div>
+                        
+                        <div className="flex flex-col md:flex-row gap-2 bg-indigo-50 p-3 rounded-xl border border-indigo-100 shadow-inner">
+                            <input 
+                                type="text" 
+                                className="flex-1 border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white focus:border-indigo-500" 
+                                value={newSeason.name} 
+                                onChange={e => setNewSeason({...newSeason, name: e.target.value})} 
+                                placeholder="시즌명 (예: ☀️ 2026 서머 특강)" 
+                            />
+                            <div className="flex items-center gap-2">
+                                <input 
+                                    type="date" 
+                                    className="border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white text-gray-700 focus:border-indigo-500" 
+                                    value={newSeason.startDate} 
+                                    onChange={e => setNewSeason({...newSeason, startDate: e.target.value})} 
+                                />
+                                <span className="text-indigo-400 font-black">~</span>
+                                <input 
+                                    type="date" 
+                                    className="border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white text-gray-700 focus:border-indigo-500" 
+                                    value={newSeason.endDate} 
+                                    onChange={e => setNewSeason({...newSeason, endDate: e.target.value})} 
+                                />
+                                <Button onClick={addSeason} className="bg-indigo-600 hover:bg-indigo-700 border-0 h-[42px] px-4 shadow-md"><Plus size={18}/></Button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar p-1">
+                            {(!settings.seasons || settings.seasons.length === 0) && <div className="text-sm text-gray-400 font-bold text-center py-6 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">등록된 시즌 데이터가 없습니다. 상단에서 시즌을 추가해 주세요.</div>}
+                            {(settings.seasons || []).sort((a,b) => a.startDate.localeCompare(b.startDate)).map((season, idx) => (
+                                <div key={season.id} className="bg-white border-2 border-gray-100 p-3 rounded-xl flex items-center justify-between gap-2 shadow-sm hover:border-indigo-200 transition-colors">
+                                    <div className="flex items-center gap-3">
+                                        <span className="font-black text-indigo-900 text-base">{season.name}</span>
+                                        <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded-md border border-gray-200 flex items-center gap-1">
+                                            <CalendarDays size={12}/> {season.startDate} ~ {season.endDate}
+                                        </span>
+                                    </div>
+                                    <button onClick={() => removeSeason(settings.seasons.findIndex(s => s.id === season.id))} className="text-gray-400 hover:bg-rose-100 hover:text-rose-500 p-2 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         
                         {/* 1-1. 학원 기본 정보 */}
@@ -414,7 +494,6 @@ const SettingsManager = ({ currentUser }) => {
                                     </div>
                                 </div>
                                 
-                                {/* 🚀 [CTO 패치] Grid 레이아웃 & Inline Edit Input 적용 */}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-64 overflow-y-auto custom-scrollbar p-1">
                                     {settings.classrooms.length === 0 && <div className="col-span-full text-sm text-gray-400 font-bold text-center py-4 border-2 border-dashed rounded-xl">등록된 강의실이 없습니다.</div>}
                                     {settings.classrooms.map((room, idx) => {
@@ -477,17 +556,12 @@ const SettingsManager = ({ currentUser }) => {
                                         );
                                     })}
                                 </div>
-                                
-                                <div className="bg-orange-50 p-4 rounded-xl border border-orange-200 mt-4">
-                                    <h4 className="text-sm font-bold text-orange-800 mb-2 flex items-center gap-1"><AlertTriangle size={16}/> 특수 과목(논술 등)이 필요하신가요?</h4>
-                                    <p className="text-xs text-orange-700">정규 교과목이 아닌 특수 과목은 기출 업로드 및 분석지 작성 시 <b>'예외 과목 수동 입력' 체크박스</b>를 통해 현장에서 직접 추가하실 수 있습니다.</p>
-                                </div>
                             </div>
                         </div>
                     </div>
 
                     <Button onClick={handleSaveMaster} disabled={saving} className="w-full bg-blue-600 hover:bg-blue-700 font-bold py-4 text-lg border-0 shadow-lg mt-6">
-                        {saving ? <Loader className="animate-spin mx-auto" size={24}/> : <><Save size={20} className="inline mr-2"/> 기본 정보 및 부서/강의실 통합 저장</>}
+                        {saving ? <Loader className="animate-spin mx-auto" size={24}/> : <><Save size={20} className="inline mr-2"/> 인프라, 일정 및 부서 통합 저장</>}
                     </Button>
                 </div>
             )}

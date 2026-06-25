@@ -1,7 +1,7 @@
 /* [서비스 가치] 글로벌 Context 데이터를 구독하여 Firebase 서버 요금을 극적으로 절감하고,
    학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다.
-   (🚀 CTO Phase 3: 'Proactive Season Planning'의 완성. [시즌 복제]를 통해 데이터 입력을 자동화하고,
-   [타임테이블 시뮬레이터] 샌드박스 뷰를 도입하여 시간/공간 충돌(Conflict)을 직관적으로 해결합니다.) */
+   (🚀 CTO 패치: 하드코딩된 시즌을 폐기하고, 환경설정(Settings) 마스터 데이터를 구독하여 
+   오늘 날짜(Today)를 분석, 현재 학원의 운영 시즌을 자동으로 선택해주는 'Auto-Routing 타임머신 엔진'을 이식했습니다.) */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -20,17 +20,6 @@ import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
-
-const ACADEMIC_SEASONS = [
-    { id: 'all', name: '전체 시즌 (All)' },
-    { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
-    { id: '2026_winter', name: '❄️ 2026 윈터시즌' },
-    { id: '2026_sem1_mid', name: '🌸 2026 1학기 중간고사' },
-    { id: '2026_sem1_final', name: '🌿 2026 1학기 기말고사' },
-    { id: '2026_summer', name: '☀️ 2026 서머시즌' },
-    { id: '2026_sem2_mid', name: '🍁 2026 2학기 중간고사' },
-    { id: '2026_sem2_final', name: '⛄ 2026 2학기 기말고사' }
-];
 
 const parseCSV = (str) => {
     const result = [];
@@ -80,7 +69,7 @@ const getMatchedMasterRoom = (rawRoom, masterRooms) => {
 // 🚀 시뮬레이터 절대좌표 엔진 설정 (오후 1시 ~ 밤 11시)
 const SIM_START_HOUR = 13; 
 const SIM_END_HOUR = 23;
-const HOUR_HEIGHT = 80; // 1시간당 80px 높이
+const HOUR_HEIGHT = 80;
 
 const getSimTop = (timeStr) => {
     if(!timeStr) return 0;
@@ -480,10 +469,48 @@ const LectureManagementPanel = ({ selectedClass }) => {
 export const AdminLectureManager = () => {
     const { users = [], classes = [], masterData = {}, loadingData } = useData();
     
-    // 🚀 [CTO 패치 3] 어드민 상단 탭 확장 (클래스 마스터 vs 결재함 vs 시뮬레이터)
-    const [adminTab, setAdminTab] = useState('master'); // 'master' | 'proposals' | 'simulator'
-    
-    const [selectedSeason, setSelectedSeason] = useState('2026_summer');
+    // 🚀 [CTO 패치] 동적 시즌 데이터 연동
+    const dynamicSeasons = useMemo(() => {
+        const customSeasons = (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        return [
+            { id: 'all', name: '전체 시즌 (All)' },
+            { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
+            ...customSeasons
+        ];
+    }, [masterData]);
+
+    const [adminTab, setAdminTab] = useState('master');
+    const [selectedSeason, setSelectedSeason] = useState('');
+    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+
+    // 🚀 [CTO 패치] 타임머신 자동 시즌 선택 엔진
+    useEffect(() => {
+        if (!isSeasonAutoSet && !loadingData) {
+            const seasons = masterData?.seasons || [];
+            if (seasons.length > 0) {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const current = seasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                if (current) {
+                    setSelectedSeason(current.id);
+                } else {
+                    const future = seasons.filter(s => s.startDate > todayStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
+                    if (future.length > 0) {
+                        setSelectedSeason(future[0].id);
+                    } else {
+                        const past = seasons.filter(s => s.endDate < todayStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
+                        if (past.length > 0) {
+                            setSelectedSeason(past[0].id);
+                        } else {
+                            setSelectedSeason('all');
+                        }
+                    }
+                }
+            } else {
+                setSelectedSeason('all');
+            }
+            setIsSeasonAutoSet(true);
+        }
+    }, [masterData, isSeasonAutoSet, loadingData]);
 
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -498,14 +525,10 @@ export const AdminLectureManager = () => {
     const [csvLecturerFile, setCsvLecturerFile] = useState(null);
     const [isSyncing, setIsSyncing] = useState(false);
 
-    // 🚀 [CTO 패치 3] 시즌 복제용 상태
     const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
-    const [cloneForm, setCloneForm] = useState({ sourceSeason: '', targetSeason: '2026_summer', prefix: '' });
-    
-    // 🚀 [CTO 패치 3] 시뮬레이터 요일 선택 상태
+    const [cloneForm, setCloneForm] = useState({ sourceSeason: '', targetSeason: '', prefix: '' });
     const [simulatorDay, setSimulatorDay] = useState('월');
 
-    // 전체 시즌 클래스
     const seasonFilteredClasses = useMemo(() => {
         return (classes || []).filter(c => {
             if (selectedSeason === 'all') return true;
@@ -514,10 +537,7 @@ export const AdminLectureManager = () => {
         });
     }, [classes, selectedSeason]);
 
-    // 마스터 탭용 (active만 표시)
     const masterClasses = useMemo(() => seasonFilteredClasses.filter(c => c.status !== 'proposed' && c.status !== 'rejected'), [seasonFilteredClasses]);
-    
-    // 결재함 탭용 (proposed만 표시)
     const proposedClasses = useMemo(() => seasonFilteredClasses.filter(c => c.status === 'proposed'), [seasonFilteredClasses]);
 
     const lecturers = useMemo(() => {
@@ -543,12 +563,13 @@ export const AdminLectureManager = () => {
 
     const handleOpenCreateClass = () => {
         const defaultLecturerId = selectedLecturerId === 'UNASSIGNED_ORPHANS' ? '' : selectedLecturerId;
+        const validDefaultSeason = selectedSeason !== 'all' && selectedSeason !== 'legacy' ? selectedSeason : (dynamicSeasons[2]?.id || '');
         setNewClass({ 
             name: '', 
             lecturerId: defaultLecturerId, 
             subject: '', 
             schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }],
-            season: (selectedSeason === 'all' || selectedSeason === 'legacy') ? '2026_summer' : selectedSeason,
+            season: validDefaultSeason,
             status: 'active'
         });
         setEditingClassId(null);
@@ -600,7 +621,11 @@ export const AdminLectureManager = () => {
         } catch(e) { alert("반려 오류: " + e.message); }
     };
 
-    // 🚀 [CTO 패치 3] 시즌 복제 엔진
+    const openCloneModal = () => {
+        setCloneForm({ sourceSeason: '', targetSeason: selectedSeason !== 'all' && selectedSeason !== 'legacy' ? selectedSeason : '', prefix: '' });
+        setIsCloneModalOpen(true);
+    };
+
     const handleCloneSeason = async () => {
         if(!cloneForm.sourceSeason) return alert('복사해올 이전 시즌을 선택하세요.');
         if(!cloneForm.targetSeason) return alert('저장될 타겟 시즌을 선택하세요.');
@@ -612,7 +637,7 @@ export const AdminLectureManager = () => {
         });
 
         if(sourceClasses.length === 0) return alert('선택하신 이전 시즌에 복제할 강의가 없습니다.');
-        if(!window.confirm(`총 ${sourceClasses.length}개의 강의를 [${ACADEMIC_SEASONS.find(s=>s.id===cloneForm.targetSeason)?.name}]으로 복제하시겠습니까?\n(기존 스케줄과 담당 강사 정보가 그대로 유지됩니다.)`)) return;
+        if(!window.confirm(`총 ${sourceClasses.length}개의 강의를 [${dynamicSeasons.find(s=>s.id===cloneForm.targetSeason)?.name}]으로 복제하시겠습니까?\n(기존 스케줄과 담당 강사 정보가 그대로 유지됩니다.)`)) return;
 
         setIsSaving(true);
         try {
@@ -828,7 +853,7 @@ export const AdminLectureManager = () => {
 
             if (writeCount > 0) {
                 await batch.commit();
-                alert(`[${ACADEMIC_SEASONS.find(s=>s.id===selectedSeason)?.name}] 시간표 완전 동기화가 완료되었습니다! (적용된 반: ${writeCount}개)`);
+                alert(`[${dynamicSeasons.find(s=>s.id===selectedSeason)?.name}] 시간표 완전 동기화가 완료되었습니다! (적용된 반: ${writeCount}개)`);
             } else {
                 alert("적용할 반 데이터가 없습니다. 파일을 다시 확인해주세요.");
             }
@@ -844,7 +869,7 @@ export const AdminLectureManager = () => {
         }
     };
 
-    if (loadingData) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    if (loadingData || !isSeasonAutoSet) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in h-[85vh] flex flex-col">
@@ -868,14 +893,14 @@ export const AdminLectureManager = () => {
                             }}
                             className="bg-transparent border-none outline-none font-black text-indigo-900 text-sm cursor-pointer pr-2 w-full"
                         >
-                            {ACADEMIC_SEASONS.map(season => (
+                            {dynamicSeasons.map(season => (
                                 <option key={season.id} value={season.id}>{season.name}</option>
                             ))}
                         </select>
                     </div>
 
                     <div className="flex gap-2 w-full md:w-auto">
-                        <Button variant="outline" onClick={() => setIsCloneModalOpen(true)} icon={Copy} className="w-full md:w-auto bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold">
+                        <Button variant="outline" onClick={openCloneModal} icon={Copy} className="w-full md:w-auto bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold">
                             시즌 복제
                         </Button>
                         <Button variant="outline" onClick={() => setIsCsvModalOpen(true)} icon={Upload} className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold">
@@ -899,7 +924,6 @@ export const AdminLectureManager = () => {
                     <Inbox size={18}/> 강의 기획 결재함 
                     {proposedClasses.length > 0 && <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full animate-bounce">{proposedClasses.length}</span>}
                 </button>
-                {/* 🚀 [CTO 패치 3] 시뮬레이터 탭 신설 */}
                 <button 
                     onClick={() => setAdminTab('simulator')} 
                     className={`flex-1 py-3.5 font-bold transition-colors flex justify-center items-center gap-2 ${adminTab === 'simulator' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}
@@ -915,7 +939,7 @@ export const AdminLectureManager = () => {
                         <div className="p-4 border-b border-gray-100 bg-gray-50 rounded-t-2xl flex justify-between items-center">
                             <h3 className="font-bold text-gray-800">강사 목록</h3>
                             <div className="text-xs bg-white border border-gray-200 px-2 py-0.5 rounded text-gray-500 font-bold flex items-center gap-1">
-                                <Filter size={12}/> {ACADEMIC_SEASONS.find(s=>s.id === selectedSeason)?.name}
+                                <Filter size={12}/> {dynamicSeasons.find(s=>s.id === selectedSeason)?.name}
                             </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
@@ -966,7 +990,7 @@ export const AdminLectureManager = () => {
                                         {selectedLecturerId === 'UNASSIGNED_ORPHANS' ? (
                                             <><span className="text-red-600">미배정/오류</span> 클래스 목록</>
                                         ) : (
-                                            <><span className="text-blue-600">{lecturers.find(l => l.id === selectedLecturerId)?.name}</span> 강사님의 {ACADEMIC_SEASONS.find(s=>s.id===selectedSeason)?.name.split(' ')[1] || ''} 운영 클래스</>
+                                            <><span className="text-blue-600">{lecturers.find(l => l.id === selectedLecturerId)?.name}</span> 강사님의 운영 클래스</>
                                         )}
                                     </h3>
                                     {selectedLecturerId !== 'UNASSIGNED_ORPHANS' && (
@@ -1036,7 +1060,7 @@ export const AdminLectureManager = () => {
                     {proposedClasses.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-4 mt-20">
                             <CheckSquare size={64} className="opacity-20 text-emerald-500" />
-                            <p className="font-bold text-lg text-gray-500">[{ACADEMIC_SEASONS.find(s=>s.id===selectedSeason)?.name}] 결재 대기 중인 기획안이 없습니다.</p>
+                            <p className="font-bold text-lg text-gray-500">결재 대기 중인 기획안이 없습니다.</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -1088,7 +1112,7 @@ export const AdminLectureManager = () => {
                 </div>
             )}
 
-            {/* 🚀 TAB 3: 타임테이블 시뮬레이터 (Sandbox) 뷰 */}
+            {/* 📍 Tab 3: 타임테이블 시뮬레이터 (Sandbox) 뷰 */}
             {adminTab === 'simulator' && (
                 <div className="flex-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col min-h-0 overflow-hidden animate-in slide-in-from-bottom-4">
                     <div className="p-4 border-b border-gray-100 bg-indigo-50/50 flex flex-col md:flex-row justify-between items-center gap-4 shrink-0">
@@ -1124,7 +1148,6 @@ export const AdminLectureManager = () => {
                             {[{name: '미정'}, ...(masterData?.classrooms || [])].map((room, rIdx) => {
                                 const rName = typeof room === 'string' ? room : room.name;
                                 
-                                // 해당 요일, 해당 강의실에 배정된 강의들 필터링
                                 const classesInRoom = seasonFilteredClasses.filter(c => 
                                     c.schedules?.some(s => s.dayOfWeek === simulatorDay && (s.room || '미정') === rName)
                                 );
@@ -1194,7 +1217,7 @@ export const AdminLectureManager = () => {
                                     onChange={e => setNewClass({...newClass, season: e.target.value})}
                                 >
                                     <option value="" disabled>시즌을 선택해주세요</option>
-                                    {ACADEMIC_SEASONS.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
+                                    {dynamicSeasons.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
                                         <option key={s.id} value={s.id}>{s.name}</option>
                                     ))}
                                     {newClass.season === 'legacy' && <option value="legacy">📦 시즌 미지정 (과거 데이터)</option>}
@@ -1278,7 +1301,6 @@ export const AdminLectureManager = () => {
                 </div>
             </Modal>
 
-            {/* 🚀 [CTO 패치 3] 시즌 복제 모달 */}
             <Modal isOpen={isCloneModalOpen} onClose={() => setIsCloneModalOpen(false)} title="🔄 시즌 강의 일괄 복제">
                 <div className="space-y-6 w-full">
                     <div className="bg-indigo-50 p-4 rounded-xl text-sm text-indigo-800">
@@ -1295,7 +1317,7 @@ export const AdminLectureManager = () => {
                                 onChange={e => setCloneForm({...cloneForm, sourceSeason: e.target.value})}
                             >
                                 <option value="" disabled>어느 시즌을 가져올까요?</option>
-                                {ACADEMIC_SEASONS.filter(s => s.id !== 'all').map(s => (
+                                {dynamicSeasons.filter(s => s.id !== 'all').map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                             </select>
@@ -1307,7 +1329,7 @@ export const AdminLectureManager = () => {
                                 value={cloneForm.targetSeason}
                                 onChange={e => setCloneForm({...cloneForm, targetSeason: e.target.value})}
                             >
-                                {ACADEMIC_SEASONS.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
+                                {dynamicSeasons.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                             </select>
@@ -1341,7 +1363,7 @@ export const AdminLectureManager = () => {
                         <div className="opacity-90 leading-relaxed space-y-1">
                             <p>• <b>통통통 &gt; 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 엑셀(CSV) 파일을 올려주세요.</p>
                             <p>• 기존 반의 <span className="font-bold text-red-500">시간표만 완벽하게 덮어쓰기</span> 됩니다. (과거 일지 보존)</p>
-                            <p>• 현재 상단에 지정된 <strong>[{ACADEMIC_SEASONS.find(s=>s.id===selectedSeason)?.name}]</strong> 시즌으로 모든 시간표가 덮어씌워집니다.</p>
+                            <p>• 현재 상단에 지정된 <strong>[{dynamicSeasons.find(s=>s.id===selectedSeason)?.name}]</strong> 시즌으로 모든 시간표가 덮어씌워집니다.</p>
                         </div>
                     </div>
 
@@ -1367,7 +1389,46 @@ export const AdminLectureManager = () => {
 export const LecturerDashboard = ({ currentUser }) => {
     const { classes: allClasses = [], users = [], masterData = {}, loadingData } = useData();
     
-    const [selectedSeason, setSelectedSeason] = useState('2026_summer');
+    const dynamicSeasons = useMemo(() => {
+        const customSeasons = (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        return [
+            { id: 'all', name: '전체 시즌 (All)' },
+            { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
+            ...customSeasons
+        ];
+    }, [masterData]);
+
+    const [selectedSeason, setSelectedSeason] = useState('');
+    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+
+    useEffect(() => {
+        if (!isSeasonAutoSet && !loadingData) {
+            const seasons = masterData?.seasons || [];
+            if (seasons.length > 0) {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const current = seasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                if (current) {
+                    setSelectedSeason(current.id);
+                } else {
+                    const future = seasons.filter(s => s.startDate > todayStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
+                    if (future.length > 0) {
+                        setSelectedSeason(future[0].id);
+                    } else {
+                        const past = seasons.filter(s => s.endDate < todayStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
+                        if (past.length > 0) {
+                            setSelectedSeason(past[0].id);
+                        } else {
+                            setSelectedSeason('all');
+                        }
+                    }
+                }
+            } else {
+                setSelectedSeason('all');
+            }
+            setIsSeasonAutoSet(true);
+        }
+    }, [masterData, isSeasonAutoSet, loadingData]);
+
     const [selectedClass, setSelectedClass] = useState(null);
 
     const [isProposalModalOpen, setIsProposalModalOpen] = useState(false);
@@ -1395,11 +1456,12 @@ export const LecturerDashboard = ({ currentUser }) => {
     }, [myClasses, selectedClass]);
 
     const handleOpenProposal = () => {
+        const validDefaultSeason = selectedSeason !== 'all' && selectedSeason !== 'legacy' ? selectedSeason : (dynamicSeasons[2]?.id || '');
         setNewProposal({ 
             name: '', 
             subject: currentUser.subject || '', 
             schedules: [{ dayOfWeek: '월', startTime: '18:00', endTime: '20:00', room: '' }],
-            season: (selectedSeason === 'all' || selectedSeason === 'legacy') ? '2026_summer' : selectedSeason
+            season: validDefaultSeason
         });
         setIsProposalModalOpen(true);
     };
@@ -1436,19 +1498,19 @@ export const LecturerDashboard = ({ currentUser }) => {
         } catch (e) { alert("제출 실패: " + e.message); } finally { setIsSavingProposal(false); }
     };
 
-    if (loadingData) return <div className="flex justify-center items-center h-full w-full min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    if (loadingData || !isSeasonAutoSet) return <div className="flex justify-center items-center h-full w-full min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="space-y-6 w-full animate-in fade-in">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 w-full sm:w-auto">
                     <span className="font-bold text-gray-700 flex items-center gap-1"><Filter size={18}/> 운영 시즌:</span>
                     <select
                         value={selectedSeason}
                         onChange={e => setSelectedSeason(e.target.value)}
-                        className="bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl outline-none font-black text-indigo-900 text-sm cursor-pointer"
+                        className="bg-indigo-50 border border-indigo-200 px-3 py-2 rounded-xl outline-none font-black text-indigo-900 text-sm cursor-pointer flex-1 sm:flex-none"
                     >
-                        {ACADEMIC_SEASONS.map(season => (
+                        {dynamicSeasons.map(season => (
                             <option key={season.id} value={season.id}>{season.name}</option>
                         ))}
                     </select>
@@ -1514,7 +1576,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                                     value={newProposal.season} 
                                     onChange={e => setNewProposal({...newProposal, season: e.target.value})}
                                 >
-                                    {ACADEMIC_SEASONS.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
+                                    {dynamicSeasons.filter(s => s.id !== 'all' && s.id !== 'legacy').map(s => (
                                         <option key={s.id} value={s.id}>{s.name}</option>
                                     ))}
                                 </select>
