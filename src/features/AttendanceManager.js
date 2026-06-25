@@ -1,7 +1,7 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
-   🚀 CTO 패치: 
-   1. 아키텍처 분리: 신규 '원생별 출결관리(CareReportManager)'로 이관된 조회 탭을 제거했습니다.
-   2. PIN 관리 센터 신설: 데스크 업무의 병목을 없애기 위해 '출결 PIN 관리' 전용 탭을 만들어 중복 핀을 실시간으로 감지하고 광속으로 수정(Quick Edit)할 수 있게 고도화했습니다. */
+   🚀 CTO 패치 요약:
+   1. 런타임 무결성(Runtime Integrity) 확보: Badge 임포트 누락 수정 및 초기 렌더링 시 발생할 수 있는 null 참조(useData, currentUser)를 완벽하게 방어했습니다.
+   2. PIN 관리 센터 신설: 중복 출결 번호를 실시간으로 감지하고 광속 수정하는 전용 탭이 런타임 오류 없이 구동됩니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -13,7 +13,8 @@ import {
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-import { Button, Modal } from '../components/UI';
+// 🚀 [수정] Badge 컴포넌트 임포트 추가 완수
+import { Button, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
@@ -47,9 +48,9 @@ const TEACHER_COLORS = [
 ];
 
 export default function AttendanceManager({ currentUser }) {
-    const { classes, enrollments, users, masterData, loadingData } = useData();
+    // 🚀 [런타임 에러 차단] 데이터가 로딩되기 전 null 상태일 때 화면이 죽지 않도록 방어 로직 추가
+    const { classes = [], enrollments = [], users = [], masterData = {}, loadingData = true } = useData() || {};
 
-    // 🚀 탭 구성: daily(일별 관제), matrix(교실 매트릭스), pin_mgmt(출결 PIN 관리)
     const [activeTab, setActiveTab] = useState('daily'); 
     
     const [selectedDateObj, setSelectedDateObj] = useState(new Date());
@@ -69,7 +70,7 @@ export default function AttendanceManager({ currentUser }) {
     const [quickAddForm, setQuickAddForm] = useState({ room: '', startTime: '', endTime: '', topic: '', lecturerId: '', headcount: 1 });
     const [confirmConfig, setConfirmConfig] = useState(null);
 
-    // 🚀 [출결 PIN 관리용 상태]
+    // 출결 PIN 관리용 상태
     const [pinSearchQuery, setPinSearchQuery] = useState('');
     const [isPinModalOpen, setIsPinModalOpen] = useState(false);
     const [selectedStudentForPin, setSelectedStudentForPin] = useState(null);
@@ -133,7 +134,8 @@ export default function AttendanceManager({ currentUser }) {
 
         enrollments.forEach(enroll => {
             if (enroll.status !== 'active') return;
-            if (currentUser.role === 'lecturer' && enroll.lecturerId !== currentUser.id) return;
+            // 🚀 [런타임 에러 방어] currentUser가 null일 경우 에러 방지
+            if (currentUser?.role === 'lecturer' && enroll.lecturerId !== currentUser?.id) return;
 
             const todaySch = enroll.schedules?.find(s => s.dayOfWeek === selectedDayStr);
             if (!todaySch) return;
@@ -393,7 +395,7 @@ export default function AttendanceManager({ currentUser }) {
         if (startIndex + 4 <= TIME_SLOTS.length - 1) { 
             endTime = TIME_SLOTS[startIndex + 4];
         }
-        setQuickAddForm({ room, startTime: time, endTime, topic: '직전 보충', lecturerId: currentUser.id, headcount: 1 });
+        setQuickAddForm({ room, startTime: time, endTime, topic: '직전 보충', lecturerId: currentUser?.id, headcount: 1 });
         setIsQuickAddModalOpen(true);
     };
 
@@ -470,7 +472,7 @@ export default function AttendanceManager({ currentUser }) {
         }
     };
 
-    // 🚀 [CTO 패치] 출결 PIN 관리 탭 전용 로직
+    // 출결 PIN 관리 로직
     const pinConflictMap = useMemo(() => {
         const map = {};
         users.forEach(u => {
@@ -486,12 +488,10 @@ export default function AttendanceManager({ currentUser }) {
             .filter(u => u.role === 'student' && u.status !== 'pending')
             .filter(u => (u.name || '').includes(pinSearchQuery) || (u.phone || '').includes(pinSearchQuery) || (u.attendancePin || '').includes(pinSearchQuery))
             .sort((a, b) => {
-                // 1순위: 중복 번호가 있는 학생을 무조건 최상단으로 끌어올림
                 const aConflict = a.attendancePin && pinConflictMap[a.attendancePin] > 1 ? 1 : 0;
                 const bConflict = b.attendancePin && pinConflictMap[b.attendancePin] > 1 ? 1 : 0;
                 if (aConflict !== bConflict) return bConflict - aConflict;
                 
-                // 2순위: 이름 가나다순
                 return (a.name || '').localeCompare(b.name || '');
             });
     }, [users, pinSearchQuery, pinConflictMap]);
@@ -519,7 +519,6 @@ export default function AttendanceManager({ currentUser }) {
                 attendancePin: newPinValue
             });
             setIsPinModalOpen(false);
-            // alert 창 없이 스무스하게 닫힙니다 (UX)
         } catch(e) {
             alert("변경 실패: " + e.message);
         }
@@ -562,7 +561,6 @@ export default function AttendanceManager({ currentUser }) {
                     <button onClick={() => setActiveTab('matrix')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'matrix' ? 'bg-white text-emerald-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <LayoutGrid size={16}/> 교실 매트릭스
                     </button>
-                    {/* 🚀 신규 추가된 PIN 전용 관리 탭 */}
                     <button onClick={() => setActiveTab('pin_mgmt')} className={`px-5 py-2.5 rounded-xl font-bold transition-all text-sm flex items-center gap-1 ${activeTab === 'pin_mgmt' ? 'bg-white text-rose-700 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-slate-200'}`}>
                         <Key size={16}/> 출결 PIN 관리
                     </button>
@@ -578,7 +576,7 @@ export default function AttendanceManager({ currentUser }) {
                                 <Activity size={28} className="animate-pulse" />
                                 <h2 className="text-xl md:text-2xl font-black">{selectedDayStr}요일 실시간 출결 현황</h2>
                             </div>
-                            <p className="opacity-90 text-sm">{currentUser.role === 'lecturer' ? '담당하시는 반의' : '학원의 모든'} 스케줄이 실시간으로 관제됩니다.</p>
+                            <p className="opacity-90 text-sm">{currentUser?.role === 'lecturer' ? '담당하시는 반의' : '학원의 모든'} 스케줄이 실시간으로 관제됩니다.</p>
                         </div>
                         <div className="bg-black/20 p-4 rounded-2xl flex items-center gap-5">
                             <div className="text-center">
