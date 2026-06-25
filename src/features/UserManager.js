@@ -2,7 +2,7 @@
    모바일/데스크톱 통합 UI를 통해 운영 효율성을 200% 향상시킵니다.
    (🚀 최적화 패치: 완벽한 '연쇄 삭제(Cascading Delete)' 알고리즘을 도입하여, 학생 삭제 시 관련된 
    수강이력, 성적, Voca 스탯, 학부모 연동 데이터를 일괄 소각하여 DB 쓰레기(고아 데이터)를 원천 차단합니다.) 
-   (🚀 CTO 패치 2.0: 출결 키오스크 도입에 따른 실시간 PIN 번호 중복 감지 레이더 및 안전 편집 기능 탑재) */
+   (🚀 CTO 패치 3.0: 수강 배정 시 '시즌 꼬리표(Badge)'를 부착하여 데스크가 동명의 반을 완벽하게 구분할 수 있도록 UI를 혁신했습니다.) */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -93,8 +93,16 @@ const UserManager = ({ currentUser }) => {
     const isAssistant = currentUser.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
     
+    // 🚀 [CTO 패치] masterData 추출 (시즌 데이터 확보)
     const { users, classes, enrollments, masterData, loadingData } = useData();
     
+    // 시즌 ID를 이름으로 변환하는 유틸리티
+    const getSeasonName = (seasonId) => {
+        if (!seasonId) return '📦 과거/미지정';
+        const s = (masterData?.seasons || []).find(x => x.id === seasonId);
+        return s ? s.name : seasonId;
+    };
+
     const [searchQuery, setSearchQuery] = useState('');
     const [childSearchQuery, setChildSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState('student'); 
@@ -117,12 +125,9 @@ const UserManager = ({ currentUser }) => {
     const [enrollForm, setEnrollForm] = useState(initEnrollForm);
     const [classSearchInput, setClassSearchInput] = useState('');
     const [classSearchQuery, setClassSearchQuery] = useState('');
-    const [smsPreviewModal, setSmsPreviewModal] = useState({ isOpen: false, welcomeMsg: '', textbookMsg: '', targetPhone: '', studentName: '' });
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false);
-
-    const availableSubjects = masterData?.subjects?.length > 0 ? masterData.subjects : ['국어', '수학', '영어', '과학'];
 
     useEffect(() => {
         const fetchSchools = async () => {
@@ -151,7 +156,6 @@ const UserManager = ({ currentUser }) => {
 
     const showToast = (message, type = 'error') => setToast({ message, type });
 
-    // 🚀 [CTO 패치 2.0] 전체 학생 대상 출결 번호(PIN) 중복 빈도수 체크 엔진
     const pinConflictMap = useMemo(() => {
         const map = {};
         users.forEach(u => {
@@ -162,12 +166,11 @@ const UserManager = ({ currentUser }) => {
         return map;
     }, [users]);
 
-    // 🚀 [CTO 패치 2.0] 정보 수정 폼에서 입력 중인 PIN을 다른 학생이 사용 중인지 실시간 검증
     const currentPinOwner = useMemo(() => {
         if (!formData.attendancePin || formData.attendancePin.length !== 4 || !formData.id) return null;
         return users.find(u => 
             u.role === 'student' && 
-            u.id !== formData.id && // 본인 제외
+            u.id !== formData.id &&
             u.attendancePin === formData.attendancePin &&
             u.status !== 'pending'
         );
@@ -307,7 +310,6 @@ const UserManager = ({ currentUser }) => {
         const currentRole = activeTab === 'pending' ? formData.role : activeTab;
         const targetDocId = isEditMode ? formData.id : encodeURIComponent(formData.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
-        // 🚀 [CTO 패치 2.0] 수동 입력된 PIN이 중복인지 최종 검증
         if (currentRole === 'student' && formData.attendancePin) {
             if (formData.attendancePin.length !== 4) return showToast('출결 PIN은 반드시 4자리 숫자여야 합니다.', 'error');
             const duplicate = users.find(u => u.role === 'student' && u.id !== targetDocId && u.attendancePin === formData.attendancePin && u.status !== 'pending');
@@ -360,9 +362,6 @@ const UserManager = ({ currentUser }) => {
         } catch (e) { showToast(e.message || '저장에 실패했습니다.', 'error'); } finally { setLoading(false); }
     };
 
-    // =========================================================================================
-    // 🚀 [CTO 패치] 완벽한 연쇄 삭제(Cascading Delete) 엔진 탑재
-    // =========================================================================================
     const handleDeleteUser = async () => {
         if (!targetUserId) return;
         setLoading(true);
@@ -403,7 +402,6 @@ const UserManager = ({ currentUser }) => {
             setTargetUserId(null);
         }
     };
-    // =========================================================================================
 
     const currentStudentEnrollments = enrollments.filter(e => e.studentId === formData.id);
     
@@ -515,7 +513,6 @@ const UserManager = ({ currentUser }) => {
                             {filteredUsers.length === 0 ? <tr><td colSpan="5" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr> :
                             filteredUsers.map(u => {
                                 const myEnrollments = enrollments.filter(e => e.studentId === u.id && e.status === 'active');
-                                // 🚀 [CTO 패치] 출결 번호가 다른 활성 학생과 겹치는지 검사
                                 const isPinConflicted = u.role === 'student' && u.status !== 'pending' && u.attendancePin && (pinConflictMap[u.attendancePin] > 1);
                                 
                                 return (
@@ -557,10 +554,19 @@ const UserManager = ({ currentUser }) => {
                                                                 PIN: {u.attendancePin || '없음'}
                                                             </span>
                                                         </div>
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {myEnrollments.length > 0 ? myEnrollments.map(e => (
-                                                                <span key={e.id} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-100 px-1.5 py-0.5 rounded-full">{e.className}</span>
-                                                            )) : <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">배정된 반 없음</span>}
+                                                        <div className="flex flex-col gap-1">
+                                                            {myEnrollments.length > 0 ? myEnrollments.map(e => {
+                                                                // 🚀 [CTO 패치] 소속 반 이름 옆에 시즌 태그 부착
+                                                                const cls = classes.find(c => c.id === e.classId);
+                                                                return (
+                                                                    <div key={e.id} className="flex items-center text-[10px] bg-blue-50 text-blue-800 border border-blue-100 px-2 py-1 rounded-md w-fit font-bold">
+                                                                        <span className="bg-white text-blue-600 border border-blue-200 px-1 py-0.5 rounded mr-1.5">
+                                                                            {getSeasonName(cls?.season)}
+                                                                        </span>
+                                                                        {e.className}
+                                                                    </div>
+                                                                );
+                                                            }) : <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full w-fit">배정된 반 없음</span>}
                                                         </div>
                                                     </div>
                                                 )}
@@ -691,7 +697,6 @@ const UserManager = ({ currentUser }) => {
                                                 <option value="pending">승인 대기</option>
                                             </select>
                                         </div>
-                                        {/* 🚀 [CTO 패치 2.0] 실시간 2차 중복 충돌 검증 알림 장치 */}
                                         {currentPinOwner && (
                                             <div className="col-span-2 bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-700 font-bold flex items-center gap-2 animate-in slide-in-from-top-2 mt-1">
                                                 <AlertTriangle size={14} className="animate-pulse text-rose-600"/>
@@ -714,7 +719,7 @@ const UserManager = ({ currentUser }) => {
                                                     onChange={e => setFormData({...formData, subject: e.target.value})}
                                                 >
                                                     <option value="" disabled>과목을 선택하세요</option>
-                                                    {availableSubjects.map(sub => (
+                                                    {masterData?.subjects?.map(sub => (
                                                         <option key={sub} value={sub}>{sub}</option>
                                                     ))}
                                                 </select>
@@ -794,13 +799,17 @@ const UserManager = ({ currentUser }) => {
                                     <div className="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-300 text-sm font-bold text-gray-400">배정된 강의가 없습니다. 아래에서 반을 검색 후 배정해주세요.</div>
                                 ) : (
                                     <div className="space-y-3">
-                                        {currentStudentEnrollments.map(e => (
+                                        {currentStudentEnrollments.map(e => {
+                                            // 🚀 [CTO 패치] 수강 중인 반 목록에 시즌 꼬리표 부착
+                                            const cls = classes.find(c => c.id === e.classId);
+                                            return (
                                             <div key={e.id} className={`border p-4 rounded-xl flex flex-col gap-3 relative overflow-hidden shadow-sm ${e.status === 'active' ? 'bg-white border-blue-100' : 'bg-gray-50 border-gray-200'}`}>
                                                 {e.status === 'active' && <div className="absolute left-0 top-0 w-1 h-full bg-emerald-500"/>}
                                                 <div className="flex justify-between items-start pl-2">
                                                     <div>
                                                         <div className="flex items-center gap-2 mb-1">
                                                             <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${e.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{e.status === 'active' ? '수강중' : '퇴원/취소'}</span>
+                                                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border font-black">{getSeasonName(cls?.season)}</span>
                                                             <span className="text-xs font-bold text-gray-500">강사: {users.find(u=>u.id===e.lecturerId)?.name || '미지정'}</span>
                                                         </div>
                                                         <h4 className="font-black text-gray-900">{e.className}</h4>
@@ -819,7 +828,7 @@ const UserManager = ({ currentUser }) => {
                                                     ))}
                                                 </div>
                                             </div>
-                                        ))}
+                                        )})}
                                     </div>
                                 )}
                             </div>
@@ -848,6 +857,7 @@ const UserManager = ({ currentUser }) => {
                                                 </div>
                                                 
                                                 <div className="max-h-48 overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                                                    {/* 🚀 [CTO 패치] 검색 결과에 시즌 꼬리표 부착 */}
                                                     {classes
                                                         .filter(c => c.name.includes(classSearchQuery) || (users.find(u=>u.id===c.lecturerId)?.name || '').includes(classSearchQuery))
                                                         .map(c => (
@@ -857,11 +867,14 @@ const UserManager = ({ currentUser }) => {
                                                                 onClick={() => handleClassSelect(c.id)}
                                                                 className={`w-full text-left p-2.5 rounded-lg text-sm transition-all flex items-center justify-between border ${enrollForm.classId === c.id ? 'bg-blue-50 border-blue-300 font-bold text-blue-900 shadow-sm' : 'bg-white border-transparent hover:bg-gray-50 text-gray-700'}`}
                                                             >
-                                                                <div>
-                                                                    <span className="text-xs text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mr-2 font-bold inline-block w-14 text-center">{users.find(u=>u.id===c.lecturerId)?.name || '미지정'}</span>
+                                                                <div className="flex items-center">
+                                                                    <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded border mr-2 font-black">
+                                                                        {getSeasonName(c.season)}
+                                                                    </span>
+                                                                    <span className="text-[11px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded mr-2 font-bold inline-block min-w-[3rem] text-center">{users.find(u=>u.id===c.lecturerId)?.name || '미지정'}</span>
                                                                     {c.name}
                                                                 </div>
-                                                                {enrollForm.classId === c.id && <CheckCircle size={16} className="text-blue-600"/>}
+                                                                {enrollForm.classId === c.id && <CheckCircle size={16} className="text-blue-600 shrink-0"/>}
                                                             </button>
                                                         ))
                                                     }
@@ -872,6 +885,7 @@ const UserManager = ({ currentUser }) => {
                                             </div>
                                         ) : (
                                             <div className="w-full border-2 border-gray-200 bg-gray-100 p-3.5 rounded-xl font-bold text-gray-500 shadow-sm flex items-center gap-2">
+                                                <span className="text-[10px] bg-white border border-gray-300 px-1.5 py-0.5 rounded text-gray-600">{getSeasonName(classes.find(c=>c.id===enrollForm.classId)?.season)}</span>
                                                 <span className="text-xs text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded font-bold">{users.find(u=>u.id===enrollForm.lecturerId)?.name || '미지정'}</span>
                                                 {enrollForm.className}
                                                 <span className="ml-auto text-xs font-normal text-rose-500 hidden md:inline">* 배정된 반은 변경불가 (필요시 삭제 후 재배정)</span>
@@ -918,7 +932,6 @@ const UserManager = ({ currentUser }) => {
                 <div className="text-center space-y-6 p-4">
                     <div className="bg-red-50 p-4 rounded-full w-20 h-20 flex items-center justify-center mx-auto text-red-500"><Trash2 size={40} /></div>
                     <p className="text-lg font-medium">정말로 삭제하시겠습니까?<br/>
-                    {/* 🚀 [CTO 패치] 삭제 경고 텍스트 강화 */}
                     <span className="text-red-500 font-bold text-sm mt-2 block">해당 학생의 수강 이력, 성적, 단어장 스탯 등<br/>모든 데이터가 DB에서 영구 삭제됩니다.</span></p>
                     <div className="flex gap-3">
                         <Button variant="secondary" className="flex-1 py-3" onClick={() => setIsDeleteConfirmOpen(false)}>취소</Button>

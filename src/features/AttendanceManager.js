@@ -1,7 +1,7 @@
 /* [서비스 가치(Service Value)] 통합 출결 및 공간 관제 엔진
-   🚀 CTO 패치 요약:
-   1. 런타임 무결성(Runtime Integrity) 확보: Badge 임포트 누락 수정 및 초기 렌더링 시 발생할 수 있는 null 참조(useData, currentUser)를 완벽하게 방어했습니다.
-   2. PIN 관리 센터 신설: 중복 출결 번호를 실시간으로 감지하고 광속 수정하는 전용 탭이 런타임 오류 없이 구동됩니다. */
+   🚀 CTO 패치: 
+   1. 글로벌 시즌 필터 완벽 연동: 매트릭스와 출결 레이더에 '선택된 시즌'의 클래스만 렌더링되도록 격리(Isolation) 처리하여 중복 표출 오류를 원천 차단했습니다.
+   2. PIN 관리 센터 신설: 데스크 업무의 병목을 없애기 위해 '출결 PIN 관리' 전용 탭을 만들어 중복 핀을 실시간으로 감지하고 광속으로 수정할 수 있습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -13,7 +13,6 @@ import {
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
-// 🚀 [수정] Badge 컴포넌트 임포트 추가 완수
 import { Button, Modal, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -48,7 +47,6 @@ const TEACHER_COLORS = [
 ];
 
 export default function AttendanceManager({ currentUser }) {
-    // 🚀 [런타임 에러 차단] 데이터가 로딩되기 전 null 상태일 때 화면이 죽지 않도록 방어 로직 추가
     const { classes = [], enrollments = [], users = [], masterData = {}, loadingData = true } = useData() || {};
 
     const [activeTab, setActiveTab] = useState('daily'); 
@@ -75,6 +73,45 @@ export default function AttendanceManager({ currentUser }) {
     const [isPinModalOpen, setIsPinModalOpen] = useState(false);
     const [selectedStudentForPin, setSelectedStudentForPin] = useState(null);
     const [newPinValue, setNewPinValue] = useState('');
+
+    // 🚀 [CTO 패치] 동적 시즌 데이터 연동
+    const dynamicSeasons = useMemo(() => {
+        return (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    }, [masterData]);
+
+    const [selectedSeasonId, setSelectedSeasonId] = useState('');
+    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+
+    // 🚀 타임머신 자동 시즌 선택 엔진
+    useEffect(() => {
+        if (!isSeasonAutoSet && !loadingData) {
+            if (dynamicSeasons.length > 0) {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const current = dynamicSeasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                if (current) {
+                    setSelectedSeasonId(current.id);
+                } else {
+                    const future = dynamicSeasons.filter(s => s.startDate > todayStr);
+                    if (future.length > 0) {
+                        setSelectedSeasonId(future[0].id);
+                    } else {
+                        const past = [...dynamicSeasons].reverse();
+                        setSelectedSeasonId(past[0].id);
+                    }
+                }
+            } else {
+                setSelectedSeasonId('legacy');
+            }
+            setIsSeasonAutoSet(true);
+        }
+    }, [dynamicSeasons, isSeasonAutoSet, loadingData]);
+
+    // 🚀 [중복 렌더링 완벽 차단] 선택된 시즌의 클래스만 추출합니다!
+    const seasonFilteredClasses = useMemo(() => {
+        if (selectedSeasonId === 'legacy') return classes.filter(c => !c.season);
+        if (selectedSeasonId) return classes.filter(c => c.season === selectedSeasonId);
+        return classes;
+    }, [classes, selectedSeasonId]);
 
     const teacherColorMap = useMemo(() => {
         const map = {};
@@ -132,9 +169,13 @@ export default function AttendanceManager({ currentUser }) {
         const isPastDate = selectedDateStr < getLocalDateStr(now);
         const currentHHMM = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
+        // 🚀 시즌에 해당하는 클래스의 ID만 추출하여 Enrollment 필터링
+        const seasonClassIds = new Set(seasonFilteredClasses.map(c => c.id));
+
         enrollments.forEach(enroll => {
             if (enroll.status !== 'active') return;
-            // 🚀 [런타임 에러 방어] currentUser가 null일 경우 에러 방지
+            if (!seasonClassIds.has(enroll.classId)) return; // 🚀 선택된 시즌에 속하지 않은 반의 수강생은 무시
+            
             if (currentUser?.role === 'lecturer' && enroll.lecturerId !== currentUser?.id) return;
 
             const todaySch = enroll.schedules?.find(s => s.dayOfWeek === selectedDayStr);
@@ -215,7 +256,7 @@ export default function AttendanceManager({ currentUser }) {
         emergencyList.sort((a, b) => String(a.callTime || '').localeCompare(String(b.callTime || '')));
 
         return { groups: sortedGroups, emergencyList, examLeaveList, totalExpected: totalExpected + totalAttended + totalLate, totalAttended, totalLate };
-    }, [enrollments, users, dailyAttendances, academicCalendars, selectedDayStr, selectedDateStr, searchQuery, currentUser, aiInsights]);
+    }, [enrollments, seasonFilteredClasses, users, dailyAttendances, academicCalendars, selectedDayStr, selectedDateStr, searchQuery, currentUser, aiInsights]);
 
     const matrixGrid = useMemo(() => {
         const grid = {};
@@ -227,7 +268,8 @@ export default function AttendanceManager({ currentUser }) {
             TIME_SLOTS.forEach(time => { grid[rName][time] = null; });
         });
 
-        classes.forEach(cls => {
+        // 🚀 전체 classes가 아닌 필터링된 seasonFilteredClasses만 매트릭스에 뿌립니다.
+        seasonFilteredClasses.forEach(cls => {
             const todaySch = cls.schedules?.find(s => s.dayOfWeek === selectedDayStr);
             if (!todaySch || !todaySch.room || !grid[todaySch.room]) return;
 
@@ -358,7 +400,7 @@ export default function AttendanceManager({ currentUser }) {
         });
 
         return grid;
-    }, [masterData, classes, enrollments, academicCalendars, todaySessions, users, selectedDayStr, selectedDateStr]);
+    }, [masterData, seasonFilteredClasses, enrollments, academicCalendars, todaySessions, users, selectedDayStr, selectedDateStr]);
 
     const handleManualCheckIn = async (studentId, studentName, callTime) => {
         const currentHHMM = `${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}`;
@@ -524,7 +566,7 @@ export default function AttendanceManager({ currentUser }) {
         }
     };
 
-    if (loadingData || localLoading) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
+    if (loadingData || localLoading || !isSeasonAutoSet) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
     return (
         <div className="max-w-screen-2xl mx-auto space-y-6 pb-20 animate-in fade-in h-screen flex flex-col">
@@ -576,7 +618,10 @@ export default function AttendanceManager({ currentUser }) {
                                 <Activity size={28} className="animate-pulse" />
                                 <h2 className="text-xl md:text-2xl font-black">{selectedDayStr}요일 실시간 출결 현황</h2>
                             </div>
-                            <p className="opacity-90 text-sm">{currentUser?.role === 'lecturer' ? '담당하시는 반의' : '학원의 모든'} 스케줄이 실시간으로 관제됩니다.</p>
+                            <div className="opacity-90 text-sm mt-1 flex items-center gap-2">
+                                <span className="bg-indigo-800 px-2 py-1 rounded-md text-xs font-bold shadow-sm">{dynamicSeasons.find(s=>s.id===selectedSeasonId)?.name || '과거/미지정'}</span>
+                                {currentUser?.role === 'lecturer' ? '담당하시는 반의 스케줄이 관제됩니다.' : '해당 시즌의 스케줄이 실시간으로 관제됩니다.'}
+                            </div>
                         </div>
                         <div className="bg-black/20 p-4 rounded-2xl flex items-center gap-5">
                             <div className="text-center">
@@ -608,7 +653,7 @@ export default function AttendanceManager({ currentUser }) {
                                 {radarData.groups.length === 0 ? (
                                     <div className="h-full flex flex-col items-center justify-center text-slate-400">
                                         <Activity size={48} className="opacity-20 mb-4"/>
-                                        <p className="font-bold">선택하신 날짜에 예정된 스케줄이 없습니다.</p>
+                                        <p className="font-bold">선택하신 날짜 및 시즌에 예정된 스케줄이 없습니다.</p>
                                     </div>
                                 ) : (
                                     radarData.groups.map((group, idx) => {
@@ -745,9 +790,12 @@ export default function AttendanceManager({ currentUser }) {
                         <div>
                             <div className="flex items-center gap-3 mb-1">
                                 <LayoutGrid size={24} />
-                                <h2 className="text-xl font-black">{selectedDateStr} 교실 자원 관제탑</h2>
+                                <h2 className="text-xl font-black">{selectedDateStr} 교실 매트릭스</h2>
                             </div>
-                            <p className="opacity-90 text-sm">강사별 고유 색상 식별. 빈 칸을 클릭하여 직보/보충을 즉시 배정하세요.</p>
+                            <div className="opacity-90 text-sm mt-1 flex items-center gap-2">
+                                <span className="bg-emerald-800 px-2 py-1 rounded-md text-xs font-bold shadow-sm">{dynamicSeasons.find(s=>s.id===selectedSeasonId)?.name || '과거/미지정'}</span>
+                                해당 시즌의 교실 점유 현황입니다.
+                            </div>
                         </div>
                         <div className="flex gap-2 bg-black/20 p-2 rounded-xl text-xs font-bold">
                             <span className="flex items-center gap-1"><span className="w-3 h-3 bg-white/90 rounded-sm"></span> 정규반</span>
@@ -915,7 +963,7 @@ export default function AttendanceManager({ currentUser }) {
                 </div>
             )}
 
-            {/* 🚀 TAB 3: 출결 PIN 관리 (신규) */}
+            {/* 🚀 TAB 3: 출결 PIN 관리 */}
             {activeTab === 'pin_mgmt' && (
                 <div className="flex flex-col h-full gap-6 animate-in fade-in">
                     <div className="bg-gradient-to-r from-rose-700 to-pink-800 text-white p-6 rounded-3xl shadow-lg shrink-0 flex flex-col md:flex-row justify-between items-center gap-4">
