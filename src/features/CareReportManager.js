@@ -1,11 +1,12 @@
 /* [서비스 가치(Service Value)] 프리미엄 밀착 케어 리포트 엔진
    🚀 CTO 패치: 
-   1. 무한 로딩(WSOD) 해결: currentUser 출입증을 Context가 아닌 Prop으로 직접 전달받아, 권한 판별이 지연되거나 실패하는 현상을 완벽하게 해결했습니다. */
+   1. 글로벌 시즌 동기화: 하드코딩된 연도/시즌 셀렉터를 폐기하고, 환경설정(Settings)의 마스터 시즌 데이터를 구독하여 타임라인을 제어합니다.
+   2. 오토-라우팅: 접속 시 오늘 날짜를 분석하여 현재 운영 중인 시즌의 리포트를 자동으로 렌더링합니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     PieChart, Clock, CalendarDays, CheckCircle, AlertTriangle, XCircle, 
-    BookOpen, Flame, User, Search, Loader, ShieldCheck
+    BookOpen, Flame, User, Search, Loader, ShieldCheck, Filter
 } from 'lucide-react';
 import { collection, query, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -13,15 +14,6 @@ import { useData } from '../contexts/DataContext';
 import { Card, Badge } from '../components/UI';
 
 const APP_ID = 'imperial-clinic-v1';
-
-const SEASONS = [
-    { id: 'winter', name: '윈터시즌 (1~2월)', start: '01-01', end: '02-28' },
-    { id: 'sem1_mid', name: '1학기 중간고사 (3~4월)', start: '03-01', end: '04-30' },
-    { id: 'sem1_fin', name: '1학기 기말고사 (5~6월)', start: '05-01', end: '06-30' },
-    { id: 'summer', name: '서머시즌 (7~8월)', start: '07-01', end: '08-31' },
-    { id: 'sem2_mid', name: '2학기 중간고사 (9~10월)', start: '09-01', end: '10-31' },
-    { id: 'sem2_fin', name: '2학기 기말고사 (11~12월)', start: '11-01', end: '12-31' }
-];
 
 const CustomDonutChart = ({ data }) => {
     let cumulativePercent = 0;
@@ -57,18 +49,22 @@ const CustomDonutChart = ({ data }) => {
     );
 };
 
-// 🚀 [핵심 픽스] currentUser를 외부(App.js)에서 명확하게 건네받습니다.
 export default function CareReportManager({ currentUser }) {
-    const { users, enrollments, classes, loadingData } = useData() || {};
+    const { users, enrollments, classes, masterData, loadingData } = useData() || {};
     
     const isStudent = currentUser?.role === 'student';
     const isParent = currentUser?.role === 'parent';
     const isLecturer = currentUser?.role === 'lecturer';
     const isGlobalAdmin = ['admin', 'admin_assistant', 'ta'].includes(currentUser?.role);
 
-    const currentYear = new Date().getFullYear();
-    const [selectedYear, setSelectedYear] = useState(currentYear);
-    const [selectedSeason, setSelectedSeason] = useState(SEASONS[1]);
+    // 🚀 [CTO 패치] 동적 시즌 데이터 연동
+    const dynamicSeasons = useMemo(() => {
+        return (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    }, [masterData]);
+
+    const [selectedSeasonId, setSelectedSeasonId] = useState('');
+    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+    
     const [selectedStudentId, setSelectedStudentId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
 
@@ -78,6 +74,28 @@ export default function CareReportManager({ currentUser }) {
         stats: { expected: 0, attended: 0, late: 0, absent: 0, exempt: 0 },
         careTime: { regular: 0, clinic: 0, total: 0 }
     });
+
+    // 🚀 [CTO 패치] 타임머신 자동 시즌 선택 엔진
+    useEffect(() => {
+        if (!isSeasonAutoSet && !loadingData) {
+            if (dynamicSeasons.length > 0) {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const current = dynamicSeasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                if (current) {
+                    setSelectedSeasonId(current.id);
+                } else {
+                    const future = dynamicSeasons.filter(s => s.startDate > todayStr);
+                    if (future.length > 0) {
+                        setSelectedSeasonId(future[0].id);
+                    } else {
+                        const past = [...dynamicSeasons].reverse();
+                        setSelectedSeasonId(past[0].id);
+                    }
+                }
+            }
+            setIsSeasonAutoSet(true);
+        }
+    }, [dynamicSeasons, isSeasonAutoSet, loadingData]);
 
     const myStudentIds = useMemo(() => {
         if (!isLecturer) return [];
@@ -119,15 +137,18 @@ export default function CareReportManager({ currentUser }) {
         return hours > 0 ? hours : 0;
     };
 
+    // 🚀 [CTO 패치] 글로벌 시즌 날짜를 기반으로 분석 리포트 추출
     useEffect(() => {
-        if (!selectedStudentId || loadingData) return;
+        const currentSeasonObj = dynamicSeasons.find(s => s.id === selectedSeasonId);
+        
+        if (!selectedStudentId || !currentSeasonObj || loadingData) return;
         
         let isMounted = true;
         const fetchReport = async () => {
             setIsLoading(true);
             try {
-                const startDateStr = `${selectedYear}-${selectedSeason.start}`;
-                const endDateStr = `${selectedYear}-${selectedSeason.end}`;
+                const startDateStr = currentSeasonObj.startDate;
+                const endDateStr = currentSeasonObj.endDate;
 
                 const attQ = query(collection(db, `artifacts/${APP_ID}/public/data/attendance_logs`), where('studentId', '==', selectedStudentId));
                 const attSnap = await getDocs(attQ);
@@ -155,7 +176,7 @@ export default function CareReportManager({ currentUser }) {
                     else if (a.status === 'exam_leave') exempt++;
                 });
 
-                const regularHours = attended * 2;
+                const regularHours = attended * 2; // 정규 수업은 1회당 평균 2시간으로 산정
                 let clinicHours = 0;
                 seasonSess.forEach(s => { clinicHours += calculateHours(s.startTime, s.endTime); });
 
@@ -175,7 +196,7 @@ export default function CareReportManager({ currentUser }) {
 
         fetchReport();
         return () => { isMounted = false; };
-    }, [selectedStudentId, selectedSeason, selectedYear, users, loadingData]);
+    }, [selectedStudentId, selectedSeasonId, dynamicSeasons, users, loadingData]);
 
     const totalStatus = reportData.stats.expected || 1; 
     const chartData = [
@@ -184,7 +205,7 @@ export default function CareReportManager({ currentUser }) {
         { name: '결석', value: reportData.stats.absent, percent: reportData.stats.absent / totalStatus, color: '#ef4444' } 
     ];
 
-    if (loadingData) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
+    if (loadingData || !isSeasonAutoSet) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
 
     const isStaffType = isGlobalAdmin || isLecturer;
 
@@ -243,15 +264,24 @@ export default function CareReportManager({ currentUser }) {
                     </div>
                 )}
                 
+                {/* 🚀 [CTO 패치] 글로벌 시즌 필터 반영 */}
                 <div className="flex w-full md:w-auto gap-2 flex-1 md:justify-end">
-                    <select className="border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-indigo-500 font-bold bg-white" value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))}>
-                        <option value={currentYear}>{currentYear}년도</option>
-                        <option value={currentYear - 1}>{currentYear - 1}년도</option>
-                    </select>
-                    
-                    <select className="flex-1 border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-indigo-500 font-black text-indigo-900 bg-white" value={selectedSeason.id} onChange={e => setSelectedSeason(SEASONS.find(s => s.id === e.target.value))}>
-                        {SEASONS.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
+                    <div className="flex items-center gap-2 bg-indigo-50 px-3 py-2 rounded-xl border border-indigo-200 w-full md:w-auto shadow-sm">
+                        <Filter size={18} className="text-indigo-600 shrink-0" />
+                        <select
+                            value={selectedSeasonId}
+                            onChange={e => setSelectedSeasonId(e.target.value)}
+                            className="bg-transparent border-none outline-none font-black text-indigo-900 text-sm cursor-pointer pr-2 w-full"
+                        >
+                            {dynamicSeasons.length === 0 ? (
+                                <option value="">등록된 시즌 없음</option>
+                            ) : (
+                                dynamicSeasons.map(season => (
+                                    <option key={season.id} value={season.id}>{season.name}</option>
+                                ))
+                            )}
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -300,7 +330,7 @@ export default function CareReportManager({ currentUser }) {
                             </div>
                             
                             <div className="z-10 bg-white p-6 rounded-3xl shadow-md border border-indigo-50 text-center shrink-0 w-full md:w-auto">
-                                <p className="text-xs font-black text-slate-500 mb-1">이번 시즌 누적 케어 타임</p>
+                                <p className="text-xs font-black text-slate-500 mb-1">선택 시즌 누적 케어 타임</p>
                                 <div className="text-5xl font-black text-indigo-600 tracking-tighter">
                                     {reportData.careTime.total}<span className="text-2xl text-indigo-400">시간</span>
                                 </div>
@@ -342,7 +372,7 @@ export default function CareReportManager({ currentUser }) {
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {reportData.attendance.length === 0 ? (
-                                            <tr><td colSpan="3" className="text-center py-10 text-slate-400 font-bold">기록이 없습니다.</td></tr>
+                                            <tr><td colSpan="3" className="text-center py-10 text-slate-400 font-bold">해당 시즌의 기록이 없습니다.</td></tr>
                                         ) : (
                                             reportData.attendance.map(log => {
                                                 const timeStr = log.timestamp?.seconds ? new Date(log.timestamp.seconds * 1000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : '-';
@@ -381,7 +411,7 @@ export default function CareReportManager({ currentUser }) {
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {reportData.sessions.length === 0 ? (
-                                            <tr><td colSpan="3" className="text-center py-10 text-slate-400 font-bold">추가 케어 기록이 없습니다.</td></tr>
+                                            <tr><td colSpan="3" className="text-center py-10 text-slate-400 font-bold">해당 시즌의 추가 케어 기록이 없습니다.</td></tr>
                                         ) : (
                                             reportData.sessions.map(s => (
                                                 <tr key={s.id} className="hover:bg-purple-50/30 transition-colors">
