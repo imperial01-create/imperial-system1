@@ -1,11 +1,11 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.2 (UI/UX 픽스)
-   사용자 경험(UX) 최적화: 정렬 헤더를 클릭할 때 화살표 아이콘이 나타나며 테이블 너비가 흔들리는 현상(Layout Shift)을 방지하기 위해, 
-   아이콘을 상시 렌더링하고 투명도로 상태를 구분하는 방탄(Bulletproof) UI 레이아웃을 적용했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.3 (ERP 동기화)
+   🚀 CTO 패치: 학원 전체의 글로벌 시즌(Season) 타임라인과 완벽하게 동기화되었습니다.
+   이제 접속 시 오늘 날짜를 분석하여 '현재 진행 중인 시즌'의 반만 자동으로 렌더링하며, 과거/미래 반의 중복 표출 오류를 완벽히 차단했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
-    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info
+    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info, CalendarDays
 } from 'lucide-react';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -61,7 +61,40 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    const { users, classes, enrollments, englishStats } = useData();
+    // 🚀 [CTO 패치] masterData, loadingData 추출
+    const { users, classes, enrollments, englishStats, masterData, loadingData } = useData();
+
+    // 🚀 [CTO 패치] 동적 시즌 데이터 연동
+    const dynamicSeasons = useMemo(() => {
+        return (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+    }, [masterData]);
+
+    const [selectedSeasonId, setSelectedSeasonId] = useState('');
+    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+
+    // 🚀 [CTO 패치] 타임머신 자동 시즌 선택 엔진
+    useEffect(() => {
+        if (!isSeasonAutoSet && !loadingData) {
+            if (dynamicSeasons.length > 0) {
+                const todayStr = new Date().toISOString().split('T')[0];
+                const current = dynamicSeasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                if (current) {
+                    setSelectedSeasonId(current.id);
+                } else {
+                    const future = dynamicSeasons.filter(s => s.startDate > todayStr);
+                    if (future.length > 0) {
+                        setSelectedSeasonId(future[0].id);
+                    } else {
+                        const past = [...dynamicSeasons].reverse();
+                        setSelectedSeasonId(past[0].id);
+                    }
+                }
+            } else {
+                setSelectedSeasonId('legacy');
+            }
+            setIsSeasonAutoSet(true);
+        }
+    }, [dynamicSeasons, isSeasonAutoSet, loadingData]);
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
@@ -75,26 +108,45 @@ const VocaManager = ({ currentUser }) => {
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetData, setPresetData] = useState({ studentId: '', name: '', oldPreset: '', newPreset: '' });
 
+    // 🚀 [CTO 패치] 현재 시즌에 맞는 활성화된 영어 클래스만 필터링
+    const availableClasses = useMemo(() => {
+        let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
+        
+        // 기획 중이거나 반려된 반은 제외 (운영 중인 반만)
+        filtered = filtered.filter(c => c.status === 'active');
+
+        // 선택된 시즌에 해당하는 반만 노출하여 중복 방지
+        if (selectedSeasonId === 'legacy') {
+            filtered = filtered.filter(c => !c.season);
+        } else if (selectedSeasonId) {
+            filtered = filtered.filter(c => c.season === selectedSeasonId);
+        }
+
+        // 강사 필터
+        if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
+            filtered = filtered.filter(c => c.lecturerId === currentUser.id);
+        }
+        
+        return filtered.sort((a, b) => a.name.localeCompare(b.name));
+    }, [classes, currentUser, selectedSeasonId]);
+
+    // 반 목록이 바뀌면(시즌을 변경하면) 첫 번째 반으로 자동 포커스
+    useEffect(() => {
+        if (availableClasses.length > 0) {
+            if (!availableClasses.some(c => c.id === selectedClassId)) {
+                setSelectedClassId(availableClasses[0].id);
+            }
+        } else {
+            setSelectedClassId('');
+        }
+    }, [availableClasses, selectedClassId]);
+
     const enrolledStudentIds = useMemo(() => {
         if (!selectedClassId) return [];
         return enrollments
             .filter(e => e.classId === selectedClassId && e.status === 'active')
             .map(e => e.studentId);
     }, [selectedClassId, enrollments]);
-
-    const availableClasses = useMemo(() => {
-        let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
-        if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
-            filtered = filtered.filter(c => c.lecturerId === currentUser.id);
-        }
-        return filtered.sort((a, b) => a.name.localeCompare(b.name));
-    }, [classes, currentUser]);
-
-    useEffect(() => {
-        if (availableClasses.length > 0 && !selectedClassId) {
-            setSelectedClassId(availableClasses[0].id);
-        }
-    }, [availableClasses, selectedClassId]);
 
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
@@ -456,6 +508,8 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    if (loadingData || !isSeasonAutoSet) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
+
     return (
         <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in pb-20 print:hidden">
             
@@ -529,11 +583,30 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3 md:col-span-1">
-                    <Users className="text-slate-400" />
+            {/* 🚀 [CTO 패치] 4열 레이아웃 적용 및 글로벌 시즌 필터 결합 */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                
+                {/* 1. 시즌 필터 */}
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3">
+                    <CalendarDays className="text-slate-400 shrink-0" size={20} />
                     <select 
-                        className="w-full bg-transparent font-black text-slate-700 outline-none cursor-pointer"
+                        className="w-full bg-transparent font-black text-slate-700 outline-none cursor-pointer text-sm"
+                        value={selectedSeasonId}
+                        onChange={(e) => {
+                            setSelectedSeasonId(e.target.value);
+                            setSelectedClassId('');
+                        }}
+                    >
+                        {dynamicSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        <option value="legacy">📦 시즌 미지정 (과거)</option>
+                    </select>
+                </div>
+
+                {/* 2. 클래스 필터 */}
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3">
+                    <Users className="text-slate-400 shrink-0" size={20} />
+                    <select 
+                        className="w-full bg-transparent font-black text-slate-700 outline-none cursor-pointer text-sm"
                         value={selectedClassId}
                         onChange={(e) => setSelectedClassId(e.target.value)}
                     >
@@ -542,6 +615,7 @@ const VocaManager = ({ currentUser }) => {
                     </select>
                 </div>
                 
+                {/* 3. 우측 컨트롤러 영역 */}
                 {activeTab === 'dashboard' && (
                     <div className="md:col-span-2 flex flex-wrap lg:flex-nowrap gap-3">
                         <button onClick={() => preparePrintData('wordbook')} disabled={processing || classStudents.length === 0} className="flex-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 font-black py-3 rounded-2xl flex items-center justify-center gap-2 transition-colors border border-cyan-200 disabled:opacity-50 min-w-[140px] text-sm">
@@ -561,7 +635,7 @@ const VocaManager = ({ currentUser }) => {
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input 
                             type="text" placeholder="학생 이름으로 검색..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-white border border-slate-200 font-bold p-4 pl-12 rounded-2xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all"
+                            className="w-full bg-white border border-slate-200 font-bold p-4 pl-12 rounded-2xl outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all text-sm h-full"
                         />
                     </div>
                 )}
@@ -593,7 +667,6 @@ const VocaManager = ({ currentUser }) => {
                             <tr>
                                 <th className="p-4 font-black text-slate-600 w-1/4">학생 정보</th>
                                 
-                                {/* 🚀 [CTO 패치] 흔들림 없는(Layout Shift 방지) 상시 렌더링 화살표 UI */}
                                 <th 
                                     className="p-4 font-black text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors group select-none" 
                                     onClick={() => handleSort('catScore')}
@@ -692,7 +765,7 @@ const VocaManager = ({ currentUser }) => {
                                                     >
                                                         <option value="밸런스 모드">밸런스 모드</option>
                                                         <option value="오답 학습">오답 학습</option>
-                                                        <option value="망 방어">망각 방어</option>
+                                                        <option value="망각 방어">망각 방어</option>
                                                         <option value="기초 수리">기초 수리</option>
                                                         <option value="스퍼트 모드">스퍼트 모드</option>
                                                         <option value="초기 영점 조절">초기 영점 조절</option>
