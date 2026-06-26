@@ -1,6 +1,7 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.3 (ERP 동기화)
-   🚀 CTO 패치: 학원 전체의 글로벌 시즌(Season) 타임라인과 완벽하게 동기화되었습니다.
-   이제 접속 시 오늘 날짜를 분석하여 '현재 진행 중인 시즌'의 반만 자동으로 렌더링하며, 과거/미래 반의 중복 표출 오류를 완벽히 차단했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.4 (ERP 동기화 및 런타임 픽스)
+   🚀 CTO 패치: 
+   1. 글로벌 시즌(Season) 타임라인과 완벽하게 동기화되었습니다.
+   2. 방탄 렌더링(Defensive Rendering): 초기 데이터 로딩 시 발생할 수 있는 null/undefined 에러를 완벽하게 방어하여 백화현상(WSOD)을 원천 차단했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -15,7 +16,6 @@ import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } f
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 프리셋 비율 가이드 정보
 const PRESET_GUIDE = [
     { name: '밸런스 모드', desc: '신규 50% / 복습 30% / 오답 15% / 패시브 5%', color: 'text-indigo-600', bg: 'bg-indigo-50' },
     { name: '오답 학습', desc: '신규 15% / 복습 20% / 오답 60% / 패시브 5%', color: 'text-rose-600', bg: 'bg-rose-50' },
@@ -61,27 +61,25 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [CTO 패치] masterData, loadingData 추출
-    const { users, classes, enrollments, englishStats, masterData, loadingData } = useData();
+    // 🚀 [런타임 에러 방어] useData()가 undefined일 때 튕기지 않도록 기본값 객체 할당
+    const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
 
-    // 🚀 [CTO 패치] 동적 시즌 데이터 연동
     const dynamicSeasons = useMemo(() => {
-        return (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        return (masterData?.seasons || []).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
     }, [masterData]);
 
     const [selectedSeasonId, setSelectedSeasonId] = useState('');
     const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
 
-    // 🚀 [CTO 패치] 타임머신 자동 시즌 선택 엔진
     useEffect(() => {
         if (!isSeasonAutoSet && !loadingData) {
             if (dynamicSeasons.length > 0) {
                 const todayStr = new Date().toISOString().split('T')[0];
-                const current = dynamicSeasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
+                const current = dynamicSeasons.find(s => todayStr >= (s.startDate || '') && todayStr <= (s.endDate || ''));
                 if (current) {
                     setSelectedSeasonId(current.id);
                 } else {
-                    const future = dynamicSeasons.filter(s => s.startDate > todayStr);
+                    const future = dynamicSeasons.filter(s => (s.startDate || '') > todayStr);
                     if (future.length > 0) {
                         setSelectedSeasonId(future[0].id);
                     } else {
@@ -108,29 +106,25 @@ const VocaManager = ({ currentUser }) => {
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetData, setPresetData] = useState({ studentId: '', name: '', oldPreset: '', newPreset: '' });
 
-    // 🚀 [CTO 패치] 현재 시즌에 맞는 활성화된 영어 클래스만 필터링
+    // 🚀 [런타임 에러 방어] currentUser?.role을 통한 안전한 접근
     const availableClasses = useMemo(() => {
-        let filtered = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
+        let filtered = (classes || []).filter(c => c.subject === '영어' || ((c.name || '').includes('영어')));
         
-        // 기획 중이거나 반려된 반은 제외 (운영 중인 반만)
         filtered = filtered.filter(c => c.status === 'active');
 
-        // 선택된 시즌에 해당하는 반만 노출하여 중복 방지
         if (selectedSeasonId === 'legacy') {
             filtered = filtered.filter(c => !c.season);
         } else if (selectedSeasonId) {
             filtered = filtered.filter(c => c.season === selectedSeasonId);
         }
 
-        // 강사 필터
-        if (currentUser.role === 'lecturer' || currentUser.role === 'ta') {
-            filtered = filtered.filter(c => c.lecturerId === currentUser.id);
+        if (currentUser?.role === 'lecturer' || currentUser?.role === 'ta') {
+            filtered = filtered.filter(c => c.lecturerId === currentUser?.id);
         }
         
-        return filtered.sort((a, b) => a.name.localeCompare(b.name));
+        return filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     }, [classes, currentUser, selectedSeasonId]);
 
-    // 반 목록이 바뀌면(시즌을 변경하면) 첫 번째 반으로 자동 포커스
     useEffect(() => {
         if (availableClasses.length > 0) {
             if (!availableClasses.some(c => c.id === selectedClassId)) {
@@ -143,7 +137,7 @@ const VocaManager = ({ currentUser }) => {
 
     const enrolledStudentIds = useMemo(() => {
         if (!selectedClassId) return [];
-        return enrollments
+        return (enrollments || [])
             .filter(e => e.classId === selectedClassId && e.status === 'active')
             .map(e => e.studentId);
     }, [selectedClassId, enrollments]);
@@ -151,9 +145,9 @@ const VocaManager = ({ currentUser }) => {
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         
-        let filteredStudents = users
+        let filteredStudents = (users || [])
             .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
-            .filter(student => student.name.includes(searchQuery));
+            .filter(student => (student.name || '').includes(searchQuery));
 
         if (sortConfig) {
             filteredStudents.sort((a, b) => {
@@ -165,7 +159,7 @@ const VocaManager = ({ currentUser }) => {
                 return valB - valA; 
             });
         } else {
-            filteredStudents.sort((a, b) => a.name.localeCompare(b.name));
+            filteredStudents.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         }
 
         return filteredStudents;
@@ -583,10 +577,8 @@ const VocaManager = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* 🚀 [CTO 패치] 4열 레이아웃 적용 및 글로벌 시즌 필터 결합 */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 
-                {/* 1. 시즌 필터 */}
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3">
                     <CalendarDays className="text-slate-400 shrink-0" size={20} />
                     <select 
@@ -602,7 +594,6 @@ const VocaManager = ({ currentUser }) => {
                     </select>
                 </div>
 
-                {/* 2. 클래스 필터 */}
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex items-center gap-3">
                     <Users className="text-slate-400 shrink-0" size={20} />
                     <select 
@@ -615,7 +606,6 @@ const VocaManager = ({ currentUser }) => {
                     </select>
                 </div>
                 
-                {/* 3. 우측 컨트롤러 영역 */}
                 {activeTab === 'dashboard' && (
                     <div className="md:col-span-2 flex flex-wrap lg:flex-nowrap gap-3">
                         <button onClick={() => preparePrintData('wordbook')} disabled={processing || classStudents.length === 0} className="flex-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 font-black py-3 rounded-2xl flex items-center justify-center gap-2 transition-colors border border-cyan-200 disabled:opacity-50 min-w-[140px] text-sm">
@@ -722,7 +712,7 @@ const VocaManager = ({ currentUser }) => {
                                     <td className="p-4">
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black shrink-0">
-                                                {student.name[0]}
+                                                {(student.name || '알수없음')[0]}
                                             </div>
                                             <div>
                                                 <div className="font-black text-slate-800 text-base">{student.name}</div>
