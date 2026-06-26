@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.4 (ERP 동기화 및 런타임 픽스)
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.5 (런타임 에러 방어)
    🚀 CTO 패치: 
-   1. 글로벌 시즌(Season) 타임라인과 완벽하게 동기화되었습니다.
-   2. 방탄 렌더링(Defensive Rendering): 초기 데이터 로딩 시 발생할 수 있는 null/undefined 에러를 완벽하게 방어하여 백화현상(WSOD)을 원천 차단했습니다. */
+   1. 원본 데이터 훼손 방지: React 상태의 불변성(Immutability)을 유지하기 위해 배열을 깊은 복사([...])하여 정렬함으로써 백화현상(WSOD)을 원천 차단했습니다.
+   2. 방탄 렌더링(Defensive Rendering): 초기 데이터 로딩 시 발생할 수 있는 null/undefined 참조 에러를 옵셔널 체이닝(?.)과 기본값(|| [])으로 완벽하게 방어했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -61,11 +61,13 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [런타임 에러 방어] useData()가 undefined일 때 튕기지 않도록 기본값 객체 할당
+    // 🚀 [런타임 에러 방어] Context에서 데이터를 못 가져와도 에러가 나지 않도록 빈 객체/배열 기본값 할당
     const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
 
+    // 🚀 [런타임 에러 방어] 원본 배열(masterData.seasons)을 훼손하지 않기 위해 얕은 복사([...]) 후 정렬 수행 (WSOD 핵심 원인 해결)
     const dynamicSeasons = useMemo(() => {
-        return (masterData?.seasons || []).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+        if (!masterData?.seasons || !Array.isArray(masterData.seasons)) return [];
+        return [...masterData.seasons].sort((a, b) => (a?.startDate || '').localeCompare(b?.startDate || ''));
     }, [masterData]);
 
     const [selectedSeasonId, setSelectedSeasonId] = useState('');
@@ -73,18 +75,22 @@ const VocaManager = ({ currentUser }) => {
 
     useEffect(() => {
         if (!isSeasonAutoSet && !loadingData) {
-            if (dynamicSeasons.length > 0) {
+            if (dynamicSeasons && dynamicSeasons.length > 0) {
                 const todayStr = new Date().toISOString().split('T')[0];
-                const current = dynamicSeasons.find(s => todayStr >= (s.startDate || '') && todayStr <= (s.endDate || ''));
-                if (current) {
+                const current = dynamicSeasons.find(s => todayStr >= (s?.startDate || '') && todayStr <= (s?.endDate || ''));
+                if (current && current.id) {
                     setSelectedSeasonId(current.id);
                 } else {
-                    const future = dynamicSeasons.filter(s => (s.startDate || '') > todayStr);
-                    if (future.length > 0) {
+                    const future = dynamicSeasons.filter(s => (s?.startDate || '') > todayStr);
+                    if (future.length > 0 && future[0].id) {
                         setSelectedSeasonId(future[0].id);
                     } else {
                         const past = [...dynamicSeasons].reverse();
-                        setSelectedSeasonId(past[0].id);
+                        if (past.length > 0 && past[0].id) {
+                            setSelectedSeasonId(past[0].id);
+                        } else {
+                            setSelectedSeasonId('legacy');
+                        }
                     }
                 }
             } else {
@@ -106,29 +112,28 @@ const VocaManager = ({ currentUser }) => {
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetData, setPresetData] = useState({ studentId: '', name: '', oldPreset: '', newPreset: '' });
 
-    // 🚀 [런타임 에러 방어] currentUser?.role을 통한 안전한 접근
     const availableClasses = useMemo(() => {
-        let filtered = (classes || []).filter(c => c.subject === '영어' || ((c.name || '').includes('영어')));
+        let filtered = (classes || []).filter(c => c?.subject === '영어' || ((c?.name || '').includes('영어')));
         
-        filtered = filtered.filter(c => c.status === 'active');
+        filtered = filtered.filter(c => c?.status === 'active');
 
         if (selectedSeasonId === 'legacy') {
-            filtered = filtered.filter(c => !c.season);
+            filtered = filtered.filter(c => !c?.season);
         } else if (selectedSeasonId) {
-            filtered = filtered.filter(c => c.season === selectedSeasonId);
+            filtered = filtered.filter(c => c?.season === selectedSeasonId);
         }
 
         if (currentUser?.role === 'lecturer' || currentUser?.role === 'ta') {
-            filtered = filtered.filter(c => c.lecturerId === currentUser?.id);
+            filtered = filtered.filter(c => c?.lecturerId === currentUser?.id);
         }
         
-        return filtered.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        return filtered.sort((a, b) => (a?.name || '').localeCompare(b?.name || ''));
     }, [classes, currentUser, selectedSeasonId]);
 
     useEffect(() => {
         if (availableClasses.length > 0) {
-            if (!availableClasses.some(c => c.id === selectedClassId)) {
-                setSelectedClassId(availableClasses[0].id);
+            if (!availableClasses.some(c => c?.id === selectedClassId)) {
+                setSelectedClassId(availableClasses[0]?.id || '');
             }
         } else {
             setSelectedClassId('');
@@ -138,28 +143,28 @@ const VocaManager = ({ currentUser }) => {
     const enrolledStudentIds = useMemo(() => {
         if (!selectedClassId) return [];
         return (enrollments || [])
-            .filter(e => e.classId === selectedClassId && e.status === 'active')
-            .map(e => e.studentId);
+            .filter(e => e?.classId === selectedClassId && e?.status === 'active')
+            .map(e => e?.studentId);
     }, [selectedClassId, enrollments]);
 
     const classStudents = useMemo(() => {
         if (!selectedClassId) return [];
         
         let filteredStudents = (users || [])
-            .filter(u => u.role === 'student' && enrolledStudentIds.includes(u.id))
-            .filter(student => (student.name || '').includes(searchQuery));
+            .filter(u => u?.role === 'student' && enrolledStudentIds.includes(u?.id))
+            .filter(student => (student?.name || '').includes(searchQuery));
 
         if (sortConfig) {
             filteredStudents.sort((a, b) => {
-                const statA = (englishStats || []).find(s => s.id === a.id) || {};
-                const statB = (englishStats || []).find(s => s.id === b.id) || {};
+                const statA = (englishStats || []).find(s => s?.id === a?.id) || {};
+                const statB = (englishStats || []).find(s => s?.id === b?.id) || {};
                 
                 const valA = sortConfig === 'vocaProgress' ? getTierProgress(Number(statA.masteredCount)||0, Number(statA.catScore)||0).totalMastered : (Number(statA[sortConfig]) || 0);
                 const valB = sortConfig === 'vocaProgress' ? getTierProgress(Number(statB.masteredCount)||0, Number(statB.catScore)||0).totalMastered : (Number(statB[sortConfig]) || 0);
                 return valB - valA; 
             });
         } else {
-            filteredStudents.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            filteredStudents.sort((a, b) => (a?.name || '').localeCompare(b?.name || ''));
         }
 
         return filteredStudents;
@@ -178,13 +183,13 @@ const VocaManager = ({ currentUser }) => {
         try {
             const dataToPrint = [];
             const targetStudents = targetStudentId 
-                ? classStudents.filter(s => s.id === targetStudentId)
+                ? classStudents.filter(s => s?.id === targetStudentId)
                 : classStudents;
 
             for (const student of targetStudents) {
-                const stat = (englishStats || []).find(s => s.id === student.id) || {};
+                const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
                 const sessionNum = stat.vocaSession || 1;
-                const sessionId = `test_${student.id}_s${sessionNum}`;
+                const sessionId = `test_${student?.id}_s${sessionNum}`;
                 
                 const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
                 
@@ -210,11 +215,11 @@ const VocaManager = ({ currentUser }) => {
 
                 if (type.startsWith('retest')) {
                     if (!isSessionCompleted) {
-                        alert(`${student.name} 학생의 채점이 완료되지 않아 오답 재시험지를 출력할 수 없습니다.`);
+                        alert(`${student?.name || '학생'}의 채점이 완료되지 않아 오답 재시험지를 출력할 수 없습니다.`);
                         continue;
                     }
                     if (wrongNums.length === 0) {
-                        alert(`${student.name} 학생은 100점이므로 재시험지가 없습니다!`);
+                        alert(`${student?.name || '학생'}은 100점이므로 재시험지가 없습니다!`);
                         continue;
                     }
                     questionsList = questionsList.filter(q => wrongNums.includes(q.questionNumber));
@@ -275,7 +280,7 @@ const VocaManager = ({ currentUser }) => {
                     <div class="header">
                       <h2>임페리얼 ${printTitle}</h2>
                       <div class="info">
-                        <div>이름: ${data.student.name}</div>
+                        <div>이름: ${data.student.name || '알수없음'}</div>
                         <div>날짜: ${new Date().toLocaleDateString()} ${type.includes('test') && !type.includes('retest') ? '/ 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50' : ''}</div>
                       </div>
                     </div>
@@ -388,11 +393,12 @@ const VocaManager = ({ currentUser }) => {
     const handlePresetSelect = (student, stat, newPreset) => {
         const oldPreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
         if (oldPreset === newPreset) return;
-        setPresetData({ studentId: student.id, name: student.name, oldPreset, newPreset });
+        setPresetData({ studentId: student?.id || '', name: student?.name || '학생', oldPreset, newPreset });
         setPresetModalOpen(true);
     };
 
     const confirmPresetChange = async () => {
+        if (!presetData.studentId) return;
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, presetData.studentId);
@@ -410,13 +416,14 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const openGradingModal = async (student, stat) => {
+        if (!student?.id) return;
         const sessionNum = stat.vocaSession || 1;
         const sessionId = `test_${student.id}_s${sessionNum}`;
         const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
         if (!testSnap.exists()) return alert("해당 회차의 단어장이 아직 생성되지 않았습니다.");
         
         setGradingData({
-            studentId: student.id, name: student.name, sessionNumber: sessionNum, wrongAnswers: []
+            studentId: student.id, name: student.name || '학생', sessionNumber: sessionNum, wrongAnswers: []
         });
         setGradingModalOpen(true);
     };
@@ -430,6 +437,7 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const submitDetailedGrading = async () => {
+        if (!gradingData.studentId) return;
         const finalScore = 50 - gradingData.wrongAnswers.length;
         if (!window.confirm(`[${gradingData.name}] 학생의 최종 점수는 ${finalScore}점입니다.\n오답 문항 개수를 정확히 확인하셨습니까?\n이대로 채점을 확정하고 AI 엔진에 전송하시겠습니까?`)) {
             return;
@@ -464,7 +472,8 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const handleCatSubmit = async (studentId, score) => {
-        if (score === undefined || score < 0 || score > 1000) return alert("정상적인 점수(0~1000)를 입력하세요.");
+        if (!studentId) return;
+        if (score === undefined || score < 0 || score > 1000 || isNaN(score)) return alert("정상적인 점수(0~1000)를 입력하세요.");
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
@@ -485,7 +494,8 @@ const VocaManager = ({ currentUser }) => {
     };
 
     const handleApprovePromotion = async (studentId, targetScore, studentName) => {
-        if (!window.confirm(`[${studentName}] 학생의 ${targetScore}점 승급 심사를 통과 처리하시겠습니까?\n이제 ${targetScore + 49}점 구간까지 자유롭게 어휘력이 상승합니다.`)) return;
+        if (!studentId) return;
+        if (!window.confirm(`[${studentName || '학생'}] 학생의 ${targetScore}점 승급 심사를 통과 처리하시겠습니까?\n이제 ${targetScore + 49}점 구간까지 자유롭게 어휘력이 상승합니다.`)) return;
         setProcessing(true);
         try {
             const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
@@ -589,7 +599,7 @@ const VocaManager = ({ currentUser }) => {
                             setSelectedClassId('');
                         }}
                     >
-                        {dynamicSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        {dynamicSeasons.map(s => <option key={s?.id || Math.random()} value={s?.id || ''}>{s?.name || '알 수 없음'}</option>)}
                         <option value="legacy">📦 시즌 미지정 (과거)</option>
                     </select>
                 </div>
@@ -602,7 +612,7 @@ const VocaManager = ({ currentUser }) => {
                         onChange={(e) => setSelectedClassId(e.target.value)}
                     >
                         {availableClasses.length === 0 && <option value="">배정된 영어 클래스 없음</option>}
-                        {availableClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {availableClasses.map(c => <option key={c?.id || Math.random()} value={c?.id || ''}>{c?.name || '이름 없음'}</option>)}
                     </select>
                 </div>
                 
@@ -701,22 +711,22 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                const stat = (englishStats || []).find(s => s.id === student.id) || {};
+                                const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
                                 const catScore = Number(stat.catScore) || 0;
                                 const masteredCount = Number(stat.masteredCount) || 0;
                                 const tierInfo = getTierProgress(masteredCount, catScore);
                                 const currentActivePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
 
                                 return (
-                                <tr key={student.id} className="hover:bg-slate-50 transition-colors">
+                                <tr key={student?.id || Math.random()} className="hover:bg-slate-50 transition-colors">
                                     <td className="p-4">
                                         <div className="flex items-center gap-3">
                                             <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-black shrink-0">
-                                                {(student.name || '알수없음')[0]}
+                                                {(student?.name || '알')[0]}
                                             </div>
                                             <div>
-                                                <div className="font-black text-slate-800 text-base">{student.name}</div>
-                                                <div className="text-xs font-bold text-slate-400">{student.schoolName} {student.grade}</div>
+                                                <div className="font-black text-slate-800 text-base">{student?.name || '알수없음'}</div>
+                                                <div className="text-xs font-bold text-slate-400">{student?.schoolName || '학교미상'} {student?.grade || ''}</div>
                                             </div>
                                         </div>
                                     </td>
@@ -765,11 +775,11 @@ const VocaManager = ({ currentUser }) => {
                                             
                                             <td className="p-4 text-center">
                                                 <div className="flex justify-center gap-1.5 flex-wrap max-w-[200px] mx-auto">
-                                                    <button onClick={() => preparePrintData('wordbook', student.id)} className="px-2.5 py-1.5 bg-cyan-50 text-cyan-600 hover:bg-cyan-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-cyan-200 whitespace-nowrap">단어장</button>
-                                                    <button onClick={() => preparePrintData('test', student.id)} className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-indigo-200 whitespace-nowrap">시험지</button>
-                                                    <button onClick={() => preparePrintData('answer', student.id)} className="px-2.5 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-rose-200 whitespace-nowrap">답안지</button>
-                                                    <button onClick={() => preparePrintData('retest', student.id)} className="px-2.5 py-1.5 bg-amber-50 text-amber-600 hover:bg-amber-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-amber-200 whitespace-nowrap mt-1">오답 재시험지</button>
-                                                    <button onClick={() => preparePrintData('retest_answer', student.id)} className="px-2.5 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-emerald-200 whitespace-nowrap mt-1">재시험 답지</button>
+                                                    <button onClick={() => preparePrintData('wordbook', student?.id)} className="px-2.5 py-1.5 bg-cyan-50 text-cyan-600 hover:bg-cyan-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-cyan-200 whitespace-nowrap">단어장</button>
+                                                    <button onClick={() => preparePrintData('test', student?.id)} className="px-2.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-indigo-200 whitespace-nowrap">시험지</button>
+                                                    <button onClick={() => preparePrintData('answer', student?.id)} className="px-2.5 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-rose-200 whitespace-nowrap">답안지</button>
+                                                    <button onClick={() => preparePrintData('retest', student?.id)} className="px-2.5 py-1.5 bg-amber-50 text-amber-600 hover:bg-amber-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-amber-200 whitespace-nowrap mt-1">오답 재시험지</button>
+                                                    <button onClick={() => preparePrintData('retest_answer', student?.id)} className="px-2.5 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white rounded-md font-bold text-[11px] transition-colors border border-emerald-200 whitespace-nowrap mt-1">재시험 답지</button>
                                                 </div>
                                             </td>
                                         </>
@@ -782,7 +792,7 @@ const VocaManager = ({ currentUser }) => {
                                                     <CheckCircle size={18} /> 오답 문항 선택 (채점)
                                                 </button>
                                                 {stat.vocaSession > 1 && (
-                                                    <button onClick={() => handleRollback(student.id, stat.vocaSession - 1)} className="text-[11px] text-rose-400 hover:text-rose-600 underline font-bold flex items-center gap-1 mt-1">
+                                                    <button onClick={() => handleRollback(student?.id, stat.vocaSession - 1)} className="text-[11px] text-rose-400 hover:text-rose-600 underline font-bold flex items-center gap-1 mt-1">
                                                         <Undo2 size={12} /> {stat.vocaSession - 1}회차 채점 취소 (복구)
                                                     </button>
                                                 )}
@@ -817,7 +827,7 @@ const VocaManager = ({ currentUser }) => {
                                             <td className="p-4 text-center">
                                                 {stat.promotionPending ? (
                                                     <button 
-                                                        onClick={() => handleApprovePromotion(student.id, stat.promotionPending, student.name)} 
+                                                        onClick={() => handleApprovePromotion(student?.id, stat.promotionPending, student?.name)} 
                                                         className="bg-rose-100 text-rose-700 hover:bg-rose-600 hover:text-white border border-rose-200 px-4 py-2 rounded-xl font-black text-xs transition-all shadow-sm mx-auto flex items-center justify-center gap-1 animate-pulse"
                                                     >
                                                         <AlertCircle size={14} /> {stat.promotionPending}점 승급 승인
@@ -834,9 +844,9 @@ const VocaManager = ({ currentUser }) => {
                                     {activeTab === 'cat_input' && (
                                         <td className="p-4">
                                             <div className="flex gap-2 items-center">
-                                                <input type="number" max="1000" min="0" placeholder="점수" value={catInput[student.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-20 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
+                                                <input type="number" max="1000" min="0" placeholder="점수" value={catInput[student?.id] || ''} onChange={e => setCatInput({...catInput, [student.id]: e.target.value})} disabled={processing} className="w-20 bg-white border border-slate-300 font-black text-center p-2 rounded-xl outline-none focus:border-amber-500"/>
                                                 <span className="font-bold text-slate-400 mr-2">/ 1000</span>
-                                                <button onClick={() => handleCatSubmit(student.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">초기화 반영</button>
+                                                <button onClick={() => handleCatSubmit(student?.id, parseInt(catInput[student.id]))} disabled={processing || !catInput[student?.id]} className="bg-amber-500 hover:bg-amber-600 text-white font-black px-4 py-2 rounded-xl text-sm transition-all disabled:opacity-50">초기화 반영</button>
                                             </div>
                                         </td>
                                     )}
