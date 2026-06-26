@@ -1,12 +1,13 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.5 (런타임 에러 방어)
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.5.1 (WSOD 패치 완료)
    🚀 CTO 패치: 
-   1. 원본 데이터 훼손 방지: React 상태의 불변성(Immutability)을 유지하기 위해 배열을 깊은 복사([...])하여 정렬함으로써 백화현상(WSOD)을 원천 차단했습니다.
+   1. 런타임 에러 방어: 누락되었던 Loader 컴포넌트를 정상 import 하여 초기 로딩 시 발생하는 백화현상(WSOD)을 완벽히 해결했습니다.
    2. 방탄 렌더링(Defensive Rendering): 초기 데이터 로딩 시 발생할 수 있는 null/undefined 참조 에러를 옵셔널 체이닝(?.)과 기본값(|| [])으로 완벽하게 방어했습니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
-    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info, CalendarDays
+    AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info, CalendarDays, Loader 
+    // 💡 CTO Fix: 위 줄 맨 끝에 Loader가 추가되었습니다.
 } from 'lucide-react';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -64,7 +65,7 @@ const VocaManager = ({ currentUser }) => {
     // 🚀 [런타임 에러 방어] Context에서 데이터를 못 가져와도 에러가 나지 않도록 빈 객체/배열 기본값 할당
     const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
 
-    // 🚀 [런타임 에러 방어] 원본 배열(masterData.seasons)을 훼손하지 않기 위해 얕은 복사([...]) 후 정렬 수행 (WSOD 핵심 원인 해결)
+    // 🚀 [런타임 에러 방어] 원본 배열을 훼손하지 않기 위해 얕은 복사([...]) 후 정렬 수행
     const dynamicSeasons = useMemo(() => {
         if (!masterData?.seasons || !Array.isArray(masterData.seasons)) return [];
         return [...masterData.seasons].sort((a, b) => (a?.startDate || '').localeCompare(b?.startDate || ''));
@@ -512,6 +513,7 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    // 💡 CTO Fix 반영됨: 이제 Loader가 정상적으로 렌더링됩니다.
     if (loadingData || !isSeasonAutoSet) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
 
     return (
@@ -524,7 +526,7 @@ const VocaManager = ({ currentUser }) => {
                         <span className="text-slate-400 line-through">[{presetData.oldPreset}]</span> 에서 <br/>
                         <span className="text-rose-600 font-black text-2xl">[{presetData.newPreset}]</span> (으)로<br/>바꾸시겠습니까?
                     </h3>
-                    <p className="text-sm font-bold text-gray-500 bg-slate-50 p-3 rounded-xl">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모드는 해제됩니다.</p>
+                    <p className="text-sm font-bold text-gray-500 bg-slate-50 p-3 rounded-xl">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모 해제됩니다.</p>
                     <div className="flex gap-3 justify-center mt-6">
                         <Button variant="secondary" onClick={() => setPresetModalOpen(false)}>취소</Button>
                         <Button onClick={confirmPresetChange} disabled={processing}>
