@@ -1,6 +1,6 @@
 /* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture)
    🚀 업데이트 6 (동적 50점 승급 심사): 특정 점수가 아닌 '매 50점 단위(50, 100, 150...)'마다 승급 심사를 강제하는 알고리즘을 도입했습니다. 
-   강사의 승인이 떨어지기 전까지 학생의 점수는 다음 50점 구간을 절대 돌파할 수 없으며, 화면에 강력한 경고를 발생시킵니다. */
+   🚀 업데이트 7 (고급 어휘력 확장): 41~50번 구간에서 유의어/반의어를 묻는 객관식(Multiple Choice) 알고리즘을 적용하여 수능형 어휘 응용력을 강화합니다. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -27,7 +27,8 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-const generateVariedQuestion = (word, qNumber) => {
+// [수정] 오답 보기를 추출하기 위해 poolForTest(당일 출제 전체 단어)를 인자로 추가로 받습니다.[cite: 2]
+const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
     const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
 
@@ -68,26 +69,42 @@ const generateVariedQuestion = (word, qNumber) => {
 
     const selectedType = advancedTypes[Math.floor(Math.random() * advancedTypes.length)];
 
-    if (selectedType === 2) {
+    // [CTO 최적화 로직] 유의어(1) 또는 반의어(3) 일 때 객관식 형태(Options)의 데이터 구조 생성[cite: 2]
+    if (selectedType === 1 || selectedType === 3) {
+        const isSynonym = selectedType === 1;
+        const targetArray = isSynonym ? meaningObj.synonyms : meaningObj.antonyms;
+        
+        const correctAnswer = targetArray[0]; // 첫 번째 유의어/반의어를 정답으로 설정
+        const distractors = [];
+        let attempts = 0;
+        
+        // 메모리에 로드된 poolForTest를 활용하여 O(1) 방식으로 랜덤 오답 3개 추출 (Firebase 추가 비용 발생 0원)
+        while (distractors.length < 3 && attempts < poolForTest.length * 2) {
+            attempts++;
+            const randomWord = poolForTest[Math.floor(Math.random() * poolForTest.length)].word;
+            
+            // 오답이 정답과 같지 않고, 원본 단어와도 같지 않으며, 중복되지 않을 때만 추가
+            if (randomWord && randomWord !== correctAnswer && randomWord !== word.word && !distractors.includes(randomWord)) {
+                distractors.push(randomWord);
+            }
+        }
+
+        const options = shuffleArray([correctAnswer, ...distractors]); // 정답 1 + 오답 3 셔플
+
+        return {
+            ...baseQuestion, 
+            type: isSynonym ? 'synonym' : 'antonym',
+            wordText: `다음 단어의 ${isSynonym ? '유의어(Synonym)' : '반의어(Antonym)'}를 고르시오: ${word.word}`,
+            answerText: correctAnswer,
+            hint: `(뜻: ${allMeanings})`,
+            options: options // 클라이언트 UI에서 이를 바탕으로 버튼식 객관식 렌더링 가능
+        };
+    } else if (selectedType === 2) {
         return {
             ...baseQuestion, type: 'blank',
             wordText: meaningObj.blankSentence[0], 
             answerText: word.word, 
             hint: `(빈칸에 알맞은 영어 단어 작성, 뜻: ${allMeanings})`
-        };
-    } else if (selectedType === 1) {
-        return {
-            ...baseQuestion, type: 'synonym',
-            wordText: `다음 단어의 유의어(동의어)를 쓰시오: ${word.word}`,
-            answerText: meaningObj.synonyms.join(', '),
-            hint: `(뜻: ${allMeanings})`
-        };
-    } else if (selectedType === 3) {
-        return {
-            ...baseQuestion, type: 'antonym',
-            wordText: `다음 단어의 반의어(반대말)를 쓰시오: ${word.word}`,
-            answerText: meaningObj.antonyms.join(', '),
-            hint: `(뜻: ${allMeanings})`
         };
     } else if (selectedType === 4) {
         return {
@@ -312,8 +329,9 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             poolForTest.push(finalWordData[Math.floor(Math.random() * finalWordData.length)]);
         }
 
+        // [수정] 오답 보기를 추출할 수 있도록 poolForTest 데이터를 인자로 넘겨줍니다.[cite: 2]
         const full50Questions = poolForTest.map((word, index) => {
-            return generateVariedQuestion(word, index + 1);
+            return generateVariedQuestion(word, index + 1, poolForTest);
         });
 
         const testSessionId = `test_${studentId}_s${vocaSession}`;
@@ -493,9 +511,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let finalVocaScore = Math.round(currentVocaScore + scoreDelta);
     let autoShiftMessage = '';
 
-    // ============================================================================
-    // 🚀 [CTO 패치] 50점 단위 동적 승급 심사 (Hard-Cap) 알고리즘
-    // ============================================================================
     const nextBoundary = Math.floor(currentVocaScore / 50) * 50 + 50; 
     const maxApprovedPromotion = statData.maxApprovedPromotion || 0;
     let promotionPending = statData.promotionPending || null;
