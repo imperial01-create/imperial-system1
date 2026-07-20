@@ -1,11 +1,11 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.4
-   메타인지 최적화: '하이브리드 어휘량 추정 알고리즘'을 도입하여, 학생의 CAT 지수에 기반한 '기본 보유 어휘량'과 '시스템 내 마스터 어휘량'을 합산합니다. 
-   이를 통해 학생의 실제 어휘 능력을 완벽하게 반영한 진정한 의미의 '학년별 어휘 진도(Grade-Level Equivalency)'를 제공합니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.5
+   메타인지 최적화: '하이브리드 어휘량 추정 알고리즘'을 도입하여 학생의 실제 어휘 능력을 반영합니다.
+   🚀 업데이트 8 (학부모 리포트 내장): 시험 완료(completed) 상태일 때, 단순 텍스트 대신 AI가 분석한 '취약 어휘 집중 분석 리포트(parentReport)'를 인라인으로 즉시 렌더링하여 학부모의 신뢰를 극대화합니다. */
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
     CheckCircle, RefreshCw, Brain, Target, Users, ShieldAlert, Activity, Info,
-    AlertTriangle, TrendingDown, GraduationCap
+    AlertTriangle, TrendingDown, GraduationCap, Shield, Search // 💡 [추가] 리포트용 아이콘
 } from 'lucide-react';
 import { collection, doc, getDoc, getDocs, query, where, orderBy, limit, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -346,9 +346,8 @@ const StudentVocaDaily = ({ currentUser }) => {
 
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
-  
-  // 🚀 [CTO 패치] 하이브리드 어휘량 추정 함수에 catScore 파라미터 전달
   const tierInfo = studentStats ? getTierProgress(studentStats.masteredCount || 0, studentStats.catScore || 0) : null;
+  const parentReport = studentStats?.parentReport; // 💡 [추가] vocaEngine에서 저장한 AI 분석 리포트 데이터
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -489,7 +488,7 @@ const StudentVocaDaily = ({ currentUser }) => {
 
       {activeTab === 'daily' && (
           <>
-              {!isParent && (
+              {!isParent && sessionInfo.status !== 'completed' && (
                   <div className="flex mb-8 print:hidden">
                     <button 
                       onClick={() => handlePrint('wordbook')}
@@ -532,13 +531,104 @@ const StudentVocaDaily = ({ currentUser }) => {
                       </div>
                   )}
 
+                  {/* 💡 [CTO 패치] 시험 완료 상태일 때, 단순 메시지 대신 AI 분석 리포트 인라인 렌더링 */}
                   {sessionInfo.status === 'completed' && (
-                      <div className="flex flex-col items-center justify-center py-20 text-center print:hidden">
-                          <CheckCircle size={56} className="text-emerald-400 mb-4" />
-                          <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 학습 목표 100% 달성!</h3>
-                          <p className="text-slate-500 font-bold max-w-md break-keep">
-                              이미 {sessionInfo.sessionNumber}회차 어휘 시험 응시 및 채점을 완료했습니다. 위 대시보드에서 학습 결과를 확인하세요.
-                          </p>
+                      <div className="w-full animate-in fade-in print:hidden">
+                          {parentReport ? (
+                            <div className="bg-slate-50 rounded-3xl overflow-hidden border border-slate-200 shadow-inner">
+                              {/* 1단계: AI 3줄 요약 */}
+                              <div className="bg-indigo-900 text-white p-8">
+                                <h2 className="text-2xl font-black mb-4 flex items-center gap-2">
+                                    <Brain className="text-indigo-300" /> AI 단어 밀착 분석 리포트
+                                </h2>
+                                <div className="bg-white/10 p-5 rounded-2xl backdrop-blur-sm border border-white/20">
+                                  <div className="flex items-start gap-3">
+                                    <Activity className="w-6 h-6 text-indigo-300 mt-1 flex-shrink-0" />
+                                    <p className="text-base font-bold leading-relaxed text-indigo-50">{parentReport.summary.mainComment}</p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 2단계: 핵심 원리 대시보드 */}
+                              <div className="p-8 pb-4">
+                                <h3 className="text-lg font-black text-slate-800 mb-4">오늘의 AI 케어 현황</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600"><Shield size={20} /></div>
+                                        <h4 className="font-bold text-slate-800">망각 방어 ({parentReport.metrics.defended}단어)</h4>
+                                    </div>
+                                    <p className="text-xs text-slate-500 font-bold break-keep">잊어버리기 직전의 단어들을 정확히 재출제하여 장기기억으로 이식했습니다.</p>
+                                  </div>
+                                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="bg-blue-100 p-2 rounded-xl text-blue-600"><Search size={20} /></div>
+                                        <h4 className="font-bold text-slate-800">기초 점검 ({parentReport.metrics.passiveChecked}단어)</h4>
+                                    </div>
+                                    <p className="text-xs text-slate-500 font-bold break-keep">쉬운 단어를 무작위 출제하여 어학의 뼈대를 흔드는 숨은 구멍을 메꿨습니다.</p>
+                                  </div>
+                                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="bg-rose-100 p-2 rounded-xl text-rose-600"><AlertTriangle size={20} /></div>
+                                        <h4 className="font-bold text-slate-800">만성 오답 ({parentReport.metrics.chronic}단어)</h4>
+                                    </div>
+                                    <p className="text-xs text-slate-500 font-bold break-keep">반복해서 틀린 단어는 형태를 변형하여 완벽히 알 때까지 재출제됩니다.</p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* 3단계: 취약 어휘 리스트 */}
+                              <div className="p-8 pt-4">
+                                <div className="flex justify-between items-end mb-4 border-b border-slate-200 pb-2">
+                                  <h3 className="text-lg font-black text-slate-800">취약 어휘 집중 분석</h3>
+                                  <span className="text-sm font-bold text-slate-500">{parentReport.vulnerableWords.length}개의 분석된 오답</span>
+                                </div>
+                                
+                                {parentReport.vulnerableWords.length === 0 ? (
+                                  <div className="bg-white p-8 rounded-2xl shadow-sm text-center border border-slate-100">
+                                    <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
+                                    <p className="text-lg font-black text-slate-700">오답이 없습니다!</p>
+                                    <p className="text-sm text-slate-500 mt-1 font-bold">학습 목표를 100% 달성했습니다. AI가 다음 학습 주기를 준비합니다.</p>
+                                  </div>
+                                ) : (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {parentReport.vulnerableWords.map((item, idx) => (
+                                      <div key={idx} className="bg-white p-5 rounded-2xl shadow-sm border-l-4 border-indigo-500 flex flex-col">
+                                        <div className="flex justify-between items-start mb-3">
+                                          <div>
+                                            <h4 className="text-xl font-black text-slate-900 leading-none mb-1">{item.word}</h4>
+                                            <p className="text-sm font-bold text-slate-600">{item.meaning}</p>
+                                          </div>
+                                          <span className={`text-[11px] px-2 py-1 rounded-md font-black whitespace-nowrap ${
+                                            item.type === '만성 오답' ? 'bg-rose-100 text-rose-700' :
+                                            item.type === '패시브' ? 'bg-blue-100 text-blue-700' :
+                                            item.type === '복습' ? 'bg-amber-100 text-amber-700' :
+                                            'bg-indigo-100 text-indigo-700'
+                                          }`}>
+                                            {item.type === '만성 오답' ? '🚨 집중 케어' : item.type}
+                                          </span>
+                                        </div>
+                                        <div className="bg-slate-50 p-3 rounded-xl mt-auto border border-slate-100">
+                                          <p className="text-xs font-bold text-slate-600 leading-relaxed break-keep">
+                                            <span className="text-indigo-700 font-black mr-1">AI 분석:</span>
+                                            {item.aiComment}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center py-20 text-center">
+                                <CheckCircle size={56} className="text-emerald-400 mb-4" />
+                                <h3 className="text-2xl font-black text-slate-700 mb-2">오늘의 학습 목표 100% 달성!</h3>
+                                <p className="text-slate-500 font-bold max-w-md break-keep">
+                                    이미 {sessionInfo.sessionNumber}회차 어휘 시험 응시 및 채점을 완료했습니다.
+                                </p>
+                            </div>
+                          )}
                       </div>
                   )}
 

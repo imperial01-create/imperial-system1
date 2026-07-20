@@ -1,7 +1,8 @@
 /* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture)
-   🚀 업데이트 6 (동적 50점 승급 심사): 특정 점수가 아닌 '매 50점 단위(50, 100, 150...)'마다 승급 심사를 강제하는 알고리즘을 도입했습니다. 
-   🚀 업데이트 7 (고급 어휘력 확장): 41~50번 구간에서 유의어/반의어를 묻는 객관식(Multiple Choice) 알고리즘을 적용하여 수능형 어휘 응용력을 강화합니다. 
-   🚀 핫픽스 (단어 기아 현상 방지): Z1 쿼터 증발을 막고 limit 버퍼를 확장하여 무조건 40단어가 출제되도록 안정성을 강화했습니다. */
+   🚀 업데이트 6 (동적 50점 승급 심사): 특정 점수가 아닌 '매 50점 단위'마다 승급 심사를 강제하는 알고리즘 도입.
+   🚀 업데이트 7 (고급 어휘력 확장): 41~50번 구간에서 유의어/반의어를 묻는 객관식 알고리즘 적용.
+   🚀 핫픽스 (단어 기아 현상 방지): Z1 쿼터 증발 방지 및 limit 버퍼(150) 확장을 통한 40단어 무결성 보장.
+   🚀 업데이트 8 (학부모 리포트 최적화): 테스트 완료 시점에 학부모용 분석 JSON을 O(1) 구조로 사전 조립하여 저장. */
 
 import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -28,7 +29,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// [수정] 오답 보기를 추출하기 위해 poolForTest(당일 출제 전체 단어)를 인자로 추가로 받습니다.
 const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
     const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
@@ -70,34 +70,30 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
 
     const selectedType = advancedTypes[Math.floor(Math.random() * advancedTypes.length)];
 
-    // [CTO 최적화 로직] 유의어(1) 또는 반의어(3) 일 때 객관식 형태(Options)의 데이터 구조 생성
     if (selectedType === 1 || selectedType === 3) {
         const isSynonym = selectedType === 1;
         const targetArray = isSynonym ? meaningObj.synonyms : meaningObj.antonyms;
         
-        const correctAnswer = targetArray[0]; // 첫 번째 유의어/반의어를 정답으로 설정
+        const correctAnswer = targetArray[0]; 
         const distractors = [];
         let attempts = 0;
         
-        // 메모리에 로드된 poolForTest를 활용하여 O(1) 방식으로 랜덤 오답 3개 추출 (Firebase 추가 비용 발생 0원)
         while (distractors.length < 3 && attempts < poolForTest.length * 2) {
             attempts++;
-            if (!poolForTest || poolForTest.length === 0) break; // 안전 장치
+            if (!poolForTest || poolForTest.length === 0) break;
 
             const randomWord = poolForTest[Math.floor(Math.random() * poolForTest.length)].word;
             
-            // 오답이 정답과 같지 않고, 원본 단어와도 같지 않으며, 중복되지 않을 때만 추가
             if (randomWord && randomWord !== correctAnswer && randomWord !== word.word && !distractors.includes(randomWord)) {
                 distractors.push(randomWord);
             }
         }
 
-        // 만약 추출 풀이 너무 적어 오답이 3개가 안 채워질 경우를 대비한 안전 장치(Fallback)
         while (distractors.length < 3) {
             distractors.push(`dummy_${Math.floor(Math.random()*1000)}`);
         }
 
-        const options = shuffleArray([correctAnswer, ...distractors]); // 정답 1 + 오답 3 셔플
+        const options = shuffleArray([correctAnswer, ...distractors]); 
 
         return {
             ...baseQuestion, 
@@ -105,7 +101,7 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
             wordText: `다음 단어의 ${isSynonym ? '유의어(Synonym)' : '반의어(Antonym)'}를 고르시오: ${word.word}`,
             answerText: correctAnswer,
             hint: `(뜻: ${allMeanings})`,
-            options: options // 클라이언트 UI에서 이를 바탕으로 버튼식 객관식 렌더링 가능
+            options: options 
         };
     } else if (selectedType === 2) {
         return {
@@ -183,9 +179,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                     newlySeenWordIds.push(d.id);
                 });
                 qZ2 += (qZ1 - selectedZ1.length);
-            } 
-            // 💡 [핫픽스 1] Z1 구간을 건너뛸 경우 할당량을 Z2로 보존 (단어 수 증발 방지)
-            else {
+            } else {
                 qZ2 += qZ1;
             }
 
@@ -204,7 +198,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
             let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
             if (qZ3 > 0) {
-                // 💡 [핫픽스 2] 중복 단어 필터링을 대비해 넉넉한 버퍼(150) 제공 (기존 qZ3 + 20에서 변경)
                 const z3Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(150));
                 const z3Snap = await getDocs(z3Query);
                 const z3Candidates = z3Snap.docs.filter(d => !seenWordIds.has(d.id));
@@ -283,7 +276,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
             
             if (qNew > 0) {
-                // 💡 [핫픽스 3] 2회차 이후 시험에서도 신규 단어가 고갈되지 않도록 안전 버퍼(150) 적용
                 const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(150));
                 const newSnap = await getDocs(newQuery);
                 const newCandidates = newSnap.docs.filter(d => !seenWordIds.has(d.id));
@@ -343,7 +335,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             poolForTest.push(finalWordData[Math.floor(Math.random() * finalWordData.length)]);
         }
 
-        // [수정] 오답 보기를 추출할 수 있도록 poolForTest 데이터를 인자로 넘겨줍니다.
         const full50Questions = poolForTest.map((word, index) => {
             return generateVariedQuestion(word, index + 1, poolForTest);
         });
@@ -525,15 +516,12 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let finalVocaScore = Math.round(currentVocaScore + scoreDelta);
     let autoShiftMessage = '';
 
-    // ============================================================================
-    // 🚀 [CTO 패치] 50점 단위 동적 승급 심사 (Hard-Cap) 알고리즘
-    // ============================================================================
     const nextBoundary = Math.floor(currentVocaScore / 50) * 50 + 50; 
     const maxApprovedPromotion = statData.maxApprovedPromotion || 0;
     let promotionPending = statData.promotionPending || null;
 
     if (finalVocaScore >= nextBoundary && maxApprovedPromotion < nextBoundary) {
-        finalVocaScore = nextBoundary - 1; // 허들에서 -1점으로 강제 정지
+        finalVocaScore = nextBoundary - 1; 
         promotionPending = nextBoundary;
         autoShiftMessage = `🚨 ${nextBoundary}점 승급 심사 구간에 도달했습니다. 담당 강사의 승인 전까지 점수가 오르지 않습니다.`;
     } else {
@@ -590,6 +578,42 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let rubricStr = `기억 유지율 ${retentionRate}%, 다의어 이해도 ${comprehension}%를 기록했습니다.`;
     if (autoShiftMessage) rubricStr = autoShiftMessage; 
 
+    // 💡 [업데이트 8] 학부모용 AI 분석 리포트 JSON 사전 조립 (O(1) 읽기 최적화)
+    const passiveCheckedCount = wordsForPrint ? wordsForPrint.filter(w => w.queueType === '패시브').length : 0;
+    const chronicCount = wrongWordsDetails.filter(w => w.queueType === '만성 오답').length;
+
+    const parentReport = {
+        summary: {
+            retentionRate: retentionRate,
+            comprehension: comprehension,
+            mainComment: autoShiftMessage || `현재 학생의 장기 기억 전환율은 ${retentionRate}%로 매우 안정적입니다.`
+        },
+        metrics: {
+            defended: reviewTotal, 
+            passiveChecked: passiveCheckedCount, 
+            chronic: chronicCount 
+        },
+        vulnerableWords: wrongWordsDetails.map(w => {
+            let aiComment = '';
+            if (w.queueType === '만성 오답') {
+                aiComment = '3회 이상 반복 틀림. 내일 예문 빈칸 채우기 등 다른 형태로 자동 변형되어 집중 재출제됩니다.';
+            } else if (w.queueType === '복습') {
+                aiComment = '망각 주기가 도래하여 재점검 중 혼동이 발생했습니다. 단기 기억을 장기 기억으로 전환하기 위해 주기를 재설정합니다.';
+            } else if (w.queueType === '패시브') {
+                aiComment = '기초 단어 무작위 점검 중 누수가 발견되었습니다. 어학의 뼈대를 흔들지 않도록 기초 구간을 다시 메꿉니다.';
+            } else {
+                aiComment = '새롭게 학습한 단어입니다. 뇌에 완전히 각인될 때까지 내일 1차 복습 시스템이 가동됩니다.';
+            }
+            return {
+                word: w.word,
+                meaning: w.meaning,
+                type: w.queueType,
+                aiComment: aiComment
+            };
+        }),
+        updatedAt: new Date().toISOString()
+    };
+
     await updateDoc(sessionRef, { 
         status: 'completed', 
         wrongCount: wrongSet.size,
@@ -611,6 +635,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         adaptivePreset: newAdaptivePreset,  
         totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, 
         promotionPending: promotionPending,
+        parentReport: parentReport, // 학부모 리포트 데이터 저장 완료
         updatedAt: serverTimestamp()
     });
 };
@@ -658,6 +683,7 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
         waitingReview: rb.waitingReview,
         promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
         maxApprovedPromotion: rb.maxApprovedPromotion !== undefined ? rb.maxApprovedPromotion : 0
+        // 주의: Rollback 시 parentReport는 굳이 삭제하지 않고 다음 테스트 시 덮어씌워지게 둡니다.
     });
 
     await updateDoc(sessionRef, {
