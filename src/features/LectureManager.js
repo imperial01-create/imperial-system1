@@ -2,7 +2,7 @@
    학생 수강 이력(Enrollments)과 강의 일지의 출결 현황을 완벽하게 동기화합니다.
    (🚀 CTO 패치: 하드코딩된 시즌을 폐기하고, 환경설정(Settings) 마스터 데이터를 구독하여 
    오늘 날짜(Today)를 분석, 현재 학원의 운영 시즌을 자동으로 선택해주는 'Auto-Routing 타임머신 엔진'을 이식했습니다.)
-   (🚀 UI/UX 패치: 진도/숙제 텍스트 오버플로우 방지 및 관리 액션 버튼 고정 최적화 적용 완료) */
+   (🚀 UI/UX 핫픽스: 긴 텍스트 입력 시 레이아웃 오버플로우를 방지하고 관리 버튼을 고정하는 반응형 CSS 적용 완료) */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
@@ -178,6 +178,8 @@ const LectureManagementPanel = ({ selectedClass }) => {
         return () => unsub();
     }, [selectedClass]);
 
+    const currentLectures = (lectures || []).filter(l => l?.date === selectedDate);
+
     useEffect(() => {
         if (currentLectures.length === 0) {
             setCompletions([]);
@@ -194,8 +196,6 @@ const LectureManagementPanel = ({ selectedClass }) => {
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_tasks'), where('targetDate', '==', clinicTargetDate));
         getDocs(q).then(snap => setClinicDayTotalCount(snap.size)).catch(err => console.error(err));
     }, [clinicTargetDate, isClinicModalOpen]);
-
-    const currentLectures = (lectures || []).filter(l => l?.date === selectedDate);
 
     const handleOpenClinicModal = () => {
         setClinicTargetStudent(studentsInClass[0]?.id || '');
@@ -301,18 +301,20 @@ const LectureManagementPanel = ({ selectedClass }) => {
                     <Button size="sm" variant="outline" onClick={handleOpenClinicModal} icon={ClipboardList} className="w-full border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100">개별 클리닉 지시</Button>
                 </div>
 
+                {/* 📍 모바일 리스트 뷰 (CSS 오버플로우 방지 적용) */}
                 <div className="block md:hidden space-y-3">
                     {currentLectures.length === 0 ? (
                         <div className="text-center py-8 text-gray-400 border-2 border-dashed rounded-xl">해당 날짜에 일지가 없습니다.</div>
                     ) : (
                         currentLectures.map(lecture => (
                             <div key={lecture.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3">
-                                {/* 💡 [CTO 패치] 오버플로우 방지를 위해 min-w-0 부여 및 버튼 영역 shrink-0 처리 */}
                                 <div className="flex justify-between items-start border-b border-gray-100 pb-2">
+                                    {/* 텍스트가 밀리지 않도록 min-w-0 적용 */}
                                     <div className="flex-1 min-w-0 pr-2">
                                         <span className="inline-block bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-md font-bold mb-1">{lecture.round}</span>
                                         <div className="font-bold text-gray-900 truncate">{lecture.date}</div>
                                     </div>
+                                    {/* 관리 버튼이 찌그러지지 않도록 shrink-0 적용 */}
                                     <div className="flex gap-1 shrink-0 flex-none whitespace-nowrap">
                                         <button onClick={() => handleOpenModal(lecture)} className="p-2 bg-gray-50 text-blue-600 rounded-lg"><Edit2 size={16}/></button>
                                         <button onClick={() => handleDeleteLecture(lecture.id)} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={16}/></button>
@@ -321,6 +323,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                 <div className="space-y-2 text-sm">
                                     <div className="flex gap-2">
                                         <div className="w-6 shrink-0 text-gray-400"><FileText size={16}/></div>
+                                        {/* 긴 텍스트 줄바꿈 강제 적용 */}
                                         <div className="text-gray-700 flex-1 min-w-0 whitespace-pre-wrap break-words">
                                             <span className="font-bold text-gray-500 text-xs block mb-1">진도</span>
                                             {lecture.progress}
@@ -328,6 +331,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                     </div>
                                     <div className="flex gap-2">
                                         <div className="w-6 shrink-0 text-gray-400"><CheckCircle size={16}/></div>
+                                        {/* 긴 텍스트 줄바꿈 강제 적용 */}
                                         <div className="text-gray-700 flex-1 min-w-0 whitespace-pre-wrap break-words">
                                             <span className="font-bold text-gray-500 text-xs block mb-1">숙제</span>
                                             {lecture.homework}
@@ -348,8 +352,9 @@ const LectureManagementPanel = ({ selectedClass }) => {
                     )}
                 </div>
 
+                {/* 📍 데스크탑 테이블 뷰 (CSS 오버플로우 방지 적용) */}
                 <div className="hidden md:block bg-white rounded-xl border border-gray-200 overflow-x-auto custom-scrollbar">
-                    {/* 💡 [CTO 패치] 테이블 레이아웃을 고정하고 오버플로우 시 스크롤 허용 */}
+                    {/* table-fixed를 선언하여 테이블 폭과 컬럼 비율을 고정합니다. */}
                     <table className="w-full text-left text-sm table-fixed min-w-[800px]">
                         <thead className="bg-gray-50 border-b text-gray-500">
                             <tr>
@@ -365,6 +370,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                             {currentLectures.map(lecture => (
                                 <tr key={lecture.id} className="hover:bg-gray-50">
                                     <td className="p-3 text-blue-600 font-bold w-16 align-top">{lecture.round}</td>
+                                    {/* 긴 텍스트 줄바꿈 강제 (truncate 제거) */}
                                     <td className="p-3 whitespace-pre-wrap break-words min-w-0 align-top text-gray-800">{lecture.progress}</td>
                                     <td className="p-3 whitespace-pre-wrap break-words min-w-0 align-top text-gray-800">{lecture.homework}</td>
                                     <td className="p-3 text-center align-top w-20">
@@ -378,6 +384,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                             })}
                                         </div>
                                     </td>
+                                    {/* 관리 버튼 고정 및 찌그러짐 방지 */}
                                     <td className="p-3 text-right align-top w-24">
                                         <div className="flex justify-end gap-2 shrink-0 flex-none whitespace-nowrap">
                                             <button onClick={() => handleOpenModal(lecture)} className="text-gray-400 hover:text-blue-600 p-1 bg-white rounded shadow-sm border border-gray-100"><Edit2 size={16}/></button>
