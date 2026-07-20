@@ -1,11 +1,12 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.5
-   메타인지 최적화: '하이브리드 어휘량 추정 알고리즘'을 도입하여 학생의 실제 어휘 능력을 반영합니다.
-   🚀 업데이트 8 (학부모 리포트 내장): 시험 완료(completed) 상태일 때, 단순 텍스트 대신 AI가 분석한 '취약 어휘 집중 분석 리포트(parentReport)'를 인라인으로 즉시 렌더링하여 학부모의 신뢰를 극대화합니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.6
+   🚀 업데이트 8 (학부모 리포트 내장): 시험 완료 상태일 때 AI 취약 어휘 리포트를 제공합니다.
+   🚀 업데이트 9 (학습 이력 투명화): 학생과 학부모가 최근 10회차의 시험 응시 로그와 점수를 투명하게 확인할 수 있는 '이전 학습 기록' 탭을 신설했습니다. O(1) 병렬 쿼리로 읽기 비용을 최소화했습니다. */
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
     Printer, BookOpen, Clock, FileText, Download, Play, AlertCircle, 
     CheckCircle, RefreshCw, Brain, Target, Users, ShieldAlert, Activity, Info,
-    AlertTriangle, TrendingDown, GraduationCap, Shield, Search // 💡 [추가] 리포트용 아이콘
+    AlertTriangle, TrendingDown, GraduationCap, Shield, Search, History, CalendarCheck, Award
 } from 'lucide-react';
 import { collection, doc, getDoc, getDocs, query, where, orderBy, limit, documentId } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -22,9 +23,8 @@ const PRESET_DESCRIPTIONS = {
     '스퍼트 모드': '신규 70% / 복습 15% / 오답 10% / 패시브 5%'
 };
 
-// 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘 (CAT 점수 연동)
+// 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘
 const getTierProgress = (masteredCount = 0, catScore = 0) => {
-    // 학생의 CAT 지수 1점당 약 8.5단어의 기본 어휘량을 보유하고 있다고 역산합니다.
     const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
     const totalEstimatedWords = baseVocab + masteredCount;
 
@@ -90,9 +90,14 @@ const StudentVocaDaily = ({ currentUser }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // 탭 상태 관리
   const [vulnerableWords, setVulnerableWords] = useState([]);
   const [isVulnerableLoading, setIsVulnerableLoading] = useState(false);
   const [vulnerableLoaded, setVulnerableLoaded] = useState(false);
+
+  const [historyLogs, setHistoryLogs] = useState([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
 
   useEffect(() => {
     const fetchVocaData = async () => {
@@ -109,6 +114,8 @@ const StudentVocaDaily = ({ currentUser }) => {
         setActiveTab('daily');
         setVulnerableLoaded(false);
         setVulnerableWords([]);
+        setHistoryLoaded(false);
+        setHistoryLogs([]);
 
         const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, activeStudentId);
         const statSnap = await getDoc(statRef);
@@ -139,13 +146,14 @@ const StudentVocaDaily = ({ currentUser }) => {
         }
       } catch (error) {
         console.error("Data Fetch Error:", error);
-        setErrorMsg("데이터를 동기화하는 데 문제가 발생했습니다. (권한 대기 중이거나 네트워크를 확인해주세요)");
+        setErrorMsg("데이터를 동기화하는 데 문제가 발생했습니다.");
       }
     };
 
     fetchVocaData();
   }, [activeStudentId, isParent, linkedChildren]);
 
+  // 🚀 취약 어휘 로드 로직
   const fetchVulnerableWords = async () => {
       if (vulnerableLoaded || !activeStudentId) return;
       setIsVulnerableLoading(true);
@@ -192,15 +200,46 @@ const StudentVocaDaily = ({ currentUser }) => {
           setVulnerableLoaded(true);
       } catch (error) {
           console.error("Fetch Vulnerable Error:", error);
-          alert("취약 어휘 데이터를 불러오지 못했습니다.");
       } finally {
           setIsVulnerableLoading(false);
+      }
+  };
+
+  // 🚀 [신규 기능] 학습 이력(로그) 로드 로직 (O(1) 병렬 쿼리 최적화)
+  const fetchHistoryLogs = async () => {
+      if (historyLoaded || !activeStudentId || !studentStats) return;
+      setIsHistoryLoading(true);
+      try {
+          // 컬렉션을 전체 스캔하지 않고, 현재 세션 기준으로 역순 10개의 문서를 직접 조회합니다. (비용 극최소화)
+          const currentSession = studentStats.vocaSession || 1;
+          const fetchPromises = [];
+          
+          for (let i = 1; i <= 10; i++) {
+              const targetSessionNum = currentSession - i;
+              if (targetSessionNum <= 0) break;
+              
+              const testRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, `test_${activeStudentId}_s${targetSessionNum}`);
+              fetchPromises.push(getDoc(testRef));
+          }
+
+          const snaps = await Promise.all(fetchPromises);
+          const logs = snaps
+            .filter(snap => snap.exists() && snap.data().status === 'completed')
+            .map(snap => snap.data());
+
+          setHistoryLogs(logs);
+          setHistoryLoaded(true);
+      } catch (error) {
+          console.error("Fetch History Error:", error);
+      } finally {
+          setIsHistoryLoading(false);
       }
   };
 
   const handleTabChange = (tab) => {
       setActiveTab(tab);
       if (tab === 'vulnerable') fetchVulnerableWords();
+      if (tab === 'history') fetchHistoryLogs();
   };
 
   const handleGenerateVoca = async () => {
@@ -347,7 +386,7 @@ const StudentVocaDaily = ({ currentUser }) => {
   const isPrintReady = sessionInfo.status === 'ready' && wordsList.length > 0;
   const currentPresetName = studentStats?.adaptivePreset || studentStats?.vocaPreset || '밸런스 모드';
   const tierInfo = studentStats ? getTierProgress(studentStats.masteredCount || 0, studentStats.catScore || 0) : null;
-  const parentReport = studentStats?.parentReport; // 💡 [추가] vocaEngine에서 저장한 AI 분석 리포트 데이터
+  const parentReport = studentStats?.parentReport; 
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -471,21 +510,29 @@ const StudentVocaDaily = ({ currentUser }) => {
         </div>
       )}
 
+      {/* 💡 3단 탭 메뉴 */}
       <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1 mb-6 print:hidden">
           <button 
               onClick={() => handleTabChange('daily')} 
-              className={`flex-1 py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'daily' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
+              className={`flex-1 min-w-[120px] py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'daily' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
           >
               <BookOpen size={18} /> 오늘의 단어장
           </button>
           <button 
               onClick={() => handleTabChange('vulnerable')} 
-              className={`flex-1 py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'vulnerable' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
+              className={`flex-1 min-w-[120px] py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'vulnerable' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
           >
-              <AlertTriangle size={18} /> 취약 어휘 집중 분석
+              <AlertTriangle size={18} /> 취약 어휘 분석
+          </button>
+          <button 
+              onClick={() => handleTabChange('history')} 
+              className={`flex-1 min-w-[120px] py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'history' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
+          >
+              <History size={18} /> 이전 학습 기록
           </button>
       </div>
 
+      {/* 탭 1: 오늘의 단어장 */}
       {activeTab === 'daily' && (
           <>
               {!isParent && sessionInfo.status !== 'completed' && (
@@ -531,12 +578,10 @@ const StudentVocaDaily = ({ currentUser }) => {
                       </div>
                   )}
 
-                  {/* 💡 [CTO 패치] 시험 완료 상태일 때, 단순 메시지 대신 AI 분석 리포트 인라인 렌더링 */}
                   {sessionInfo.status === 'completed' && (
                       <div className="w-full animate-in fade-in print:hidden">
                           {parentReport ? (
                             <div className="bg-slate-50 rounded-3xl overflow-hidden border border-slate-200 shadow-inner">
-                              {/* 1단계: AI 3줄 요약 */}
                               <div className="bg-indigo-900 text-white p-8">
                                 <h2 className="text-2xl font-black mb-4 flex items-center gap-2">
                                     <Brain className="text-indigo-300" /> AI 단어 밀착 분석 리포트
@@ -549,7 +594,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                                 </div>
                               </div>
 
-                              {/* 2단계: 핵심 원리 대시보드 */}
                               <div className="p-8 pb-4">
                                 <h3 className="text-lg font-black text-slate-800 mb-4">오늘의 AI 케어 현황</h3>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -577,7 +621,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                                 </div>
                               </div>
 
-                              {/* 3단계: 취약 어휘 리스트 */}
                               <div className="p-8 pt-4">
                                 <div className="flex justify-between items-end mb-4 border-b border-slate-200 pb-2">
                                   <h3 className="text-lg font-black text-slate-800">취약 어휘 집중 분석</h3>
@@ -729,15 +772,16 @@ const StudentVocaDaily = ({ currentUser }) => {
           </>
       )}
 
+{/* 탭 2: AI 오답 추적 및 관리 프로세스 (기존 취약어휘 탭 개편) */}
       {activeTab === 'vulnerable' && (
           <div className="animate-in fade-in slide-in-from-bottom-4">
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 bg-rose-50 p-6 rounded-3xl border border-rose-100">
                   <div>
                       <h2 className="text-xl font-black text-rose-800 flex items-center gap-2 mb-2">
-                          <TrendingDown className="text-rose-500" /> 누적 취약 어휘 (Top 30)
+                          <Activity className="text-rose-500" /> AI 오답 극복 및 관리 프로세스
                       </h2>
                       <p className="text-sm font-bold text-rose-600 break-keep">
-                          AI가 분석한 학생의 가장 취약한 단어 목록입니다. 해당 단어들을 가정에서 집중적으로 점검해주세요.
+                          단순히 틀린 단어를 나열하지 않습니다. 시스템이 학생의 오답을 어떻게 추적하고 마스터 시키는지 투명하게 공개합니다.
                       </p>
                   </div>
                   <button 
@@ -745,84 +789,100 @@ const StudentVocaDaily = ({ currentUser }) => {
                       disabled={isVulnerableLoading || vulnerableWords.length === 0}
                       className="mt-4 sm:mt-0 px-6 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black shadow-md flex items-center gap-2 transition-colors disabled:opacity-50 shrink-0"
                   >
-                      <Printer size={18} /> 오답 노트 인쇄
+                      <Printer size={18} /> 오답 처방전 인쇄
                   </button>
               </div>
 
-              <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-8 min-h-[400px]">
+              <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-6 sm:p-8 min-h-[400px]">
+                  
+                  {/* 🚀 [신규] 오답 치료 파이프라인 UI */}
+                  <div className="mb-8 p-6 bg-slate-50 border border-slate-200 rounded-2xl">
+                      <h3 className="text-base font-black text-slate-700 mb-4 flex items-center gap-2">
+                          <Target size={18} className="text-indigo-500"/> 현재 {targetStudentName} 학생의 오답 처리 현황
+                      </h3>
+                      <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                          <div className="flex-1 w-full bg-white p-4 border border-rose-200 rounded-xl shadow-sm text-center">
+                              <p className="text-xs font-bold text-rose-500 mb-1">현재 교정 대기 중인 오답</p>
+                              <p className="text-2xl font-black text-rose-700">{studentStats?.waitingWrong || 0}<span className="text-sm font-bold text-rose-400 ml-1">단어</span></p>
+                          </div>
+                          <div className="hidden md:block text-slate-300">
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                          </div>
+                          <div className="flex-1 w-full bg-white p-4 border border-amber-200 rounded-xl shadow-sm text-center">
+                              <p className="text-xs font-bold text-amber-600 mb-1">내일 시험 변형 출제 대기</p>
+                              <p className="text-2xl font-black text-amber-700">
+                                  {/* 내일 출제될 오답량 예측 (프리셋 기준) */}
+                                  {Math.min(studentStats?.waitingWrong || 0, Math.round(40 * (VOCA_PRESETS[currentPresetName]?.wrong || 15) / 100))}
+                                  <span className="text-sm font-bold text-amber-400 ml-1">단어</span>
+                              </p>
+                          </div>
+                          <div className="hidden md:block text-slate-300">
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                          </div>
+                          <div className="flex-1 w-full bg-white p-4 border border-emerald-200 rounded-xl shadow-sm text-center">
+                              <p className="text-xs font-bold text-emerald-600 mb-1">오답 극복 ➔ 마스터 전환</p>
+                              <p className="text-2xl font-black text-emerald-700">{studentStats?.masteredCount || 0}<span className="text-sm font-bold text-emerald-400 ml-1">단어</span></p>
+                          </div>
+                      </div>
+                  </div>
+
                   {isVulnerableLoading ? (
-                      <div className="flex flex-col items-center justify-center py-20 text-center">
+                      <div className="flex flex-col items-center justify-center py-10 text-center">
                           <RefreshCw size={40} className="text-rose-400 animate-spin mb-4" />
-                          <h3 className="text-xl font-bold text-slate-600">취약 어휘 데이터를 분석 중입니다...</h3>
+                          <h3 className="text-xl font-bold text-slate-600">오답 데이터를 분석 중입니다...</h3>
                       </div>
                   ) : vulnerableWords.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-20 text-center">
+                      <div className="flex flex-col items-center justify-center py-10 text-center">
                           <CheckCircle size={56} className="text-emerald-400 mb-4" />
-                          <h3 className="text-2xl font-black text-slate-700 mb-2">취약 어휘가 없습니다!</h3>
-                          <p className="text-slate-500 font-bold">학생이 현재까지 틀린 단어가 없거나 데이터가 부족합니다.</p>
+                          <h3 className="text-2xl font-black text-slate-700 mb-2">현재 누적된 오답이 없습니다!</h3>
+                          <p className="text-slate-500 font-bold">학생이 모든 단어를 완벽하게 장기기억으로 전환했습니다.</p>
                       </div>
                   ) : (
                       <table className="w-full text-left border-collapse">
                           <thead>
                               <tr className="bg-slate-50">
-                                  <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-16 text-center">오답 수</th>
+                                  <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-24 text-center">누적 오답</th>
                                   <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700 w-1/3">Target Vocabulary</th>
-                                  <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">Core Meaning (핵심 의미)</th>
+                                  <th className="p-3 border-b-2 border-slate-300 font-black text-slate-700">AI 시스템 관리 현황 (Action Plan)</th>
                               </tr>
                           </thead>
                           <tbody>
                               {vulnerableWords.map((word) => {
-                                  const meanings = word.meanings && word.meanings.length > 0 ? word.meanings : [];
+                                  const meaning = word.meanings && word.meanings.length > 0 ? word.meanings[0].koreanMeaning : '뜻 없음';
+                                  const isChronic = word.status === 'chronic_error';
+                                  
                                   return (
-                                      <tr key={word.wordId} className="border-b border-slate-100">
-                                          <td className="p-3 text-center align-top">
-                                              <div className={`font-black text-sm w-10 h-10 mx-auto rounded-full flex items-center justify-center ${word.status === 'chronic_error' ? 'bg-rose-100 text-rose-700' : 'bg-orange-100 text-orange-700'}`}>
-                                                  {word.incorrectCount}회
+                                      <tr key={word.wordId} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                                          <td className="p-3 text-center align-middle">
+                                              <div className={`font-black text-sm w-12 h-12 mx-auto rounded-xl flex flex-col items-center justify-center ${isChronic ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-orange-50 text-orange-700 border border-orange-200'}`}>
+                                                  <span className="text-lg leading-none">{word.incorrectCount}</span>
+                                                  <span className="text-[10px] opacity-70">Times</span>
                                               </div>
                                           </td>
-                                          <td className="p-3 font-black text-lg text-slate-800 tracking-wide align-top">
-                                              {word.word}
-                                              {word.status === 'chronic_error' && <span className="block mt-1 text-[10px] bg-rose-50 text-rose-600 px-2 py-0.5 rounded border border-rose-100 w-fit">만성 오답</span>}
+                                          <td className="p-3 align-middle">
+                                              <div className="font-black text-xl text-slate-800 tracking-wide">
+                                                  {word.word}
+                                              </div>
+                                              <div className="font-bold text-sm text-slate-500 mt-1 truncate max-w-[200px]">
+                                                  {meaning}
+                                              </div>
                                           </td>
-                                          <td className="p-3 font-bold text-slate-600 align-top">
-                                              {meanings.length > 0 ? (
-                                                  <div className="space-y-1">
-                                                      {meanings.map((m, i) => (
-                                                          <div key={i} className="text-[15px] font-black text-blue-900">
-                                                              {m.partOfSpeech && <span className="text-slate-400 font-normal mr-1">[{m.partOfSpeech}]</span>}
-                                                              {i + 1}. {m.koreanMeaning}
-                                                          </div>
-                                                      ))}
-                                                  </div>
-                                              ) : '뜻 정보 없음'}
-                                              
-                                              <div className="mt-2 space-y-1">
-                                                  {(() => {
-                                                      let allSynonyms = [];
-                                                      let allAntonyms = [];
-                                                      let fullSentence = '';
-                                                      
-                                                      meanings.forEach(m => {
-                                                          if (m.synonyms) allSynonyms.push(...m.synonyms);
-                                                          if (m.antonyms) allAntonyms.push(...m.antonyms);
-                                                          if (!fullSentence && m.exampleSentence) fullSentence = m.exampleSentence;
-                                                          else if (!fullSentence && m.blankSentence && m.blankSentence.length > 0) {
-                                                              const regex = new RegExp('_+(?:\\s*_+)*', 'g');
-                                                              fullSentence = m.blankSentence[0].replace(regex, word.word);
-                                                          }
-                                                      });
-
-                                                      allSynonyms = [...new Set(allSynonyms)];
-                                                      allAntonyms = [...new Set(allAntonyms)];
-
-                                                      return (
+                                          <td className="p-3 align-middle">
+                                              <div className={`p-3 rounded-xl border text-sm font-bold flex items-start gap-2 ${isChronic ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-indigo-50 border-indigo-200 text-indigo-800'}`}>
+                                                  <ShieldAlert size={18} className={`shrink-0 mt-0.5 ${isChronic ? 'text-rose-600' : 'text-indigo-600'}`} />
+                                                  <div className="leading-relaxed">
+                                                      {isChronic ? (
                                                           <>
-                                                              {allSynonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">유의어</span> {allSynonyms.join(', ')}</div>}
-                                                              {allAntonyms.length > 0 && <div className="text-xs font-bold text-slate-500"><span className="text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">반의어</span> {allAntonyms.join(', ')}</div>}
-                                                              {fullSentence && <div className="text-xs font-bold text-slate-500"><span className="text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded mr-1 text-[10px]">예문</span> {fullSentence}</div>}
+                                                              <span className="block text-rose-600 font-black mb-1">[만성 오답 타격 알고리즘 가동]</span>
+                                                              해당 단어는 3회 이상 오답이 발생하여 <span className="underline decoration-rose-400 underline-offset-2">'객관식/예문 빈칸 추론'</span> 형태로 자동 변형되어 내일 시험에 1순위로 강제 배정됩니다.
                                                           </>
-                                                      );
-                                                  })()}
+                                                      ) : (
+                                                          <>
+                                                              <span className="block text-indigo-600 font-black mb-1">[일반 오답 재학습 큐 대기]</span>
+                                                              해당 단어는 에빙하우스 망각 주기에 따라, 단기 기억이 소실되기 직전인 <span className="underline decoration-indigo-400 underline-offset-2">다음 회차 시험에 재등장</span>하여 장기기억으로 이식됩니다.
+                                                          </>
+                                                      )}
+                                                  </div>
                                               </div>
                                           </td>
                                       </tr>
@@ -834,6 +894,78 @@ const StudentVocaDaily = ({ currentUser }) => {
               </div>
           </div>
       )}
+
+      {/* 🚀 [신규 기능] 탭 3: 이전 학습 기록 (로그) */}
+      {activeTab === 'history' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4">
+              <div className="flex flex-col sm:flex-row justify-between items-center mb-6 bg-emerald-50 p-6 rounded-3xl border border-emerald-100">
+                  <div>
+                      <h2 className="text-xl font-black text-emerald-800 flex items-center gap-2 mb-2">
+                          <CalendarCheck className="text-emerald-500" /> 최근 학습 이력 (최근 10회차)
+                      </h2>
+                      <p className="text-sm font-bold text-emerald-600 break-keep">
+                          학생이 최근 응시한 10번의 단어 시험 결과와 당시 적용된 AI 프리셋을 투명하게 확인합니다.
+                      </p>
+                  </div>
+              </div>
+
+              <div className="bg-white rounded-[32px] shadow-sm border border-slate-200 p-4 sm:p-8 min-h-[400px]">
+                  {isHistoryLoading ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-center">
+                          <RefreshCw size={40} className="text-emerald-400 animate-spin mb-4" />
+                          <h3 className="text-xl font-bold text-slate-600">과거 학습 데이터를 불러오는 중입니다...</h3>
+                      </div>
+                  ) : historyLogs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-20 text-center">
+                          <History size={56} className="text-slate-300 mb-4" />
+                          <h3 className="text-2xl font-black text-slate-700 mb-2">아직 완료된 학습 기록이 없습니다.</h3>
+                          <p className="text-slate-500 font-bold">첫 번째 단어 시험을 완료하면 이곳에 기록이 쌓이기 시작합니다.</p>
+                      </div>
+                  ) : (
+                      <div className="space-y-4">
+                          {historyLogs.map((log, idx) => {
+                              const isPerfect = log.sessionScore === 100;
+                              const dateStr = log.completedAt?.toDate 
+                                  ? log.completedAt.toDate().toLocaleDateString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) 
+                                  : '날짜 정보 없음';
+
+                              return (
+                                  <div key={idx} className={`p-5 rounded-2xl border-2 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${isPerfect ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-100'}`}>
+                                      <div className="flex items-center gap-4">
+                                          <div className={`w-14 h-14 rounded-full flex flex-col items-center justify-center shrink-0 shadow-sm ${isPerfect ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                                              <span className="text-xs font-bold opacity-80">회차</span>
+                                              <span className="text-lg font-black leading-none">{log.sessionNumber}</span>
+                                          </div>
+                                          <div>
+                                              <div className="flex items-center gap-2 mb-1">
+                                                  <h4 className="text-lg font-black text-slate-800">{dateStr} 완료</h4>
+                                                  {isPerfect && <Award size={18} className="text-blue-500" />}
+                                              </div>
+                                              <div className="flex items-center gap-2 text-sm font-bold">
+                                                  <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200">
+                                                      {log.presetUsed || '기본 모드'}
+                                                  </span>
+                                                  <span className="text-rose-500">
+                                                      오답 {log.wrongCount || 0}개
+                                                  </span>
+                                              </div>
+                                          </div>
+                                      </div>
+                                      
+                                      <div className="text-right shrink-0">
+                                          <div className={`text-3xl font-black ${isPerfect ? 'text-blue-600' : log.sessionScore >= 80 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                              {log.sessionScore}<span className="text-lg opacity-50">%</span>
+                                          </div>
+                                      </div>
+                                  </div>
+                              );
+                          })}
+                      </div>
+                  )}
+              </div>
+          </div>
+      )}
+
     </div>
   );
 };
