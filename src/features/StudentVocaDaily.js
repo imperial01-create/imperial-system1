@@ -1,6 +1,7 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.6
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.7
    🚀 업데이트 8 (학부모 리포트 내장): 시험 완료 상태일 때 AI 취약 어휘 리포트를 제공합니다.
-   🚀 업데이트 9 (학습 이력 투명화): 학생과 학부모가 최근 10회차의 시험 응시 로그와 점수를 투명하게 확인할 수 있는 '이전 학습 기록' 탭을 신설했습니다. O(1) 병렬 쿼리로 읽기 비용을 최소화했습니다. */
+   🚀 업데이트 9 (학습 이력 투명화): 학생과 학부모가 최근 10회차의 시험 응시 로그와 점수를 투명하게 확인할 수 있는 '이전 학습 기록' 탭 신설.
+   🚀 업데이트 10 (오답 처방전 개편 & 렌더링 핫픽스): 학부모에게 오답의 뜻을 나열하는 대신 'AI 시스템의 후속 조치(Action Plan)'를 시각화하여 신뢰도를 높이고, 빈 화면 렌더링 버그를 수정했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -90,7 +91,6 @@ const StudentVocaDaily = ({ currentUser }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // 탭 상태 관리
   const [vulnerableWords, setVulnerableWords] = useState([]);
   const [isVulnerableLoading, setIsVulnerableLoading] = useState(false);
   const [vulnerableLoaded, setVulnerableLoaded] = useState(false);
@@ -153,7 +153,7 @@ const StudentVocaDaily = ({ currentUser }) => {
     fetchVocaData();
   }, [activeStudentId, isParent, linkedChildren]);
 
-  // 🚀 취약 어휘 로드 로직
+  // 🚀 취약 어휘 로드 로직 (빈 화면 버그 수정)
   const fetchVulnerableWords = async () => {
       if (vulnerableLoaded || !activeStudentId) return;
       setIsVulnerableLoading(true);
@@ -180,6 +180,9 @@ const StudentVocaDaily = ({ currentUser }) => {
           
           for (let i = 0; i < wordIds.length; i += chunkSize) {
               const chunkIds = wordIds.slice(i, i + chunkSize);
+              // Firestore 'in' 쿼리는 최대 10개 요소까지만 지원하므로 안전망 추가
+              if (chunkIds.length === 0) continue; 
+              
               const vocaQuery = query(collection(db, 'VocabularyDB'), where(documentId(), 'in', chunkIds));
               const vocaSnap = await getDocs(vocaQuery);
               
@@ -200,17 +203,17 @@ const StudentVocaDaily = ({ currentUser }) => {
           setVulnerableLoaded(true);
       } catch (error) {
           console.error("Fetch Vulnerable Error:", error);
+          setVulnerableWords([]); // 에러 시 빈 배열로 리셋하여 렌더링 충돌 방지
+          setVulnerableLoaded(true);
       } finally {
           setIsVulnerableLoading(false);
       }
   };
 
-  // 🚀 [신규 기능] 학습 이력(로그) 로드 로직 (O(1) 병렬 쿼리 최적화)
   const fetchHistoryLogs = async () => {
       if (historyLoaded || !activeStudentId || !studentStats) return;
       setIsHistoryLoading(true);
       try {
-          // 컬렉션을 전체 스캔하지 않고, 현재 세션 기준으로 역순 10개의 문서를 직접 조회합니다. (비용 극최소화)
           const currentSession = studentStats.vocaSession || 1;
           const fetchPromises = [];
           
@@ -522,7 +525,7 @@ const StudentVocaDaily = ({ currentUser }) => {
               onClick={() => handleTabChange('vulnerable')} 
               className={`flex-1 min-w-[120px] py-3 rounded-xl font-black transition-all flex items-center justify-center gap-2 ${activeTab === 'vulnerable' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
           >
-              <AlertTriangle size={18} /> 취약 어휘 분석
+              <Target size={18} /> 오답 극복 프로세스
           </button>
           <button 
               onClick={() => handleTabChange('history')} 
@@ -772,7 +775,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           </>
       )}
 
-{/* 탭 2: AI 오답 추적 및 관리 프로세스 (기존 취약어휘 탭 개편) */}
+      {/* 탭 2: AI 오답 추적 및 관리 프로세스 (기존 취약어휘 탭 개편) */}
       {activeTab === 'vulnerable' && (
           <div className="animate-in fade-in slide-in-from-bottom-4">
               <div className="flex flex-col sm:flex-row justify-between items-center mb-6 bg-rose-50 p-6 rounded-3xl border border-rose-100">
@@ -811,7 +814,6 @@ const StudentVocaDaily = ({ currentUser }) => {
                           <div className="flex-1 w-full bg-white p-4 border border-amber-200 rounded-xl shadow-sm text-center">
                               <p className="text-xs font-bold text-amber-600 mb-1">내일 시험 변형 출제 대기</p>
                               <p className="text-2xl font-black text-amber-700">
-                                  {/* 내일 출제될 오답량 예측 (프리셋 기준) */}
                                   {Math.min(studentStats?.waitingWrong || 0, Math.round(40 * (VOCA_PRESETS[currentPresetName]?.wrong || 15) / 100))}
                                   <span className="text-sm font-bold text-amber-400 ml-1">단어</span>
                               </p>
