@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.7
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 클라이언트 포털 v2.8
    🚀 업데이트 8 (학부모 리포트 내장): 시험 완료 상태일 때 AI 취약 어휘 리포트를 제공합니다.
    🚀 업데이트 9 (학습 이력 투명화): 학생과 학부모가 최근 10회차의 시험 응시 로그와 점수를 투명하게 확인할 수 있는 '이전 학습 기록' 탭 신설.
-   🚀 업데이트 10 (오답 처방전 개편 & 렌더링 핫픽스): 학부모에게 오답의 뜻을 나열하는 대신 'AI 시스템의 후속 조치(Action Plan)'를 시각화하여 신뢰도를 높이고, 빈 화면 렌더링 버그를 수정했습니다. */
+   🚀 업데이트 10 (오답 처방전 개편 & 렌더링 핫픽스): 학부모에게 오답의 뜻을 나열하는 대신 'AI 시스템의 후속 조치(Action Plan)'를 시각화하여 신뢰도를 높이고, VOCA_PRESETS ReferenceError로 인한 빈 화면 렌더링 버그를 완벽하게 수정했습니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
@@ -22,6 +22,15 @@ const PRESET_DESCRIPTIONS = {
     '망각 방어': '신규 0% / 복습 50% / 오답 40% / 패시브 10%',
     '기초 수리': '신규 30% / 복습 20% / 오답 10% / 패시브 40%',
     '스퍼트 모드': '신규 70% / 복습 15% / 오답 10% / 패시브 5%'
+};
+
+// 🚀 [CTO 패치] 런타임 에러(빈 화면) 원인 해결을 위한 프리셋 메타데이터 상수화
+const VOCA_PRESETS = {
+    '밸런스 모드': { wrong: 15 },
+    '오답 학습': { wrong: 60 },
+    '망각 방어': { wrong: 40 },
+    '기초 수리': { wrong: 10 },
+    '스퍼트 모드': { wrong: 10 }
 };
 
 // 🚀 [CTO 패치] 하이브리드 어휘량 추정 알고리즘
@@ -153,7 +162,6 @@ const StudentVocaDaily = ({ currentUser }) => {
     fetchVocaData();
   }, [activeStudentId, isParent, linkedChildren]);
 
-  // 🚀 취약 어휘 로드 로직 (빈 화면 버그 수정)
   const fetchVulnerableWords = async () => {
       if (vulnerableLoaded || !activeStudentId) return;
       setIsVulnerableLoading(true);
@@ -180,7 +188,6 @@ const StudentVocaDaily = ({ currentUser }) => {
           
           for (let i = 0; i < wordIds.length; i += chunkSize) {
               const chunkIds = wordIds.slice(i, i + chunkSize);
-              // Firestore 'in' 쿼리는 최대 10개 요소까지만 지원하므로 안전망 추가
               if (chunkIds.length === 0) continue; 
               
               const vocaQuery = query(collection(db, 'VocabularyDB'), where(documentId(), 'in', chunkIds));
@@ -203,7 +210,7 @@ const StudentVocaDaily = ({ currentUser }) => {
           setVulnerableLoaded(true);
       } catch (error) {
           console.error("Fetch Vulnerable Error:", error);
-          setVulnerableWords([]); // 에러 시 빈 배열로 리셋하여 렌더링 충돌 방지
+          setVulnerableWords([]); 
           setVulnerableLoaded(true);
       } finally {
           setIsVulnerableLoading(false);
@@ -814,7 +821,8 @@ const StudentVocaDaily = ({ currentUser }) => {
                           <div className="flex-1 w-full bg-white p-4 border border-amber-200 rounded-xl shadow-sm text-center">
                               <p className="text-xs font-bold text-amber-600 mb-1">내일 시험 변형 출제 대기</p>
                               <p className="text-2xl font-black text-amber-700">
-                                  {Math.min(studentStats?.waitingWrong || 0, Math.round(40 * (VOCA_PRESETS[currentPresetName]?.wrong || 15) / 100))}
+                                  {/* 🚀 VOCA_PRESETS ReferenceError 원천 차단 및 방어적 코딩 적용 */}
+                                  {Math.min(studentStats?.waitingWrong || 0, Math.round(40 * ((VOCA_PRESETS && VOCA_PRESETS[currentPresetName]?.wrong) || 15) / 100))}
                                   <span className="text-sm font-bold text-amber-400 ml-1">단어</span>
                               </p>
                           </div>
