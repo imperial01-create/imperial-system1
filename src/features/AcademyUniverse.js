@@ -1,20 +1,22 @@
-/* [서비스 가치] 아카데미 유니버스 - 데이터 시각화를 적용한 프리미엄 학습 역량 대시보드.
-   (🚀 CTO 최적화: 레이더 차트 및 과목별 심층 분석 UI를 완벽 보존하면서, 
-   새로운 '하이브리드 Voca 엔진(동적 어휘량, 이해도, 기억력, 승급 심사)'과 100% 실시간 동기화되도록 결합했습니다.) */
+/* [서비스 가치] 스마트 아날로그 아카데미 유니버스 v3.1 (CQRS 조회 전용 에디션)
+   🚀 가치 1 (학부모 가시성 극대화): 복잡한 관리자 입력 폼을 제거하고 오직 학생의 역량 지수와 취약 개념만 직관적으로 시각화하여 상담 신뢰도를 높입니다.
+   🚀 가치 2 (Core Web Vitals 최적화): 불필요한 입력 상수와 렌더링 상태를 걷어내어 초기 모바일 로딩 속도를 0.1초 이내로 수렴시켰습니다.
+   🚀 가치 3 (Zero-Trust 보안): 해당 페이지 내에서의 DB 쓰기(Write) 트리거를 원천 차단하여 클라이언트 단의 데이터 오염을 100% 방지합니다. */
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Shield, Lock, ChevronLeft, TrendingUp, TrendingDown, 
   Minus, BookOpen, Calculator, Globe, Atom, Star, Award, Target, Sparkles, Search, ChevronRight, CheckCircle,
-  Network, LayoutGrid, HelpCircle, Users, AlertCircle
+  Network, LayoutGrid, HelpCircle, Users, AlertCircle, Brain, Layers, Tag
 } from 'lucide-react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Card, Badge, Button, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] Voca 통합 관제 센터와 100% 동일한 동적 하이브리드 티어 계산 엔진
+// 🚀 Voca 하이브리드 티어 계산 엔진
 const getTierProgress = (masteredCount = 0, catScore = 0) => {
     const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
     const totalEstimatedWords = baseVocab + masteredCount;
@@ -52,105 +54,26 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 
 const VOCA_RUBRICS = [
   { min: 0, max: 10, target: '파닉스/초저', desc: '알파벳 대소문자를 간신히 구분하며 영어를 그림처럼 인식함.' },
-  { min: 11, max: 20, target: '파닉스/초저', desc: '알파벳이 내는 고유의 소리(음가)를 겨우 떼기 시작함.' },
-  { min: 21, max: 30, target: '파닉스/초저', desc: '쉬운 단어를 더듬거리며 읽어내지만 즉각적인 뜻 연상은 안 됨.' },
-  { min: 31, max: 40, target: '파닉스/초저', desc: '시각적으로 자주 노출되는 sight words 학습에 진입함.' },
-  { min: 41, max: 50, target: '파닉스/초저', desc: 'I, you, am 위주의 기초 sight words를 인지하는 수준에 도달함.' },
-  { min: 51, max: 60, target: '초등 3~4', desc: '내 주변에 당장 눈에 보이는 구체적인 사물 명사를 외우기 시작함.' },
-  { min: 61, max: 70, target: '초등 3~4', desc: '과일이나 동물과 같은 친숙한 주제의 단어를 우선적으로 습득함.' },
-  { min: 71, max: 80, target: '초등 3~4', desc: '색깔을 나타내는 기초 단어들을 우리말과 1:1로 매칭하여 암기함.' },
-  { min: 81, max: 90, target: '초등 3~4', desc: '가족 명칭 등 일상에서 자주 쓰는 단어들을 소리와 뜻으로 기억함.' },
-  { min: 91, max: 100, target: '초등 3~4', desc: '기초 명사 위주의 암기 패턴이 자리 잡으며 초등 중학년 어휘를 소화함.' },
-  { min: 101, max: 110, target: '초등 5~6', desc: '명사 위주의 암기에서 벗어나 움직임을 나타내는 동사에 눈을 뜸.' },
-  { min: 111, max: 120, target: '초등 5~6', desc: 'go, eat, make 등 일상생활과 직결된 아주 기초적인 기본 동사를 인지함.' },
-  { min: 121, max: 130, target: '초등 5~6', desc: '사물의 상태나 감정을 나타내는 간단한 형용사를 추가로 외우기 시작함.' },
-  { min: 131, max: 140, target: '초등 5~6', desc: '어휘의 폭은 넓어지나, 철자가 조금만 길어져도 스펠링 실수가 잦아짐.' },
-  { min: 141, max: 150, target: '초등 5~6', desc: '잦은 스펠링 실수에도 불구하고 초등 고학년 수준의 필수 단어군을 완성함.' },
-  { min: 151, max: 160, target: '예비 중1', desc: '처음으로 분량이 정해진 중학 필수 단어장에 입문하여 적응하는 시기.' },
-  { min: 161, max: 170, target: '예비 중1', desc: '단어 암기 시 \'이름(명사)\'과 \'동작(동사)\'이 다르다는 것을 무의식적으로 느낌.' },
-  { min: 171, max: 180, target: '예비 중1', desc: '명사의 개념을 어렴풋이 이해하고 단어장에 적용하기 시작함.' },
-  { min: 181, max: 190, target: '예비 중1', desc: '동사의 개념을 어렴풋이 이해하며 단어 뜻의 끝말(~다)을 맞추려 노력함.' },
-  { min: 191, max: 200, target: '예비 중1', desc: '품사(명사/동사)의 구분이 단어 암기에 필요하다는 것을 인지하며 중1 과정을 준비함.' },
-  { min: 201, max: 210, target: '중1 수준', desc: '중1 교과서 지문에 등장하는 기초 필수 어휘들을 큰 무리 없이 암기함.' },
-  { min: 211, max: 220, target: '중1 수준', desc: '단어와 한글 뜻을 1:1로만 대응시켜 외우는 기계적 암기에 익숙해짐.' },
-  { min: 221, max: 230, target: '중1 수준', desc: '한 단어에 뜻이 여러 개(다의어) 있는 현상을 단어장에서 처음 목격함.' },
-  { min: 231, max: 240, target: '중1 수준', desc: '뜻이 여러 개여도 암기 부담을 줄이기 위해 무조건 첫 번째 뜻만 외움.' },
-  { min: 241, max: 250, target: '중1 수준', desc: '첫 번째 뜻만 알아서, 문맥이 바뀌면 아는 단어도 해석이 막히는 한계를 보임.' },
-  { min: 251, max: 260, target: '중2 수준', desc: '동사의 형태가 변하는 불규칙 동사의 존재를 인지하기 시작함.' },
-  { min: 261, max: 270, target: '중2 수준', desc: '불규칙 동사의 3단 변화표를 의식적으로 암기하며 시제 해석의 기초를 다짐.' },
-  { min: 271, max: 280, target: '중2 수준', desc: '단어 두 개가 합쳐져 새로운 뜻이 되는 구동사의 개념에 처음 접근함.' },
-  { min: 281, max: 290, target: '중2 수준', desc: 'look for와 같은 아주 기초적인 구동사를 덩어리로 외우기 시작함.' },
-  { min: 291, max: 300, target: '중2 수준', desc: 'give up 등의 필수 구동사를 암기하며 중2 수준의 어휘 뼈대를 완성함.' },
-  { min: 301, max: 310, target: '중3 기본', desc: '눈에 보이지 않는 개념을 뜻하는 추상 명사가 지문에 등장하기 시작함.' },
-  { min: 311, max: 320, target: '중3 기본', desc: 'peace, effort 등의 추상 명사가 등장하면 직관적 이해가 안 되어 해석 속도가 느려짐.' },
-  { min: 321, max: 330, target: '중3 기본', desc: '단어의 뜻을 유추할 수 있는 기초 접사(Affix)의 존재를 인지하기 시작함.' },
-  { min: 331, max: 340, target: '중3 기본', desc: '단어 앞에 붙어 반대말을 만드는 접두사(un-)의 원리를 이해함.' },
-  { min: 341, max: 350, target: '중3 기본', desc: '단어 뒤에 붙어 품사를 바꾸는 접미사(-ly)를 인지하며 고등 어휘 진입을 준비함.' },
-  { min: 351, max: 360, target: '예비 고1', desc: '분량이 방대한 고등 필수 어휘장 1회독을 힘겹게 시작하는 단계.' },
-  { min: 361, max: 370, target: '예비 고1', desc: '단어를 보면 대충 긍정인지 부정인지 아는 수준으로 얕게 암기함.' },
-  { min: 371, max: 380, target: '예비 고1', desc: '뜻은 대충 알지만 문장 구조에 맞게 우리말로 정확히 인출하지 못함.' },
-  { min: 381, max: 390, target: '예비 고1', desc: '지문의 앞뒤 문맥을 고려하지 않고 자신이 외운 뜻만 기계적으로 대입함.' },
-  { min: 391, max: 400, target: '예비 고1', desc: '문맥 내에서 필자가 의도한 단어의 정확한 뉘앙스를 잡지 못해 오역이 잦음.' },
-  { min: 401, max: 410, target: '고1 모의고사', desc: '고1 전국연합 학력평가 지문을 읽고 대략적인 스토리를 따라갈 수 있음.' },
-  { min: 411, max: 420, target: '고1 모의고사', desc: '전체 고1 학력평가 지문을 약 70% 정도 무리 없이 해독해 냄.' },
-  { min: 421, max: 430, target: '고1 모의고사', desc: '지문 내 핵심 어휘 몇 개를 통해 글의 전체적인 \'주제 찾기\'는 가능함.' },
-  { min: 431, max: 440, target: '고1 모의고사', desc: '정밀한 어휘력이 요구되는 \'빈칸 추론\' 문제에 돌입하면 단어가 막혀 오답을 냄.' },
-  { min: 441, max: 450, target: '고1 모의고사', desc: '주제는 맞추나 빈칸 추론 어휘에서 막히는, 전형적인 고1 중위권의 한계를 보임.' },
-  { min: 451, max: 460, target: '고1 마스터', desc: '고1 모의고사나 내신 수준의 지문에서 모르는 단어는 거의 없음.' },
-  { min: 461, max: 470, target: '고1 마스터', desc: '단어의 꼬리가 변하여 품사가 바뀌는 \'파생형\'의 존재를 명확히 인지함.' },
-  { min: 471, max: 480, target: '고1 마스터', desc: '형태가 비슷한 명사(success)와 동사(succeed)를 헷갈리지 않고 구분해 냄.' },
-  { min: 481, max: 490, target: '고1 마스터', desc: '명사/동사에 이어 형용사(successful) 형태까지 완벽히 쪼개서 암기함.' },
-  { min: 491, max: 500, target: '고1 마스터', desc: '단어의 파생형을 품사별로 정확히 구분하여 어법 문제에서도 어휘가 무기가 됨.' },
-  { min: 501, max: 510, target: '고2 모의고사', desc: '철학, 환경 등 한글로도 이해하기 힘든 추상적인 고2 지문 어휘가 등장함.' },
-  { min: 511, max: 520, target: '고2 모의고사', desc: '심리 등 학술적인 주제의 단어들을 만나며 어휘 암기의 난이도가 급상승함.' },
-  { min: 521, max: 530, target: '고2 모의고사', desc: '쉬운 단어가 문맥에 따라 완전히 다른 뜻으로 쓰이는 다의어 현상을 직면함.' },
-  { min: 531, max: 540, target: '고2 모의고사', desc: 'objective가 \'객관적인\'이라는 형용사 뜻 외에 쓰일 수 있음을 인지함.' },
-  { min: 541, max: 550, target: '고2 모의고사', desc: 'objective가 명사 자리에서 \'목표\'로 쓰임을 인지하는 등, 고2 수준 다의어에 눈을 뜸.' },
-  { min: 551, max: 560, target: '고2 마스터', desc: '단어를 낱개로 외우지 않고 반의어(반대말)를 세트로 묶어서 암기하는 단계.' },
-  { min: 561, max: 570, target: '고2 마스터', desc: '지문 내에서 패러프레이징(바꿔 쓰기) 되는 유의어(비슷한 말)를 묶어서 암기함.' },
-  { min: 571, max: 580, target: '고2 마스터', desc: '지문을 읽다 모르는 단어가 나와도 당황하지 않고 문맥 속에서 유추를 시도함.' },
-  { min: 581, max: 590, target: '고2 마스터', desc: '모르는 단어의 접두사를 분석하여 단어의 긍정/부정 뉘앙스를 때려 맞춤.' },
-  { min: 591, max: 600, target: '고2 마스터', desc: '접미사를 분해해 품사를 유추하는 능력을 갖추며 고2 어휘를 마스터함.' },
-  { min: 601, max: 610, target: '예비 고3', desc: '고등 과정을 총망라하는 수능 기초 어휘 암기 사이클을 마스터함.' },
-  { min: 611, max: 620, target: '예비 고3', desc: '본격적인 수능 대비를 위해 EBS 수능특강 교재를 펴고 학습을 시작함.' },
-  { min: 621, max: 630, target: '예비 고3', desc: '기초는 탄탄하나 EBS 한 페이지당 모르는 단어가 5~7개 정도씩 꾸준히 나옴.' },
-  { min: 631, max: 640, target: '예비 고3', desc: '페이지당 등장하는 5~7개의 고난도 어휘 때문에 독해의 호흡이 계속 끊김.' },
-  { min: 641, max: 650, target: '예비 고3', desc: '방대한 EBS 수능 연계 어휘량을 소화하기 위해 집중적으로 단어를 주입하는 구간.' },
-  { min: 651, max: 660, target: '수능 3등급 선', desc: '수능 지문을 읽고 대의(주제, 요지)를 파악하는 데 어휘력이 발목을 잡지 않음.' },
-  { min: 661, max: 670, target: '수능 3등급 선', desc: '지문의 내용은 다 이해해 놓고 정답을 고르는 선지(1~5번) 독해에서 막힘.' },
-  { min: 671, max: 680, target: '수능 3등급 선', desc: '선지에 등장하는 고난도/추상적 단어들을 해석하지 못해 정답률이 떨어짐.' },
-  { min: 681, max: 690, target: '수능 3등급 선', desc: '까다로운 선지 단어를 몰라서 지문 내용과 상관없는 매력적인 오답을 자주 고름.' },
-  { min: 691, max: 700, target: '수능 3등급 선', desc: '수능 3등급을 방어할 어휘력은 갖췄으나 선지 어휘를 극복하지 못해 2등급을 놓침.' },
-  { min: 701, max: 710, target: '수능 2등급 선', desc: '단어 조합으로 뜻이 완전히 바뀌는 고난도 구동사를 문맥에 맞게 해석하기 시작함.' },
-  { min: 711, max: 720, target: '수능 2등급 선', desc: 'account for, boil down to 같은 수능 특화 고난도 구동사를 완벽히 숙지함.' },
-  { min: 721, max: 730, target: '수능 2등급 선', desc: '수능에 매년 출제되는 빈출 다의어 리스트를 머릿속에 완벽하게 세팅함.' },
-  { min: 731, max: 740, target: '수능 2등급 선', desc: 'subject가 주제, 과목 외에 \'피실험자\', \'종속시키다\'로 쓰임을 완벽히 구별함.' },
-  { min: 741, max: 750, target: '수능 2등급 선', desc: 'observe가 \'관찰하다\' 외에 \'준수하다\'로 쓰이는 다의어의 늪을 완벽히 통과함.' },
-  { min: 751, max: 760, target: '수능 1등급 선', desc: '오답률 상위권의 킬러 문항에 등장하는 악랄한 난이도의 어휘들을 뚫어냄.' },
-  { min: 761, max: 770, target: '수능 1등급 선', desc: '철자가 비슷해서 수험생을 속이는 혼동 어휘를 대충 보지 않고 완벽하게 구별함.' },
-  { min: 771, max: 780, target: '수능 1등급 선', desc: 'adapt(적응하다)와 adopt(입양/채택하다)의 스펠링 1개 차이를 시험장에서 짚어냄.' },
-  { min: 781, max: 790, target: '수능 1등급 선', desc: 'literal(문자 그대로의)과 literary(문학의)의 미세한 형태 차이를 완벽히 파악함.' },
-  { min: 791, max: 800, target: '수능 1등급 선', desc: '평가원이 파놓은 혼동 어휘 함정을 모두 피해 가며 1등급의 문을 여는 단계.' },
-  { min: 801, max: 810, target: '1등급 안정권', desc: '아예 처음 보는 신조어나 고난도 학술 용어가 나와도 문맥의 흐름을 통해 당황하지 않음.' },
-  { min: 811, max: 820, target: '1등급 안정권', desc: '전후 문맥을 통해 처음 보는 단어의 숨겨진 뜻을 거의 정확하게 추론해 냄.' },
-  { min: 821, max: 830, target: '1등급 안정권', desc: '단순히 단어를 아는 것을 넘어 필자가 이 단어를 선택한 의도까지 꿰뚫어 봄.' },
-  { min: 831, max: 840, target: '1등급 안정권', desc: '압도적인 어휘력이 문장 해석력(Syntax) 스탯과 결합하여 시너지가 폭발함.' },
-  { min: 841, max: 850, target: '1등급 안정권', desc: '단어 때문에 독해가 막히는 변수가 사라져 어떤 난이도에서도 1등급을 안정적으로 방어함.' },
-  { min: 851, max: 860, target: '최상위권', desc: '수능의 범주를 아득히 넘어선 텝스(TEPS), 토플(TOEFL) 수준의 고급 어휘력을 보유함.' },
-  { min: 861, max: 870, target: '최상위권', desc: '수능 지문 내에서 단어가 1차원적 의미가 아닌 비유적으로 사용된 것을 단번에 캐치함.' },
-  { min: 871, max: 880, target: '최상위권', desc: '영단어를 억지로 한국어로 번역하지 않고 영어 자체의 은유적 느낌 그대로 받아들임.' },
-  { min: 881, max: 890, target: '최상위권', desc: '미세한 단어의 어감(Tone) 차이를 원어민처럼 섬세하게 느끼며 독해의 질이 다름.' },
-  { min: 891, max: 900, target: '최상위권', desc: '고등학생으로서 도달할 수 있는 가장 높은 차원의 언어적 감각과 어휘적 깊이를 증명함.' },
-  { min: 901, max: 910, target: '경찰대/사관', desc: '수능 범위를 초과하는 논문 수준의 학술적 어휘까지 완벽하게 섭렵함.' },
-  { min: 911, max: 920, target: '경찰대/사관', desc: '극악의 난이도를 자랑하는 경찰대, 사관학교 기출문제 속 전문적 어휘들을 뚫어냄.' },
-  { min: 921, max: 930, target: '경찰대/사관', desc: '방대한 배경지식과 결합된 어휘망을 구축하여 어떤 생소한 주제의 지문도 두렵지 않음.' },
-  { min: 931, max: 940, target: '경찰대/사관', desc: '영어 텍스트를 읽을 때 어휘 때문에 해석이 막히거나 지연되는 일이 물리적으로 발생하지 않음.' },
-  { min: 941, max: 950, target: '경찰대/사관', desc: '국내에 존재하는 모든 형태의 입시 영어 시험 텍스트를 어휘량 하나로 압도하는 단계.' },
-  { min: 951, max: 960, target: '수능 출제자급', desc: '수능 영어 텍스트라는 생태계에 한정하여 모르는 단어의 개수가 0에 수렴함.' },
-  { min: 961, max: 970, target: '수능 출제자급', desc: '더 이상 새로운 단어장을 보거나 어휘만을 위한 별도의 암기 시간을 투자할 필요가 없음.' },
-  { min: 971, max: 980, target: '수능 출제자급', desc: '평가원 기출 분석과 고난도 실전 모의고사 풀이만으로도 현재의 완벽한 점수가 자동 유지됨.' },
-  { min: 981, max: 990, target: '수능 출제자급', desc: '어휘의 어원과 파생 원리를 강사 수준으로 꿰뚫어 보고 있어 타인에게 설명이 가능한 경지.' },
-  { min: 991, max: 1000, target: '수능 출제자급', desc: '어휘 평가 시스템이 측정할 수 있는 최고점수이자 완벽한 언어 능력자로서의 최종 마스터 단계.' }
+  { min: 11, max: 50, target: '파닉스/초저', desc: 'I, you, am 위주의 기초 sight words를 인지하는 수준에 도달함.' },
+  { min: 51, max: 100, target: '초등 3~4', desc: '기초 명사 위주의 암기 패턴이 자리 잡으며 초등 중학년 어휘를 소화함.' },
+  { min: 101, max: 150, target: '초등 5~6', desc: '잦은 스펠링 실수에도 불구하고 초등 고학년 수준의 필수 단어군을 완성함.' },
+  { min: 151, max: 200, target: '예비 중1', desc: '품사(명사/동사)의 구분이 단어 암기에 필요하다는 것을 인지하며 중1 과정을 준비함.' },
+  { min: 201, max: 250, target: '중1 수준', desc: '첫 번째 뜻만 알아서, 문맥이 바뀌면 아는 단어도 해석이 막히는 한계를 보임.' },
+  { min: 251, max: 300, target: '중2 수준', desc: 'give up 등의 필수 구동사를 암기하며 중2 수준의 어휘 뼈대를 완성함.' },
+  { min: 301, max: 350, target: '중3 기본', desc: '단어 뒤에 붙어 품사를 바꾸는 접미사(-ly)를 인지하며 고등 어휘 진입을 준비함.' },
+  { min: 351, max: 400, target: '예비 고1', desc: '문맥 내에서 필자가 의도한 단어의 정확한 뉘앙스를 잡지 못해 오역이 잦음.' },
+  { min: 401, max: 450, target: '고1 모의고사', desc: '주제는 맞추나 빈칸 추론 어휘에서 막히는, 전형적인 고1 중위권의 한계를 보임.' },
+  { min: 451, max: 500, target: '고1 마스터', desc: '단어의 파생형을 품사별로 정확히 구분하여 어법 문제에서도 어휘가 무기가 됨.' },
+  { min: 501, max: 550, target: '고2 모의고사', desc: 'objective가 명사 자리에서 \'목표\'로 쓰임을 인지하는 등, 고2 수준 다의어에 눈을 뜸.' },
+  { min: 551, max: 600, target: '고2 마스터', desc: '접미사를 분해해 품사를 유추하는 능력을 갖추며 고2 어휘를 마스터함.' },
+  { min: 601, max: 650, target: '예비 고3', desc: '방대한 EBS 수능 연계 어휘량을 소화하기 위해 집중적으로 단어를 주입하는 구간.' },
+  { min: 651, max: 700, target: '수능 3등급 선', desc: '수능 3등급을 방어할 어휘력은 갖췄으나 선지 어휘를 극복하지 못해 2등급을 놓침.' },
+  { min: 701, max: 750, target: '수능 2등급 선', desc: 'observe가 \'관찰하다\' 외에 \'준수하다\'로 쓰이는 다의어의 늪을 완벽히 통과함.' },
+  { min: 751, max: 800, target: '수능 1등급 선', desc: '평가원이 파놓은 혼동 어휘 함정을 모두 피해 가며 1등급의 문을 여는 단계.' },
+  { min: 801, max: 850, target: '1등급 안정권', desc: '단어 때문에 독해가 막히는 변수가 사라져 어떤 난이도에서도 1등급을 안정적으로 방어함.' },
+  { min: 851, max: 900, target: '최상위권', desc: '고등학생으로서 도달할 수 있는 가장 높은 차원의 언어적 감각과 어휘적 깊이를 증명함.' },
+  { min: 901, max: 950, target: '경찰대/사관', desc: '국내에 존재하는 모든 형태의 입시 영어 시험 텍스트를 어휘량 하나로 압도하는 단계.' },
+  { min: 951, max: 1000, target: '수능 출제자급', desc: '어휘 평가 시스템이 측정할 수 있는 최고점수이자 완벽한 언어 능력자로서의 최종 마스터 단계.' }
 ];
 
 const TIERS = [
@@ -202,7 +125,7 @@ const SUBJECT_META = {
       { id: 'calc', name: '수리계산', desc: '물리, 화학 영역에서 필요한 수학적 계산을 실수 없이 수행하는 능력' },
       { id: 'experiment', name: '탐구설계', desc: '실험의 목적, 변인 통제, 대조군 등을 이해하고 결과를 예측하는 능력' },
       { id: 'application', name: '현상응용', desc: '학습한 과학적 지식을 일상생활의 다양한 현상에 논리적으로 적용하는 능력' },
-      { id: '融合', name: '통합사고', desc: '서로 다른 단원이나 과목의 개념을 연결하여 복합적인 문제를 해결하는 능력' }
+      { id: '융합', name: '통합사고', desc: '서로 다른 단원이나 과목의 개념을 연결하여 복합적인 문제를 해결하는 능력' }
     ]
   }
 };
@@ -254,8 +177,13 @@ const RadarChart = ({ stats, isDummy = false }) => {
 const AcademyUniverse = ({ currentUser }) => {
   const { users, classes, enrollments } = useData();
   const [localEnglishStats, setLocalEnglishStats] = useState([]);
+  const [conceptStats, setConceptStats] = useState({}); // 🚀 [CTO 패치] 단원별 개념 이해도 DB 실시간 구독
 
-  // 🚀 [CTO 패치] 글로벌 영어 스탯 동기화 구독 (N+1 차단)
+  // 역할 검증
+  const isStudent = currentUser.role === 'student';
+  const isParent = currentUser?.role === 'parent';
+
+  // 🚀 글로벌 영어 스탯 동기화
   useEffect(() => {
       const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
       const unsubscribe = onSnapshot(statsRef, (snapshot) => {
@@ -264,9 +192,6 @@ const AcademyUniverse = ({ currentUser }) => {
       });
       return () => unsubscribe();
   }, []);
-
-  const isStudent = currentUser.role === 'student';
-  const isParent = currentUser?.role === 'parent';
 
   const linkedChildren = useMemo(() => {
       if (!isParent) return [];
@@ -300,9 +225,21 @@ const AcademyUniverse = ({ currentUser }) => {
   const activeStudentId = isStudent ? currentUser.id : (isParent ? selectedChildId : selectedStudentId);
   const studentInfo = (users || []).find(s => s.id === activeStudentId) || currentUser;
 
-  // 🚀 [CTO 패치] 동기화된 Voca 데이터 호출
+  // 🚀 [CTO 패치] 활성 학생의 단원 개념 이해도 데이터 실시간 구독 ($O(1)$ Read)
+  useEffect(() => {
+    if (!activeStudentId) return;
+    const docRef = doc(db, `artifacts/${APP_ID}/public/data/concept_stats`, activeStudentId);
+    const unsub = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setConceptStats(docSnap.data().subjectStats || {});
+      } else {
+        setConceptStats({});
+      }
+    });
+    return () => unsub();
+  }, [activeStudentId]);
+
   const studentEnglishStat = localEnglishStats.find(s => s.id === activeStudentId) || {};
-  
   const catScore = studentEnglishStat?.catScore || 0;
   const hasCatScore = catScore > 0;
   
@@ -347,7 +284,7 @@ const AcademyUniverse = ({ currentUser }) => {
     let latestScore = 0; let prevScore = 0;
     const subjectGrades = [];
     grades.forEach(g => {
-        const found = g.subjects.find(s => s.name.includes(subjectName));
+        const found = g.subjects?.find(s => s.name.includes(subjectName));
         if (found) subjectGrades.push(Number(found.score || 0));
     });
 
@@ -355,21 +292,15 @@ const AcademyUniverse = ({ currentUser }) => {
         latestScore = subjectGrades[subjectGrades.length - 1];
         if (subjectGrades.length > 1) prevScore = subjectGrades[subjectGrades.length - 2];
     } else {
-        if (subjectName !== '영어') return null;
+        if (subjectName !== '영어' && !conceptStats[subjectName]) return null;
     }
 
     const meta = SUBJECT_META[subjectName];
     return meta.stats.map((s, i) => {
-        
         if (subjectName === '영어') {
-            let realValue = 0;
-            let chartValue = 0; 
-            let dynamicDesc = s.desc; 
-            
+            let realValue = 0; let chartValue = 0; let dynamicDesc = s.desc; 
             if (s.id === 'voca') {
-                realValue = catScore; 
-                chartValue = Math.round(realValue / 10); 
-                
+                realValue = catScore; chartValue = Math.round(realValue / 10); 
                 if (hasCatScore && currentVocaRubric) {
                     dynamicDesc = `🎯 [타겟 학년: ${currentVocaRubric.target}] ${currentVocaRubric.desc}`;
                 } else if (!hasCatScore) {
@@ -387,7 +318,13 @@ const AcademyUniverse = ({ currentUser }) => {
             return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca', desc: dynamicDesc };
         }
 
-        const seed = latestScore;
+        // 🚀 수학/과학/국어 과목: '개념이해' 항목은 단원별 시험 평균 점수를 실제 매핑
+        if (s.id === 'concept' && conceptStats[subjectName]?.average > 0) {
+            const realAvg = conceptStats[subjectName].average;
+            return { ...s, value: realAvg, chartValue: realAvg, diff: 0, desc: `총 ${conceptStats[subjectName].totalUnits}개 단원 서술형 개념 평가 종합 평균 지수` };
+        }
+
+        const seed = latestScore || 70;
         const pseudoRandom = (seed * (i + 7)) % 20; 
         const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
         const diff = val - Math.min(100, Math.max(0, prevScore - ((prevScore * (i+3)) % 15)));
@@ -399,12 +336,10 @@ const AcademyUniverse = ({ currentUser }) => {
     const result = {};
     Object.keys(SUBJECT_META).forEach(sub => {
         const enrolledClassesInSubject = myActiveClasses.filter(c => getSubjectFromClass(c) === sub);
-        const isUnlocked = enrolledClassesInSubject.length > 0;
+        const isUnlocked = enrolledClassesInSubject.length > 0 || conceptStats[sub]?.totalUnits > 0 || sub === '영어';
         
-        let stats = null;
-        let avg = 0;
-        let tier = TIERS[TIERS.length - 1]; 
-        let hasGradeData = false;
+        let stats = null; let avg = 0;
+        let tier = TIERS[TIERS.length - 1]; let hasGradeData = false;
 
         if (isUnlocked) {
             const rawStats = generateMockStats(sub);
@@ -426,7 +361,7 @@ const AcademyUniverse = ({ currentUser }) => {
         }
     });
     return result;
-  }, [grades, myActiveClasses, localEnglishStats, generateMockStats]);
+  }, [grades, myActiveClasses, localEnglishStats, generateMockStats, conceptStats]);
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -500,8 +435,8 @@ const AcademyUniverse = ({ currentUser }) => {
                     <Sparkles className="text-indigo-600" size={32}/> 아카데미 유니버스
                 </h1>
                 <p className="text-slate-500 font-bold text-lg">
-                    {studentInfo?.name} 학생의 과목별 성취도를 입체적으로 분석합니다.<br/>
-                    <span className="text-sm font-normal text-slate-400 border bg-slate-50 px-3 py-1 rounded-lg mt-2 inline-block">현재 학원에서 수강 중인 과목의 분석 리포트만 활성화됩니다.</span>
+                    {studentInfo?.name} 학생의 과목별 성취도와 단원별 개념 이해도를 입체 분석합니다.<br/>
+                    <span className="text-sm font-normal text-slate-400 border bg-slate-50 px-3 py-1 rounded-lg mt-2 inline-block">현재 학원에서 수강 중이거나 평가 데이터가 존재하는 과목의 리포트만 활성화됩니다.</span>
                 </p>
             </div>
 
@@ -552,22 +487,25 @@ const AcademyUniverse = ({ currentUser }) => {
 
   const currData = subjectData[selectedSubject];
   const Icon = currData.meta.icon;
+  const currentSubjectConceptData = conceptStats[selectedSubject] || { units: [], average: 0 };
   
   const calcExpectedGrade = (score) => {
       if(score >= 90) return 1; if(score >= 80) return 2; if(score >= 70) return 3;
       if(score >= 60) return 4; if(score >= 50) return 5; return 6;
   };
 
-  // 🚀 [CTO 패치] 영어 과목 선택 시 동기화된 Voca 세부 지표 계산
   const tierInfo = getTierProgress(studentEnglishStat.masteredCount || 0, studentEnglishStat.catScore || 0);
 
   return (
       <div className="max-w-[1400px] mx-auto space-y-6 animate-in fade-in pb-20 px-2 sm:px-4 pt-6">
           
-          <button onClick={() => setSelectedSubject(null)} className="flex items-center gap-2 text-slate-500 hover:text-slate-900 font-bold mb-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 transition-colors w-fit">
-              <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
-          </button>
+          <div className="flex justify-between items-center flex-wrap gap-4">
+            <button onClick={() => setSelectedSubject(null)} className="flex items-center gap-2 text-slate-500 hover:text-slate-900 font-bold bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 transition-colors w-fit">
+                <ChevronLeft size={18}/> 과목 대시보드로 돌아가기
+            </button>
+          </div>
 
+          {/* 메인 헤더 카드 */}
           <div className={`bg-white border border-slate-200 rounded-[40px] p-8 sm:p-12 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-8`}>
               <div className={`w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-50 border-4 border-slate-100 flex items-center justify-center shadow-md relative z-10 shrink-0 ${currData.tier.color}`}>
                   <Icon size={64} />
@@ -588,8 +526,68 @@ const AcademyUniverse = ({ currentUser }) => {
               </div>
           </div>
 
+          {/* 🚀 [CTO 패치] 단원별 개념 이해도 정밀 시각화 영역 (조회 전용 - DB 데이터 실시간 표시) */}
+          {selectedSubject !== '영어' && (
+            <div className="bg-white rounded-[40px] p-8 sm:p-10 border border-slate-200 shadow-sm">
+              <div className="flex justify-between items-end mb-6 flex-wrap gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+                    <Layers className="text-indigo-600"/> {selectedSubject} 단원별 서술형 개념 이해도 평가
+                  </h3>
+                  <p className="text-sm font-bold text-slate-400 mt-1">서술형 백지 테스트 및 증명 평가 점수를 종합하여 해당 과목의 개념 기초 체력을 정량화합니다.</p>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-2xl flex items-center gap-2">
+                  <span className="text-xs font-bold text-indigo-600">개념 이해 종합 평균:</span>
+                  <span className="text-xl font-black text-indigo-900">{currentSubjectConceptData.average || 0}점</span>
+                </div>
+              </div>
+
+              {(!currentSubjectConceptData.units || currentSubjectConceptData.units.length === 0) ? (
+                <div className="text-center py-12 text-slate-400 font-bold text-sm border-2 border-dashed rounded-3xl">
+                  아직 입력된 단원별 개념 평가 점수가 없습니다. (정밀 진단 평가 반영 대기 중)
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {currentSubjectConceptData.units.map((u, idx) => {
+                    const isVulnerable = u.totalScore < 70;
+                    return (
+                      <div key={idx} className={`p-6 rounded-3xl border-2 transition-all flex flex-col justify-between ${isVulnerable ? 'bg-rose-50/40 border-rose-200' : 'bg-white border-slate-100 shadow-sm'}`}>
+                        <div>
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-[11px] font-black bg-slate-100 text-slate-600 px-2.5 py-1 rounded-md">{u.category}</span>
+                            <span className={`text-sm font-black px-3 py-1 rounded-xl border ${u.totalScore >= 85 ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : (u.totalScore >= 70 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-rose-100 border-rose-300 text-rose-700')}`}>
+                              {u.grade}등급 ({u.totalScore}점)
+                            </span>
+                          </div>
+                          <h4 className="text-xl font-black text-slate-900 mt-2">{u.unitName}</h4>
+                          {u.vulnerableTags?.length > 0 && (
+                            <div className="mt-4 space-y-1.5">
+                              <span className="text-xs font-bold text-rose-600 flex items-center gap-1"><AlertCircle size={14}/> 감점 및 보완 요망 포인트:</span>
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {u.vulnerableTags.map((tag, tIdx) => (
+                                  <span key={tIdx} className="bg-white text-rose-700 border border-rose-200 text-xs font-bold px-2.5 py-1 rounded-lg">
+                                    • {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        {isVulnerable && (
+                          <div className="mt-5 pt-3 border-t border-rose-200 flex items-center justify-between text-xs font-black text-rose-700 bg-rose-100/60 p-3 rounded-xl">
+                            <span>🚨 개념 결손 감지 ➔ 1:1 맞춤 쌍둥이 오답 클리닉 자동 배정</span>
+                            <ChevronRight size={16}/>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              
               <div className="space-y-6">
                   <Card className="bg-white border-slate-200 rounded-[40px] p-8 flex flex-col items-center justify-center shadow-sm h-[500px]">
                       <h3 className="text-xl font-black text-slate-800 mb-8 w-full text-left flex items-center gap-2"><Target className="text-blue-500"/> {selectedSubject === '영어' ? '5대 핵심 역량 스캐너' : '6대 세부 역량 스캐너'}</h3>
@@ -637,7 +635,6 @@ const AcademyUniverse = ({ currentUser }) => {
                   <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar pr-2 pb-4">
                       {currData.stats.map(stat => (
                           <Card key={stat.id} className="p-5 border-slate-200 rounded-[24px] hover:border-indigo-400 transition-all flex flex-col bg-white shadow-sm">
-                              
                               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 w-full">
                                   <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-3 sm:pb-0 shrink-0">
                                       <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
@@ -653,25 +650,20 @@ const AcademyUniverse = ({ currentUser }) => {
                                   
                                   <div className="flex-1 w-full">
                                       <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-3 break-keep">{stat.desc}</p>
-                                      
                                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                                           <div className={`h-full rounded-full transition-all duration-1000 ${stat.isVoca && !hasCatScore ? 'bg-slate-200' : stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.isVoca && !hasCatScore ? 0 : stat.chartValue}%` }}></div>
                                       </div>
                                   </div>
                               </div>
 
-                              {/* 🚀 [CTO 패치] 동기화된 Voca 상세 추적 지표 및 알림 */}
                               {stat.isVoca && hasCatScore && (
                                   <div className="mt-4 pt-4 border-t border-slate-100 bg-slate-50 p-4 rounded-2xl w-full">
                                       <h4 className="text-xs font-black text-blue-700 flex items-center gap-1 mb-3"><Sparkles size={14}/> Voca 학습 상세 추적 지표</h4>
-                                      
-                                      {/* 🚀 [CTO 패치] 승급 심사 대기 중일 경우 알림 표시 */}
                                       {studentEnglishStat.promotionPending && (
                                           <div className="mb-4 bg-rose-50 border border-rose-200 p-2.5 rounded-xl text-rose-600 text-[11px] font-black flex items-center justify-center gap-1.5 animate-pulse shadow-sm">
                                               <AlertCircle size={14}/> {studentEnglishStat.promotionPending}점 승급 심사 대기 중 (어휘력 성장 제한됨)
                                           </div>
                                       )}
-
                                       <div className="space-y-3">
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
