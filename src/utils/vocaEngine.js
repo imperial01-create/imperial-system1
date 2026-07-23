@@ -1,5 +1,5 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.2)
-   🚀 가치 1 (인쇄 100% 보장): 기존 학생의 데이터 조회 오류 및 단어 부족 현상을 완벽히 해결하여 어떤 상황에서도 50문항을 조립합니다.
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.3)
+   🚀 가치 1 (인쇄 100% 보장): 기존 학생의 과거 기록 조회 충돌을 해결하고 3단계 폴백으로 언제나 50문항을 생성합니다.
    🚀 가치 2 (에빙하우스 망각 곡선): 1, 3, 7, 14, 30, 60, 120일 주기로 오답을 재출제하여 장기 기억 전환율을 극대화합니다.
    🚀 가치 3 (학부모 가시성): 채점 즉시 학부모용 AI 분석 리포트 JSON을 사전 조립(O(1))하여 실시간 앱으로 동기화합니다. */
 
@@ -37,7 +37,7 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
 
     const baseQuestion = {
         questionNumber: qNumber,
-        wordId: word.wordId || `word_${qNumber}`,
+        wordId: word.wordId || word.id || `word_${qNumber}`,
         queueType: word.queueType || '신규'
     };
 
@@ -126,11 +126,14 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
     try {
         const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
         const statSnap = await getDoc(statRef);
-        if (!statSnap.exists()) throw new Error("영어 스탯 데이터가 없습니다. 초기 진단을 먼저 진행하세요.");
         
-        const statData = statSnap.data();
+        // 🚀 [CTO 방탄 패치] 스탯 데이터가 없어도 에러를 던지지 않고 기본 스탯으로 안전하게 초기화합니다!
+        const statData = statSnap.exists() ? statSnap.data() : {
+            vocaSession: 1, catScore: 300, vocaPreset: '밸런스 모드', seenWordIds: [], totalAttempts: 0, totalErrors: 0, masteredCount: 0
+        };
+
         const vocaSession = statData.vocaSession || 1;
-        const catScore = Math.max(0, Math.min(1000, statData.catScore || 100)); 
+        const catScore = Math.max(0, Math.min(1000, statData.catScore || 300)); 
         
         let presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
         if (vocaSession === 1 && !statData.adaptivePreset && !requestedPreset) {
@@ -176,7 +179,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const z1Candidates = z1Snap.docs.filter(d => !seenWordIds.has(d.id));
                 const selectedZ1 = shuffleArray(z1Candidates).slice(0, qZ1);
                 selectedZ1.forEach(d => {
-                    finalWordData.push({ ...d.data(), queueType: '딥 스캔' });
+                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '딥 스캔' });
                     seenWordIds.add(d.id);
                     newlySeenWordIds.push(d.id);
                 });
@@ -191,7 +194,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const z2Candidates = z2Snap.docs.filter(d => !seenWordIds.has(d.id));
                 const selectedZ2 = shuffleArray(z2Candidates).slice(0, qZ2);
                 selectedZ2.forEach(d => {
-                    finalWordData.push({ ...d.data(), queueType: '의심 스캔' });
+                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '의심 스캔' });
                     seenWordIds.add(d.id);
                     newlySeenWordIds.push(d.id);
                 });
@@ -206,7 +209,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const selectedZ3 = z3Candidates.slice(0, qZ3);
                 selectedZ3.forEach(d => {
                     const wData = d.data();
-                    finalWordData.push({ ...wData, queueType: '신규' });
+                    finalWordData.push({ ...wData, wordId: d.id, id: d.id, queueType: '신규' });
                     seenWordIds.add(d.id);
                     newlySeenWordIds.push(d.id);
                     if (wData.rootDifficulty > newProgressDifficulty) {
@@ -222,7 +225,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 finalWordData.splice(finalWordData.length - qWrong, qWrong); 
             }
 
-            await updateDoc(statRef, { lastNewWordDifficulty: newProgressDifficulty, adaptivePreset: '초기 영점 조절' });
+            await setDoc(statRef, { lastNewWordDifficulty: newProgressDifficulty, adaptivePreset: '초기 영점 조절', updatedAt: serverTimestamp() }, { merge: true });
 
         } else {
             let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
@@ -237,7 +240,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 
                 const selectedPassive = shuffleArray(passiveCandidates).slice(0, qPassive);
                 selectedPassive.forEach(d => {
-                    finalWordData.push({ ...d.data(), queueType: '패시브' });
+                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '패시브' });
                     seenWordIds.add(d.id);
                     newlySeenWordIds.push(d.id);
                 });
@@ -285,7 +288,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const selectedNew = newCandidates.slice(0, qNew);
                 selectedNew.forEach(d => {
                     const wData = d.data();
-                    finalWordData.push({ ...wData, queueType: '신규' });
+                    finalWordData.push({ ...wData, wordId: d.id, id: d.id, queueType: '신규' });
                     seenWordIds.add(d.id);
                     newlySeenWordIds.push(d.id);
                     if (wData.rootDifficulty > newProgressDifficulty) {
@@ -293,7 +296,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                     }
                 });
             }
-            await updateDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty });
+            await setDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty, updatedAt: serverTimestamp() }, { merge: true });
         }
 
         if (requiredOldWordIds.length > 0) {
@@ -307,8 +310,8 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                     getDocs(vocaQ).then(snap => {
                         snap.forEach(d => {
                             const queueInfo = chunk.find(c => c.wordId === d.id);
-                            if (queueInfo && !finalWordData.some(fw => fw.wordId === d.id)) {
-                                finalWordData.push({ ...d.data(), queueType: queueInfo.queueType });
+                            if (queueInfo && !finalWordData.some(fw => (fw.wordId || fw.id) === d.id)) {
+                                finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: queueInfo.queueType });
                             }
                         });
                     })
@@ -325,9 +328,9 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const extraQuery = query(collection(db, 'VocabularyDB'), limit(shortage + 30));
                 const extraSnap = await getDocs(extraQuery);
                 extraSnap.docs.forEach(docSnap => {
-                    if (finalWordData.length < 40 && !finalWordData.some(w => w.wordId === docSnap.id)) {
+                    if (finalWordData.length < 40 && !finalWordData.some(w => (w.wordId || w.id) === docSnap.id)) {
                         const extraWord = docSnap.data();
-                        finalWordData.push({ ...extraWord, wordId: docSnap.id, queueType: '신규(추가)' });
+                        finalWordData.push({ ...extraWord, wordId: docSnap.id, id: docSnap.id, queueType: '신규(추가)' });
                         seenWordIds.add(docSnap.id);
                         newlySeenWordIds.push(docSnap.id);
                     }
@@ -341,19 +344,19 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         if (finalWordData.length < 10) {
             console.error(`🚨 [Critical Warning] DB 단어 총량 부족! 강사의 수업 진행을 위해 긴급 수능 필수 어휘 풀을 가동합니다.`);
             const emergencyWords = [
-                { wordId: 'em_1', word: 'Absolute', meanings: [{ koreanMeaning: '절대적인, 완전한', partOfSpeech: 'adj.' }], rootDifficulty: 200 },
-                { wordId: 'em_2', word: 'Benevolent', meanings: [{ koreanMeaning: '자비로운, 인자한', partOfSpeech: 'adj.' }], rootDifficulty: 400 },
-                { wordId: 'em_3', word: 'Cognitive', meanings: [{ koreanMeaning: '인식의, 인지의', partOfSpeech: 'adj.' }], rootDifficulty: 500 },
-                { wordId: 'em_4', word: 'Dilemma', meanings: [{ koreanMeaning: '진퇴양난, 딜레마', partOfSpeech: 'n.' }], rootDifficulty: 300 },
-                { wordId: 'em_5', word: 'Empirical', meanings: [{ koreanMeaning: '실증적인, 경험적인', partOfSpeech: 'adj.' }], rootDifficulty: 600 },
-                { wordId: 'em_6', word: 'Fluctuate', meanings: [{ koreanMeaning: '변동하다, 오르내리다', partOfSpeech: 'v.' }], rootDifficulty: 550 },
-                { wordId: 'em_7', word: 'Guaranteed', meanings: [{ koreanMeaning: '보장된, 확실한', partOfSpeech: 'adj.' }], rootDifficulty: 250 },
-                { wordId: 'em_8', word: 'Hypothesis', meanings: [{ koreanMeaning: '가설, 가정', partOfSpeech: 'n.' }], rootDifficulty: 450 },
-                { wordId: 'em_9', word: 'Inevitable', meanings: [{ koreanMeaning: '피할 수 없는, 필연적인', partOfSpeech: 'adj.' }], rootDifficulty: 350 },
-                { wordId: 'em_10', word: 'Judicious', meanings: [{ koreanMeaning: '현명한, 신중한', partOfSpeech: 'adj.' }], rootDifficulty: 650 }
+                { wordId: 'em_1', id: 'em_1', word: 'Absolute', meanings: [{ koreanMeaning: '절대적인, 완전한', partOfSpeech: 'adj.' }], rootDifficulty: 200 },
+                { wordId: 'em_2', id: 'em_2', word: 'Benevolent', meanings: [{ koreanMeaning: '자비로운, 인자한', partOfSpeech: 'adj.' }], rootDifficulty: 400 },
+                { wordId: 'em_3', id: 'em_3', word: 'Cognitive', meanings: [{ koreanMeaning: '인식의, 인지의', partOfSpeech: 'adj.' }], rootDifficulty: 500 },
+                { wordId: 'em_4', id: 'em_4', word: 'Dilemma', meanings: [{ koreanMeaning: '진퇴양난, 딜레마', partOfSpeech: 'n.' }], rootDifficulty: 300 },
+                { wordId: 'em_5', id: 'em_5', word: 'Empirical', meanings: [{ koreanMeaning: '실증적인, 경험적인', partOfSpeech: 'adj.' }], rootDifficulty: 600 },
+                { wordId: 'em_6', id: 'em_6', word: 'Fluctuate', meanings: [{ koreanMeaning: '변동하다, 오르내리다', partOfSpeech: 'v.' }], rootDifficulty: 550 },
+                { wordId: 'em_7', id: 'em_7', word: 'Guaranteed', meanings: [{ koreanMeaning: '보장된, 확실한', partOfSpeech: 'adj.' }], rootDifficulty: 250 },
+                { wordId: 'em_8', id: 'em_8', word: 'Hypothesis', meanings: [{ koreanMeaning: '가설, 가정', partOfSpeech: 'n.' }], rootDifficulty: 450 },
+                { wordId: 'em_9', id: 'em_9', word: 'Inevitable', meanings: [{ koreanMeaning: '피할 수 없는, 필연적인', partOfSpeech: 'adj.' }], rootDifficulty: 350 },
+                { wordId: 'em_10', id: 'em_10', word: 'Judicious', meanings: [{ koreanMeaning: '현명한, 신중한', partOfSpeech: 'adj.' }], rootDifficulty: 650 }
             ];
             emergencyWords.forEach((ew, idx) => {
-                if (!finalWordData.some(fw => fw.wordId === ew.wordId)) {
+                if (!finalWordData.some(fw => (fw.wordId || fw.id) === ew.wordId)) {
                     finalWordData.push({ ...ew, queueType: '신규(긴급)' });
                 }
             });
@@ -377,11 +380,11 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         let poolForTest = [...first40, ...next10];
 
-        // 🚀 [방어적 코딩] undefined 객체 참조로 인한 문항 생성기(generateVariedQuestion) 크래시 원천 차단!
         while (poolForTest.length < 50) {
             const safeRandomIndex = Math.floor(Math.random() * finalWordData.length);
             const safeWord = finalWordData[safeRandomIndex] || {
                 wordId: `dummy_${poolForTest.length}`,
+                id: `dummy_${poolForTest.length}`,
                 word: `Vocabulary_${poolForTest.length}`,
                 meanings: [{ koreanMeaning: '필수 고등 어휘', partOfSpeech: 'n.' }],
                 queueType: '신규'
@@ -403,7 +406,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId), testPayload);
         
         if (newlySeenWordIds.length > 0) {
-            await updateDoc(statRef, { seenWordIds: arrayUnion(...newlySeenWordIds) });
+            await setDoc(statRef, { seenWordIds: arrayUnion(...newlySeenWordIds), updatedAt: serverTimestamp() }, { merge: true });
         }
         
         return testPayload;
@@ -423,7 +426,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const { questionsForTest, wordsForPrint, presetUsed } = sessionSnap.data();
     const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
     const statSnap = await getDoc(statRef);
-    const statData = statSnap.data();
+    const statData = statSnap.data() || {};
     
     let { totalAttempts = 0, totalErrors = 0, masteredCount = 0, waitingWrong = 0, waitingReview = 0 } = statData;
     
@@ -440,7 +443,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             if (d.status === 'wrong' || d.status === 'chronic_error') waitingWrong++;
             if (d.status === 'review' && d.nextReviewSession <= sessionNumber + 1) waitingReview++;
         });
-        await updateDoc(statRef, { totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, seenWordIds: migratedSeenIds });
+        await setDoc(statRef, { totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, seenWordIds: migratedSeenIds }, { merge: true });
     }
 
     const rollbackData = {
@@ -479,7 +482,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
 
     const difficultyMap = {};
     if (wordsForPrint) {
-        wordsForPrint.forEach(w => { difficultyMap[w.wordId] = w.rootDifficulty || currentVocaScore; });
+        wordsForPrint.forEach(w => { difficultyMap[w.wordId || w.id] = w.rootDifficulty || currentVocaScore; });
     }
 
     for (const q of questionsForTest) {
@@ -667,7 +670,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         updatedAt: new Date().toISOString()
     };
 
-    await updateDoc(sessionRef, { 
+    await setDoc(sessionRef, { 
         status: 'completed', 
         wrongCount: wrongSet.size,
         wrongAnswerNumbers: Array.from(wrongSet), 
@@ -675,9 +678,9 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         wrongWordsDetails: wrongWordsDetails, 
         rollbackData: rollbackData, 
         completedAt: serverTimestamp()
-    });
+    }, { merge: true });
 
-    await updateDoc(statRef, {
+    await setDoc(statRef, {
         catScore: finalVocaScore,
         vocaSession: sessionNumber + 1,
         vocaProgress: Math.min(100, Math.round((masteredCount / 2000) * 100)), 
@@ -690,7 +693,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         promotionPending: promotionPending,
         parentReport: parentReport, 
         updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
 };
 
 export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
@@ -719,7 +722,7 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
     });
     await Promise.all(promises);
 
-    await updateDoc(statRef, {
+    await setDoc(statRef, {
         catScore: rb.catScore,
         vocaSession: rb.vocaSession,
         vocaProgress: rb.vocaProgress,
@@ -736,16 +739,16 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
         waitingReview: rb.waitingReview,
         promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
         maxApprovedPromotion: rb.maxApprovedPromotion !== undefined ? rb.maxApprovedPromotion : 0
-    });
+    }, { merge: true });
 
-    await updateDoc(sessionRef, {
+    await setDoc(sessionRef, {
         status: 'ready',
         wrongCount: 0,
         wrongAnswerNumbers: [],
         sessionScore: 0,
         wrongWordsDetails: [],
         completedAt: null
-    });
+    }, { merge: true });
 
     const nextSessionId = `test_${studentId}_s${sessionNumber + 1}`;
     const nextSessionRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, nextSessionId);

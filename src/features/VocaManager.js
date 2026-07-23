@@ -1,4 +1,4 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.2 (프로덕션 전체 배포본)
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.3 (프로덕션 전체 배포본)
    🚀 가치 1 (업무 자동화): 강사는 수업 시작 1분 전, 반 전체 수강생의 단어장/시험지/답안지를 원클릭으로 출력합니다.
    🚀 가치 2 (장애 격리): 특정 학생 데이터 오류 시 전체 인쇄가 중단되지 않고 개별 격리되어 반 전체 인쇄를 성공시킵니다.
    🚀 가치 3 (에러 안내): 불투명한 에러 대신 권한 차단, 팝업 차단, 데이터 부족 등 정확한 한국어 원인과 해결책을 안내합니다. */
@@ -153,8 +153,8 @@ const VocaManager = ({ currentUser }) => {
 
         if (sortConfig) {
             filteredStudents.sort((a, b) => {
-                const statA = (englishStats || []).find(s => s?.id === a?.id) || {};
-                const statB = (englishStats || []).find(s => s?.id === b?.id) || {};
+                const statA = (englishStats || []).find(s => s?.id === a?.id || s?.studentId === a?.id) || {};
+                const statB = (englishStats || []).find(s => s?.id === b?.id || s?.studentId === b?.id) || {};
                 
                 const valA = sortConfig === 'vocaProgress' ? getTierProgress(Number(statA.masteredCount)||0, Number(statA.catScore)||0).totalMastered : (Number(statA[sortConfig]) || 0);
                 const valB = sortConfig === 'vocaProgress' ? getTierProgress(Number(statB.masteredCount)||0, Number(statB.catScore)||0).totalMastered : (Number(statB[sortConfig]) || 0);
@@ -175,7 +175,7 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 방탄 패치] 기존 수강생의 조건 완화 로직 및 Resilient Loop 탑재
+    // 🚀 [CTO 방탄 패치] 기존 수강생의 조건 완화 로직, Resilient Loop 및 이전 회차 오답 재시험 스캔 기능
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
         try {
@@ -192,11 +192,18 @@ const VocaManager = ({ currentUser }) => {
 
             for (const student of targetStudents) {
                 try {
-                    const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
-                    const sessionNum = stat.vocaSession || 1;
-                    const sessionId = `test_${student?.id}_s${sessionNum}`;
+                    const stat = (englishStats || []).find(s => s?.id === student?.id || s?.studentId === student?.id) || {};
+                    let sessionNum = stat.vocaSession || 1;
                     
-                    const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
+                    // 🚀 오답 재시험지 출력 시, 현재 회차가 아직 생성/채점 안 되었다면 직전 완료 회차를 스마트하게 스캔!
+                    let sessionId = `test_${student?.id}_s${sessionNum}`;
+                    let testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
+                    
+                    if (type.startsWith('retest') && (!testSnap.exists() || testSnap.data()?.status !== 'completed') && sessionNum > 1) {
+                        sessionNum = sessionNum - 1;
+                        sessionId = `test_${student?.id}_s${sessionNum}`;
+                        testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
+                    }
                     
                     let questionsList = [];
                     let wordsList = []; 
@@ -211,8 +218,8 @@ const VocaManager = ({ currentUser }) => {
                             isSessionCompleted = true;
                             wrongNums = testData.wrongAnswerNumbers || [];
                         }
-                    } else if (stat.catScore !== undefined || stat.vocaSession > 0 || !stat.catScore) {
-                        // 🚀 기존에 점수가 있었거나 초기 상태인 모든 수강생의 동적 시험지 생성 보장!
+                    } else if (!type.startsWith('retest')) {
+                        // 🚀 일반 시험지/단어장 출력 시 세션이 없으면 즉시 동적 생성!
                         const activePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
                         const payload = await generateDailyVocaSet(student.id, activePreset);
                         questionsList = payload.questionsForTest || [];
@@ -725,7 +732,7 @@ const VocaManager = ({ currentUser }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {classStudents.map(student => {
-                                const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
+                                const stat = (englishStats || []).find(s => s?.id === student?.id || s?.studentId === student?.id) || {};
                                 const catScore = Number(stat.catScore) || 0;
                                 const masteredCount = Number(stat.masteredCount) || 0;
                                 const tierInfo = getTierProgress(masteredCount, catScore);
