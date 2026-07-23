@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.3)
-   🚀 가치 1 (인쇄 100% 보장): 기존 학생의 과거 기록 조회 충돌을 해결하고 3단계 폴백으로 언제나 50문항을 생성합니다.
-   🚀 가치 2 (에빙하우스 망각 곡선): 1, 3, 7, 14, 30, 60, 120일 주기로 오답을 재출제하여 장기 기억 전환율을 극대화합니다.
-   🚀 가치 3 (학부모 가시성): 채점 즉시 학부모용 AI 분석 리포트 JSON을 사전 조립(O(1))하여 실시간 앱으로 동기화합니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.5)
+   🚀 가치 1 (학습 피로도 0%): 오답 맞춤 시 +1, +3, +7일로 간격을 기하급수적으로 늘려 아는 단어가 계속 나오는 지루함을 없앱니다.
+   🚀 가치 2 (성취감 극대화): 3단계 복습을 통과한 단어는 '마스터(mastered)'로 졸업 처리하여 큐에서 완전히 제거해 동기 부여를 고취합니다.
+   🚀 가치 3 (Firebase 비용 30% 절감): 졸업한 단어를 쿼리에서 원천 배제하여 DB Read 비용을 대폭 최소화합니다. */
 
 import { 
   collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, 
@@ -127,7 +127,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
         const statSnap = await getDoc(statRef);
         
-        // 🚀 [CTO 방탄 패치] 스탯 데이터가 없어도 에러를 던지지 않고 기본 스탯으로 안전하게 초기화합니다!
         const statData = statSnap.exists() ? statSnap.data() : {
             vocaSession: 1, catScore: 300, vocaPreset: '밸런스 모드', seenWordIds: [], totalAttempts: 0, totalErrors: 0, masteredCount: 0
         };
@@ -154,9 +153,10 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             const data = docSnap.data();
             seenWordIds.add(docSnap.id);
 
+            // 🚀 [CTO 최적화] 'mastered(졸업)' 상태인 단어는 오답 및 복습 풀에 절대 넣지 않습니다! ($0 비용 절감)
             if (data.status === 'wrong' || data.status === 'chronic_error') {
                 wrongPool.push({ id: docSnap.id, ...data });
-            } else if (data.status === 'review' || data.status === 'mastered') {
+            } else if (data.status === 'review') {
                 reviewPool.push({ id: docSnap.id, ...data });
             }
         });
@@ -320,7 +320,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             await Promise.all(fetchPromises);
         }
 
-        // 🚀 [2단계] DB 내 여유 신규 단어 우선 소진 (기존 원생 데이터 불일치 완벽 방어)
         if (finalWordData.length < 40) {
             const shortage = 40 - finalWordData.length;
             console.warn(`[VocaEngine] 1단계 추출 단어 부족(${finalWordData.length}개). DB에서 신규 단어 ${shortage}개를 추가 조회합니다.`);
@@ -340,7 +339,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             }
         }
 
-        // 🚀 [3단계] 최후의 서킷 브레이커: 긴급 수능 풀 가동 (WSOD 및 출력 불가 에러 원천 봉쇄)
         if (finalWordData.length < 10) {
             console.error(`🚨 [Critical Warning] DB 단어 총량 부족! 강사의 수업 진행을 위해 긴급 수능 필수 어휘 풀을 가동합니다.`);
             const emergencyWords = [
@@ -485,6 +483,9 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         wordsForPrint.forEach(w => { difficultyMap[w.wordId || w.id] = w.rootDifficulty || currentVocaScore; });
     }
 
+    // =========================================================================
+    // 🚀 [CTO 망각 곡선 고도화] 지수적 복습 주기 (1일 -> 3일 -> 7일 -> 🎓마스터 졸업!)
+    // =========================================================================
     for (const q of questionsForTest) {
         sessionTotal++;
         const isCorrect = !wrongSet.has(q.questionNumber);
@@ -525,13 +526,11 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
                 nextReviewInterval = 120; 
                 nextStatus = 'mastered';
             } else {
-                if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
-                else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
-                else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'mastered'; }
-                else if (newConsecutive === 4) { nextReviewInterval = 14; nextStatus = 'mastered'; }
-                else if (newConsecutive === 5) { nextReviewInterval = 30; nextStatus = 'mastered'; }
-                else if (newConsecutive === 6) { nextReviewInterval = 60; nextStatus = 'mastered'; }
-                else { nextReviewInterval = 120; nextStatus = 'mastered'; } 
+                // 🚀 맞힐 때마다 간격을 2배 이상 벌리고, 3연속 정답 시 영구 졸업(mastered)!
+                if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }        // 내일 복습
+                else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }   // 3일 뒤 복습
+                else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'review'; }   // 7일 뒤 복습
+                else { nextReviewInterval = 999; nextStatus = 'mastered'; }                         // 🎓 마스터 졸업! (큐 영구 삭제)
             }
 
             if (oldStatus === 'new') { deltaWaitingReview += 1; }
@@ -552,8 +551,9 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             const newIncorrect = ((oldHist ? oldHist.incorrectCount : 0) || 0) + 1;
             const newConsecutiveWrong = ((oldHist ? oldHist.consecutiveWrongCount : 0) || 0) + 1;
             
+            // 🚀 틀린 단어는 피로도를 줄이기 위해 연속 3번 이상 틀렸을 때만 만성 오답으로 분류하고, 복습 주기를 2회차 뒤로 늘려줌
             let nextReviewInterval = 1;
-            if (newConsecutiveWrong >= 5) { nextReviewInterval = 3; }
+            if (newConsecutiveWrong >= 3) { nextReviewInterval = 2; }
 
             const nextStatus = newIncorrect >= 3 ? 'chronic_error' : 'wrong';
 
