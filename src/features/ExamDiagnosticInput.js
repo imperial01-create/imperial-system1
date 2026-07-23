@@ -1,8 +1,8 @@
 /* [서비스 가치] 강사가 내신, 개념 테스트, 모의고사를 한 화면에서 일괄 입력하고, 
    입력 즉시 학부모가 열람하는 '아카데미 유니버스'에 실시간($O(1)$)으로 동기화하여 상담 전환을 유도합니다. */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
-  collection, getDocs, doc, getDoc, writeBatch, serverTimestamp, query, where 
+  collection, getDocs, doc, writeBatch, serverTimestamp, query, where 
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { 
@@ -14,27 +14,29 @@ import { getDynamicSubjectLabel } from '../utils/subjectMapper';
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 개념 테스트용 루브릭 및 등급 환산 보조 함수
+// 🚀 개념 테스트용 루브릭 및 등급 환산 보조 함수
 const getRubricGrade = (score) => {
-  if (score >= 90) return 'S';
-  if (score >= 80) return 'A';
-  if (score >= 70) return 'B';
+  const num = Number(score);
+  if (isNaN(num)) return 'C';
+  if (num >= 90) return 'S';
+  if (num >= 80) return 'A';
+  if (num >= 70) return 'B';
   return 'C';
 };
 
 export default function ExamDiagnosticInput({ currentUser }) {
   const { classes, users, loadingData } = useData();
   
-  // [DRY 원칙 & 안전한 메모리 캐싱] 데이터 전처리
+  // [DRY 원칙 & 안전한 메모리 캐싱] 데이터 전처리 (undefined 방지)
   const data = useMemo(() => ({
-    classes: classes || [],
-    students: (users || []).filter(u => u.role === 'student')
+    classes: Array.isArray(classes) ? classes : [],
+    students: Array.isArray(users) ? users.filter(u => u && u.role === 'student') : []
   }), [classes, users]);
   
   const currentYear = new Date().getFullYear();
 
-  // 🚀 [핵심 추가] 평가 대분류 탭 스테이트: 'school'(학교내신) | 'concept'(개념/단원) | 'mock'(모의고사)
-  const [testCategory, setTestCategory] = useState('concept'); // 기본값을 강사들이 가장 자주 쓰는 개념 테스트로 설정
+  // 🚀 평가 대분류 탭 스테이트: 'concept'(개념/단원) | 'school'(학교내신) | 'mock'(모의고사)
+  const [testCategory, setTestCategory] = useState('concept');
 
   // 1. 학교 내신용 필터 스테이트
   const [filters, setFilters] = useState({
@@ -44,7 +46,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const [loadingExams, setLoadingExams] = useState(false);
   const [selectedExamId, setSelectedExamId] = useState('');
 
-  // 2. 자체 개념/단원 및 모의고사용 직접 입력 스테이트
+  // 2. 자체 개념/단원 및 모의고사용 직접 입력 메타 스테이트
   const [customTestMeta, setCustomTestMeta] = useState({
     title: '', unitName: '', subject: '수학', totalQuestions: 10, questionScore: 10
   });
@@ -57,8 +59,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
 
-  // 탭 변경 시 선택 초기화 (메모리 및 렌더링 충돌 방지)
-  handleCategoryChange = (category) => {
+  // 🚀 [버그 해결] const 키워드 추가 및 탭 변경 핸들러
+  const handleCategoryChange = (category) => {
     setTestCategory(category);
     setSelectedExamId('');
     setSelectedStudentIds([]);
@@ -121,33 +123,19 @@ export default function ExamDiagnosticInput({ currentUser }) {
     
     return data.students.filter(s => {
       if (s.classId === selectedClassId) return true;
-      if (cls.studentIds && cls.studentIds.includes(s.id)) return true;
+      if (cls.studentIds && Array.isArray(cls.studentIds) && cls.studentIds.includes(s.id)) return true;
       if (cls.students && Array.isArray(cls.students)) {
-        return cls.students.some(cs => cs === s.id || cs.id === s.id);
+        return cls.students.some(cs => cs === s.id || cs?.id === s.id);
       }
       return false;
     });
   }, [selectedClassId, availableClasses, data.students]);
 
-  // 학생 선택/해제 토글 및 초기 입력값 설정
-  const toggleStudent = (sId) => {
-    setSelectedStudentIds(prev => {
-      const isSelected = prev.includes(sId);
-      if (isSelected) return prev.filter(id => id !== sId);
-      
-      setInputsByStudent(current => ({
-        ...current,
-        [sId]: current[sId] || { wrongQuestions: [], score: 100, comment: '', plan: '' }
-      }));
-      return [...prev, sId];
-    });
-  };
-
-  // 문제 목록 생성 (내신 선택 시험 또는 직접 설정한 문항 수 기반)
+  // 🚀 [버그 해결 1] 문제 목록 생성 로직(examQuestionsList)을 toggleStudent보다 상단에 배치
   const examQuestionsList = useMemo(() => {
     if (testCategory === 'school') {
       const selectedExamData = searchedExams.find(e => e.id === selectedExamId);
-      if (selectedExamData?.questions && selectedExamData.questions.length > 0) {
+      if (selectedExamData?.questions && Array.isArray(selectedExamData.questions) && selectedExamData.questions.length > 0) {
         return selectedExamData.questions.map((q, idx) => ({
           ...q,
           displayNumber: (q.number !== undefined && q.number !== null && q.number !== '') ? String(q.number) : String(idx + 1),
@@ -157,27 +145,52 @@ export default function ExamDiagnosticInput({ currentUser }) {
       return Array.from({ length: 25 }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: 4 }));
     } else {
       // 개념 테스트 또는 모의고사 문항 리스트 생성
-      const count = Number(customTestMeta.totalQuestions) || 10;
-      const point = Number(customTestMeta.questionScore) || 10;
+      const count = Math.max(1, Math.min(100, Number(customTestMeta.totalQuestions) || 10));
+      const point = Math.max(1, Math.min(100, Number(customTestMeta.questionScore) || 10));
       return Array.from({ length: count }, (_, i) => ({ displayNumber: String(i + 1), calcPoint: point }));
     }
   }, [testCategory, searchedExams, selectedExamId, customTestMeta.totalQuestions, customTestMeta.questionScore]);
 
+  // 🚀 [버그 해결 2] examQuestionsList가 선언된 이후에 toggleStudent 정의 (초기화 참조 에러 원천 차단)
+  const toggleStudent = useCallback((sId) => {
+    setSelectedStudentIds(prev => {
+      const isSelected = prev.includes(sId);
+      if (isSelected) return prev.filter(id => id !== sId);
+      
+      setInputsByStudent(current => {
+        if (current[sId]) return current;
+        return {
+          ...current,
+          [sId]: { wrongQuestions: [], score: 100, comment: '', plan: '' }
+        };
+      });
+      return [...prev, sId];
+    });
+  }, []);
+
   // 오답 클릭 시 점수 자동 차감 로직 ($O(1)$ 상태 변경)
   const toggleWrongQuestion = (sId, qNumStr) => {
     setInputsByStudent(prev => {
-      const currentInput = prev[sId];
+      const currentInput = prev[sId] || { wrongQuestions: [], score: 100, comment: '', plan: '' };
       const isWrong = currentInput.wrongQuestions.includes(qNumStr);
       
       let newWrongs = isWrong 
         ? currentInput.wrongQuestions.filter(n => n !== qNumStr)
-        : [...currentInput.wrongQuestions, qNumStr].sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+        : [...currentInput.wrongQuestions, qNumStr].sort((a, b) => {
+            const numA = parseInt(String(a).replace(/[^0-9]/g, ''), 10) || 0;
+            const numB = parseInt(String(b).replace(/[^0-9]/g, ''), 10) || 0;
+            return numA - numB;
+          });
 
       let newScore = 100;
       let deduction = 0;
       newWrongs.forEach(n => {
         const qInfo = examQuestionsList.find(x => x.displayNumber === n);
-        if (qInfo && qInfo.calcPoint) deduction += qInfo.calcPoint;
+        if (qInfo && qInfo.calcPoint !== null && !isNaN(Number(qInfo.calcPoint))) {
+          deduction += Number(qInfo.calcPoint);
+        } else {
+          deduction += Number(customTestMeta.questionScore) || 10;
+        }
       });
       newScore = Math.max(0, Math.round((100 - deduction) * 10) / 10);
 
@@ -191,7 +204,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const handleInputChange = (sId, field, value) => {
     setInputsByStudent(prev => ({
       ...prev,
-      [sId]: { ...prev[sId], [field]: value }
+      [sId]: { ...(prev[sId] || {}), [field]: value }
     }));
   };
 
@@ -210,17 +223,17 @@ export default function ExamDiagnosticInput({ currentUser }) {
     const batch = writeBatch(db);
     const timestamp = serverTimestamp();
     const examTitle = testCategory === 'school' 
-      ? searchedExams.find(e => e.id === selectedExamId)?.schoolName + ' 내신 진단'
-      : `[${testCategory === 'concept' ? '개념테스트' : '모의고사'}] ${customTestMeta.title}`;
+      ? (searchedExams.find(e => e.id === selectedExamId)?.schoolName || '학교내신') + ' 내신 진단'
+      : `[${testCategory === 'concept' ? '개념테스트' : '모의고사'}] ${customTestMeta.title.trim()}`;
 
     try {
       for (const sId of selectedStudentIds) {
         const sInfo = data.students.find(s => s.id === sId);
-        const input = inputsByStudent[sId];
+        const input = inputsByStudent[sId] || { wrongQuestions: [], score: 100, comment: '', plan: '' };
         const numScore = Number(input.score);
 
         if (isNaN(numScore) || numScore < 0 || numScore > 100) {
-          throw new Error(`${sInfo?.name} 학생의 점수가 유효하지 않습니다 (0~100점).`);
+          throw new Error(`${sInfo?.name || '학생'}의 점수가 유효하지 않습니다 (0~100점 사이).`);
         }
 
         // Action 1: 진단 평가 원본 로그 생성 (student_exam_diagnostics)
@@ -228,14 +241,14 @@ export default function ExamDiagnosticInput({ currentUser }) {
         batch.set(diagRef, {
           testCategory: testCategory,
           examTitle: examTitle,
-          unitName: testCategory === 'school' ? '학교 내신 기출' : customTestMeta.unitName,
+          unitName: testCategory === 'school' ? '학교 내신 기출' : customTestMeta.unitName.trim(),
           subject: customTestMeta.subject,
           studentId: sId,
           studentName: sInfo?.name || '알수없음',
           score: numScore,
-          wrongQuestionNumbers: input.wrongQuestions,
-          instructorComment: input.comment,
-          growthPlan: input.plan,
+          wrongQuestionNumbers: input.wrongQuestions || [],
+          instructorComment: input.comment || '',
+          growthPlan: input.plan || '',
           instructorId: currentUser?.id || 'unknown',
           createdAt: timestamp
         });
@@ -244,26 +257,14 @@ export default function ExamDiagnosticInput({ currentUser }) {
         if (testCategory === 'concept') {
           const statsRef = doc(db, `artifacts/${APP_ID}/public/data/concept_stats`, sId);
           
-          // 기존 유니버스 데이터를 불필요하게 읽지 않고(Read 요금 0원), 병합(Merge) 옵션으로 최신 단원 평가를 덮어씀
-          const newUnitRecord = {
-            unitId: `concept_${Date.now()}_${sId.slice(0,4)}`,
-            unitName: customTestMeta.unitName,
-            category: customTestMeta.title,
-            totalScore: numScore,
-            grade: getRubricGrade(numScore),
-            vulnerableTags: input.wrongQuestions.map(q => `${q}번 문항 개념 오류`),
-            updatedAt: new Date().toISOString()
-          };
-
           // Note: Firestore의 merge 옵션을 사용하여 기존 통계를 해치지 않고 최근 지표를 업데이트합니다.
           batch.set(statsRef, {
             subjectStats: {
               [customTestMeta.subject]: {
                 latestScore: numScore,
                 latestGrade: getRubricGrade(numScore),
-                lastUpdatedUnit: customTestMeta.unitName,
-                // 최근 취약 문항 태그를 유니버스로 즉시 렌더링
-                recentVulnerabilities: input.wrongQuestions.map(q => `[${customTestMeta.unitName}] ${q}번 오답`)
+                lastUpdatedUnit: customTestMeta.unitName.trim(),
+                recentVulnerabilities: (input.wrongQuestions || []).map(q => `[${customTestMeta.unitName.trim()}] ${q}번 오답`)
               }
             },
             updatedAt: timestamp
@@ -286,7 +287,14 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }
   };
 
-  if (loadingData) return <div className="p-10 text-center text-indigo-600 font-bold flex flex-col items-center"><Loader className="animate-spin mb-2" size={32}/>데이터를 동기화 중입니다...</div>;
+  if (loadingData) {
+    return (
+      <div className="p-12 text-center text-indigo-600 font-bold flex flex-col items-center justify-center">
+        <Loader className="animate-spin mb-3 text-indigo-600" size={36}/>
+        <span>학원 데이터를 안전하게 동기화 중입니다...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in">
@@ -306,7 +314,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
         </p>
       </div>
 
-      {/* 🚀 [고도화 1] 3대 평가 대분류 탭 선택기 */}
+      {/* 🚀 3대 평가 대분류 탭 선택기 */}
       <div className="flex rounded-2xl bg-slate-200/80 p-1.5 shadow-inner">
         {[
           { id: 'concept', label: '⚡ 자체 개념/단원 테스트 (유니버스 연동)', icon: Layers, color: 'text-indigo-600' },
@@ -319,6 +327,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
             <button
               key={tab.id}
               onClick={() => handleCategoryChange(tab.id)}
+              type="button"
               className={`flex-1 py-3.5 px-4 rounded-xl font-extrabold text-sm transition-all flex items-center justify-center gap-2 cursor-pointer ${
                 isActive ? 'bg-white text-slate-900 shadow-md scale-[1.01]' : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
               }`}
@@ -339,20 +348,19 @@ export default function ExamDiagnosticInput({ currentUser }) {
         </div>
       )}
       {successMsg && (
-        <div className="p-4 bg-emerald-50 border-l-4 border-emerald-500 rounded-xl flex items-center gap-3 text-emerald-800 text-sm font-bold animate-fade-in">
+        <div className="p-4 bg-emerald-50 border-l-4 border-emerald-500 rounded-xl flex items-center gap-3 text-emerald-800 text-sm font-bold animate-in fade-in">
           <CheckCircle className="w-5 h-5 flex-shrink-0 text-emerald-500" />
           <span>{successMsg}</span>
         </div>
       )}
 
-      {/* 🚀 [고도화 2] 평가 유형별 조건 설정 널 (개념/모의고사 vs 학교내신) */}
+      {/* 1단계: 평가 유형별 조건 설정 패널 */}
       <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
         <h2 className="text-lg font-black text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-100 pb-3">
           <Search className="text-indigo-600" size={20} /> 1단계: {testCategory === 'school' ? '진단할 내신 시험 검색' : '평가 정보 및 문항 설정'}
         </h2>
 
         {testCategory === 'school' ? (
-          /* 기존 학교 내신 검색 UI */
           <div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <input 
@@ -376,7 +384,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 <option value="중간고사">중간고사</option><option value="기말고사">기말고사</option>
               </select>
             </div>
-            <button onClick={handleSearchExams} disabled={loadingExams} className="w-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 font-black py-3 rounded-xl transition-colors flex justify-center items-center gap-2 mb-4 cursor-pointer disabled:opacity-50">
+            <button onClick={handleSearchExams} disabled={loadingExams} type="button" className="w-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 font-black py-3 rounded-xl transition-colors flex justify-center items-center gap-2 mb-4 cursor-pointer disabled:opacity-50">
               {loadingExams ? <Loader className="animate-spin" size={18}/> : <Search size={18} />} 
               {loadingExams ? '내신 기출 DB 조회 중...' : '조건에 맞는 기출 시험 검색하기'}
             </button>
@@ -392,7 +400,6 @@ export default function ExamDiagnosticInput({ currentUser }) {
             )}
           </div>
         ) : (
-          /* 🚀 자체 개념 테스트 및 모의고사 메타 입력 UI */
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-1">
@@ -490,7 +497,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
               <div key={sId} className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 border-l-8 border-l-rose-500 flex flex-col gap-5 transition-all hover:border-slate-300">
                 <div className="flex flex-col md:flex-row justify-between md:items-center bg-slate-50 p-4 rounded-2xl border border-slate-100 gap-3">
                   <div>
-                    <span className="text-xl font-black text-slate-900">{student?.name} 학생</span>
+                    <span className="text-xl font-black text-slate-900">{student?.name || '수강생'}</span>
                     <span className="ml-2 text-xs font-bold text-slate-500">{student?.grade || '고등부'}</span>
                   </div>
                   <div className="flex items-center gap-2 self-end md:self-auto bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
