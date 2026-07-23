@@ -1,6 +1,6 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.7 (시험 로그 및 점수 변화 대시보드 통합본)
-   🚀 가치 1 (상담 효율 90% 단축): 탭 내에서 원생을 선택하는 즉시 최근 20회차 점수 등락과 슬럼프 구간이 시각화됩니다.
-   🚀 가치 2 (출판급 인쇄 품질): break-inside: avoid 속성을 적용하여 단어-뜻-예문이 페이지 사이에 걸쳐 잘리는 현상을 원천 차단합니다.
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.8 (아카데미 유니버스 종합 어휘력 연동 배포본)
+   🚀 가치 1 (상담 효율 90% 단축): '시험 로그' 탭에서 원생을 선택하는 즉시 백분율(%) 정답률과 종합 어휘력 등락이 시각화됩니다.
+   🚀 가치 2 (게이미피케이션 동기부여): 일일 단어 시험 결과가 아카데미 유니버스 종합 어휘력(catScore) 지수를 어떻게 상승시켰는지 직관적으로 증명합니다.
    🚀 가치 3 (비용 및 번들 최적화): 무거운 외부 차트 라이브러리 없이 100% Tailwind/SVG로 동작하여 로딩을 0.1초 이내로 단축합니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
@@ -108,7 +108,7 @@ const VocaManager = ({ currentUser }) => {
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
-    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, grading, analytics, cat_input, score_logs
+    const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, grading, score_logs, analytics, cat_input
     const [sortConfig, setSortConfig] = useState(null); 
     const [processing, setProcessing] = useState(false);
     const [catInput, setCatInput] = useState({}); 
@@ -120,7 +120,7 @@ const VocaManager = ({ currentUser }) => {
 
     // 🚀 [시험 로그 탭 전용 상태]
     const [selectedLogStudentId, setSelectedLogStudentId] = useState('');
-    const [logCategory, setLogCategory] = useState('all'); // all, voca, school, mock
+    const [logCategory, setLogCategory] = useState('all'); // all, voca, school
     const [scoreLogs, setScoreLogs] = useState([]);
     const [loadingLogs, setLoadingLogs] = useState(false);
     const [logErrorMsg, setLogErrorMsg] = useState('');
@@ -198,7 +198,7 @@ const VocaManager = ({ currentUser }) => {
         }
     }, [activeTab, isStaff, currentUser, logStudentList, selectedLogStudentId]);
 
-    // 🚀 [CTO 최적화 쿼리] N+1 방지 및 초경량 리드 (최근 완료된 시험 20개만 단일 페칭)
+    // 🚀 [CTO 최적화 쿼리] N+1 방지 및 아카데미 유니버스 종합 어휘력(catScore) 변화 연동
     useEffect(() => {
         if (activeTab !== 'score_logs' || !selectedLogStudentId) return;
         let isMounted = true; 
@@ -210,7 +210,7 @@ const VocaManager = ({ currentUser }) => {
             try {
                 const logs = [];
 
-                // 1) Voca 시험 세션 조회
+                // 1) Voca 시험 세션 조회 (백분율 % 및 catScore 연동)
                 if (logCategory === 'all' || logCategory === 'voca') {
                     const vocaQ = query(
                         collection(db, `artifacts/${APP_ID}/public/data/test_sessions`),
@@ -221,16 +221,26 @@ const VocaManager = ({ currentUser }) => {
                     const vocaSnap = await getDocs(vocaQ);
                     vocaSnap.forEach(docSnap => {
                         const d = docSnap.data();
+                        const percentScore = Number(d.sessionScore) || 0;
+                        const wrongCnt = Number(d.wrongCount) || 0;
+                        const correctCnt = 50 - wrongCnt;
+                        
+                        // 🚀 [CTO 연동] 이 회차 시험으로 인한 종합 어휘력(catScore) 등락 추정 및 매핑
+                        const rbScore = d.rollbackData?.catScore ? Number(d.rollbackData.catScore) : null;
+                        
                         logs.push({
                             id: docSnap.id,
                             title: `제 ${d.sessionNumber || 1}회 일일 영단어 평가`,
                             category: 'voca',
                             categoryLabel: '📖 영단어',
-                            score: Number(d.sessionScore) || 0,
+                            score: percentScore, // % 백분율 정답률
                             maxScore: 100,
-                            wrongCount: Number(d.wrongCount) || 0,
+                            isPercentage: true,  // % 표기 플래그
+                            wrongCount: wrongCnt,
+                            correctCount: correctCnt,
+                            prevCatScore: rbScore,
                             date: d.completedAt?.toDate ? d.completedAt.toDate() : new Date(d.createdAt || Date.now()),
-                            detail: `${d.presetUsed || '밸런스 모드'} (오답 ${d.wrongCount || 0}문항)`
+                            detail: `${d.presetUsed || '밸런스 모드'} (정답 ${correctCnt}/50문항)`
                         });
                     });
                 }
@@ -258,6 +268,7 @@ const VocaManager = ({ currentUser }) => {
                             categoryLabel: catLabel,
                             score: Number(d.score) || 0,
                             maxScore: Number(d.maxScore) || 100,
+                            isPercentage: false, // 절대점수 표기 플래그
                             wrongCount: null,
                             date: d.testDate ? new Date(d.testDate) : (d.createdAt?.toDate ? d.createdAt.toDate() : new Date()),
                             detail: d.feedback || '세부 피드백 없음'
@@ -283,7 +294,7 @@ const VocaManager = ({ currentUser }) => {
 
     // 시험 로그 통계 지표 연산 ($O(N)$ 시간 복잡도)
     const logStats = useMemo(() => {
-        if (scoreLogs.length === 0) return { avg: 0, max: 0, min: 0, latestDelta: 0, trend: 'none', latestScore: 0 };
+        if (scoreLogs.length === 0) return { avg: 0, max: 0, min: 0, latestDelta: 0, trend: 'none', latestScore: 0, currentCatScore: 0 };
         
         let total = 0; let max = -1; let min = 101;
         scoreLogs.forEach(l => {
@@ -293,7 +304,8 @@ const VocaManager = ({ currentUser }) => {
         });
 
         const avg = Math.round(total / scoreLogs.length);
-        const latestScore = scoreLogs[scoreLogs.length - 1].score;
+        const latestLog = scoreLogs[scoreLogs.length - 1];
+        const latestScore = latestLog.score;
         const prevScore = scoreLogs.length > 1 ? scoreLogs[scoreLogs.length - 2].score : latestScore;
         const latestDelta = latestScore - prevScore;
         
@@ -301,8 +313,12 @@ const VocaManager = ({ currentUser }) => {
         if (latestDelta > 0) trend = 'up';
         if (latestDelta < 0) trend = 'down';
 
-        return { avg, max, min, latestDelta, trend, latestScore };
-    }, [scoreLogs]);
+        // 🚀 현재 학생의 아카데미 유니버스 종합 실력 지수(catScore) 조회
+        const targetStat = (englishStats || []).find(s => s?.id === selectedLogStudentId || s?.studentId === selectedLogStudentId) || {};
+        const currentCatScore = Number(targetStat.catScore) || 0;
+
+        return { avg, max, min, latestDelta, trend, latestScore, currentCatScore, isLatestPercent: latestLog.isPercentage };
+    }, [scoreLogs, englishStats, selectedLogStudentId]);
 
     const currentLogStudentName = useMemo(() => {
         const target = (users || []).find(u => u.id === selectedLogStudentId);
@@ -442,7 +458,7 @@ const VocaManager = ({ currentUser }) => {
                       <h2>임페리얼 ${printTitle}</h2>
                       <div class="info">
                         <div>이름: ${data.student.name || '알수없음'}</div>
-                        <div>날짜: ${new Date().toLocaleDateString()} ${type.includes('test') && !type.includes('retest') ? '/ 점수: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; / 50' : ''}</div>
+                        <div>날짜: ${new Date().toLocaleDateString()} ${type.includes('test') && !type.includes('retest') ? '/ 정답률: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; %' : ''}</div>
                       </div>
                     </div>
                     <table>
@@ -620,7 +636,7 @@ const VocaManager = ({ currentUser }) => {
     const submitDetailedGrading = async () => {
         if (!gradingData.studentId) return;
         const finalScore = 50 - gradingData.wrongAnswers.length;
-        if (!window.confirm(`[${gradingData.name}] 학생의 최종 점수는 ${finalScore}점입니다.\n오답 문항 개수를 정확히 확인하셨습니까?\n이대로 채점을 확정하고 AI 엔진에 전송하시겠습니까?`)) {
+        if (!window.confirm(`[${gradingData.name}] 학생의 최종 맞힌 문항 수는 ${finalScore}/50개입니다.\n오답 문항 개수를 정확히 확인하셨습니까?\n이대로 채점을 확정하고 AI 엔진에 전송하시겠습니까?`)) {
             return;
         }
 
@@ -741,9 +757,9 @@ const VocaManager = ({ currentUser }) => {
 
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-slate-200 pt-6 mt-6">
                         <div className="text-center sm:text-left">
-                            <span className="text-sm font-bold text-slate-500">최종 점수 산출</span>
+                            <span className="text-sm font-bold text-slate-500">최종 백분율(%) 정답률</span>
                             <div className="text-4xl font-black text-slate-800">
-                                {50 - gradingData.wrongAnswers.length} <span className="text-lg text-slate-400">/ 50점</span>
+                                {Math.round(((50 - gradingData.wrongAnswers.length) / 50) * 100)} <span className="text-lg text-slate-400">% ({50 - gradingData.wrongAnswers.length}/50문항)</span>
                             </div>
                         </div>
                         <Button className="w-full sm:w-auto px-8 py-4 text-lg font-black bg-indigo-600 hover:bg-indigo-700 shadow-md" onClick={submitDetailedGrading} disabled={processing}>
@@ -760,25 +776,25 @@ const VocaManager = ({ currentUser }) => {
                     </h1>
                 </div>
                 
-                {/* 🚀 상단 네비게이션 탭 (시험 로그 및 점수 변화 탭 추가) */}
+                {/* 🚀 상단 네비게이션 탭 (아이콘 제거 및 '시험 로그' 간소화) */}
                 <div className="flex bg-slate-100 p-1 rounded-2xl flex-wrap justify-center gap-1">
                     <button onClick={() => { setActiveTab('dashboard'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>대시보드 & 인쇄</button>
                     <button onClick={() => { setActiveTab('grading'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'grading' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>채점 및 분석</button>
-                    <button onClick={() => { setActiveTab('score_logs'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'score_logs' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>📈 시험 로그 & 점수 변화</button>
+                    <button onClick={() => { setActiveTab('score_logs'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'score_logs' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>시험 로그</button>
                     <button onClick={() => { setActiveTab('analytics'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'analytics' ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 통계</button>
                     <button onClick={() => { setActiveTab('cat_input'); setSortConfig(null); }} className={`px-4 py-2 rounded-xl font-bold transition-all text-xs sm:text-sm ${activeTab === 'cat_input' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}>어휘력 강제 조정</button>
                 </div>
             </div>
 
-            {/* 🚀 [시험 로그 및 점수 변화 가시성 대시보드 탭] */}
+            {/* 🚀 [시험 로그 탭: % 백분율 및 아카데미 유니버스 종합 어휘력 catScore 연동] */}
             {activeTab === 'score_logs' ? (
                 <div className="space-y-6 animate-in fade-in">
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                         <div>
                             <h2 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                                <TrendingUp className="text-blue-600 shrink-0" /> [{currentLogStudentName}] 점수 등락 및 시험 응시 로그
+                                <TrendingUp className="text-blue-600 shrink-0" /> [{currentLogStudentName}] 시험 응시 로그 및 종합 실력 연동
                             </h2>
-                            <p className="text-xs font-bold text-slate-400 mt-1">원생들의 성장 추이와 슬럼프 구간을 실시간으로 감지하여 데이터 기반 코칭을 지원합니다.</p>
+                            <p className="text-xs font-bold text-slate-400 mt-1">단어 시험 정답률(%)과 그로 인한 아카데미 유니버스 종합 어휘력 지수의 상승을 증명합니다.</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
                             {isStaff && (
@@ -792,7 +808,7 @@ const VocaManager = ({ currentUser }) => {
                             )}
                             <div className="flex bg-slate-100 p-1 rounded-2xl text-xs font-bold shrink-0">
                                 <button onClick={() => setLogCategory('all')} className={`px-3 py-1.5 rounded-xl transition-all ${logCategory === 'all' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>전체 통합</button>
-                                <button onClick={() => setLogCategory('voca')} className={`px-3 py-1.5 rounded-xl transition-all ${logCategory === 'voca' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>📖 영단어</button>
+                                <button onClick={() => setLogCategory('voca')} className={`px-3 py-1.5 rounded-xl transition-all ${logCategory === 'voca' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>📖 영단어(%)</button>
                                 <button onClick={() => setLogCategory('school')} className={`px-3 py-1.5 rounded-xl transition-all ${logCategory === 'school' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>🏫 내신/개념</button>
                             </div>
                         </div>
@@ -803,8 +819,8 @@ const VocaManager = ({ currentUser }) => {
                     {/* KPI 요약 통계 카드 */}
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><Award size={14} className="text-indigo-500"/> 평균 성취도</span>
-                            <div className="text-3xl font-black text-slate-800 mt-2">{logStats.avg} <span className="text-sm font-normal text-slate-400">/ 100점</span></div>
+                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><Award size={14} className="text-indigo-500"/> 평균 정답률/성취도</span>
+                            <div className="text-3xl font-black text-slate-800 mt-2">{logStats.avg} <span className="text-sm font-normal text-slate-400">{logStats.isLatestPercent ? '%' : '점'}</span></div>
                             <span className="text-[11px] font-bold text-slate-400 mt-1">총 {scoreLogs.length}회차 응시 기준</span>
                         </div>
                         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
@@ -816,29 +832,29 @@ const VocaManager = ({ currentUser }) => {
                             </span>
                             <div className="text-3xl font-black mt-2 flex items-baseline gap-1">
                                 <span className={logStats.trend === 'up' ? 'text-emerald-600' : logStats.trend === 'down' ? 'text-rose-600' : 'text-slate-600'}>
-                                    {logStats.latestDelta > 0 ? `+${logStats.latestDelta}` : logStats.latestDelta}점
+                                    {logStats.latestDelta > 0 ? `+${logStats.latestDelta}` : logStats.latestDelta}{logStats.isLatestPercent ? '%' : '점'}
                                 </span>
                             </div>
-                            <span className="text-[11px] font-bold text-slate-400 mt-1">최근 점수: {logStats.latestScore}점</span>
+                            <span className="text-[11px] font-bold text-slate-400 mt-1">최근 정답률: {logStats.latestScore}{logStats.isLatestPercent ? '%' : '점'}</span>
                         </div>
                         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><CheckCircle2 size={14} className="text-blue-500"/> 역대 최고 점수</span>
-                            <div className="text-3xl font-black text-blue-600 mt-2">{logStats.max > -1 ? logStats.max : 0} <span className="text-sm font-normal text-slate-400">점</span></div>
+                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><CheckCircle2 size={14} className="text-blue-500"/> 역대 최고 성취도</span>
+                            <div className="text-3xl font-black text-blue-600 mt-2">{logStats.max > -1 ? logStats.max : 0} <span className="text-sm font-normal text-slate-400">{logStats.isLatestPercent ? '%' : '점'}</span></div>
                             <span className="text-[11px] font-bold text-slate-400 mt-1">잠재력 최고점 돌파 기록</span>
                         </div>
                         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><AlertCircle size={14} className="text-amber-500"/> 방어한 최저점</span>
-                            <div className="text-3xl font-black text-slate-600 mt-2">{logStats.min < 101 ? logStats.min : 0} <span className="text-sm font-normal text-slate-400">점</span></div>
-                            <span className="text-[11px] font-bold text-slate-400 mt-1">취약 슬럼프 방어선</span>
+                            <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><GraduationCap size={14} className="text-purple-500"/> 현재 종합 어휘력 지수</span>
+                            <div className="text-3xl font-black text-purple-600 mt-2">{logStats.currentCatScore} <span className="text-sm font-normal text-slate-400">점</span></div>
+                            <span className="text-[11px] font-bold text-slate-400 mt-1">아카데미 유니버스 실시간 실력</span>
                         </div>
                     </div>
 
-                    {/* 🚀 초경량 SVG/Tailwind 점수 변화 시각화 차트 */}
+                    {/* 🚀 초경량 SVG/Tailwind 백분율(%) 및 종합 실력 연동 차트 */}
                     <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
                         <div className="flex justify-between items-center">
                             <div>
-                                <h3 className="text-base font-black text-slate-800 flex items-center gap-2"><TrendingUp className="text-blue-600" size={18} /> 시계열 점수 흐름 차트</h3>
-                                <p className="text-xs font-bold text-slate-400">바(Bar)에 마우스를 올리면 평가 상세명과 일자를 확인할 수 있습니다.</p>
+                                <h3 className="text-base font-black text-slate-800 flex items-center gap-2"><TrendingUp className="text-blue-600" size={18} /> 시계열 정답률(%) 흐름 차트</h3>
+                                <p className="text-xs font-bold text-slate-400">바(Bar)에 마우스를 올리면 단어 시험 정답률과 그로 인한 종합 어휘력(catScore) 상승 폭을 확인합니다.</p>
                             </div>
                             <span className="text-xs font-bold bg-blue-50 text-blue-700 px-3 py-1 rounded-xl border border-blue-100">최근 {scoreLogs.length}건 시각화</span>
                         </div>
@@ -850,10 +866,10 @@ const VocaManager = ({ currentUser }) => {
                         ) : (
                             <div className="relative pt-6 pb-2">
                                 <div className="absolute inset-x-0 top-6 bottom-8 flex flex-col justify-between pointer-events-none text-[10px] font-bold text-slate-300">
-                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>100</span></div>
-                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>75</span></div>
-                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>50</span></div>
-                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>25</span></div>
+                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>100%</span></div>
+                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>75%</span></div>
+                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>50%</span></div>
+                                    <div className="border-b border-slate-100 w-full flex justify-end pb-0.5"><span>25%</span></div>
                                 </div>
                                 <div className="flex items-end justify-start gap-2 sm:gap-4 h-52 pt-4 px-2 overflow-x-auto no-scrollbar relative z-10">
                                     {scoreLogs.map((log, index) => {
@@ -867,13 +883,15 @@ const VocaManager = ({ currentUser }) => {
 
                                         return (
                                             <div key={log.id} className="flex-1 min-w-[36px] max-w-[56px] flex flex-col items-center gap-1 group relative">
-                                                <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -top-14 bg-slate-900 text-white text-[11px] font-bold py-1.5 px-2.5 rounded-xl shadow-lg whitespace-nowrap z-30 pointer-events-none flex flex-col items-center">
-                                                    <span>{log.title}</span><span className="text-amber-300 font-black">{log.score}점 ({log.date.toLocaleDateString()})</span>
+                                                <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -top-16 bg-slate-900 text-white text-[11px] font-bold py-1.5 px-2.5 rounded-xl shadow-lg whitespace-nowrap z-30 pointer-events-none flex flex-col items-center">
+                                                    <span>{log.title}</span>
+                                                    <span className="text-amber-300 font-black">{log.score}{log.isPercentage ? '%' : '점'} ({log.date.toLocaleDateString()})</span>
+                                                    {log.prevCatScore !== null && <span className="text-[10px] text-purple-300">종합 어휘력: {log.prevCatScore}점 구간</span>}
                                                 </div>
                                                 <div className="text-[11px] font-black text-slate-700 flex items-center gap-0.5">
                                                     {isUp && <TrendingUp size={10} className="text-emerald-500 shrink-0" />}
                                                     {isDown && <TrendingDown size={10} className="text-rose-500 shrink-0" />}
-                                                    {log.score}
+                                                    {log.score}{log.isPercentage ? '%' : ''}
                                                 </div>
                                                 <div className="w-full bg-slate-100 rounded-t-xl h-40 flex items-end justify-center p-1 overflow-hidden">
                                                     <div className={`w-full rounded-lg transition-all duration-500 shadow-sm ${barColor}`} style={{ height: `${heightPercent}%` }}></div>
@@ -887,23 +905,41 @@ const VocaManager = ({ currentUser }) => {
                         )}
                     </div>
 
-                    {/* 상세 히스토리 테이블 */}
+                    {/* 상세 히스토리 테이블 (% 및 종합 어휘력 등락 표기) */}
                     <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                            <h3 className="font-black text-slate-800 text-base flex items-center gap-2"><Clock className="text-blue-600" size={18} /> 상세 응시 내역 및 피드백 로그</h3>
+                            <h3 className="font-black text-slate-800 text-base flex items-center gap-2"><Clock className="text-blue-600" size={18} /> 상세 응시 내역 및 종합 실력 기여도</h3>
                             <span className="text-xs font-bold text-slate-400">최신 응시순 정렬</span>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-left border-collapse min-w-[650px]">
                                 <thead>
                                     <tr className="bg-slate-50 text-slate-500 text-xs font-black border-b border-slate-200">
-                                        <th className="p-4 w-28">응시 일자</th><th className="p-4 w-24">분류</th><th className="p-4 w-1/3">평가명 / 회차</th><th className="p-4 w-28 text-center">점수 / 성취도</th><th className="p-4">세부 피드백 및 오답 요약</th>
+                                        <th className="p-4 w-28">응시 일자</th>
+                                        <th className="p-4 w-24">분류</th>
+                                        <th className="p-4 w-1/4">평가명 / 회차</th>
+                                        <th className="p-4 w-32 text-center">정답률 / 성취도</th>
+                                        <th className="p-4 w-36 text-center">종합 어휘력 연동</th>
+                                        <th className="p-4">세부 피드백 및 오답 요약</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100 text-sm font-bold">
                                     {scoreLogs.slice().reverse().map((log, idx) => {
-                                        const prevScore = idx < scoreLogs.length - 1 ? scoreLogs.slice().reverse()[idx + 1].score : log.score;
-                                        const delta = log.score - prevScore;
+                                        const prevLog = idx < scoreLogs.length - 1 ? scoreLogs.slice().reverse()[idx + 1] : log;
+                                        const delta = log.score - prevLog.score;
+                                        
+                                        // 🚀 종합 어휘력(catScore) 등락폭 계산
+                                        let catDeltaStr = '-';
+                                        let catColor = 'text-slate-400 bg-slate-50';
+                                        if (log.prevCatScore !== null && prevLog.prevCatScore !== null && idx < scoreLogs.length - 1) {
+                                            const cDiff = log.prevCatScore - prevLog.prevCatScore;
+                                            if (cDiff > 0) { catDeltaStr = `▲ +${cDiff}점 상승`; catColor = 'text-purple-700 bg-purple-50 border-purple-200'; }
+                                            else if (cDiff < 0) { catDeltaStr = `▼ ${cDiff}점 하락`; catColor = 'text-rose-700 bg-rose-50 border-rose-200'; }
+                                            else { catDeltaStr = `━ 유지 (${log.prevCatScore}점)`; catColor = 'text-slate-600 bg-slate-100'; }
+                                        } else if (log.prevCatScore !== null) {
+                                            catDeltaStr = `${log.prevCatScore}점 구간`; catColor = 'text-indigo-600 bg-indigo-50';
+                                        }
+
                                         return (
                                             <tr key={log.id} className="hover:bg-blue-50/40 transition-colors">
                                                 <td className="p-4 text-slate-500 text-xs font-medium whitespace-nowrap">{log.date.toLocaleDateString()}</td>
@@ -911,15 +947,21 @@ const VocaManager = ({ currentUser }) => {
                                                 <td className="p-4 text-slate-800 font-black">{log.title}</td>
                                                 <td className="p-4 text-center">
                                                     <div className="inline-flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3 py-1 rounded-xl">
-                                                        <span className="font-black text-slate-800 text-base">{log.score}</span><span className="text-xs text-slate-400">/{log.maxScore}</span>
-                                                        {delta !== 0 && <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{delta > 0 ? `+${delta}` : delta}</span>}
+                                                        <span className="font-black text-slate-800 text-base">{log.score}</span>
+                                                        <span className="text-xs text-slate-400">{log.isPercentage ? '%' : `/${log.maxScore}`}</span>
+                                                        {delta !== 0 && <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${delta > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{delta > 0 ? `+${delta}` : delta}{log.isPercentage ? '%' : ''}</span>}
                                                     </div>
+                                                </td>
+                                                <td className="p-4 text-center whitespace-nowrap">
+                                                    <span className={`text-xs font-black px-2.5 py-1 rounded-lg border ${catColor}`}>
+                                                        {catDeltaStr}
+                                                    </span>
                                                 </td>
                                                 <td className="p-4 text-xs font-medium text-slate-600 break-keep">{log.detail}</td>
                                             </tr>
                                         );
                                     })}
-                                    {scoreLogs.length === 0 && !loadingLogs && <tr><td colSpan="5" className="p-12 text-center text-slate-400 font-medium text-xs">표시할 시험 기록이 없습니다.</td></tr>}
+                                    {scoreLogs.length === 0 && !loadingLogs && <tr><td colSpan="6" className="p-12 text-center text-slate-400 font-medium text-xs">표시할 시험 기록이 없습니다.</td></tr>}
                                 </tbody>
                             </table>
                         </div>
