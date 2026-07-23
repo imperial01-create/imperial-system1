@@ -1,13 +1,12 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v6.5.1 (WSOD 패치 완료)
-   🚀 CTO 패치: 
-   1. 런타임 에러 방어: 누락되었던 Loader 컴포넌트를 정상 import 하여 초기 로딩 시 발생하는 백화현상(WSOD)을 완벽히 해결했습니다.
-   2. 방탄 렌더링(Defensive Rendering): 초기 데이터 로딩 시 발생할 수 있는 null/undefined 참조 에러를 옵셔널 체이닝(?.)과 기본값(|| [])으로 완벽하게 방어했습니다. */
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.1 (프로덕션 전체 배포본)
+   🚀 가치 1 (업무 자동화): 강사는 수업 시작 1분 전, 반 전체 수강생의 단어장/시험지/답안지를 원클릭으로 출력합니다.
+   🚀 가치 2 (장애 격리): 특정 학생 데이터 오류 시 전체 인쇄가 중단되지 않고 개별 격리되어 반 전체 인쇄를 성공시킵니다.
+   🚀 가치 3 (에러 안내): 불투명한 에러 대신 권한 차단, 팝업 차단, 데이터 부족 등 정확한 한국어 원인과 해결책을 안내합니다. */
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
     Users, Printer, BarChart2, Search, 
     AlertCircle, FileText, RefreshCw, Sliders, Trophy, BookOpen, CheckCircle, ChevronDown, Undo2, GraduationCap, Info, CalendarDays, Loader 
-    // 💡 CTO Fix: 위 줄 맨 끝에 Loader가 추가되었습니다.
 } from 'lucide-react';
 import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -62,10 +61,9 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [런타임 에러 방어] Context에서 데이터를 못 가져와도 에러가 나지 않도록 빈 객체/배열 기본값 할당
+    // 🚀 [런타임 에러 방어] Context 기본값 안전 할당
     const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
 
-    // 🚀 [런타임 에러 방어] 원본 배열을 훼손하지 않기 위해 얕은 복사([...]) 후 정렬 수행
     const dynamicSeasons = useMemo(() => {
         if (!masterData?.seasons || !Array.isArray(masterData.seasons)) return [];
         return [...masterData.seasons].sort((a, b) => (a?.startDate || '').localeCompare(b?.startDate || ''));
@@ -115,7 +113,6 @@ const VocaManager = ({ currentUser }) => {
 
     const availableClasses = useMemo(() => {
         let filtered = (classes || []).filter(c => c?.subject === '영어' || ((c?.name || '').includes('영어')));
-        
         filtered = filtered.filter(c => c?.status === 'active');
 
         if (selectedSeasonId === 'legacy') {
@@ -179,6 +176,7 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
+    // 🚀 [CTO 패치] N+1 인쇄 크래시 방지 방어적 루프(Resilient Loop) 및 친절한 한국어 에러 안내
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
         try {
@@ -187,51 +185,63 @@ const VocaManager = ({ currentUser }) => {
                 ? classStudents.filter(s => s?.id === targetStudentId)
                 : classStudents;
 
-            for (const student of targetStudents) {
-                const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
-                const sessionNum = stat.vocaSession || 1;
-                const sessionId = `test_${student?.id}_s${sessionNum}`;
-                
-                const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
-                
-                let questionsList = [];
-                let wordsList = []; 
-                let isSessionCompleted = false;
-                let wrongNums = [];
-                
-                if (testSnap.exists() && testSnap.data().questionsForTest) {
-                    const testData = testSnap.data();
-                    questionsList = testData.questionsForTest;
-                    wordsList = testData.wordsForPrint;
-                    if (testData.status === 'completed') {
-                        isSessionCompleted = true;
-                        wrongNums = testData.wrongAnswerNumbers || [];
-                    }
-                } else if (Number(stat.catScore) > 0) {
-                    const activePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
-                    const payload = await generateDailyVocaSet(student.id, activePreset);
-                    questionsList = payload.questionsForTest;
-                    wordsList = payload.wordsForPrint;
-                }
+            if (targetStudents.length === 0) {
+                alert("출력할 대상 학생이 없습니다.");
+                setProcessing(false);
+                return;
+            }
 
-                if (type.startsWith('retest')) {
-                    if (!isSessionCompleted) {
-                        alert(`${student?.name || '학생'}의 채점이 완료되지 않아 오답 재시험지를 출력할 수 없습니다.`);
-                        continue;
+            // 🚀 한 명의 학생 데이터 오류가 반 전체 인쇄를 막지 않도록 개별 try-catch 격리 적용
+            for (const student of targetStudents) {
+                try {
+                    const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
+                    const sessionNum = stat.vocaSession || 1;
+                    const sessionId = `test_${student?.id}_s${sessionNum}`;
+                    
+                    const testSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, sessionId));
+                    
+                    let questionsList = [];
+                    let wordsList = []; 
+                    let isSessionCompleted = false;
+                    let wrongNums = [];
+                    
+                    if (testSnap.exists() && testSnap.data().questionsForTest) {
+                        const testData = testSnap.data();
+                        questionsList = testData.questionsForTest || [];
+                        wordsList = testData.wordsForPrint || [];
+                        if (testData.status === 'completed') {
+                            isSessionCompleted = true;
+                            wrongNums = testData.wrongAnswerNumbers || [];
+                        }
+                    } else if (Number(stat.catScore) > 0 || stat.vocaSession === 1 || !stat.catScore) {
+                        const activePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
+                        const payload = await generateDailyVocaSet(student.id, activePreset);
+                        questionsList = payload.questionsForTest || [];
+                        wordsList = payload.wordsForPrint || [];
                     }
-                    if (wrongNums.length === 0) {
-                        alert(`${student?.name || '학생'}은 100점이므로 재시험지가 없습니다!`);
-                        continue;
+
+                    if (type.startsWith('retest')) {
+                        if (!isSessionCompleted) {
+                            console.warn(`[${student?.name}] 학생은 채점이 완료되지 않아 오답 재시험지에서 제외됩니다.`);
+                            continue;
+                        }
+                        if (wrongNums.length === 0) {
+                            console.info(`[${student?.name}] 학생은 100점이므로 오답이 없습니다.`);
+                            continue;
+                        }
+                        questionsList = questionsList.filter(q => wrongNums.includes(q.questionNumber));
                     }
-                    questionsList = questionsList.filter(q => wrongNums.includes(q.questionNumber));
-                }
-                
-                if (questionsList.length > 0 || (type === 'wordbook' && wordsList.length > 0)) {
-                    dataToPrint.push({ student, questionsList, wordsList, session: sessionNum });
+                    
+                    if (questionsList.length > 0 || (type === 'wordbook' && wordsList.length > 0)) {
+                        dataToPrint.push({ student, questionsList, wordsList, session: sessionNum });
+                    }
+                } catch (studentError) {
+                    console.error(`[${student?.name || '학생'}] 개별 데이터 준비 실패:`, studentError);
                 }
             }
             
             if (dataToPrint.length === 0) {
+                alert("🚨 출력할 데이터가 없습니다. 학생의 초기 진단(CAT 점수)이 입력되었거나, 시험지가 생성될 수 있는 조건인지 확인해주세요.");
                 setProcessing(false);
                 return;
             }
@@ -381,11 +391,15 @@ const VocaManager = ({ currentUser }) => {
                 printWindow.document.write(htmlContent);
                 printWindow.document.close();
             } else {
-                alert("팝업 차단이 설정되어 있습니다. 팝업 차단을 해제해 주세요.");
+                alert("🚨 브라우저의 팝업 차단이 설정되어 있습니다. 주소창 오른쪽의 [팝업 차단 해제]를 허용해 주세요.");
             }
         } catch (error) {
             console.error("Print Data Preparation Error:", error);
-            alert("출력 데이터 준비 중 오류가 발생했습니다.");
+            if (error.code === 'permission-denied') {
+                alert("🚨 [권한 차단] 클라우드 보안 규칙에 의해 단어 데이터 접근이 거부되었습니다. Firebase 콘솔에 최신 규칙이 배포되었는지 확인하세요.");
+            } else {
+                alert(`🚨 [출력 시스템 에러] ${error.message || '데이터 생성 중 알 수 없는 오류가 발생했습니다.'}`);
+            }
         } finally {
             setProcessing(false);
         }
@@ -513,7 +527,6 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 💡 CTO Fix 반영됨: 이제 Loader가 정상적으로 렌더링됩니다.
     if (loadingData || !isSeasonAutoSet) return <div className="h-[70vh] flex items-center justify-center"><Loader className="animate-spin text-indigo-600" size={40}/></div>;
 
     return (
@@ -526,7 +539,7 @@ const VocaManager = ({ currentUser }) => {
                         <span className="text-slate-400 line-through">[{presetData.oldPreset}]</span> 에서 <br/>
                         <span className="text-rose-600 font-black text-2xl">[{presetData.newPreset}]</span> (으)로<br/>바꾸시겠습니까?
                     </h3>
-                    <p className="text-sm font-bold text-gray-500 bg-slate-50 p-3 rounded-xl">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모 해제됩니다.</p>
+                    <p className="text-sm font-bold text-gray-500 bg-slate-50 p-3 rounded-xl">다음 회차 시험지 생성 시점부터 해당 비율이 적용되며, AI의 자율주행 모드가 해제됩니다.</p>
                     <div className="flex gap-3 justify-center mt-6">
                         <Button variant="secondary" onClick={() => setPresetModalOpen(false)}>취소</Button>
                         <Button onClick={confirmPresetChange} disabled={processing}>

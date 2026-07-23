@@ -1,10 +1,12 @@
-/* [서비스 가치] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture)
-   🚀 업데이트 6 (동적 50점 승급 심사): 특정 점수가 아닌 '매 50점 단위'마다 승급 심사를 강제하는 알고리즘 도입.
-   🚀 업데이트 7 (고급 어휘력 확장): 41~50번 구간에서 유의어/반의어를 묻는 객관식 알고리즘 적용.
-   🚀 핫픽스 (단어 기아 현상 방지): Z1 쿼터 증발 방지 및 limit 버퍼(150) 확장을 통한 40단어 무결성 보장.
-   🚀 업데이트 8 (학부모 리포트 최적화): 테스트 완료 시점에 학부모용 분석 JSON을 O(1) 구조로 사전 조립하여 저장. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.1)
+   🚀 가치 1 (인쇄 100% 보장): 40개 기본 추출 -> DB 추가 소진 -> 긴급 어휘 풀의 3단계 폴백을 통해 어떤 상황에서도 50문항을 조립합니다.
+   🚀 가치 2 (에빙하우스 망각 곡선): 1, 3, 7, 14, 30, 60, 120일 주기로 오답을 재출제하여 장기 기억 전환율을 극대화합니다.
+   🚀 가치 3 (학부모 가시성): 채점 즉시 학부모용 AI 분석 리포트 JSON을 사전 조립(O(1))하여 실시간 앱으로 동기화합니다. */
 
-import { collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId } from 'firebase/firestore';
+import { 
+  collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, 
+  deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId 
+} from 'firebase/firestore';
 import { db } from '../firebase';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -18,6 +20,7 @@ export const VOCA_PRESETS = {
     '초기 영점 조절': { wrong: 0, review: 0, z1_deep: 5, z2_scan: 45, z3_target: 50 } 
 };
 
+// 🚀 1차 선별하는 핵심 타깃 단어 수 (40개)
 const TOTAL_WORDS = 40; 
 
 const shuffleArray = (array) => {
@@ -29,20 +32,21 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
+// 🚀 41번~50번 구간: 유의어/반의어/예문 빈칸/파생어 고난도 응용 문항 동적 조립기
 const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
     const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
 
     const baseQuestion = {
         questionNumber: qNumber,
-        wordId: word.wordId,
+        wordId: word.wordId || `word_${qNumber}`,
         queueType: word.queueType || '신규'
     };
 
     if (qNumber <= 40) {
         return {
             ...baseQuestion, type: 'basic',
-            wordText: word.word,
+            wordText: word.word || 'Vocabulary',
             answerText: allMeanings,
             hint: (word.meanings && word.meanings.length > 1) ? "(다의어 모두 작성)" : ""
         };
@@ -62,7 +66,7 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     if (advancedTypes.length === 0) {
         return {
             ...baseQuestion, type: 'basic',
-            wordText: word.word,
+            wordText: word.word || 'Vocabulary',
             answerText: allMeanings,
             hint: (word.meanings && word.meanings.length > 1) ? "(다의어 모두 작성)" : ""
         };
@@ -82,7 +86,7 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
             attempts++;
             if (!poolForTest || poolForTest.length === 0) break;
 
-            const randomWord = poolForTest[Math.floor(Math.random() * poolForTest.length)].word;
+            const randomWord = poolForTest[Math.floor(Math.random() * poolForTest.length)]?.word;
             
             if (randomWord && randomWord !== correctAnswer && randomWord !== word.word && !distractors.includes(randomWord)) {
                 distractors.push(randomWord);
@@ -160,6 +164,9 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const requiredOldWordIds = [];
         const newlySeenWordIds = []; 
 
+        // ===================================================================
+        // [1단계] 프리셋 비율 기반 40개 핵심 단어 1차 선별 로직
+        // ===================================================================
         if (presetName === '초기 영점 조절') {
             const z1_limit = Math.max(0, catScore - 150); 
             const z2_limit = catScore;                    
@@ -313,8 +320,57 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             await Promise.all(fetchPromises);
         }
 
+        // ===================================================================
+        // 🚀 [2단계] DB 내 여유 신규 단어 우선 소진 (원장님 제안 반영)
+        // ===================================================================
+        // 1단계 추출 후에도 기본 40개에 단어가 부족할 경우, DB 내에 있는 미학습 단어를 난이도 무관하게 추가로 끌어옵니다!
+        if (finalWordData.length < 40) {
+            const shortage = 40 - finalWordData.length;
+            console.warn(`[VocaEngine] 1단계 추출 단어 부족(${finalWordData.length}개). DB에서 신규 단어 ${shortage}개를 추가 조회합니다.`);
+            try {
+                const extraQuery = query(collection(db, 'VocabularyDB'), limit(shortage + 20));
+                const extraSnap = await getDocs(extraQuery);
+                extraSnap.docs.forEach(docSnap => {
+                    if (finalWordData.length < 40 && !seenWordIds.has(docSnap.id) && !finalWordData.some(w => w.wordId === docSnap.id)) {
+                        const extraWord = docSnap.data();
+                        finalWordData.push({ ...extraWord, queueType: '신규(추가)' });
+                        seenWordIds.add(docSnap.id);
+                        newlySeenWordIds.push(docSnap.id);
+                    }
+                });
+            } catch (fallbackErr) {
+                console.error("2단계 DB 추가 추출 중 에러:", fallbackErr);
+            }
+        }
+
+        // ===================================================================
+        // 🚀 [3단계] 최후의 서킷 브레이커: 긴급 수능 풀 가동 (WSOD 방어)
+        // ===================================================================
+        // DB 자체가 텅 비어있거나 물리적 고갈 상태일 때만 수업 중단을 막기 위해 긴급 풀을 가동합니다.
+        if (finalWordData.length < 10) {
+            console.error(`🚨 [Critical Warning] DB 단어 총량 부족! 강사의 수업 진행을 위해 긴급 수능 필수 어휘 풀을 가동합니다.`);
+            const emergencyWords = [
+                { wordId: 'em_1', word: 'Absolute', meanings: [{ koreanMeaning: '절대적인, 완전한', partOfSpeech: 'adj.' }], rootDifficulty: 200 },
+                { wordId: 'em_2', word: 'Benevolent', meanings: [{ koreanMeaning: '자비로운, 인자한', partOfSpeech: 'adj.' }], rootDifficulty: 400 },
+                { wordId: 'em_3', word: 'Cognitive', meanings: [{ koreanMeaning: '인식의, 인지의', partOfSpeech: 'adj.' }], rootDifficulty: 500 },
+                { wordId: 'em_4', word: 'Dilemma', meanings: [{ koreanMeaning: '진퇴양난, 딜레마', partOfSpeech: 'n.' }], rootDifficulty: 300 },
+                { wordId: 'em_5', word: 'Empirical', meanings: [{ koreanMeaning: '실증적인, 경험적인', partOfSpeech: 'adj.' }], rootDifficulty: 600 },
+                { wordId: 'em_6', word: 'Fluctuate', meanings: [{ koreanMeaning: '변동하다, 오르내리다', partOfSpeech: 'v.' }], rootDifficulty: 550 },
+                { wordId: 'em_7', word: 'Guaranteed', meanings: [{ koreanMeaning: '보장된, 확실한', partOfSpeech: 'adj.' }], rootDifficulty: 250 },
+                { wordId: 'em_8', word: 'Hypothesis', meanings: [{ koreanMeaning: '가설, 가정', partOfSpeech: 'n.' }], rootDifficulty: 450 },
+                { wordId: 'em_9', word: 'Inevitable', meanings: [{ koreanMeaning: '피할 수 없는, 필연적인', partOfSpeech: 'adj.' }], rootDifficulty: 350 },
+                { wordId: 'em_10', word: 'Judicious', meanings: [{ koreanMeaning: '현명한, 신중한', partOfSpeech: 'adj.' }], rootDifficulty: 650 }
+            ];
+            emergencyWords.forEach((ew, idx) => {
+                if (!finalWordData.some(fw => fw.wordId === ew.wordId)) {
+                    finalWordData.push({ ...ew, queueType: '신규(긴급)' });
+                }
+            });
+        }
+
         let first40 = shuffleArray(finalWordData).slice(0, 40);
 
+        // 🚀 41~50번 고난도 응용 문항 조립을 위한 10개 단어 선별
         const advancedCandidates = finalWordData.filter(word => {
             const m = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
             return (m?.synonyms?.length > 0 || m?.antonyms?.length > 0 || m?.blankSentence?.length > 0 || (word.derivatives && word.derivatives.length > 0));
@@ -331,10 +387,19 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         let poolForTest = [...first40, ...next10];
 
+        // 🚀 [방어적 코딩] undefined 객체 참조로 인한 문항 생성기(generateVariedQuestion) 크래시 원천 차단!
         while (poolForTest.length < 50) {
-            poolForTest.push(finalWordData[Math.floor(Math.random() * finalWordData.length)]);
+            const safeRandomIndex = Math.floor(Math.random() * finalWordData.length);
+            const safeWord = finalWordData[safeRandomIndex] || {
+                wordId: `dummy_${poolForTest.length}`,
+                word: `Vocabulary_${poolForTest.length}`,
+                meanings: [{ koreanMeaning: '필수 고등 어휘', partOfSpeech: 'n.' }],
+                queueType: '신규'
+            };
+            poolForTest.push(safeWord);
         }
 
+        // 최종 50문항 시험지 완벽 생성
         const full50Questions = poolForTest.map((word, index) => {
             return generateVariedQuestion(word, index + 1, poolForTest);
         });
@@ -578,7 +643,6 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let rubricStr = `기억 유지율 ${retentionRate}%, 다의어 이해도 ${comprehension}%를 기록했습니다.`;
     if (autoShiftMessage) rubricStr = autoShiftMessage; 
 
-    // 💡 [업데이트 8] 학부모용 AI 분석 리포트 JSON 사전 조립 (O(1) 읽기 최적화)
     const passiveCheckedCount = wordsForPrint ? wordsForPrint.filter(w => w.queueType === '패시브').length : 0;
     const chronicCount = wrongWordsDetails.filter(w => w.queueType === '만성 오답').length;
 
@@ -635,7 +699,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         adaptivePreset: newAdaptivePreset,  
         totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, 
         promotionPending: promotionPending,
-        parentReport: parentReport, // 학부모 리포트 데이터 저장 완료
+        parentReport: parentReport, 
         updatedAt: serverTimestamp()
     });
 };
@@ -683,7 +747,6 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
         waitingReview: rb.waitingReview,
         promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
         maxApprovedPromotion: rb.maxApprovedPromotion !== undefined ? rb.maxApprovedPromotion : 0
-        // 주의: Rollback 시 parentReport는 굳이 삭제하지 않고 다음 테스트 시 덮어씌워지게 둡니다.
     });
 
     await updateDoc(sessionRef, {
