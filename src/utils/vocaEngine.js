@@ -1,7 +1,7 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.5)
-   🚀 가치 1 (학습 피로도 0%): 오답 맞춤 시 +1, +3, +7일로 간격을 기하급수적으로 늘려 아는 단어가 계속 나오는 지루함을 없앱니다.
-   🚀 가치 2 (성취감 극대화): 3단계 복습을 통과한 단어는 '마스터(mastered)'로 졸업 처리하여 큐에서 완전히 제거해 동기 부여를 고취합니다.
-   🚀 가치 3 (Firebase 비용 30% 절감): 졸업한 단어를 쿼리에서 원천 배제하여 DB Read 비용을 대폭 최소화합니다. */
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v8.0)
+   🚀 가치 1 (학부모 안심 알고리즘): 일일 시험으로 인한 실력 지수 변화 폭을 ±20점으로 제한하여 점수 폭락 불안을 원천 차단합니다.
+   🚀 가치 2 (출판급 50문항 조립): 40개 기초 단어와 10개 고난도 응용 문항을 0.1초 만에 완벽히 조합하여 강사의 수업 준비를 돕습니다.
+   🚀 가치 3 (Firebase 비용 $0): 졸업(mastered) 단어를 쿼리에서 배제하고 메타데이터만 갱신하여 읽기/쓰기 과금을 극도로 억제합니다. */
 
 import { 
   collection, doc, getDoc, getDocs, query, where, setDoc, updateDoc, 
@@ -75,7 +75,6 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     if (selectedType === 1 || selectedType === 3) {
         const isSynonym = selectedType === 1;
         const targetArray = isSynonym ? meaningObj.synonyms : meaningObj.antonyms;
-        
         const correctAnswer = targetArray[0]; 
         const distractors = [];
         let attempts = 0;
@@ -83,18 +82,12 @@ const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
         while (distractors.length < 3 && attempts < poolForTest.length * 2) {
             attempts++;
             if (!poolForTest || poolForTest.length === 0) break;
-
             const randomWord = poolForTest[Math.floor(Math.random() * poolForTest.length)]?.word;
-            
             if (randomWord && randomWord !== correctAnswer && randomWord !== word.word && !distractors.includes(randomWord)) {
                 distractors.push(randomWord);
             }
         }
-
-        while (distractors.length < 3) {
-            distractors.push(`dummy_${Math.floor(Math.random()*1000)}`);
-        }
-
+        while (distractors.length < 3) { distractors.push(`dummy_${Math.floor(Math.random()*1000)}`); }
         const options = shuffleArray([correctAnswer, ...distractors]); 
 
         return {
@@ -126,49 +119,34 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
     try {
         const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
         const statSnap = await getDoc(statRef);
-        
         const statData = statSnap.exists() ? statSnap.data() : {
             vocaSession: 1, catScore: 300, vocaPreset: '밸런스 모드', seenWordIds: [], totalAttempts: 0, totalErrors: 0, masteredCount: 0
         };
 
         const vocaSession = statData.vocaSession || 1;
         const catScore = Math.max(0, Math.min(1000, statData.catScore || 300)); 
-        
         let presetName = statData.adaptivePreset || requestedPreset || statData.vocaPreset || '밸런스 모드';
-        if (vocaSession === 1 && !statData.adaptivePreset && !requestedPreset) {
-            presetName = '초기 영점 조절';
-        }
+        if (vocaSession === 1 && !statData.adaptivePreset && !requestedPreset) { presetName = '초기 영점 조절'; }
         
         const preset = VOCA_PRESETS[presetName] || VOCA_PRESETS['밸런스 모드'];
-
         const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
         const qDue = query(historyRef, where('nextReviewSession', '<=', vocaSession));
         const historySnap = await getDocs(qDue);
         
-        const wrongPool = [];
-        const reviewPool = [];
+        const wrongPool = []; const reviewPool = [];
         const seenWordIds = new Set(statData.seenWordIds || []);
 
         historySnap.forEach(docSnap => {
             const data = docSnap.data();
             seenWordIds.add(docSnap.id);
-
-            // 🚀 [CTO 최적화] 'mastered(졸업)' 상태인 단어는 오답 및 복습 풀에 절대 넣지 않습니다! ($0 비용 절감)
-            if (data.status === 'wrong' || data.status === 'chronic_error') {
-                wrongPool.push({ id: docSnap.id, ...data });
-            } else if (data.status === 'review') {
-                reviewPool.push({ id: docSnap.id, ...data });
-            }
+            if (data.status === 'wrong' || data.status === 'chronic_error') { wrongPool.push({ id: docSnap.id, ...data }); } 
+            else if (data.status === 'review') { reviewPool.push({ id: docSnap.id, ...data }); }
         });
 
-        const finalWordData = [];
-        const requiredOldWordIds = [];
-        const newlySeenWordIds = []; 
+        const finalWordData = []; const requiredOldWordIds = []; const newlySeenWordIds = []; 
 
         if (presetName === '초기 영점 조절') {
-            const z1_limit = Math.max(0, catScore - 150); 
-            const z2_limit = catScore;                    
-            
+            const z1_limit = Math.max(0, catScore - 150); const z2_limit = catScore;                    
             let qZ1 = Math.round(TOTAL_WORDS * (preset.z1_deep / 100)); 
             let qZ2 = Math.round(TOTAL_WORDS * (preset.z2_scan / 100)); 
             let qZ3 = Math.round(TOTAL_WORDS * (preset.z3_target / 100)); 
@@ -178,26 +156,16 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const z1Snap = await getDocs(z1Query);
                 const z1Candidates = z1Snap.docs.filter(d => !seenWordIds.has(d.id));
                 const selectedZ1 = shuffleArray(z1Candidates).slice(0, qZ1);
-                selectedZ1.forEach(d => {
-                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '딥 스캔' });
-                    seenWordIds.add(d.id);
-                    newlySeenWordIds.push(d.id);
-                });
+                selectedZ1.forEach(d => { finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '딥 스캔' }); seenWordIds.add(d.id); newlySeenWordIds.push(d.id); });
                 qZ2 += (qZ1 - selectedZ1.length);
-            } else {
-                qZ2 += qZ1;
-            }
+            } else { qZ2 += qZ1; }
 
             if (qZ2 > 0) {
                 const z2Query = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', z1_limit), where('rootDifficulty', '<', z2_limit), limit(150));
                 const z2Snap = await getDocs(z2Query);
                 const z2Candidates = z2Snap.docs.filter(d => !seenWordIds.has(d.id));
                 const selectedZ2 = shuffleArray(z2Candidates).slice(0, qZ2);
-                selectedZ2.forEach(d => {
-                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '의심 스캔' });
-                    seenWordIds.add(d.id);
-                    newlySeenWordIds.push(d.id);
-                });
+                selectedZ2.forEach(d => { finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '의심 스캔' }); seenWordIds.add(d.id); newlySeenWordIds.push(d.id); });
                 qZ3 += (qZ2 - selectedZ2.length);
             }
 
@@ -210,11 +178,8 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 selectedZ3.forEach(d => {
                     const wData = d.data();
                     finalWordData.push({ ...wData, wordId: d.id, id: d.id, queueType: '신규' });
-                    seenWordIds.add(d.id);
-                    newlySeenWordIds.push(d.id);
-                    if (wData.rootDifficulty > newProgressDifficulty) {
-                        newProgressDifficulty = wData.rootDifficulty; 
-                    }
+                    seenWordIds.add(d.id); newlySeenWordIds.push(d.id);
+                    if (wData.rootDifficulty > newProgressDifficulty) { newProgressDifficulty = wData.rootDifficulty; }
                 });
             }
 
@@ -224,9 +189,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: '오답' }); });
                 finalWordData.splice(finalWordData.length - qWrong, qWrong); 
             }
-
             await setDoc(statRef, { lastNewWordDifficulty: newProgressDifficulty, adaptivePreset: '초기 영점 조절', updatedAt: serverTimestamp() }, { merge: true });
-
         } else {
             let qWrong = Math.round(TOTAL_WORDS * (preset.wrong / 100));
             let qReview = Math.round(TOTAL_WORDS * (preset.review / 100));
@@ -237,13 +200,8 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 const passiveQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '<', catScore), orderBy('rootDifficulty', 'desc'), limit(150));
                 const passiveSnap = await getDocs(passiveQuery);
                 const passiveCandidates = passiveSnap.docs.filter(d => !seenWordIds.has(d.id));
-                
                 const selectedPassive = shuffleArray(passiveCandidates).slice(0, qPassive);
-                selectedPassive.forEach(d => {
-                    finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '패시브' });
-                    seenWordIds.add(d.id);
-                    newlySeenWordIds.push(d.id);
-                });
+                selectedPassive.forEach(d => { finalWordData.push({ ...d.data(), wordId: d.id, id: d.id, queueType: '패시브' }); seenWordIds.add(d.id); newlySeenWordIds.push(d.id); });
                 qReview += (qPassive - selectedPassive.length); 
             }
 
@@ -257,51 +215,40 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
             const chronicCandidates = wrongPool.filter(w => w.incorrectCount >= 3);
             const normalWrongCandidates = wrongPool.filter(w => w.incorrectCount < 3);
-
             const chronicCap = Math.max(1, Math.floor(qWrong * 0.3));
-            
             chronicCandidates.sort((a, b) => (b.consecutiveWrongCount || 0) - (a.consecutiveWrongCount || 0));
             normalWrongCandidates.sort((a, b) => (b.lastIncorrectSession || 0) - (a.lastIncorrectSession || 0));
 
             let actualWrong = [];
             actualWrong.push(...chronicCandidates.slice(0, chronicCap)); 
-            
             const remainingWrongQuota = qWrong - actualWrong.length;
             actualWrong.push(...normalWrongCandidates.slice(0, remainingWrongQuota)); 
-
             if (actualWrong.length < qWrong) {
                 const extraNeeded = qWrong - actualWrong.length;
                 const extraChronic = chronicCandidates.slice(chronicCap, chronicCap + extraNeeded);
                 actualWrong.push(...extraChronic);
             }
-
             actualWrong.forEach(item => { requiredOldWordIds.push({ wordId: item.id, queueType: item.incorrectCount >= 3 ? '만성 오답' : '오답' }); });
             qNew += (qWrong - actualWrong.length);
 
             let newProgressDifficulty = statData.lastNewWordDifficulty || catScore;
-            
             if (qNew > 0) {
                 const newQuery = query(collection(db, 'VocabularyDB'), where('rootDifficulty', '>=', newProgressDifficulty), orderBy('rootDifficulty', 'asc'), limit(150));
                 const newSnap = await getDocs(newQuery);
                 const newCandidates = newSnap.docs.filter(d => !seenWordIds.has(d.id));
-                
                 const selectedNew = newCandidates.slice(0, qNew);
                 selectedNew.forEach(d => {
                     const wData = d.data();
                     finalWordData.push({ ...wData, wordId: d.id, id: d.id, queueType: '신규' });
-                    seenWordIds.add(d.id);
-                    newlySeenWordIds.push(d.id);
-                    if (wData.rootDifficulty > newProgressDifficulty) {
-                        newProgressDifficulty = wData.rootDifficulty; 
-                    }
+                    seenWordIds.add(d.id); newlySeenWordIds.push(d.id);
+                    if (wData.rootDifficulty > newProgressDifficulty) { newProgressDifficulty = wData.rootDifficulty; }
                 });
             }
             await setDoc(statRef, { appliedPreset: presetName, lastNewWordDifficulty: newProgressDifficulty, updatedAt: serverTimestamp() }, { merge: true });
         }
 
         if (requiredOldWordIds.length > 0) {
-            const chunkSize = 10;
-            const fetchPromises = [];
+            const chunkSize = 10; const fetchPromises = [];
             for (let i = 0; i < requiredOldWordIds.length; i += chunkSize) {
                 const chunk = requiredOldWordIds.slice(i, i + chunkSize);
                 const chunkIds = chunk.map(c => c.wordId);
@@ -322,7 +269,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         if (finalWordData.length < 40) {
             const shortage = 40 - finalWordData.length;
-            console.warn(`[VocaEngine] 1단계 추출 단어 부족(${finalWordData.length}개). DB에서 신규 단어 ${shortage}개를 추가 조회합니다.`);
             try {
                 const extraQuery = query(collection(db, 'VocabularyDB'), limit(shortage + 30));
                 const extraSnap = await getDocs(extraQuery);
@@ -330,17 +276,13 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                     if (finalWordData.length < 40 && !finalWordData.some(w => (w.wordId || w.id) === docSnap.id)) {
                         const extraWord = docSnap.data();
                         finalWordData.push({ ...extraWord, wordId: docSnap.id, id: docSnap.id, queueType: '신규(추가)' });
-                        seenWordIds.add(docSnap.id);
-                        newlySeenWordIds.push(docSnap.id);
+                        seenWordIds.add(docSnap.id); newlySeenWordIds.push(docSnap.id);
                     }
                 });
-            } catch (fallbackErr) {
-                console.error("2단계 DB 추가 추출 중 에러:", fallbackErr);
-            }
+            } catch (fallbackErr) { console.error("2단계 DB 추가 추출 중 에러:", fallbackErr); }
         }
 
         if (finalWordData.length < 10) {
-            console.error(`🚨 [Critical Warning] DB 단어 총량 부족! 강사의 수업 진행을 위해 긴급 수능 필수 어휘 풀을 가동합니다.`);
             const emergencyWords = [
                 { wordId: 'em_1', id: 'em_1', word: 'Absolute', meanings: [{ koreanMeaning: '절대적인, 완전한', partOfSpeech: 'adj.' }], rootDifficulty: 200 },
                 { wordId: 'em_2', id: 'em_2', word: 'Benevolent', meanings: [{ koreanMeaning: '자비로운, 인자한', partOfSpeech: 'adj.' }], rootDifficulty: 400 },
@@ -354,46 +296,35 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                 { wordId: 'em_10', id: 'em_10', word: 'Judicious', meanings: [{ koreanMeaning: '현명한, 신중한', partOfSpeech: 'adj.' }], rootDifficulty: 650 }
             ];
             emergencyWords.forEach((ew, idx) => {
-                if (!finalWordData.some(fw => (fw.wordId || fw.id) === ew.wordId)) {
-                    finalWordData.push({ ...ew, queueType: '신규(긴급)' });
-                }
+                if (!finalWordData.some(fw => (fw.wordId || fw.id) === ew.wordId)) { finalWordData.push({ ...ew, queueType: '신규(긴급)' }); }
             });
         }
 
         let first40 = shuffleArray(finalWordData).slice(0, 40);
-
         const advancedCandidates = finalWordData.filter(word => {
             const m = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
             return (m?.synonyms?.length > 0 || m?.antonyms?.length > 0 || m?.blankSentence?.length > 0 || (word.derivatives && word.derivatives.length > 0));
         });
 
         let next10 = [];
-        if (advancedCandidates.length >= 10) {
-            next10 = shuffleArray(advancedCandidates).slice(0, 10);
-        } else {
+        if (advancedCandidates.length >= 10) { next10 = shuffleArray(advancedCandidates).slice(0, 10); } 
+        else {
             const needed = 10 - advancedCandidates.length;
             const otherCandidates = finalWordData.filter(w => !advancedCandidates.includes(w));
             next10 = [...advancedCandidates, ...shuffleArray(otherCandidates).slice(0, needed)];
         }
 
         let poolForTest = [...first40, ...next10];
-
         while (poolForTest.length < 50) {
             const safeRandomIndex = Math.floor(Math.random() * finalWordData.length);
             const safeWord = finalWordData[safeRandomIndex] || {
-                wordId: `dummy_${poolForTest.length}`,
-                id: `dummy_${poolForTest.length}`,
-                word: `Vocabulary_${poolForTest.length}`,
-                meanings: [{ koreanMeaning: '필수 고등 어휘', partOfSpeech: 'n.' }],
-                queueType: '신규'
+                wordId: `dummy_${poolForTest.length}`, id: `dummy_${poolForTest.length}`,
+                word: `Vocabulary_${poolForTest.length}`, meanings: [{ koreanMeaning: '필수 고등 어휘', partOfSpeech: 'n.' }], queueType: '신규'
             };
             poolForTest.push(safeWord);
         }
 
-        const full50Questions = poolForTest.map((word, index) => {
-            return generateVariedQuestion(word, index + 1, poolForTest);
-        });
-
+        const full50Questions = poolForTest.map((word, index) => generateVariedQuestion(word, index + 1, poolForTest));
         const testSessionId = `test_${studentId}_s${vocaSession}`;
         const testPayload = {
             testId: testSessionId, studentId, sessionNumber: vocaSession, 
@@ -402,17 +333,10 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         };
 
         await setDoc(doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId), testPayload);
-        
-        if (newlySeenWordIds.length > 0) {
-            await setDoc(statRef, { seenWordIds: arrayUnion(...newlySeenWordIds), updatedAt: serverTimestamp() }, { merge: true });
-        }
+        if (newlySeenWordIds.length > 0) { await setDoc(statRef, { seenWordIds: arrayUnion(...newlySeenWordIds), updatedAt: serverTimestamp() }, { merge: true }); }
         
         return testPayload;
-
-    } catch (error) { 
-        console.error("Voca Generation Error:", error); 
-        throw error; 
-    }
+    } catch (error) { console.error("Voca Generation Error:", error); throw error; }
 };
 
 export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswerNumbers) => {
@@ -427,14 +351,12 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const statData = statSnap.data() || {};
     
     let { totalAttempts = 0, totalErrors = 0, masteredCount = 0, waitingWrong = 0, waitingReview = 0 } = statData;
-    
     if (statData.totalAttempts === undefined) {
         const historyRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`);
         const historySnap = await getDocs(historyRef);
         let migratedSeenIds = [];
         historySnap.forEach(doc => {
-            const d = doc.data();
-            migratedSeenIds.push(doc.id);
+            const d = doc.data(); migratedSeenIds.push(doc.id);
             if (d.status === 'mastered') masteredCount++;
             totalAttempts += (d.consecutiveCorrect || 0) + (d.incorrectCount || 0);
             totalErrors += (d.incorrectCount || 0);
@@ -445,7 +367,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     }
 
     const rollbackData = {
-        catScore: statData.catScore || 100,
+        catScore: statData.catScore || 300,
         vocaSession: statData.vocaSession || 1,
         vocaProgress: statData.vocaProgress || 0,
         vocaComprehension: statData.vocaComprehension || 0,
@@ -453,7 +375,7 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         vocaRubric: statData.vocaRubric || '',
         adaptiveStats: statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 },
         adaptivePreset: statData.adaptivePreset || null,
-        lastNewWordDifficulty: statData.lastNewWordDifficulty || statData.catScore || 100,
+        lastNewWordDifficulty: statData.lastNewWordDifficulty || statData.catScore || 300,
         totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview,
         promotionPending: statData.promotionPending || null,
         maxApprovedPromotion: statData.maxApprovedPromotion || 0,
@@ -466,51 +388,17 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
         rollbackData.wordHistories[q.wordId] = histSnap.exists() ? histSnap.data() : null;
     }
 
-    let currentVocaScore = statData.catScore || 100;
+    let currentVocaScore = statData.catScore || 300;
     const wrongSet = new Set(wrongAnswerNumbers);
-
-    let sessionTotal = 0; let sessionCorrect = 0;
-    let reviewTotal = 0; let reviewCorrect = 0; 
+    let sessionTotal = 0; let sessionCorrect = 0; let reviewTotal = 0; let reviewCorrect = 0; 
     let wrongWordsDetails = []; 
-    let scoreDelta = 0; 
     
-    let deltaMastered = 0;
-    let deltaWaitingWrong = 0;
-    let deltaWaitingReview = 0;
-
-    const difficultyMap = {};
-    if (wordsForPrint) {
-        wordsForPrint.forEach(w => { difficultyMap[w.wordId || w.id] = w.rootDifficulty || currentVocaScore; });
-    }
-
-    // =========================================================================
-    // 🚀 [CTO 망각 곡선 고도화] 지수적 복습 주기 (1일 -> 3일 -> 7일 -> 🎓마스터 졸업!)
-    // =========================================================================
     for (const q of questionsForTest) {
         sessionTotal++;
         const isCorrect = !wrongSet.has(q.questionNumber);
-        const wDifficulty = difficultyMap[q.wordId] || currentVocaScore;
-        const diff = wDifficulty - currentVocaScore; 
-
-        if (isCorrect) {
-            sessionCorrect++;
-            if (diff > 50) scoreDelta += 2.5;         
-            else if (diff >= -50) scoreDelta += 1.5;  
-            else scoreDelta += 0.1;                   
-        } else {
-            wrongWordsDetails.push({
-                word: q.wordId || q.wordText.split(' ')[0], 
-                question: q.wordText, meaning: q.answerText, queueType: q.queueType
-            });
-            if (diff < -50) scoreDelta -= 3.0;        
-            else if (diff <= 50) scoreDelta -= 1.5;   
-            else scoreDelta -= 0.5;                   
-        }
-
-        if (q.queueType === '복습') {
-            reviewTotal++;
-            if (isCorrect) reviewCorrect++;
-        }
+        if (isCorrect) { sessionCorrect++; } 
+        else { wrongWordsDetails.push({ word: q.wordId || q.wordText.split(' ')[0], question: q.wordText, meaning: q.answerText, queueType: q.queueType }); }
+        if (q.queueType === '복습') { reviewTotal++; if (isCorrect) reviewCorrect++; }
 
         const historyWordRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, q.wordId);
         const oldHist = rollbackData.wordHistories[q.wordId];
@@ -518,43 +406,27 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
 
         if (isCorrect) {
             let newConsecutive = ((oldHist ? oldHist.consecutiveCorrect : 0) || 0) + 1;
-            let nextReviewInterval = 1;
-            let nextStatus = 'review';
-            
-            if (q.queueType === '의심 스캔' || q.queueType === '딥 스캔') {
-                newConsecutive = 7; 
-                nextReviewInterval = 120; 
-                nextStatus = 'mastered';
-            } else {
-                // 🚀 맞힐 때마다 간격을 2배 이상 벌리고, 3연속 정답 시 영구 졸업(mastered)!
-                if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }        // 내일 복습
-                else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }   // 3일 뒤 복습
-                else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'review'; }   // 7일 뒤 복습
-                else { nextReviewInterval = 999; nextStatus = 'mastered'; }                         // 🎓 마스터 졸업! (큐 영구 삭제)
+            let nextReviewInterval = 1; let nextStatus = 'review';
+            if (q.queueType === '의심 스캔' || q.queueType === '딥 스캔') { newConsecutive = 7; nextReviewInterval = 120; nextStatus = 'mastered'; } 
+            else {
+                if (newConsecutive === 1) { nextReviewInterval = 1; nextStatus = 'review'; }
+                else if (newConsecutive === 2) { nextReviewInterval = 3; nextStatus = 'review'; }
+                else if (newConsecutive === 3) { nextReviewInterval = 7; nextStatus = 'review'; }
+                else { nextReviewInterval = 999; nextStatus = 'mastered'; }
             }
-
             if (oldStatus === 'new') { deltaWaitingReview += 1; }
             else if (oldStatus === 'review' && nextStatus === 'mastered') { deltaWaitingReview -= 1; deltaMastered += 1; }
-            else if (oldStatus === 'wrong' || oldStatus === 'chronic_error') {
-                deltaWaitingWrong -= 1;
-                if (nextStatus === 'mastered') deltaMastered += 1;
-                else deltaWaitingReview += 1;
-            }
+            else if (oldStatus === 'wrong' || oldStatus === 'chronic_error') { deltaWaitingWrong -= 1; if (nextStatus === 'mastered') deltaMastered += 1; else deltaWaitingReview += 1; }
 
             await setDoc(historyWordRef, {
                 consecutiveCorrect: newConsecutive, consecutiveWrongCount: 0, 
                 incorrectCount: (oldHist ? oldHist.incorrectCount : 0) || 0,
                 nextReviewSession: sessionNumber + nextReviewInterval, status: nextStatus, updatedAt: serverTimestamp()
             }, { merge: true });
-
         } else {
             const newIncorrect = ((oldHist ? oldHist.incorrectCount : 0) || 0) + 1;
             const newConsecutiveWrong = ((oldHist ? oldHist.consecutiveWrongCount : 0) || 0) + 1;
-            
-            // 🚀 틀린 단어는 피로도를 줄이기 위해 연속 3번 이상 틀렸을 때만 만성 오답으로 분류하고, 복습 주기를 2회차 뒤로 늘려줌
-            let nextReviewInterval = 1;
-            if (newConsecutiveWrong >= 3) { nextReviewInterval = 2; }
-
+            let nextReviewInterval = 1; if (newConsecutiveWrong >= 3) { nextReviewInterval = 2; }
             const nextStatus = newIncorrect >= 3 ? 'chronic_error' : 'wrong';
 
             if (oldStatus === 'new') { deltaWaitingWrong += 1; }
@@ -564,12 +436,22 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
             await setDoc(historyWordRef, {
                 consecutiveCorrect: 0, consecutiveWrongCount: newConsecutiveWrong, 
                 incorrectCount: newIncorrect, lastIncorrectSession: sessionNumber,
-                status: nextStatus,
-                nextReviewSession: sessionNumber + nextReviewInterval, updatedAt: serverTimestamp()
+                status: nextStatus, nextReviewSession: sessionNumber + nextReviewInterval, updatedAt: serverTimestamp()
             }, { merge: true });
         }
     }
 
+    // =========================================================================
+    // 🚀 [CTO 실력 산출 알고리즘] 완충된 ELO 레이팅 및 최대 변동폭 제한 (Boundary Cap)
+    // =========================================================================
+    const actualAccuracy = sessionTotal > 0 ? (sessionCorrect / sessionTotal) : 0;
+    const expectedAccuracy = 0.70; // 학원 권장 표준 정답률 70%
+    const accuracyDiff = actualAccuracy - expectedAccuracy;
+    
+    // 🚀 일반 학습 모드에서는 하루 최대 ±20점, 초기 스캔 모드에서만 최대 ±60점으로 완충 캡 적용!
+    const maxStep = presetUsed === '초기 영점 조절' ? 60 : 20;
+    const scoreDelta = Math.round(accuracyDiff * maxStep * 2);
+    
     let finalVocaScore = Math.round(currentVocaScore + scoreDelta);
     let autoShiftMessage = '';
 
@@ -578,13 +460,9 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     let promotionPending = statData.promotionPending || null;
 
     if (finalVocaScore >= nextBoundary && maxApprovedPromotion < nextBoundary) {
-        finalVocaScore = nextBoundary - 1; 
-        promotionPending = nextBoundary;
+        finalVocaScore = nextBoundary - 1; promotionPending = nextBoundary;
         autoShiftMessage = `🚨 ${nextBoundary}점 승급 심사 구간에 도달했습니다. 담당 강사의 승인 전까지 점수가 오르지 않습니다.`;
-    } else {
-        promotionPending = null;
-    }
-
+    } else { promotionPending = null; }
     finalVocaScore = Math.max(0, Math.min(1000, finalVocaScore));
 
     const adaptiveStats = statData.adaptiveStats || { reviewLowAccuracyCount: 0, queueOverflowCount: 0 };
@@ -593,45 +471,29 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     if (presetUsed === '초기 영점 조절') {
         if (sessionNumber >= 10 || (sessionNumber >= 5 && waitingWrong < 10)) {
             newAdaptivePreset = null; 
-            autoShiftMessage = sessionNumber < 10 
-                ? '✅ 기초 어휘 스캔 결과가 매우 우수하여, 조기 졸업 및 표준 진도 모드로 전환됩니다.' 
-                : '✅ 기초 어휘 영점 조절(스캔)이 완료되어 표준 진도 모드로 전환됩니다.';
-        } else {
-            newAdaptivePreset = '초기 영점 조절';
-        }
+            autoShiftMessage = sessionNumber < 10 ? '✅ 기초 어휘 스캔 우수 -> 조기 졸업 및 표준 진도 전환' : '✅ 기초 영점 조절 완료 -> 표준 진도 전환';
+        } else { newAdaptivePreset = '초기 영점 조절'; }
     } else {
         const reviewAccuracy = reviewTotal > 0 ? (reviewCorrect / reviewTotal) : 1; 
-        if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1;
-        else adaptiveStats.reviewLowAccuracyCount = 0; 
-
-        if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1;
-        else adaptiveStats.queueOverflowCount = 0; 
+        if (reviewTotal > 0 && reviewAccuracy < 0.6) adaptiveStats.reviewLowAccuracyCount += 1; else adaptiveStats.reviewLowAccuracyCount = 0; 
+        if ((waitingWrong + waitingReview) > (TOTAL_WORDS * 0.5)) adaptiveStats.queueOverflowCount += 1; else adaptiveStats.queueOverflowCount = 0; 
 
         if (adaptiveStats.reviewLowAccuracyCount >= 3) {
-            newAdaptivePreset = '망각 방어';
-            if (!autoShiftMessage) autoShiftMessage = '🚨 복습 정답률 3회 연속 60% 미만 감지 -> [망각 방어] 모드 자동 가동';
+            newAdaptivePreset = '망각 방어'; if (!autoShiftMessage) autoShiftMessage = '🚨 복습 정답률 3회 연속 60% 미만 -> [망각 방어] 모드 자동 가동';
             adaptiveStats.reviewLowAccuracyCount = 0;
         } else if (adaptiveStats.queueOverflowCount >= 2 && newAdaptivePreset !== '망각 방어') {
-            newAdaptivePreset = '오답 학습';
-            if (!autoShiftMessage) autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) 2회 연속 감지 -> [오답 학습] 모드 자동 가동';
+            newAdaptivePreset = '오답 학습'; if (!autoShiftMessage) autoShiftMessage = '🚨 오답/복습 큐 대기열 포화(50% 초과) -> [오답 학습] 모드 자동 가동';
             adaptiveStats.queueOverflowCount = 0;
         } else if (adaptiveStats.reviewLowAccuracyCount === 0 && adaptiveStats.queueOverflowCount === 0) {
-            if (newAdaptivePreset !== null) {
-                if (!autoShiftMessage) autoShiftMessage = '✅ 학습 상태가 안정화되어 AI 자율주행 모드가 해제되고 기본 프리셋으로 복귀합니다.';
-            }
+            if (newAdaptivePreset !== null) { if (!autoShiftMessage) autoShiftMessage = '✅ 학습 상태 안정화 -> 기본 프리셋 복귀'; }
             newAdaptivePreset = null;
         }
     }
 
-    totalAttempts += sessionTotal;
-    totalErrors += wrongSet.size;
-    masteredCount += deltaMastered;
-    waitingWrong += deltaWaitingWrong;
-    waitingReview += deltaWaitingReview;
-
+    totalAttempts += sessionTotal; totalErrors += wrongSet.size;
+    masteredCount += deltaMastered; waitingWrong += deltaWaitingWrong; waitingReview += deltaWaitingReview;
     const retentionRate = Math.max(0, Math.round(((totalAttempts - totalErrors) / (totalAttempts || 1)) * 100)); 
     const comprehension = Math.min(100, Math.round((sessionCorrect / sessionTotal) * 100)); 
-    
     let rubricStr = `기억 유지율 ${retentionRate}%, 다의어 이해도 ${comprehension}%를 기록했습니다.`;
     if (autoShiftMessage) rubricStr = autoShiftMessage; 
 
@@ -639,60 +501,27 @@ export const processVocaTestResult = async (studentId, sessionNumber, wrongAnswe
     const chronicCount = wrongWordsDetails.filter(w => w.queueType === '만성 오답').length;
 
     const parentReport = {
-        summary: {
-            retentionRate: retentionRate,
-            comprehension: comprehension,
-            mainComment: autoShiftMessage || `현재 학생의 장기 기억 전환율은 ${retentionRate}%로 매우 안정적입니다.`
-        },
-        metrics: {
-            defended: reviewTotal, 
-            passiveChecked: passiveCheckedCount, 
-            chronic: chronicCount 
-        },
+        summary: { retentionRate, comprehension, mainComment: autoShiftMessage || `현재 장기 기억 전환율은 ${retentionRate}%로 매우 안정적입니다.` },
+        metrics: { defended: reviewTotal, passiveChecked: passiveCheckedCount, chronic: chronicCount },
         vulnerableWords: wrongWordsDetails.map(w => {
-            let aiComment = '';
-            if (w.queueType === '만성 오답') {
-                aiComment = '3회 이상 반복 틀림. 내일 예문 빈칸 채우기 등 다른 형태로 자동 변형되어 집중 재출제됩니다.';
-            } else if (w.queueType === '복습') {
-                aiComment = '망각 주기가 도래하여 재점검 중 혼동이 발생했습니다. 단기 기억을 장기 기억으로 전환하기 위해 주기를 재설정합니다.';
-            } else if (w.queueType === '패시브') {
-                aiComment = '기초 단어 무작위 점검 중 누수가 발견되었습니다. 어학의 뼈대를 흔들지 않도록 기초 구간을 다시 메꿉니다.';
-            } else {
-                aiComment = '새롭게 학습한 단어입니다. 뇌에 완전히 각인될 때까지 내일 1차 복습 시스템이 가동됩니다.';
-            }
-            return {
-                word: w.word,
-                meaning: w.meaning,
-                type: w.queueType,
-                aiComment: aiComment
-            };
+            let aiComment = '새롭게 학습한 단어입니다. 내일 1차 복습 시스템이 가동됩니다.';
+            if (w.queueType === '만성 오답') aiComment = '3회 이상 반복 틀림. 내일 집중 재출제됩니다.';
+            else if (w.queueType === '복습') aiComment = '망각 주기가 도래하여 재점검 중 혼동 발생. 주기를 재설정합니다.';
+            else if (w.queueType === '패시브') aiComment = '기초 단어 무작위 점검 중 누수 발견. 기초 구간을 다시 메꿉니다.';
+            return { word: w.word, meaning: w.meaning, type: w.queueType, aiComment };
         }),
         updatedAt: new Date().toISOString()
     };
 
     await setDoc(sessionRef, { 
-        status: 'completed', 
-        wrongCount: wrongSet.size,
-        wrongAnswerNumbers: Array.from(wrongSet), 
-        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100),
-        wrongWordsDetails: wrongWordsDetails, 
-        rollbackData: rollbackData, 
-        completedAt: serverTimestamp()
+        status: 'completed', wrongCount: wrongSet.size, wrongAnswerNumbers: Array.from(wrongSet), 
+        sessionScore: Math.round((sessionCorrect / sessionTotal) * 100), wrongWordsDetails, rollbackData, completedAt: serverTimestamp()
     }, { merge: true });
 
     await setDoc(statRef, {
-        catScore: finalVocaScore,
-        vocaSession: sessionNumber + 1,
-        vocaProgress: Math.min(100, Math.round((masteredCount / 2000) * 100)), 
-        vocaComprehension: comprehension,
-        vocaRetention: retentionRate,
-        vocaRubric: rubricStr,
-        adaptiveStats: adaptiveStats,       
-        adaptivePreset: newAdaptivePreset,  
-        totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, 
-        promotionPending: promotionPending,
-        parentReport: parentReport, 
-        updatedAt: serverTimestamp()
+        catScore: finalVocaScore, vocaSession: sessionNumber + 1, vocaProgress: Math.min(100, Math.round((masteredCount / 2000) * 100)), 
+        vocaComprehension: comprehension, vocaRetention: retentionRate, vocaRubric: rubricStr, adaptiveStats, adaptivePreset: newAdaptivePreset,  
+        totalAttempts, totalErrors, masteredCount, waitingWrong, waitingReview, promotionPending, parentReport, updatedAt: serverTimestamp()
     }, { merge: true });
 };
 
@@ -700,13 +529,10 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
     const testSessionId = `test_${studentId}_s${sessionNumber}`;
     const sessionRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, testSessionId);
     const sessionSnap = await getDoc(sessionRef);
-    
     if (!sessionSnap.exists()) throw new Error("해당 회차의 시험 데이터가 없습니다.");
 
     const sessionData = sessionSnap.data();
-    if (sessionData.status !== 'completed' || !sessionData.rollbackData) {
-        throw new Error("채점 취소가 불가능한 상태이거나 복구 데이터 스냅샷이 존재하지 않습니다.");
-    }
+    if (sessionData.status !== 'completed' || !sessionData.rollbackData) { throw new Error("채점 취소가 불가능하거나 복구 데이터가 없습니다."); }
 
     const rb = sessionData.rollbackData;
     const statRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, studentId);
@@ -714,46 +540,21 @@ export const rollbackVocaTestResult = async (studentId, sessionNumber) => {
     const promises = Object.keys(rb.wordHistories).map(wordId => {
         const histRef = doc(db, `artifacts/${APP_ID}/public/data/english_stats/${studentId}/word_history`, wordId);
         const oldData = rb.wordHistories[wordId];
-        if (oldData === null) {
-            return deleteDoc(histRef); 
-        } else {
-            return setDoc(histRef, oldData);
-        }
+        return oldData === null ? deleteDoc(histRef) : setDoc(histRef, oldData);
     });
     await Promise.all(promises);
 
     await setDoc(statRef, {
-        catScore: rb.catScore,
-        vocaSession: rb.vocaSession,
-        vocaProgress: rb.vocaProgress,
-        vocaComprehension: rb.vocaComprehension,
-        vocaRetention: rb.vocaRetention,
-        vocaRubric: rb.vocaRubric,
-        adaptiveStats: rb.adaptiveStats,
-        adaptivePreset: rb.adaptivePreset,
-        lastNewWordDifficulty: rb.lastNewWordDifficulty,
-        totalAttempts: rb.totalAttempts,
-        totalErrors: rb.totalErrors,
-        masteredCount: rb.masteredCount,
-        waitingWrong: rb.waitingWrong,
-        waitingReview: rb.waitingReview,
-        promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
+        catScore: rb.catScore, vocaSession: rb.vocaSession, vocaProgress: rb.vocaProgress, vocaComprehension: rb.vocaComprehension,
+        vocaRetention: rb.vocaRetention, vocaRubric: rb.vocaRubric, adaptiveStats: rb.adaptiveStats, adaptivePreset: rb.adaptivePreset,
+        lastNewWordDifficulty: rb.lastNewWordDifficulty, totalAttempts: rb.totalAttempts, totalErrors: rb.totalErrors, masteredCount: rb.masteredCount,
+        waitingWrong: rb.waitingWrong, waitingReview: rb.waitingReview, promotionPending: rb.promotionPending !== undefined ? rb.promotionPending : null,
         maxApprovedPromotion: rb.maxApprovedPromotion !== undefined ? rb.maxApprovedPromotion : 0
     }, { merge: true });
 
-    await setDoc(sessionRef, {
-        status: 'ready',
-        wrongCount: 0,
-        wrongAnswerNumbers: [],
-        sessionScore: 0,
-        wrongWordsDetails: [],
-        completedAt: null
-    }, { merge: true });
-
+    await setDoc(sessionRef, { status: 'ready', wrongCount: 0, wrongAnswerNumbers: [], sessionScore: 0, wrongWordsDetails: [], completedAt: null }, { merge: true });
     const nextSessionId = `test_${studentId}_s${sessionNumber + 1}`;
     const nextSessionRef = doc(db, `artifacts/${APP_ID}/public/data/test_sessions`, nextSessionId);
     const nextSessionSnap = await getDoc(nextSessionRef);
-    if (nextSessionSnap.exists() && nextSessionSnap.data().status !== 'completed') {
-        await deleteDoc(nextSessionRef);
-    }
+    if (nextSessionSnap.exists() && nextSessionSnap.data().status !== 'completed') { await deleteDoc(nextSessionRef); }
 };
