@@ -1,5 +1,5 @@
-/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.1)
-   🚀 가치 1 (인쇄 100% 보장): 40개 기본 추출 -> DB 추가 소진 -> 긴급 어휘 풀의 3단계 폴백을 통해 어떤 상황에서도 50문항을 조립합니다.
+/* [서비스 가치(Service Value)] 스마트 아날로그 Voca 코어 엔진 (O(1) Delta Architecture v7.2)
+   🚀 가치 1 (인쇄 100% 보장): 기존 학생의 데이터 조회 오류 및 단어 부족 현상을 완벽히 해결하여 어떤 상황에서도 50문항을 조립합니다.
    🚀 가치 2 (에빙하우스 망각 곡선): 1, 3, 7, 14, 30, 60, 120일 주기로 오답을 재출제하여 장기 기억 전환율을 극대화합니다.
    🚀 가치 3 (학부모 가시성): 채점 즉시 학부모용 AI 분석 리포트 JSON을 사전 조립(O(1))하여 실시간 앱으로 동기화합니다. */
 
@@ -20,7 +20,6 @@ export const VOCA_PRESETS = {
     '초기 영점 조절': { wrong: 0, review: 0, z1_deep: 5, z2_scan: 45, z3_target: 50 } 
 };
 
-// 🚀 1차 선별하는 핵심 타깃 단어 수 (40개)
 const TOTAL_WORDS = 40; 
 
 const shuffleArray = (array) => {
@@ -32,7 +31,6 @@ const shuffleArray = (array) => {
     return shuffled;
 };
 
-// 🚀 41번~50번 구간: 유의어/반의어/예문 빈칸/파생어 고난도 응용 문항 동적 조립기
 const generateVariedQuestion = (word, qNumber, poolForTest = []) => {
     const meaningObj = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
     const allMeanings = word.meanings ? word.meanings.map(m => m.koreanMeaning).join(', ') : '뜻 없음';
@@ -164,9 +162,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
         const requiredOldWordIds = [];
         const newlySeenWordIds = []; 
 
-        // ===================================================================
-        // [1단계] 프리셋 비율 기반 40개 핵심 단어 1차 선별 로직
-        // ===================================================================
         if (presetName === '초기 영점 조절') {
             const z1_limit = Math.max(0, catScore - 150); 
             const z2_limit = catScore;                    
@@ -312,7 +307,9 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
                     getDocs(vocaQ).then(snap => {
                         snap.forEach(d => {
                             const queueInfo = chunk.find(c => c.wordId === d.id);
-                            finalWordData.push({ ...d.data(), queueType: queueInfo.queueType });
+                            if (queueInfo && !finalWordData.some(fw => fw.wordId === d.id)) {
+                                finalWordData.push({ ...d.data(), queueType: queueInfo.queueType });
+                            }
                         });
                     })
                 );
@@ -320,20 +317,17 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             await Promise.all(fetchPromises);
         }
 
-        // ===================================================================
-        // 🚀 [2단계] DB 내 여유 신규 단어 우선 소진 (원장님 제안 반영)
-        // ===================================================================
-        // 1단계 추출 후에도 기본 40개에 단어가 부족할 경우, DB 내에 있는 미학습 단어를 난이도 무관하게 추가로 끌어옵니다!
+        // 🚀 [2단계] DB 내 여유 신규 단어 우선 소진 (기존 원생 데이터 불일치 완벽 방어)
         if (finalWordData.length < 40) {
             const shortage = 40 - finalWordData.length;
             console.warn(`[VocaEngine] 1단계 추출 단어 부족(${finalWordData.length}개). DB에서 신규 단어 ${shortage}개를 추가 조회합니다.`);
             try {
-                const extraQuery = query(collection(db, 'VocabularyDB'), limit(shortage + 20));
+                const extraQuery = query(collection(db, 'VocabularyDB'), limit(shortage + 30));
                 const extraSnap = await getDocs(extraQuery);
                 extraSnap.docs.forEach(docSnap => {
-                    if (finalWordData.length < 40 && !seenWordIds.has(docSnap.id) && !finalWordData.some(w => w.wordId === docSnap.id)) {
+                    if (finalWordData.length < 40 && !finalWordData.some(w => w.wordId === docSnap.id)) {
                         const extraWord = docSnap.data();
-                        finalWordData.push({ ...extraWord, queueType: '신규(추가)' });
+                        finalWordData.push({ ...extraWord, wordId: docSnap.id, queueType: '신규(추가)' });
                         seenWordIds.add(docSnap.id);
                         newlySeenWordIds.push(docSnap.id);
                     }
@@ -343,10 +337,7 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             }
         }
 
-        // ===================================================================
-        // 🚀 [3단계] 최후의 서킷 브레이커: 긴급 수능 풀 가동 (WSOD 방어)
-        // ===================================================================
-        // DB 자체가 텅 비어있거나 물리적 고갈 상태일 때만 수업 중단을 막기 위해 긴급 풀을 가동합니다.
+        // 🚀 [3단계] 최후의 서킷 브레이커: 긴급 수능 풀 가동 (WSOD 및 출력 불가 에러 원천 봉쇄)
         if (finalWordData.length < 10) {
             console.error(`🚨 [Critical Warning] DB 단어 총량 부족! 강사의 수업 진행을 위해 긴급 수능 필수 어휘 풀을 가동합니다.`);
             const emergencyWords = [
@@ -370,7 +361,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
 
         let first40 = shuffleArray(finalWordData).slice(0, 40);
 
-        // 🚀 41~50번 고난도 응용 문항 조립을 위한 10개 단어 선별
         const advancedCandidates = finalWordData.filter(word => {
             const m = word.meanings && word.meanings.length > 0 ? word.meanings[0] : null;
             return (m?.synonyms?.length > 0 || m?.antonyms?.length > 0 || m?.blankSentence?.length > 0 || (word.derivatives && word.derivatives.length > 0));
@@ -399,7 +389,6 @@ export const generateDailyVocaSet = async (studentId, requestedPreset = null) =>
             poolForTest.push(safeWord);
         }
 
-        // 최종 50문항 시험지 완벽 생성
         const full50Questions = poolForTest.map((word, index) => {
             return generateVariedQuestion(word, index + 1, poolForTest);
         });

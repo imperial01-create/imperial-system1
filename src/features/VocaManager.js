@@ -1,4 +1,4 @@
-/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.1 (프로덕션 전체 배포본)
+/* [서비스 가치(Service Value)] AI Voca 통합 관제 센터 v7.2 (프로덕션 전체 배포본)
    🚀 가치 1 (업무 자동화): 강사는 수업 시작 1분 전, 반 전체 수강생의 단어장/시험지/답안지를 원클릭으로 출력합니다.
    🚀 가치 2 (장애 격리): 특정 학생 데이터 오류 시 전체 인쇄가 중단되지 않고 개별 격리되어 반 전체 인쇄를 성공시킵니다.
    🚀 가치 3 (에러 안내): 불투명한 에러 대신 권한 차단, 팝업 차단, 데이터 부족 등 정확한 한국어 원인과 해결책을 안내합니다. */
@@ -61,7 +61,6 @@ const getTierProgress = (masteredCount = 0, catScore = 0) => {
 };
 
 const VocaManager = ({ currentUser }) => {
-    // 🚀 [런타임 에러 방어] Context 기본값 안전 할당
     const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
 
     const dynamicSeasons = useMemo(() => {
@@ -176,7 +175,7 @@ const VocaManager = ({ currentUser }) => {
         }
     };
 
-    // 🚀 [CTO 패치] N+1 인쇄 크래시 방지 방어적 루프(Resilient Loop) 및 친절한 한국어 에러 안내
+    // 🚀 [CTO 방탄 패치] 기존 수강생의 조건 완화 로직 및 Resilient Loop 탑재
     const preparePrintData = async (type, targetStudentId = null) => {
         setProcessing(true);
         try {
@@ -191,7 +190,6 @@ const VocaManager = ({ currentUser }) => {
                 return;
             }
 
-            // 🚀 한 명의 학생 데이터 오류가 반 전체 인쇄를 막지 않도록 개별 try-catch 격리 적용
             for (const student of targetStudents) {
                 try {
                     const stat = (englishStats || []).find(s => s?.id === student?.id) || {};
@@ -213,7 +211,8 @@ const VocaManager = ({ currentUser }) => {
                             isSessionCompleted = true;
                             wrongNums = testData.wrongAnswerNumbers || [];
                         }
-                    } else if (Number(stat.catScore) > 0 || stat.vocaSession === 1 || !stat.catScore) {
+                    } else if (stat.catScore !== undefined || stat.vocaSession > 0 || !stat.catScore) {
+                        // 🚀 기존에 점수가 있었거나 초기 상태인 모든 수강생의 동적 시험지 생성 보장!
                         const activePreset = stat.adaptivePreset || stat.vocaPreset || '밸런스 모드';
                         const payload = await generateDailyVocaSet(student.id, activePreset);
                         questionsList = payload.questionsForTest || [];
