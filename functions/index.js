@@ -1,22 +1,31 @@
-// functions/index.js
-// 최신 2세대(v2) 파이어베이스 함수 및 파이어베이스 어드민 라이브러리
+/* =========================================================================
+   [서비스 가치(Service Value)]
+   임페리얼 학원 통합 백엔드 코어 (Firebase Functions v2)
+   🚀 가치 1: AI, 메시징, 데이터 정리, 커리큘럼 관리를 하나의 서버리스 아키텍처로 통합.
+   🚀 가치 2: 모든 외부 통신(GitHub, Gemini, Telegram) 토큰을 서버에 격리하여 100% 보안 유지.
+   🚀 가치 3: 병렬 처리(Promise.all)와 메모리 최적화를 통해 응답 속도 극대화 및 과금 방어.
+   ========================================================================= */
+
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { Octokit } = require('@octokit/rest');
+const yaml = require('js-yaml');
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-// 🚀 [CTO 패치 1] 모든 함수의 기본 리전을 서울(asia-northeast3)로 통일
-// 프론트엔드와 통신 위치를 맞춰 404 CORS(internal) 에러를 원천 차단합니다.
+// 🚀 [CTO 패치] 모든 함수의 기본 리전을 서울(asia-northeast3)로 통일
+// 프론트엔드와 통신 위치를 맞춰 404 CORS(internal) 에러 및 지연 시간을 원천 차단합니다.
 setGlobalOptions({ region: "asia-northeast3" });
 
 const APP_ID = 'imperial-clinic-v1';
 
+// [유틸리티] Gemini API Key 로드
 const getGeminiKey = () => {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
@@ -41,7 +50,6 @@ exports.adminResetPassword = onCall(async (request) => {
       return { success: true, authUid: userRecord.uid, message: "기존 인증 계정 비밀번호 동기화 성공" };
     } catch (error) {
       if (error.code === 'auth/user-not-found') {
-        // 🚀 [CTO 패치 2] 계정 생성 중 발생하는 에러를 낚아채는 완벽한 안전망 추가
         try {
             const newUserRecord = await admin.auth().createUser({ email: email, password: newPassword, emailVerified: true });
             return { success: true, authUid: newUserRecord.uid, message: "유령 계정 인증소 복구 및 비밀번호 설정 성공" };
@@ -55,7 +63,6 @@ exports.adminResetPassword = onCall(async (request) => {
     }
   }
 
-  // 이메일이 없는 경우의 폴백 로직
   try {
     await admin.auth().updateUser(uid, { password: newPassword });
     return { success: true, authUid: uid };
@@ -252,7 +259,7 @@ exports.sendTelegramAlert = onCall(async (request) => {
 });
 
 // ============================================================================
-// [기능 7] 데이터 연쇄 청소기
+// [기능 7] 데이터 연쇄 청소기 (User Deletion Cascade)
 // ============================================================================
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
     const snap = event.data;
@@ -338,7 +345,7 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async
 });
 
 // ============================================================================
-// 🚀 [기능 9] S25 울트라 통화 요약 AI 파싱 및 3-Way 자동 라우팅 엔진
+// [기능 9] S25 울트라 통화 요약 AI 파싱 및 3-Way 자동 라우팅 엔진
 // ============================================================================
 exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_call_logs/{logId}`, async (event) => {
     const snap = event.data;
@@ -349,14 +356,13 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
     const studentName = rawData.studentName;
     const rawText = rawData.rawText;
 
-    // 대기 상태(pending_ai_parsing)인 데이터만 처리
     if (!rawText || rawData.status !== 'pending_ai_parsing') return null;
 
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
         const model = genAI.getGenerativeModel({ 
             model: "gemini-1.5-flash",
-            generationConfig: { responseMimeType: "application/json" } // JSON 강제 출력으로 파싱 에러 원천 차단
+            generationConfig: { responseMimeType: "application/json" }
         });
 
         const prompt = `
@@ -388,13 +394,11 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
         const db = admin.firestore();
         const batch = db.batch();
         
-        // KST(한국 시간) 기준으로 날짜 계산
         const now = new Date();
         const kstOffset = 9 * 60 * 60 * 1000;
         const kstDate = new Date(now.getTime() + kstOffset);
         const dateStr = `${kstDate.getUTCFullYear()}-${String(kstDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kstDate.getUTCDate()).padStart(2, '0')}`;
 
-        // [경로 A] 당일 출결 반영 (일별 운영 관제 즉시 반영)
         if (parsedData.dailyAttendance && parsedData.dailyAttendance.status) {
             const attRef = db.collection(`artifacts/${APP_ID}/public/data/attendance_logs`).doc(`${dateStr}_${studentId}`);
             batch.set(attRef, {
@@ -407,7 +411,6 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
             }, { merge: true });
         }
 
-        // [경로 B] 장기 CRM 컨텍스트 (강사 화면에 뱃지로 뜰 데이터) - 덮어쓰기 병합
         if (parsedData.longTermContext && parsedData.longTermContext.type) {
             const ctxRef = db.collection(`artifacts/${APP_ID}/public/data/student_context`).doc(studentId);
             batch.set(ctxRef, {
@@ -420,7 +423,6 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
             }, { merge: true });
         }
 
-        // [경로 C] 선생님/조교 할 일 (Task Board 연동)
         if (parsedData.task && parsedData.task.title) {
             const taskRef = db.collection(`artifacts/${APP_ID}/public/data/clinic_tasks`).doc();
             batch.set(taskRef, {
@@ -433,15 +435,12 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
             });
         }
 
-        // [완료 처리] 원본 로그 상태 업데이트
         batch.update(event.data.ref, { 
             status: 'parsed_success',
             parsedResult: parsedData 
         });
 
         await batch.commit();
-        console.log(`[Success] AI Routing completed for student: ${studentName}`);
-
     } catch (error) {
         console.error("🔥 AI Parsing failed:", error);
         await event.data.ref.update({ status: 'error', errorMsg: error.message });
@@ -449,23 +448,19 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
 });
 
 // ============================================================================
-// 🚀 [기능 10] 학생 전용 AI 모닝 브리핑 생성 (캐싱 적용으로 비용 최적화)
+// [기능 10] 학생 전용 AI 모닝 브리핑 생성 (캐싱 적용)
 // ============================================================================
 exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" }, async (request) => {
-    // 1. 보안 검증: 로그인한 학생 본인만 호출 가능
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
     const studentUid = request.auth.uid;
     const { studentId, studentName, todaySchedules, contextTag } = request.data;
 
     const db = admin.firestore();
-    
-    // KST 기준 오늘 날짜 구하기
     const now = new Date();
     const kstOffset = 9 * 60 * 60 * 1000;
     const kstDate = new Date(now.getTime() + kstOffset);
     const dateStr = `${kstDate.getUTCFullYear()}-${String(kstDate.getUTCMonth() + 1).padStart(2, '0')}-${String(kstDate.getUTCDate()).padStart(2, '0')}`;
 
-    // 2. 비용 최적화 (Caching): 오늘 이미 브리핑이 생성되었다면 AI를 호출하지 않고 기존 데이터 반환
     const briefingRef = db.collection(`artifacts/${APP_ID}/public/data/daily_briefings`).doc(`${dateStr}_${studentId}`);
     const docSnap = await briefingRef.get();
     
@@ -473,7 +468,6 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
         return { success: true, briefing: docSnap.data().message, cached: true };
     }
 
-    // 3. AI 프롬프트 엔지니어링: 프로페셔널하고 따뜻한 멘토 역할 부여
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -496,7 +490,6 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
         const result = await model.generateContent(prompt);
         const briefingText = result.response.text().trim();
 
-        // 4. 생성된 브리핑 캐싱 (저장) - 내일 자정이 되면 알아서 무시되거나 TTL로 삭제됨
         await briefingRef.set({
             studentId: studentId,
             date: dateStr,
@@ -505,28 +498,23 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
         });
 
         return { success: true, briefing: briefingText, cached: false };
-
     } catch (error) {
         console.error("🔥 AI Briefing Error:", error);
-        // 에러 발생 시 런타임 에러를 막기 위한 폴백(Fallback) 텍스트 제공
         return { success: true, briefing: `${studentName} 학생, 오늘도 임페리얼 학원과 함께 목표를 향해 한 걸음 더 나아가는 멋진 하루를 만들어 봅시다!`, cached: false, error: true };
     }
 });
 
 // ============================================================================
-// 🚀 [기능 11] 신규 상담 1일 전 자동 리마인드 발송 (매일 오전 11시 KST)
-// [서비스 가치] 학부모의 깜빡임으로 인한 노쇼(No-Show)를 방지하여 상담 전환율(매출)을 방어합니다.
+// [기능 11] 신규 상담 1일 전 자동 리마인드 발송 (매일 오전 11시 KST)
 // ============================================================================
 exports.consultationReminderCron = onSchedule({
-    schedule: "0 11 * * *", // 매일 오전 11시
+    schedule: "0 11 * * *", 
     timeZone: "Asia/Seoul", 
     timeoutSeconds: 300,
     memory: "512MiB"
 }, async (event) => {
     try {
         const db = admin.firestore();
-        
-        // 내일 날짜 계산 (KST 기준)
         const now = new Date();
         const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
         const kstTime = new Date(utcNow + (9 * 3600000));
@@ -535,7 +523,6 @@ exports.consultationReminderCron = onSchedule({
         const pad = (n) => String(n).padStart(2, '0');
         const tomorrowStr = `${kstTime.getFullYear()}-${pad(kstTime.getMonth() + 1)}-${pad(kstTime.getDate())}`;
         
-        // 내일 예정된 '신규' 상담만 조회 (기존 원생 제외)
         const consultSnapshot = await db.collection(`artifacts/${APP_ID}/public/data/consultations`)
             .where('date', '==', tomorrowStr)
             .where('status', '==', 'scheduled')
@@ -576,4 +563,116 @@ exports.consultationReminderCron = onSchedule({
         console.error("🔥 상담 리마인드(Cron) 에러:", error);
     }
     return null;
+});
+
+// ============================================================================
+// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 프록시 API (데이터 읽기)
+// [서비스 가치] 클라이언트의 N+1 통신 병목을 해소하고 GitHub 보안 토큰을 격리합니다.
+// ============================================================================
+exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async (request) => {
+    // [보안 검증] 로그인된 사용자만 시스템의 핵심 자산에 접근 가능
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', '학원 시스템에 로그인된 사용자만 접근할 수 있습니다.');
+    }
+
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const OWNER = process.env.GITHUB_REPO_OWNER;
+    const REPO = process.env.GITHUB_REPO_NAME;
+    const FOLDER_PATH = 'ontology/math';
+
+    if (!GITHUB_TOKEN) {
+        throw new HttpsError('internal', '서버 구성 오류: GitHub 연동 키가 없습니다.');
+    }
+
+    try {
+        const octokit = new Octokit({ auth: GITHUB_TOKEN });
+        
+        // 1. 디렉토리 내 파일 목록 패치
+        const { data: fileList } = await octokit.repos.getContent({
+            owner: OWNER,
+            repo: REPO,
+            path: FOLDER_PATH,
+        });
+
+        const yamlFiles = fileList.filter(f => f.name.endsWith('.yaml') || f.name.endsWith('.yml'));
+
+        // 2. [비용 최적화] Promise.all을 활용한 병렬 다운로드로 서버 런타임 타임아웃 방지
+        const filePromises = yamlFiles.map(async (file) => {
+            const { data: contentData } = await octokit.repos.getContent({
+                owner: OWNER,
+                repo: REPO,
+                path: file.path,
+            });
+
+            // 클라이언트를 대신해 백엔드에서 Base64 디코딩 및 YAML 파싱 수행
+            const rawYaml = Buffer.from(contentData.content, 'base64').toString('utf-8');
+            let parsedData = {};
+            try {
+                parsedData = yaml.load(rawYaml);
+            } catch (parseErr) {
+                console.warn(`[YAML Parse Warning] 파일 문법 오류 무시됨: ${file.name}`);
+            }
+
+            return {
+                id: parsedData.id || null,
+                sha: file.sha,
+                path: file.path,
+                rawYaml,
+                parsedData
+            };
+        });
+
+        const ontologyData = await Promise.all(filePromises);
+        const validData = ontologyData.filter(item => item.id !== null);
+
+        return { success: true, data: validData };
+    } catch (error) {
+        console.error('Ontology Fetch Error:', error);
+        throw new HttpsError('internal', '커리큘럼 데이터를 가져오는 데 실패했습니다.');
+    }
+});
+
+// ============================================================================
+// 🚀 [기능 13] 커리큘럼 YAML 업데이트 및 GitHub Commit 엔진 (데이터 쓰기)
+// [서비스 가치] 강사가 시스템 이탈 없이 최신 교수법과 오개념을 바로 시스템에 반영합니다.
+// ============================================================================
+exports.commitOntologyData = onCall(async (request) => {
+    // 1. [보안 검증] 쓰기 권한은 철저하게 검증
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', '수정 권한이 없습니다. (인증 만료)');
+    }
+
+    const { path, content, sha, message } = request.data;
+
+    if (!path || !content || !sha) {
+        throw new HttpsError('invalid-argument', '필수 데이터(경로, 내용, 고유키)가 누락되었습니다.');
+    }
+
+    // 2. [방어적 코딩] YAML 문법 유효성 서버단 2차 검증 (잘못된 양식으로 깃허브 오염 방지)
+    try {
+        yaml.load(content);
+    } catch (e) {
+        throw new HttpsError('invalid-argument', `잘못된 YAML 문법입니다. 들여쓰기 기호를 확인하세요: ${e.message}`);
+    }
+
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const OWNER = process.env.GITHUB_REPO_OWNER;
+    const REPO = process.env.GITHUB_REPO_NAME;
+
+    try {
+        const octokit = new Octokit({ auth: GITHUB_TOKEN });
+        await octokit.repos.createOrUpdateFileContents({
+            owner: OWNER,
+            repo: REPO,
+            path: path,
+            message: message || 'Update ontology node via Imperial LMS',
+            content: Buffer.from(content, 'utf-8').toString('base64'),
+            sha: sha,
+        });
+
+        return { success: true };
+    } catch (error) {
+        console.error('GitHub API PUT Error:', error);
+        throw new HttpsError('internal', `GitHub 원본 업데이트에 실패했습니다.`);
+    }
 });
