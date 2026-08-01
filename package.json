@@ -3,6 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "dependencies": {
+    "@xyflow/react": "^12.11.2",
+    "dagre": "^0.8.5",
     "firebase": "^12.7.0",
     "firebase-tools": "^15.15.0",
     "lucide-react": "^0.562.0",

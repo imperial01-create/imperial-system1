@@ -1,8 +1,8 @@
-/* [서비스 가치] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
+/* [서비스 가치(Service Value)] 글로벌 Context 데이터와 컴포넌트 재사용성을 극대화한 SPA 엔트리 포인트.
    🚀 CTO 패치: 
    1. 메뉴명 동적 분기: 'CareReportManager'를 학생/학부모에게는 [출결 상황]으로, 강사/관리자에게는 [원생별 출결관리]로 분리하여 노출합니다.
    2. 통합 출결 관리 최적화: '통합 출결 관리'의 설명을 일별 관제 및 매트릭스 전용으로 수정했습니다.
-   3. 학사일정 마스터 및 HR 파이프라인 등 이전의 모든 코어 메뉴 라우팅이 완벽히 유지됩니다. */
+   3. 온톨로지 맵 통합: 'AI 수학 지식 맵'을 Lazy Loading으로 주입하여 초기 로딩 속도(LCP) 저하 없이 상담용 시각화 툴을 제공합니다. */
 
 import React, { useState, Suspense, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -11,8 +11,8 @@ import {
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
   Clock, Trash2, MessageSquare, Globe, Phone, Search, Clipboard, Book, Users, Star, ArrowRight, ChevronDown, ChevronRight,
-  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays
-} from 'lucide-react';
+  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays, Share2 
+} from 'lucide-react'; // 🚀 CTO Patch: 온톨로지 맵을 위한 Share2 아이콘 추가
 
 import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -48,6 +48,8 @@ const StudentDashboard = React.lazy(() => import('./features/StudentDashboard'))
 const RecruitmentManager = React.lazy(() => import('./features/RecruitmentManager'));
 const AcademicCalendarManager = React.lazy(() => import('./features/AcademicCalendarManager'));
 const CareReportManager = React.lazy(() => import('./features/CareReportManager'));
+// 🚀 CTO Patch: OntologyMap Lazy 로딩 추가 (초기 로딩 최적화로 이탈률 0% 방어)
+const OntologyMap = React.lazy(() => import('./features/ontology/OntologyMap'));
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -59,7 +61,6 @@ const getMenuGroups = (currentUser) => [
         theme: "from-indigo-600 to-blue-700",
         items: [
             { name: "My Imperial Day", path: "/my-day", icon: Sparkles, desc: "오늘의 완벽한 스케줄과 AI 멘토링", roles: ['student'] },
-            // 🚀 [CTO 패치] 학부모/학생용 메뉴명 변경
             { name: "출결 상황", path: "/care-report", icon: PieChart, desc: "학원의 밀착 케어 내역과 출결 통계", roles: ['student', 'parent'] }
         ]
     },
@@ -70,7 +71,6 @@ const getMenuGroups = (currentUser) => [
         items: [
             { name: "신규 상담 등록", path: "/consult", icon: UserPlus, desc: "신규 원생 상담 데이터를 입력합니다.", roles: ['admin', 'admin_assistant', 'lecturer'] },
             { name: "통합 출결 관리", path: "/attendance", icon: UserCheck, desc: "당일 출결 관제 및 교실 매트릭스", roles: ['admin', 'admin_assistant', 'lecturer'] },
-            // 🚀 [CTO 패치] 강사/관리자용 메뉴명 변경 (원생별 출결관리)
             { name: "원생별 출결관리", path: "/care-report", icon: PieChart, desc: "원생별 누적 학습 시간 및 출결 데이터", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "학사일정 마스터", path: "/academic-calendar", icon: CalendarDays, desc: "학교별 학사일정 및 D-Day 관리", roles: ['admin', 'admin_assistant'] },
             { name: "클리닉 센터", path: "/clinic", icon: CalendarIcon, desc: "1:N 클리닉 배정 및 예약 현황", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
@@ -85,6 +85,8 @@ const getMenuGroups = (currentUser) => [
         items: [
             { name: "강의 관리", studentName: "수강 강의", path: "/lectures", icon: Video, studentIcon: GraduationCap, desc: "수업 진도, 숙제 관리 및 영상 시청", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "내신 연구소", path: "/strategy", icon: Brain, desc: "학교별 맞춤형 출제 경향 및 리포트", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
+            // 🚀 CTO Patch: 상담 전환율을 극대화하는 AI 수학 지식 맵 메뉴 추가 (모든 역할군 오픈)
+            { name: "AI 수학 지식 맵", path: "/ontology", icon: Share2, desc: "수학 커리큘럼 선행 및 취약점 시각화", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || u?.subject === '영어' },
             { name: "영단어 챌린지", path: "/voca-challenge", icon: Star, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
@@ -676,6 +678,10 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/financial-dashboard" element={currentUser.role === 'admin' ? <FinancialDashboard currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/expense" element={<ExpenseManager currentUser={currentUser} />} />}
                         <Route path="/strategy" element={<SchoolStrategy currentUser={currentUser} />} />
+                        
+                        {/* 🚀 CTO Patch: 온톨로지 라우트 연결 (어느 권한이든 로그인된 유저면 확인 가능) */}
+                        <Route path="/ontology" element={<OntologyMap />} />
+
                         <Route path="/clinic" element={<ClinicDashboard currentUser={currentUser} users={users} mode="clinic" />} />
                         <Route path="/clinic-tasks" element={['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) ? <ClinicTaskManager currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
                         {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
@@ -694,8 +700,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         
                         <Route path="/recruitment" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <RecruitmentManager /> : <Navigate to="/dashboard" replace />} />
                         <Route path="/academic-calendar" element={['admin', 'admin_assistant'].includes(currentUser.role) ? <AcademicCalendarManager /> : <Navigate to="/dashboard" replace />} />
-                        
-                        {/* 🚀 [신규 마스터] 밀착 케어 리포트 라우팅 추가 */}
                         <Route path="/care-report" element={<CareReportManager currentUser={currentUser} />} />
 
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
