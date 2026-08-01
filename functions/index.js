@@ -12,6 +12,8 @@ const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// 🚀 [신규 추가 패키지] GitHub 통신 및 YAML 파싱용
 const { Octokit } = require('@octokit/rest');
 const yaml = require('js-yaml');
 
@@ -19,9 +21,12 @@ if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-// 🚀 [CTO 패치] 모든 함수의 기본 리전을 서울(asia-northeast3)로 통일
-// 프론트엔드와 통신 위치를 맞춰 404 CORS(internal) 에러 및 지연 시간을 원천 차단합니다.
-setGlobalOptions({ region: "asia-northeast3" });
+// 🚀 [CTO 패치] CORS 원천 차단 및 리전 통일
+// cors: true 를 설정하여 브라우저의 OPTIONS(Preflight) 요청이 거부되는 현상을 방지합니다.
+setGlobalOptions({ 
+    region: "asia-northeast3",
+    cors: true 
+});
 
 const APP_ID = 'imperial-clinic-v1';
 
@@ -259,7 +264,7 @@ exports.sendTelegramAlert = onCall(async (request) => {
 });
 
 // ============================================================================
-// [기능 7] 데이터 연쇄 청소기 (User Deletion Cascade)
+// [기능 7] 데이터 연쇄 청소기
 // ============================================================================
 exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users/{userId}`, async (event) => {
     const snap = event.data;
@@ -345,7 +350,7 @@ exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async
 });
 
 // ============================================================================
-// [기능 9] S25 울트라 통화 요약 AI 파싱 및 3-Way 자동 라우팅 엔진
+// 🚀 [기능 9] S25 울트라 통화 요약 AI 파싱 및 3-Way 자동 라우팅 엔진
 // ============================================================================
 exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_call_logs/{logId}`, async (event) => {
     const snap = event.data;
@@ -362,7 +367,7 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
         const genAI = new GoogleGenerativeAI(getGeminiKey());
         const model = genAI.getGenerativeModel({ 
             model: "gemini-1.5-flash",
-            generationConfig: { responseMimeType: "application/json" }
+            generationConfig: { responseMimeType: "application/json" } 
         });
 
         const prompt = `
@@ -374,11 +379,11 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
         [출력 JSON 구조 및 조건]
         {
           "dailyAttendance": {
-            "status": "absent", // "absent" 또는 "late" 중 하나 (해당 없으면 null)
+            "status": "absent", 
             "reason": "결석/지각 사유 짧게 요약"
           },
           "longTermContext": {
-            "type": "medical_psych", // "medical_psych", "parental", "emotional", "admin", "general" 중 하나 (해당 없으면 null)
+            "type": "medical_psych", 
             "tag": "3~4단어 이내 핵심 (예: 영어 학습 편식)",
             "message": "강사에게 전달할 핵심 내용 1~2줄 요약"
           },
@@ -441,6 +446,8 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
         });
 
         await batch.commit();
+        console.log(`[Success] AI Routing completed for student: ${studentName}`);
+
     } catch (error) {
         console.error("🔥 AI Parsing failed:", error);
         await event.data.ref.update({ status: 'error', errorMsg: error.message });
@@ -448,7 +455,7 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
 });
 
 // ============================================================================
-// [기능 10] 학생 전용 AI 모닝 브리핑 생성 (캐싱 적용)
+// 🚀 [기능 10] 학생 전용 AI 모닝 브리핑 생성 (캐싱 적용으로 비용 최적화)
 // ============================================================================
 exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
@@ -456,6 +463,7 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
     const { studentId, studentName, todaySchedules, contextTag } = request.data;
 
     const db = admin.firestore();
+    
     const now = new Date();
     const kstOffset = 9 * 60 * 60 * 1000;
     const kstDate = new Date(now.getTime() + kstOffset);
@@ -498,6 +506,7 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
         });
 
         return { success: true, briefing: briefingText, cached: false };
+
     } catch (error) {
         console.error("🔥 AI Briefing Error:", error);
         return { success: true, briefing: `${studentName} 학생, 오늘도 임페리얼 학원과 함께 목표를 향해 한 걸음 더 나아가는 멋진 하루를 만들어 봅시다!`, cached: false, error: true };
@@ -505,7 +514,7 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
 });
 
 // ============================================================================
-// [기능 11] 신규 상담 1일 전 자동 리마인드 발송 (매일 오전 11시 KST)
+// 🚀 [기능 11] 신규 상담 1일 전 자동 리마인드 발송 (매일 오전 11시 KST)
 // ============================================================================
 exports.consultationReminderCron = onSchedule({
     schedule: "0 11 * * *", 
@@ -515,6 +524,7 @@ exports.consultationReminderCron = onSchedule({
 }, async (event) => {
     try {
         const db = admin.firestore();
+        
         const now = new Date();
         const utcNow = now.getTime() + (now.getTimezoneOffset() * 60000);
         const kstTime = new Date(utcNow + (9 * 3600000));
@@ -566,11 +576,9 @@ exports.consultationReminderCron = onSchedule({
 });
 
 // ============================================================================
-// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 프록시 API (데이터 읽기)
-// [서비스 가치] 클라이언트의 N+1 통신 병목을 해소하고 GitHub 보안 토큰을 격리합니다.
+// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 Proxy 백엔드 (데이터 읽기)
 // ============================================================================
 exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async (request) => {
-    // [보안 검증] 로그인된 사용자만 시스템의 핵심 자산에 접근 가능
     if (!request.auth) {
         throw new HttpsError('unauthenticated', '학원 시스템에 로그인된 사용자만 접근할 수 있습니다.');
     }
@@ -587,7 +595,6 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
     try {
         const octokit = new Octokit({ auth: GITHUB_TOKEN });
         
-        // 1. 디렉토리 내 파일 목록 패치
         const { data: fileList } = await octokit.repos.getContent({
             owner: OWNER,
             repo: REPO,
@@ -596,7 +603,6 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
 
         const yamlFiles = fileList.filter(f => f.name.endsWith('.yaml') || f.name.endsWith('.yml'));
 
-        // 2. [비용 최적화] Promise.all을 활용한 병렬 다운로드로 서버 런타임 타임아웃 방지
         const filePromises = yamlFiles.map(async (file) => {
             const { data: contentData } = await octokit.repos.getContent({
                 owner: OWNER,
@@ -604,7 +610,6 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
                 path: file.path,
             });
 
-            // 클라이언트를 대신해 백엔드에서 Base64 디코딩 및 YAML 파싱 수행
             const rawYaml = Buffer.from(contentData.content, 'base64').toString('utf-8');
             let parsedData = {};
             try {
@@ -634,10 +639,8 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
 
 // ============================================================================
 // 🚀 [기능 13] 커리큘럼 YAML 업데이트 및 GitHub Commit 엔진 (데이터 쓰기)
-// [서비스 가치] 강사가 시스템 이탈 없이 최신 교수법과 오개념을 바로 시스템에 반영합니다.
 // ============================================================================
 exports.commitOntologyData = onCall(async (request) => {
-    // 1. [보안 검증] 쓰기 권한은 철저하게 검증
     if (!request.auth) {
         throw new HttpsError('unauthenticated', '수정 권한이 없습니다. (인증 만료)');
     }
@@ -648,7 +651,6 @@ exports.commitOntologyData = onCall(async (request) => {
         throw new HttpsError('invalid-argument', '필수 데이터(경로, 내용, 고유키)가 누락되었습니다.');
     }
 
-    // 2. [방어적 코딩] YAML 문법 유효성 서버단 2차 검증 (잘못된 양식으로 깃허브 오염 방지)
     try {
         yaml.load(content);
     } catch (e) {
