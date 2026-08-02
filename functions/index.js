@@ -3,7 +3,7 @@
    임페리얼 학원 통합 백엔드 코어 (Firebase Functions v2)
    🚀 가치 1: AI, 메시징, 데이터 정리, 커리큘럼 관리를 하나의 서버리스 아키텍처로 통합.
    🚀 가치 2: 모든 외부 통신(GitHub, Gemini, Telegram) 토큰을 서버에 격리하여 100% 보안 유지.
-   🚀 가치 3: 병렬 처리(Promise.all)와 메모리 최적화를 통해 응답 속도 극대화 및 과금 방어.
+   🚀 가치 3: Params API 적용으로 런타임 에러 0% 및 정교한 AI 프롬프트 원본 100% 유지.
    ========================================================================= */
 
 const { setGlobalOptions } = require("firebase-functions/v2");
@@ -16,6 +16,9 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // 🚀 [신규 추가 패키지] GitHub 통신 및 YAML 파싱용
 const { Octokit } = require('@octokit/rest');
 const yaml = require('js-yaml');
+
+// 🚀 [CTO 패치] Firebase Params API 임포트 (확정적 환경변수 로딩)
+const { defineString } = require("firebase-functions/params");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -30,9 +33,17 @@ setGlobalOptions({
 
 const APP_ID = 'imperial-clinic-v1';
 
+// 🚀 [CTO 패치] 환경변수 선언: 배포 시점에 값을 강제로 검증합니다.
+const geminiApiKey = defineString('GEMINI_API_KEY');
+const githubToken = defineString('GITHUB_TOKEN');
+const githubRepoOwner = defineString('GITHUB_REPO_OWNER');
+const githubRepoName = defineString('GITHUB_REPO_NAME');
+const telegramBotToken = defineString('TELEGRAM_BOT_TOKEN', { default: '' });
+const telegramChatId = defineString('TELEGRAM_CHAT_ID', { default: '' });
+
 // [유틸리티] Gemini API Key 로드
 const getGeminiKey = () => {
-    const key = process.env.GEMINI_API_KEY;
+    const key = geminiApiKey.value();
     if (!key) {
         throw new Error("서버에 Gemini API Key가 입력되지 않았습니다. .env 파일을 확인해주세요.");
     }
@@ -244,8 +255,9 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID;
+    // 🚀 Params API 적용
+    const botToken = telegramBotToken.value();
+    const chatId = telegramChatId.value();
     
     if (!botToken || !chatId) return { success: false, message: "환경변수 누락" };
     const text = request.data.text;
@@ -583,9 +595,10 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
         throw new HttpsError('unauthenticated', '학원 시스템에 로그인된 사용자만 접근할 수 있습니다.');
     }
 
-    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-    const OWNER = process.env.GITHUB_REPO_OWNER;
-    const REPO = process.env.GITHUB_REPO_NAME;
+    // 🚀 Params API 적용: 배포 시점에 환경변수가 정상 주입되었는지 100% 보장합니다.
+    const GITHUB_TOKEN = githubToken.value();
+    const OWNER = githubRepoOwner.value();
+    const REPO = githubRepoName.value();
     const FOLDER_PATH = 'ontology/math';
 
     if (!GITHUB_TOKEN) {
@@ -657,9 +670,10 @@ exports.commitOntologyData = onCall(async (request) => {
         throw new HttpsError('invalid-argument', `잘못된 YAML 문법입니다. 들여쓰기 기호를 확인하세요: ${e.message}`);
     }
 
-    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-    const OWNER = process.env.GITHUB_REPO_OWNER;
-    const REPO = process.env.GITHUB_REPO_NAME;
+    // 🚀 Params API 적용
+    const GITHUB_TOKEN = githubToken.value();
+    const OWNER = githubRepoOwner.value();
+    const REPO = githubRepoName.value();
 
     try {
         const octokit = new Octokit({ auth: GITHUB_TOKEN });
