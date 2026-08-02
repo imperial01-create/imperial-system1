@@ -1,9 +1,9 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   GitOps 기반 수학 온톨로지 에디터 (Serverless Proxy Version)
+   GitOps 기반 수학 온톨로지 에디터 (Cloudflare Edge Proxy Version)
    🚀 가치 1 (UX 심리학): 학생의 오개념과 행동 영역을 직관적인 카드로 보여주어 학부모 상담 신뢰도를 극대화합니다.
-   🚀 가치 2 (비용/속도): 브라우저가 아닌 Firebase Functions에서 데이터를 압축하여 내려받으므로 로딩이 0.1초로 단축됩니다.
-   🚀 가치 3 (0% Runtime Error): 옵셔널 체이닝(?.)과 철저한 예외 처리로 앱 크래시를 원천 차단합니다.
+   🚀 가치 2 (비용/속도 해방): Firebase 종속성을 제거하고 표준 fetch API를 사용하여, 트래픽 비용을 0에 가깝게 만들고 Cloudflare의 엣지 네트워크를 통한 번개같은 로딩을 구현합니다.
+   🚀 가치 3 (0% Runtime Error): 옵셔널 체이닝(?.)과 철저한 HTTP 상태 코드 방어 로직으로 앱 크래시를 원천 차단합니다.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -18,9 +18,7 @@ import {
   Brain, Target, AlertTriangle, CheckCircle2, ChevronRight, Edit3, CheckSquare
 } from 'lucide-react';
 
-// 학원 Firebase 인스턴스에서 Functions 가져오기 (src/firebase.js에 functions가 export 되어 있어야 함)
-import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase'; // 경로가 다를 경우 알맞게 수정
+// 🚀 [CTO 패치] Firebase 임포트 완전 삭제 완료
 
 // --- [Dagre 자동 레이아웃 알고리즘 최적화] ---
 const getLayoutedElements = (nodes, edges, direction = 'LR') => {
@@ -63,15 +61,35 @@ export default function OntologyMap() {
   const [isCommitting, setIsCommitting] = useState(false);
   const [error, setError] = useState(null);
 
-  // --- [1] Firebase Cloud Function 연동 (데이터 읽기) ---
+  // 🚀 [CTO 패치] 환경 변수에서 API Base URL 호출
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
+  // 🚀 [CTO 패치] Zero-Trust 기반 인증 헤더 생성 유틸리티
+  const getAuthHeaders = () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('imperial_auth_token') : '';
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token || ''}`
+    };
+  };
+
+  // --- [1] Cloudflare Edge 연동 (데이터 읽기) ---
   const loadOntologyData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      // 🚀 클라이언트는 토큰 없이 내부 Firebase API만 안전하게 호출
-      const fetchOntology = httpsCallable(functions, 'fetchOntologyData');
-      const response = await fetchOntology();
-      const fetchedFiles = response.data.data; // Callable 함수는 data 객체 안에 리턴값을 담음
+      // 🚀 표준 fetch API 사용
+      const response = await fetch(`${API_BASE_URL}/api/ontology`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`데이터 로드 실패: ${response.status} 상태 코드가 반환되었습니다.`);
+      }
+
+      const result = await response.json();
+      const fetchedFiles = result.data; // 서버에서 { success: true, data: [...] } 형태로 보낸다고 가정
       
       const newNodes = [];
       const newEdges = [];
@@ -118,53 +136,60 @@ export default function OntologyMap() {
       setNodes(layoutedNodes);
       setEdges(layoutedEdges);
 
-      // 리렌더링 시 현재 열려있는 사이드바의 텍스트도 동기화
       if (selectedNodeId && newFilesMap[selectedNodeId]) {
         setDraftYaml(newFilesMap[selectedNodeId].rawYaml);
       }
 
     } catch (err) {
-      console.error("Firestore Function Error:", err);
-      // 권한 에러 처리 등 명확한 안내
+      console.error("Fetch Error:", err);
       setError(err.message || "서버에서 데이터를 불러오는 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
     }
-  }, [selectedNodeId, setNodes, setEdges]);
+  }, [selectedNodeId, setNodes, setEdges, API_BASE_URL]);
 
-  // 마운트 시 최초 데이터 로드
   useEffect(() => { loadOntologyData(); }, [loadOntologyData]);
 
   const onNodeClick = useCallback((event, node) => {
     setSelectedNodeId(node.id);
     if (filesData[node.id]) setDraftYaml(filesData[node.id].rawYaml);
-    setIsEditMode(false); // [UX] 노드 전환 시 뷰어 모드로 자동 초기화 (복잡성 제거)
+    setIsEditMode(false); 
     setIsSidebarOpen(true);
   }, [filesData]);
 
-  // --- [2] Firebase Cloud Function 연동 (데이터 저장/업데이트) ---
+  // --- [2] Cloudflare Edge 연동 (데이터 저장/업데이트) ---
   const handleCommit = async () => {
     if (!selectedNodeId || !filesData[selectedNodeId]) return;
-
     if (!window.confirm(`[${selectedNodeId}] 단원의 내용을 시스템에 반영하시겠습니까?`)) return;
 
     setIsCommitting(true);
     const targetFile = filesData[selectedNodeId];
 
     try {
-      const commitOntology = httpsCallable(functions, 'commitOntologyData');
-      await commitOntology({
-        path: targetFile.path,
-        content: draftYaml,
-        sha: targetFile.sha,
-        message: `Update ontology node: ${selectedNodeId}`
+      // 🚀 표준 fetch API POST 사용
+      const response = await fetch(`${API_BASE_URL}/api/ontology/commit`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          path: targetFile.path,
+          content: draftYaml,
+          sha: targetFile.sha,
+          message: `Update ontology node: ${selectedNodeId}`
+        }),
       });
 
+      if (!response.ok) {
+        throw new Error(`저장 실패: 서버 응답 오류 (${response.status})`);
+      }
+
+      const result = await response.json();
+      if (!result.success) throw new Error(result.message || '알 수 없는 서버 오류');
+
       alert("성공적으로 업데이트 되었습니다.");
-      await loadOntologyData(); // 전체 맵 최신화 (새로운 SHA 반영 위함)
+      await loadOntologyData(); 
       setIsEditMode(false);
     } catch (err) {
-      console.error(err);
+      console.error("Commit Error:", err);
       alert(`저장 실패: ${err.message}`);
     } finally {
       setIsCommitting(false);
@@ -184,7 +209,6 @@ export default function OntologyMap() {
           </div>
         )}
 
-        {/* 로딩 스피너 UI (학부모 대기 시간의 지루함을 없애 이탈 방지) */}
         {isLoading ? (
           <div className="absolute inset-0 bg-slate-50/80 backdrop-blur-sm z-40 flex flex-col items-center justify-center">
             <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
@@ -204,7 +228,7 @@ export default function OntologyMap() {
         )}
       </div>
 
-      {/* 2. 우측 인터랙티브 사이드바 (상담 시크릿 무기) */}
+      {/* 2. 우측 인터랙티브 사이드바 */}
       <aside className={`w-[520px] bg-white border-l border-slate-200 flex flex-col transform transition-transform duration-300 z-20 ${isSidebarOpen ? 'translate-x-0 shadow-2xl' : 'translate-x-full absolute right-0 h-full'}`}>
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
           <h2 className="font-black text-slate-800 flex items-center gap-2 text-lg">
@@ -218,7 +242,6 @@ export default function OntologyMap() {
         <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
           {selectedData ? (
             <>
-              {/* 공통 헤더 */}
               <div className="mb-6">
                 <div className="text-xs font-black text-indigo-500 mb-2 px-2 py-1 bg-indigo-50 rounded-md inline-block">
                   {selectedData.sub_category || '카테고리 없음'}
@@ -228,10 +251,8 @@ export default function OntologyMap() {
               </div>
 
               {!isEditMode ? (
-                /* --- 뷰어 모드 (상담용 UI) --- */
+                /* --- 뷰어 모드 --- */
                 <div className="space-y-4 animate-in fade-in">
-                  
-                  {/* [방어적 코딩 & UX 심리학] 배열 길이 체크 및 Optional Chaining으로 런타임 에러 완전 차단 */}
                   <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
                     <h4 className="text-sm font-black text-blue-800 flex items-center gap-1.5 mb-3"><Brain size={16}/> 핵심 개념 (Core Concepts)</h4>
                     {selectedData.core_concepts?.length > 0 ? (
@@ -274,7 +295,6 @@ export default function OntologyMap() {
                     ) : <span className="text-xs font-bold text-slate-400">등록된 데이터가 없습니다.</span>}
                   </div>
 
-                  {/* 이 부분이 학부모에게 강력한 어필 포인트가 됩니다 */}
                   <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4">
                     <h4 className="text-sm font-black text-rose-800 flex items-center gap-1.5 mb-3"><AlertTriangle size={16}/> 주의할 오개념 (Misconceptions)</h4>
                     {selectedData.misconceptions?.length > 0 ? (
@@ -289,7 +309,6 @@ export default function OntologyMap() {
                     ) : <span className="text-xs font-bold text-slate-400">등록된 데이터가 없습니다.</span>}
                   </div>
 
-                  {/* 강사 및 관리자 전용 수정 버튼 */}
                   <button 
                     onClick={() => setIsEditMode(true)}
                     className="w-full mt-6 bg-slate-800 hover:bg-slate-900 text-white font-bold py-4 rounded-xl transition-all active:scale-[0.98] flex items-center justify-center gap-2"
@@ -298,7 +317,7 @@ export default function OntologyMap() {
                   </button>
                 </div>
               ) : (
-                /* --- 에디터 모드 (강사용) --- */
+                /* --- 에디터 모드 --- */
                 <div className="flex flex-col h-full min-h-[600px] animate-in slide-in-from-bottom-4">
                   <div className="flex justify-between items-center mb-2">
                     <span className="text-sm font-black text-slate-500 flex items-center gap-1.5"><FileText size={16} /> YAML 에디터</span>

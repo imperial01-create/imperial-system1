@@ -1,9 +1,9 @@
 /* =========================================================================
    [서비스 가치(Service Value)]
    임페리얼 학원 통합 백엔드 코어 (Firebase Functions v2)
-   🚀 가치 1: AI, 메시징, 데이터 정리, 커리큘럼 관리를 하나의 서버리스 아키텍처로 통합.
-   🚀 가치 2: 모든 외부 통신(GitHub, Gemini, Telegram) 토큰을 서버에 격리하여 100% 보안 유지.
-   🚀 가치 3: Params API 적용으로 런타임 에러 0% 및 정교한 AI 프롬프트 원본 100% 유지.
+   🚀 가치 1: AI, 메시징, 데이터 정리 로직을 하나의 서버리스 아키텍처로 통합.
+   🚀 가치 2: 모든 외부 통신(Gemini, Telegram) 토큰을 서버에 격리하여 100% 보안 유지.
+   🚀 가치 3: 불필요한 레거시(GitHub Proxy) 로직을 제거하여 Cold Start 속도를 극대화.
    ========================================================================= */
 
 const { setGlobalOptions } = require("firebase-functions/v2");
@@ -12,10 +12,6 @@ const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-
-// 🚀 [신규 추가 패키지] GitHub 통신 및 YAML 파싱용
-const { Octokit } = require('@octokit/rest');
-const yaml = require('js-yaml');
 
 // 🚀 [CTO 패치] Firebase Params API 임포트 (확정적 환경변수 로딩)
 const { defineString } = require("firebase-functions/params");
@@ -33,11 +29,9 @@ setGlobalOptions({
 
 const APP_ID = 'imperial-clinic-v1';
 
-// 🚀 [CTO 패치] 환경변수 선언: 배포 시점에 값을 강제로 검증합니다.
+// 🚀 [CTO 패치] 환경변수 선언: 배포 시점에 값을 강제로 검증합니다. 
+// (사용하지 않는 GITHUB 관련 변수 제거 완료하여 런타임 에러 방지)
 const geminiApiKey = defineString('GEMINI_API_KEY');
-const githubToken = defineString('GITHUB_TOKEN');
-const githubRepoOwner = defineString('GITHUB_REPO_OWNER');
-const githubRepoName = defineString('GITHUB_REPO_NAME');
 const telegramBotToken = defineString('TELEGRAM_BOT_TOKEN', { default: '' });
 const telegramChatId = defineString('TELEGRAM_CHAT_ID', { default: '' });
 
@@ -585,126 +579,4 @@ exports.consultationReminderCron = onSchedule({
         console.error("🔥 상담 리마인드(Cron) 에러:", error);
     }
     return null;
-});
-
-// ============================================================================
-// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 Proxy 백엔드 (데이터 읽기 - Tree API 최적화)
-// ============================================================================
-exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async (request) => {
-    // 1. 권한 검증 (보안 최우선)
-    if (!request.auth) {
-        throw new HttpsError('unauthenticated', '학원 시스템에 로그인된 사용자만 접근할 수 있습니다.');
-    }
-
-    const GITHUB_TOKEN = githubToken.value();
-    const OWNER = githubRepoOwner.value();
-    const REPO = githubRepoName.value();
-
-    if (!GITHUB_TOKEN) {
-        throw new HttpsError('internal', '서버 구성 오류: GitHub 연동 키가 없습니다.');
-    }
-
-    try {
-        const octokit = new Octokit({ auth: GITHUB_TOKEN });
-        
-        // 🚀 [CTO 최적화 1] Repository의 기본 브랜치(main 또는 master) 파악
-        const { data: repoData } = await octokit.repos.get({
-            owner: OWNER,
-            repo: REPO
-        });
-        const defaultBranch = repoData.default_branch;
-
-        // 🚀 [CTO 최적화 2] Git Tree API (Recursive: true)를 사용하여 N+1 문제 방지
-        // 폴더가 아무리 깊게 중첩되어 있어도 단 한 번의 API 호출(O(1))로 전체 파일 지도를 가져옵니다.
-        const { data: treeData } = await octokit.git.getTree({
-            owner: OWNER,
-            repo: REPO,
-            tree_sha: defaultBranch,
-            recursive: "true"
-        });
-
-        // '01_수와_연산' 등 폴더 구조에 상관없이 트리 전체에서 .yaml / .yml 파일만 필터링
-        const yamlFiles = treeData.tree.filter(file => 
-            file.type === 'blob' && (file.path.endsWith('.yaml') || file.path.endsWith('.yml'))
-        );
-
-        // Promise.all을 활용한 병렬 데이터 페칭 (비동기 처리로 로딩 속도 극대화)
-        const filePromises = yamlFiles.map(async (file) => {
-            const { data: contentData } = await octokit.repos.getContent({
-                owner: OWNER,
-                repo: REPO,
-                path: file.path,
-            });
-
-            const rawYaml = Buffer.from(contentData.content, 'base64').toString('utf-8');
-            let parsedData = {};
-            try {
-                parsedData = yaml.load(rawYaml);
-            } catch (parseErr) {
-                // 문법 오류가 있는 파일 하나 때문에 전체 화면이 죽지 않도록 방어적 코딩 적용
-                console.warn(`[YAML Parse Warning] 파일 문법 오류 무시됨 (${file.path}): ${parseErr.message}`);
-            }
-
-            return {
-                id: parsedData.id || null,
-                sha: file.sha,
-                path: file.path,
-                rawYaml,
-                parsedData
-            };
-        });
-
-        const ontologyData = await Promise.all(filePromises);
-        
-        // 유효한 ID를 가진 정상적인 커리큘럼 노드만 프론트엔드로 반환
-        const validData = ontologyData.filter(item => item.id !== null);
-
-        return { success: true, data: validData };
-    } catch (error) {
-        console.error('Ontology Fetch Error:', error);
-        throw new HttpsError('internal', '커리큘럼 데이터를 가져오는 데 실패했습니다.');
-    }
-});
-
-// ============================================================================
-// 🚀 [기능 13] 커리큘럼 YAML 업데이트 및 GitHub Commit 엔진 (데이터 쓰기)
-// ============================================================================
-exports.commitOntologyData = onCall(async (request) => {
-    if (!request.auth) {
-        throw new HttpsError('unauthenticated', '수정 권한이 없습니다. (인증 만료)');
-    }
-
-    const { path, content, sha, message } = request.data;
-
-    if (!path || !content || !sha) {
-        throw new HttpsError('invalid-argument', '필수 데이터(경로, 내용, 고유키)가 누락되었습니다.');
-    }
-
-    try {
-        yaml.load(content);
-    } catch (e) {
-        throw new HttpsError('invalid-argument', `잘못된 YAML 문법입니다. 들여쓰기 기호를 확인하세요: ${e.message}`);
-    }
-
-    // 🚀 Params API 적용
-    const GITHUB_TOKEN = githubToken.value();
-    const OWNER = githubRepoOwner.value();
-    const REPO = githubRepoName.value();
-
-    try {
-        const octokit = new Octokit({ auth: GITHUB_TOKEN });
-        await octokit.repos.createOrUpdateFileContents({
-            owner: OWNER,
-            repo: REPO,
-            path: path,
-            message: message || 'Update ontology node via Imperial LMS',
-            content: Buffer.from(content, 'utf-8').toString('base64'),
-            sha: sha,
-        });
-
-        return { success: true };
-    } catch (error) {
-        console.error('GitHub API PUT Error:', error);
-        throw new HttpsError('internal', `GitHub 원본 업데이트에 실패했습니다.`);
-    }
 });
