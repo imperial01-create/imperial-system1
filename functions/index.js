@@ -588,18 +588,17 @@ exports.consultationReminderCron = onSchedule({
 });
 
 // ============================================================================
-// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 Proxy 백엔드 (데이터 읽기)
+// 🚀 [기능 12] Zero-Trust 기반 커리큘럼 Proxy 백엔드 (데이터 읽기 - Tree API 최적화)
 // ============================================================================
 exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async (request) => {
+    // 1. 권한 검증 (보안 최우선)
     if (!request.auth) {
         throw new HttpsError('unauthenticated', '학원 시스템에 로그인된 사용자만 접근할 수 있습니다.');
     }
 
-    // 🚀 Params API 적용: 배포 시점에 환경변수가 정상 주입되었는지 100% 보장합니다.
     const GITHUB_TOKEN = githubToken.value();
     const OWNER = githubRepoOwner.value();
     const REPO = githubRepoName.value();
-    const FOLDER_PATH = 'ontology/math';
 
     if (!GITHUB_TOKEN) {
         throw new HttpsError('internal', '서버 구성 오류: GitHub 연동 키가 없습니다.');
@@ -608,14 +607,28 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
     try {
         const octokit = new Octokit({ auth: GITHUB_TOKEN });
         
-        const { data: fileList } = await octokit.repos.getContent({
+        // 🚀 [CTO 최적화 1] Repository의 기본 브랜치(main 또는 master) 파악
+        const { data: repoData } = await octokit.repos.get({
+            owner: OWNER,
+            repo: REPO
+        });
+        const defaultBranch = repoData.default_branch;
+
+        // 🚀 [CTO 최적화 2] Git Tree API (Recursive: true)를 사용하여 N+1 문제 방지
+        // 폴더가 아무리 깊게 중첩되어 있어도 단 한 번의 API 호출(O(1))로 전체 파일 지도를 가져옵니다.
+        const { data: treeData } = await octokit.git.getTree({
             owner: OWNER,
             repo: REPO,
-            path: FOLDER_PATH,
+            tree_sha: defaultBranch,
+            recursive: "true"
         });
 
-        const yamlFiles = fileList.filter(f => f.name.endsWith('.yaml') || f.name.endsWith('.yml'));
+        // '01_수와_연산' 등 폴더 구조에 상관없이 트리 전체에서 .yaml / .yml 파일만 필터링
+        const yamlFiles = treeData.tree.filter(file => 
+            file.type === 'blob' && (file.path.endsWith('.yaml') || file.path.endsWith('.yml'))
+        );
 
+        // Promise.all을 활용한 병렬 데이터 페칭 (비동기 처리로 로딩 속도 극대화)
         const filePromises = yamlFiles.map(async (file) => {
             const { data: contentData } = await octokit.repos.getContent({
                 owner: OWNER,
@@ -628,7 +641,8 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
             try {
                 parsedData = yaml.load(rawYaml);
             } catch (parseErr) {
-                console.warn(`[YAML Parse Warning] 파일 문법 오류 무시됨: ${file.name}`);
+                // 문법 오류가 있는 파일 하나 때문에 전체 화면이 죽지 않도록 방어적 코딩 적용
+                console.warn(`[YAML Parse Warning] 파일 문법 오류 무시됨 (${file.path}): ${parseErr.message}`);
             }
 
             return {
@@ -641,6 +655,8 @@ exports.fetchOntologyData = onCall({ timeoutSeconds: 60, memory: "1GiB" }, async
         });
 
         const ontologyData = await Promise.all(filePromises);
+        
+        // 유효한 ID를 가진 정상적인 커리큘럼 노드만 프론트엔드로 반환
         const validData = ontologyData.filter(item => item.id !== null);
 
         return { success: true, data: validData };
