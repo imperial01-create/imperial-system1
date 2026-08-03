@@ -1,9 +1,8 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 (Static JSON & Focus Mode 적용 버전)
-   🚀 가치 1: 단일 JSON 파일(build.json) 로드로 서버 호출 비용 완전 무료화 (Zero Cost).
-   🚀 가치 2: Focus Mode(1-Depth 노출)를 통해 학부모와 학생의 시각적 혼란을 제거하고 학습 몰입도를 높임.
-   🚀 가치 3: 런타임 에러 방지(Try-Catch) 및 Zero-Trust 토큰 검증 적용.
+   임페리얼 학원 AI 지식 맵 뷰어 (Resilient Data Fetching Patch 적용)
+   🚀 가치 1: 깐깐한 Header 검사를 유연한 JSON 파싱 검증으로 대체하여 CORS 환경에서도 끊김 없는 데이터 로딩 보장.
+   🚀 가치 2: 환경변수 URL 오입력(/build.json 중복)을 시스템이 자동 교정하여 운영자의 휴먼 에러 원천 방지.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
@@ -14,11 +13,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
 import { 
-  AlertCircle, Loader2, Maximize, Target
+  AlertCircle, Loader2, Maximize
 } from 'lucide-react';
 
-// --- [1. Dagre 자동 레이아웃 알고리즘] ---
-// 공간 기억(Spatial Memory)을 유지하기 위해 노드의 위치를 자동 정렬합니다.
 const getLayoutedElements = (nodes, edges, direction = 'LR') => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
@@ -49,9 +46,8 @@ export default function OntologyMap() {
   
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isFocused, setIsFocused] = useState(false); // 포커스 모드 활성화 여부
+  const [isFocused, setIsFocused] = useState(false);
 
-  // 환경 변수 설정 및 보안 헤더 세팅
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
   
   const getAuthHeaders = useCallback(() => {
@@ -62,12 +58,17 @@ export default function OntologyMap() {
     };
   }, []);
 
-  // --- [2. 단일 JSON 데이터 로드 (Zero Cost 아키텍처)] ---
+  // --- [핵심 패치: 무결성 검증 및 유연한 데이터 로드] ---
   const loadOntologyData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/build.json`, {
+      // 🚀 [CTO 패치 1: 휴먼 에러 방지] 
+      // 원장님이 환경변수에 주소를 어떻게 적었든, 정확한 엔드포인트를 로봇이 자동 생성합니다.
+      const baseUrl = API_BASE_URL.replace(/\/$/, ''); // 끝에 있는 슬래시 제거
+      const endpoint = baseUrl.endsWith('/build.json') ? baseUrl : `${baseUrl}/build.json`;
+
+      const response = await fetch(endpoint, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
@@ -76,20 +77,22 @@ export default function OntologyMap() {
         throw new Error(`데이터 통신 실패 (${response.status}): 서버 주소를 확인해주세요.`);
       }
 
-      // 🚀 [CTO 패치] 응답이 JSON인지 명확하게 검증하는 방어 로직 추가
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error("서버에서 올바른 데이터(JSON)를 받지 못했습니다. API 주소나 빌드 상태를 확인해주세요.");
+      // 🚀 [CTO 패치 2: 헤더 검사 대신 직접 내용물 검증]
+      // CORS로 인해 헤더가 마스킹되더라도, 실제 텍스트를 가져와 JSON 변환을 시도합니다.
+      const textData = await response.text();
+      let result;
+      try {
+        result = JSON.parse(textData);
+      } catch (parseError) {
+        console.error("[Data Parse Error] 수신된 데이터의 일부:", textData.substring(0, 100));
+        throw new Error("서버에서 올바른 JSON 데이터를 받지 못했습니다. API 주소를 다시 확인해주세요.");
       }
-
-      const result = await response.json();
       
-      // 방어적 코딩: 데이터 무결성 검증
-      if (!result.nodes || !result.edges) {
-        throw new Error("서버에서 올바르지 않은 데이터 형식을 반환했습니다.");
+      // 데이터 무결성 검증 (배열이 아니면 에러 처리)
+      if (!result || !Array.isArray(result.nodes) || !Array.isArray(result.edges)) {
+        throw new Error("데이터 구조가 올바르지 않습니다. (nodes 또는 edges 배열 누락)");
       }
 
-      // 프론트엔드 UI용 React Flow 노드 객체로 변환 (UI 렌더링 주입)
       const formattedNodes = result.nodes.map(node => {
         const parsedData = node.data || {};
         return {
@@ -114,9 +117,9 @@ export default function OntologyMap() {
           style: {
             background: '#ffffff', border: '2px solid #e2e8f0', borderRadius: '12px',
             padding: '12px 16px', minWidth: '280px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-            transition: 'opacity 0.3s ease', // 포커스 모드 시 부드러운 전환 효과
+            transition: 'opacity 0.3s ease',
           },
-          hidden: false // 초기 상태는 모두 보임
+          hidden: false
         };
       });
 
@@ -128,7 +131,6 @@ export default function OntologyMap() {
         hidden: false
       }));
 
-      // Dagre를 이용해 노드 위치를 계산합니다.
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(formattedNodes, formattedEdges, 'LR');
       
       setNodes(layoutedNodes);
@@ -142,31 +144,23 @@ export default function OntologyMap() {
     }
   }, [API_BASE_URL, getAuthHeaders, setNodes, setEdges]);
 
-  // 최초 로딩
   useEffect(() => {
     loadOntologyData();
   }, [loadOntologyData]);
 
-  // --- [3. Focus Mode (1-Depth 이웃 노출) 알고리즘] ---
   const handleNodeClick = useCallback((event, clickedNode) => {
-    // 1단계: 클릭한 노드와 연결된(출발지 혹은 도착지) 모든 Edge를 찾습니다.
     const connectedEdges = edges.filter(
       (edge) => edge.source === clickedNode.id || edge.target === clickedNode.id
     );
 
-    // 2단계: 클릭한 노드 + 이웃 노드의 ID를 저장할 Set(중복 방지)을 만듭니다.
     const visibleNodeIds = new Set([clickedNode.id]);
     connectedEdges.forEach((edge) => {
       visibleNodeIds.add(edge.source);
       visibleNodeIds.add(edge.target);
     });
 
-    // 3단계: 노드와 엣지의 hidden 속성을 업데이트하여 화면을 재구성합니다.
     setNodes((currentNodes) => 
-      currentNodes.map((node) => ({
-        ...node,
-        hidden: !visibleNodeIds.has(node.id),
-      }))
+      currentNodes.map((node) => ({ ...node, hidden: !visibleNodeIds.has(node.id) }))
     );
 
     setEdges((currentEdges) => 
@@ -176,22 +170,18 @@ export default function OntologyMap() {
       }))
     );
 
-    setIsFocused(true); // 전체 보기 버튼을 띄우기 위해 상태 변경
+    setIsFocused(true);
   }, [edges, setNodes, setEdges]);
 
-  // --- [4. 전체 보기 (Reset Focus) 함수] ---
   const resetFocus = useCallback(() => {
     setNodes((currentNodes) => currentNodes.map((n) => ({ ...n, hidden: false })));
     setEdges((currentEdges) => currentEdges.map((e) => ({ ...e, hidden: false })));
     setIsFocused(false);
   }, [setNodes, setEdges]);
 
-
-  // 렌더링 영역
   return (
     <div className="w-full h-[85vh] bg-slate-50 flex rounded-3xl overflow-hidden border border-slate-200 shadow-sm relative">
       
-      {/* 🚀 에러 및 로딩 UI (학부모의 이탈을 막는 방어 기제) */}
       {error && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-50 text-rose-700 px-6 py-3 rounded-2xl shadow-lg border border-rose-200 font-bold flex items-center gap-2">
           <AlertCircle size={20} /> {error}
@@ -205,7 +195,6 @@ export default function OntologyMap() {
         </div>
       )}
 
-      {/* 🚀 전체 보기 (Reset Focus) 플로팅 버튼 */}
       {isFocused && !isLoading && (
         <button
           onClick={resetFocus}
@@ -216,7 +205,6 @@ export default function OntologyMap() {
         </button>
       )}
 
-      {/* 🚀 React Flow 메인 캔버스 */}
       <div className="flex-1 w-full h-full">
         <ReactFlow
           nodes={nodes} 
