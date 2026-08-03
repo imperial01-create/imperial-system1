@@ -1,8 +1,8 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 v2.1 (Anti-Crash & Semantic Zoom)
-   🚀 가치 1: 어떤 형태의 결함 데이터(JSON)가 들어와도 화면이 뻗지 않는 '방탄 렌더링(Zero WSOD)' 구현.
-   🚀 가치 2: 고아 연결선(Orphan Edges)을 $O(N)$으로 사전 필터링하여 브라우저 메모리 누수 및 다운 방지.
+   임페리얼 학원 AI 지식 맵 뷰어 v2.2 (Bulletproof State Management)
+   🚀 가치 1: 줌 인/아웃 시 발생하는 React 상태 충돌(Race Condition)을 원천 차단하여 Zero WSOD 달성.
+   🚀 가치 2: 모든 노드의 id와 position 타입을 강제 캐스팅하여 렌더링 엔진의 런타임 에러 완전 차단.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback } from 'react';
@@ -16,10 +16,9 @@ import dagre from 'dagre';
 import { AlertCircle, Loader2, BookOpen } from 'lucide-react';
 
 // =====================================================================
-// 🎨 커스텀 노드: 데이터가 없어도 절대 뻗지 않는 방어적 UI 설계
+// 🎨 커스텀 노드: 예외 상황에서도 UI를 유지하는 방어적 렌더링
 // =====================================================================
 const ConceptNode = ({ data }) => {
-  // 방어적 코딩: data가 undefined일 경우를 완벽히 대비
   const safeData = data || {};
   return (
     <div className="flex flex-col text-left bg-white border-2 border-slate-200 rounded-xl p-3 min-w-[240px] shadow-sm transition-all hover:border-indigo-400 hover:shadow-md">
@@ -69,7 +68,7 @@ const nodeTypes = {
 };
 
 // =====================================================================
-// 🧭 메인 로직: 레이아웃 계산 및 에러 방어 컨트롤러
+// 🧭 메인 컴포넌트 로직
 // =====================================================================
 function OntologyMapContent() {
   const { setNodes, setEdges } = useReactFlow();
@@ -80,40 +79,71 @@ function OntologyMapContent() {
   const [error, setError] = useState(null);
   const [currentZoomTier, setCurrentZoomTier] = useState(1);
 
-  // 🚀 [CTO 패치 1: 레이아웃 계산 중 발생하는 치명적 에러 원천 차단]
+  // 🚀 [CTO 패치 1: 노드/엣지의 가시성을 계산하는 '순수 함수(Pure Function)'. 상태를 직접 변경하지 않음]
+  const applyTierVisibility = useCallback((targetNodes, targetEdges, tier) => {
+    const updatedNodes = targetNodes.map(node => {
+      let hidden = false;
+      let opacity = 1;
+
+      if (node.type === 'concept') {
+        hidden = tier < 3; 
+        opacity = tier === 3 ? 1 : 0;
+      } else if (node.type === 'category') {
+        const safeData = node.data || {};
+        if (safeData.level === 'major') {
+          hidden = false; 
+          opacity = tier === 1 ? 1 : (tier === 2 ? 0.3 : 0.05); 
+        } else if (safeData.level === 'middle') {
+          hidden = tier === 1; 
+          opacity = tier === 2 ? 1 : 0.1;
+        }
+      }
+      return { ...node, hidden, style: { ...node.style, opacity, transition: 'opacity 0.4s ease' } };
+    });
+
+    const updatedEdges = targetEdges.map(edge => ({
+      ...edge,
+      hidden: tier < 3, 
+      style: { ...edge.style, opacity: tier === 3 ? 1 : 0, transition: 'opacity 0.4s ease' }
+    }));
+
+    return { updatedNodes, updatedEdges };
+  }, []);
+
+  // 🚀 [CTO 패치 2: Dagre 레이아웃 생성 및 데이터 타입 강제 캐스팅 (Zero Exception)]
   const getLayoutedAndGroupedElements = useCallback((rawNodes = [], rawEdges = []) => {
     try {
-      // 1. 데이터 무결성 검사 (빈 배열 방어)
-      if (!Array.isArray(rawNodes) || rawNodes.length === 0) {
-        throw new Error("렌더링할 노드 데이터가 없습니다.");
-      }
+      if (!Array.isArray(rawNodes) || rawNodes.length === 0) throw new Error("렌더링할 노드 데이터가 없습니다.");
 
-      // 2. 유령 연결선(Orphan Edges) 필터링 (Dagre 크래시 방지 핵심 로직)
-      const validNodeIds = new Set(rawNodes.map(n => n.id));
-      const validEdges = rawEdges.filter(e => validNodeIds.has(e.source) && validNodeIds.has(e.target));
+      // ID를 무조건 문자열(String)로 캐스팅하여 유령 노드 참조 완벽 차단
+      const sanitizedNodes = rawNodes.map(n => ({ ...n, id: String(n.id) }));
+      const sanitizedEdges = rawEdges.map(e => ({ ...e, source: String(e.source), target: String(e.target) }));
+
+      const validNodeIds = new Set(sanitizedNodes.map(n => n.id));
+      const validEdges = sanitizedEdges.filter(e => validNodeIds.has(e.source) && validNodeIds.has(e.target));
 
       const dagreGraph = new dagre.graphlib.Graph();
       dagreGraph.setDefaultEdgeLabel(() => ({}));
-      dagreGraph.setGraph({ rankdir: 'BT', ranksep: 120, nodesep: 70 }); // 상향식 배치
+      dagreGraph.setGraph({ rankdir: 'BT', ranksep: 120, nodesep: 70 }); 
 
-      rawNodes.forEach((node) => { dagreGraph.setNode(node.id, { width: 240, height: 80 }); });
+      sanitizedNodes.forEach((node) => { dagreGraph.setNode(node.id, { width: 240, height: 80 }); });
       validEdges.forEach((edge) => { dagreGraph.setEdge(edge.source, edge.target); });
       
       dagre.layout(dagreGraph);
 
       const bounds = { major: {}, middle: {} };
       
-      const layoutedConcepts = rawNodes.map((node) => {
+      const layoutedConcepts = sanitizedNodes.map((node) => {
         const nodeWithPos = dagreGraph.node(node.id);
-        const pX = nodeWithPos ? nodeWithPos.x - 120 : 0; // 안전한 좌표 접근
-        const pY = nodeWithPos ? nodeWithPos.y - 40 : 0;
+        
+        // 치명적 에러 방어: dagre 연산 실패 시 NaN이 아닌 0으로 Fallback 처리
+        const pX = (nodeWithPos && !isNaN(nodeWithPos.x)) ? nodeWithPos.x - 120 : 0; 
+        const pY = (nodeWithPos && !isNaN(nodeWithPos.y)) ? nodeWithPos.y - 40 : 0;
 
-        // JSON 구조에 따른 안전한 데이터 추출 (이중 래핑 대비)
         const nodeData = node.data || {};
         const maj = nodeData.major_category || '기본 수학';
         const mid = nodeData.middle_category || '일반';
 
-        // 바운딩 박스 계산
         if (!bounds.major[maj]) bounds.major[maj] = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
         bounds.major[maj].minX = Math.min(bounds.major[maj].minX, pX);
         bounds.major[maj].maxX = Math.max(bounds.major[maj].maxX, pX + 240);
@@ -132,7 +162,7 @@ function OntologyMapContent() {
           type: 'concept',
           targetPosition: 'bottom',
           sourcePosition: 'top',
-          position: { x: pX, y: pY },
+          position: { x: pX, y: pY }, // 안전이 보장된 Number 좌표 배정
           zIndex: 10,
         };
       });
@@ -143,7 +173,7 @@ function OntologyMapContent() {
 
       Object.keys(bounds.major).forEach(key => {
         const b = bounds.major[key];
-        if (b.minX !== Infinity) { // 유효한 바운드만 렌더링
+        if (b.minX !== Infinity) { 
           categoryNodes.push({
             id: `major-${key}`, type: 'category', zIndex: -2,
             position: { x: b.minX - padMajor, y: b.minY - padMajor },
@@ -166,76 +196,57 @@ function OntologyMapContent() {
       return { 
         nodes: [...categoryNodes, ...layoutedConcepts], 
         edges: validEdges.map(e => ({
-          ...e, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' }, style: { stroke: '#94a3b8', strokeWidth: 2 }
+          ...e, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' }, style: { stroke: '#94a3b8', strokeWidth: 2 },
+          id: `edge-${e.source}-${e.target}` // Edge ID 강제 부여
         })) 
       };
     } catch (error) {
       console.error("[Layout Engine Error]:", error);
-      throw new Error("맵 구조를 계산하는 중 오류가 발생했습니다. 데이터 구조를 확인하세요.");
+      throw new Error("맵 구조를 계산하는 중 오류가 발생했습니다.");
     }
   }, []);
-
-  const applySemanticZoom = useCallback((currentNodes, currentEdges, tier) => {
-    setNodes(currentNodes.map(node => {
-      let hidden = false;
-      let opacity = 1;
-
-      if (node.type === 'concept') {
-        hidden = tier < 3; 
-        opacity = tier === 3 ? 1 : 0;
-      } else if (node.type === 'category') {
-        const safeData = node.data || {};
-        if (safeData.level === 'major') {
-          hidden = false; 
-          opacity = tier === 1 ? 1 : (tier === 2 ? 0.3 : 0.05); 
-        } else if (safeData.level === 'middle') {
-          hidden = tier === 1; 
-          opacity = tier === 2 ? 1 : 0.1;
-        }
-      }
-      return { ...node, hidden, style: { ...node.style, opacity, transition: 'opacity 0.4s ease' } };
-    }));
-
-    setEdges(currentEdges.map(edge => ({
-      ...edge,
-      hidden: tier < 3, 
-      style: { ...edge.style, opacity: tier === 3 ? 1 : 0, transition: 'opacity 0.4s ease' }
-    })));
-  }, [setNodes, setEdges]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const API_BASE_URL = process.env.REACT_APP_API_URL || process.env.NEXT_PUBLIC_API_URL;
-      if (!API_BASE_URL) throw new Error("환경 변수(API_URL)가 누락되었습니다.");
+      if (!API_BASE_URL) throw new Error("API 주소가 설정되지 않았습니다.");
       
       const baseUrl = API_BASE_URL.replace(/\/$/, ''); 
       const endpoint = baseUrl.endsWith('/build.json') ? baseUrl : `${baseUrl}/build.json`;
 
       const res = await fetch(endpoint);
-      if (!res.ok) throw new Error(`데이터 통신 실패 (${res.status})`);
+      if (!res.ok) throw new Error(`통신 실패 (${res.status})`);
       
       const text = await res.text();
       let result;
       try { result = JSON.parse(text); } 
       catch (e) { throw new Error("서버에서 올바른 JSON 데이터를 받지 못했습니다."); }
 
+      // 1. 레이아웃 연산
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedAndGroupedElements(result.nodes, result.edges);
       
-      applySemanticZoom(layoutedNodes, layoutedEdges, 1);
+      // 2. 초기 줌 레벨에 맞게 가시성 필터링 처리 (상태 꼬임 방지)
+      const initialTier = 1;
+      const { updatedNodes, updatedEdges } = applyTierVisibility(layoutedNodes, layoutedEdges, initialTier);
+      
+      // 3. 단 한 번의 상태 업데이트(Batch Update)로 렌더링 확정
+      setNodes(updatedNodes);
+      setEdges(updatedEdges);
+      setCurrentZoomTier(initialTier);
 
     } catch (err) {
       console.error("[Data Load Error]:", err);
-      setError(err.message || "데이터를 불러오는 중 오류가 발생했습니다.");
+      setError(err.message || "데이터 로드 실패");
     } finally {
       setIsLoading(false);
     }
-  }, [getLayoutedAndGroupedElements, applySemanticZoom]);
+  }, [getLayoutedAndGroupedElements, applyTierVisibility, setNodes, setEdges]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // 🚀 [CTO 패치 2: 줌 이벤트 쓰로틀링(Throttling)으로 렌더링 과부하 방어]
+  // 🚀 [CTO 패치 3: 줌 이벤트 발생 시 중첩 Callback을 배제한 안전한 업데이트]
   useOnViewportChange({
     onChange: (viewport) => {
       const z = viewport.zoom;
@@ -245,13 +256,16 @@ function OntologyMapContent() {
 
       if (newTier !== currentZoomTier) {
         setCurrentZoomTier(newTier);
-        setNodes((nds) => {
-          let tempNodes = [...nds];
-          setEdges((eds) => {
-            applySemanticZoom(tempNodes, eds, newTier);
-            return eds;
-          });
-          return tempNodes;
+        
+        // 현재 엔진에 올라가 있는 nodes/edges 상태를 가져와 순수 함수로 매핑 후 업데이트
+        setNodes((currentNds) => {
+          const { updatedNodes } = applyTierVisibility(currentNds, [], newTier);
+          return updatedNodes;
+        });
+        
+        setEdges((currentEds) => {
+          const { updatedEdges } = applyTierVisibility([], currentEds, newTier);
+          return updatedEdges;
         });
       }
     }
@@ -278,7 +292,7 @@ function OntologyMapContent() {
         nodeTypes={nodeTypes}
         fitView minZoom={0.05} maxZoom={2}
         proOptions={{ hideAttribution: true }}
-        nodesConnectable={false} // 보기 전용이므로 선 긋기 비활성화
+        nodesConnectable={false}
       >
         <Background color="#cbd5e1" gap={24} size={2} />
         <Controls className="bg-white rounded-xl shadow-md border border-slate-200" />
@@ -296,7 +310,6 @@ function OntologyMapContent() {
   );
 }
 
-// 🚀 ReactFlowProvider 분리
 export default function OntologyMap() {
   return (
     <ReactFlowProvider>
