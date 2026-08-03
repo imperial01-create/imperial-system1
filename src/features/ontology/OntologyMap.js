@@ -67,14 +67,19 @@ export default function OntologyMap() {
     setIsLoading(true);
     setError(null);
     try {
-      // 🚀 CI/CD가 생성한 build.json 파일을 Cloudflare에서 한 번에 가져옵니다.
       const response = await fetch(`${API_BASE_URL}/build.json`, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
-        throw new Error(`데이터 로드 실패: ${response.status} 상태 코드가 반환되었습니다.`);
+        throw new Error(`데이터 통신 실패 (${response.status}): 서버 주소를 확인해주세요.`);
+      }
+
+      // 🚀 [CTO 패치] 응답이 JSON인지 명확하게 검증하는 방어 로직 추가
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("서버에서 올바른 데이터(JSON)를 받지 못했습니다. API 주소나 빌드 상태를 확인해주세요.");
       }
 
       const result = await response.json();
