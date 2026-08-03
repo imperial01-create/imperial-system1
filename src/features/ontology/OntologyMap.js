@@ -58,15 +58,22 @@ export default function OntologyMap() {
     };
   }, []);
 
-  // --- [핵심 패치: 무결성 검증 및 유연한 데이터 로드] ---
-  const loadOntologyData = useCallback(async () => {
+const loadOntologyData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      // 🚀 [CTO 패치 1: 휴먼 에러 방지] 
-      // 원장님이 환경변수에 주소를 어떻게 적었든, 정확한 엔드포인트를 로봇이 자동 생성합니다.
-      const baseUrl = API_BASE_URL.replace(/\/$/, ''); // 끝에 있는 슬래시 제거
+      // 🚀 [CTO 패치: CRA 및 Next.js 환경변수 동시 지원]
+      const API_BASE_URL = process.env.REACT_APP_API_URL || process.env.NEXT_PUBLIC_API_URL;
+      
+      // 환경 변수 누락 원천 차단 (Fail-Fast)
+      if (!API_BASE_URL || API_BASE_URL.trim() === '') {
+        throw new Error("[환경 변수 누락] REACT_APP_API_URL이 설정되지 않았습니다. .env 파일을 확인하고 서버를 재시작해주세요.");
+      }
+
+      const baseUrl = API_BASE_URL.replace(/\/$/, ''); 
       const endpoint = baseUrl.endsWith('/build.json') ? baseUrl : `${baseUrl}/build.json`;
+
+      console.log(`[Imperial API] 다음 주소로 데이터 요청을 시작합니다: ${endpoint}`);
 
       const response = await fetch(endpoint, {
         method: 'GET',
@@ -77,18 +84,16 @@ export default function OntologyMap() {
         throw new Error(`데이터 통신 실패 (${response.status}): 서버 주소를 확인해주세요.`);
       }
 
-      // 🚀 [CTO 패치 2: 헤더 검사 대신 직접 내용물 검증]
-      // CORS로 인해 헤더가 마스킹되더라도, 실제 텍스트를 가져와 JSON 변환을 시도합니다.
       const textData = await response.text();
+      
       let result;
       try {
         result = JSON.parse(textData);
       } catch (parseError) {
-        console.error("[Data Parse Error] 수신된 데이터의 일부:", textData.substring(0, 100));
+        console.error("[Data Parse Error] 수신된 데이터의 일부:", textData.substring(0, 150));
         throw new Error("서버에서 올바른 JSON 데이터를 받지 못했습니다. API 주소를 다시 확인해주세요.");
       }
       
-      // 데이터 무결성 검증 (배열이 아니면 에러 처리)
       if (!result || !Array.isArray(result.nodes) || !Array.isArray(result.edges)) {
         throw new Error("데이터 구조가 올바르지 않습니다. (nodes 또는 edges 배열 누락)");
       }
