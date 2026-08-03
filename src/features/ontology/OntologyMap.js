@@ -1,232 +1,272 @@
 /* =========================================================================
-   [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 (Resilient Data Fetching Patch 적용)
-   🚀 가치 1: 깐깐한 Header 검사를 유연한 JSON 파싱 검증으로 대체하여 CORS 환경에서도 끊김 없는 데이터 로딩 보장.
-   🚀 가치 2: 환경변수 URL 오입력(/build.json 중복)을 시스템이 자동 교정하여 운영자의 휴먼 에러 원천 방지.
+   [서비스 가치(Service Value)]
+   임페리얼 학원 AI 지식 맵 뷰어 v2.0 (Semantic Zoom & Bottom-Up DAG)
+   🚀 가치 1: 상향식(Bottom-Up) 배치를 통해 '기초->심화'로 올라가는 스킬 트리 UI 구현 (학생 동기부여)
+   🚀 가치 2: 시맨틱 줌을 통한 인지 과부하 방지. 줌 레벨에 따라 대분류 -> 중분류 -> 상세 개념으로 자연스럽게 전환.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ReactFlow, MiniMap, Controls, Background,
-  useNodesState, useEdgesState, MarkerType
+  useNodesState, useEdgesState, MarkerType,
+  useOnViewportChange, useReactFlow, ReactFlowProvider
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
-import { 
-  AlertCircle, Loader2, Maximize
-} from 'lucide-react';
+import { AlertCircle, Loader2, BookOpen } from 'lucide-react';
 
-const getLayoutedElements = (nodes, edges, direction = 'LR') => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({ rankdir: direction, ranksep: 130, nodesep: 70 });
+// =====================================================================
+// 🎨 커스텀 노드 디자인 (Custom Nodes)
+// =====================================================================
 
-  nodes.forEach((node) => { dagreGraph.setNode(node.id, { width: 280, height: 90 }); });
-  edges.forEach((edge) => { dagreGraph.setEdge(edge.source, edge.target); });
+// 1. 개별 수학 개념 노드 (줌 인 상태에서 표시)
+const ConceptNode = ({ data }) => (
+  <div className="flex flex-col text-left bg-white border-2 border-slate-200 rounded-xl p-3 min-w-[240px] shadow-sm transition-all hover:border-indigo-400 hover:shadow-md">
+    <span className="text-[10px] text-indigo-500 font-bold mb-1 truncate">
+      {data.sub_category || '분류 없음'}
+    </span>
+    <span className="text-sm font-black text-slate-800 leading-tight">
+      {data.title || '제목 없음'}
+    </span>
+    <span className="text-[9px] text-slate-400 mt-1 font-mono">
+      {data.id}
+    </span>
+  </div>
+);
 
-  dagre.layout(dagreGraph);
+// 2. 카테고리 그룹 노드 (줌 아웃/중간 상태에서 표시되는 거대한 배경/텍스트)
+const CategoryNode = ({ data }) => (
+  <div 
+    className="flex items-center justify-center rounded-3xl transition-all duration-500"
+    style={{ 
+      width: data.width, 
+      height: data.height, 
+      backgroundColor: data.level === 'major' ? 'rgba(238, 242, 255, 0.4)' : 'rgba(241, 245, 249, 0.6)',
+      border: data.level === 'major' ? '4px dashed rgba(199, 210, 254, 0.8)' : '2px solid rgba(203, 213, 225, 0.5)',
+    }}
+  >
+    <div className="flex flex-col items-center opacity-80 pointer-events-none">
+      <BookOpen size={data.level === 'major' ? 48 : 24} className="text-indigo-300 mb-2" />
+      <span 
+        className="font-black text-slate-700 text-center px-4"
+        style={{ fontSize: data.level === 'major' ? '3rem' : '1.5rem', letterSpacing: '-0.02em' }}
+      >
+        {data.label}
+      </span>
+    </div>
+  </div>
+);
 
-  return {
-    nodes: nodes.map((node) => {
-      const nodeWithPosition = dagreGraph.node(node.id);
-      return {
-        ...node,
-        targetPosition: 'left',
-        sourcePosition: 'right',
-        position: { x: nodeWithPosition.x - 280 / 2, y: nodeWithPosition.y - 90 / 2 },
-      };
-    }),
-    edges
-  };
+const nodeTypes = {
+  concept: ConceptNode,
+  category: CategoryNode,
 };
 
-export default function OntologyMap() {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+// =====================================================================
+// 🧭 하위 컴포넌트: 내부 상태 및 React Flow 로직 제어
+// =====================================================================
+function OntologyMapContent() {
+  const { setNodes, setEdges } = useReactFlow();
+  const [nodes, onNodesChange] = useNodesState([]);
+  const [edges, onEdgesChange] = useEdgesState([]);
   
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [isFocused, setIsFocused] = useState(false);
+  const [currentZoomTier, setCurrentZoomTier] = useState(1); // 1: 대분류, 2: 중분류, 3: 상세
 
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
-  
-  const getAuthHeaders = useCallback(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('imperial_auth_token') : '';
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token || ''}`
+  const API_BASE_URL = process.env.REACT_APP_API_URL || process.env.NEXT_PUBLIC_API_URL;
+
+  // 🚀 [CTO 패치 1: 상향식 자동 정렬 및 그룹 바운딩 박스 계산]
+  const getLayoutedAndGroupedElements = useCallback((rawNodes, rawEdges) => {
+    const dagreGraph = new dagre.graphlib.Graph();
+    dagreGraph.setDefaultEdgeLabel(() => ({}));
+    // rankdir: 'BT' (Bottom to Top) 상향식 설계 적용
+    dagreGraph.setGraph({ rankdir: 'BT', ranksep: 100, nodesep: 60 });
+
+    // 1. 기초 개념 노드 레이아웃 계산
+    rawNodes.forEach((node) => { dagreGraph.setNode(node.id, { width: 240, height: 80 }); });
+    rawEdges.forEach((edge) => { dagreGraph.setEdge(edge.source, edge.target); });
+    dagre.layout(dagreGraph);
+
+    const layoutedConcepts = rawNodes.map((node) => {
+      const nodeWithPos = dagreGraph.node(node.id);
+      return {
+        ...node,
+        type: 'concept',
+        targetPosition: 'bottom', // 아래에서 들어와서
+        sourcePosition: 'top',    // 위로 나감 (스킬트리 형태)
+        position: { x: nodeWithPos.x - 240 / 2, y: nodeWithPos.y - 80 / 2 },
+        zIndex: 10,
+      };
+    });
+
+    // 2. 카테고리별 영역(Bounding Box) 계산
+    const bounds = { major: {}, middle: {} };
+    
+    layoutedConcepts.forEach(node => {
+      const p = node.position;
+      const maj = node.data?.data?.major_category || '기본 수학';
+      const mid = node.data?.data?.middle_category || '일반';
+
+      // 대분류 바운드
+      if (!bounds.major[maj]) bounds.major[maj] = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      bounds.major[maj].minX = Math.min(bounds.major[maj].minX, p.x);
+      bounds.major[maj].maxX = Math.max(bounds.major[maj].maxX, p.x + 240);
+      bounds.major[maj].minY = Math.min(bounds.major[maj].minY, p.y);
+      bounds.major[maj].maxY = Math.max(bounds.major[maj].maxY, p.y + 80);
+
+      // 중분류 바운드
+      const midKey = `${maj}-${mid}`;
+      if (!bounds.middle[midKey]) bounds.middle[midKey] = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, label: mid };
+      bounds.middle[midKey].minX = Math.min(bounds.middle[midKey].minX, p.x);
+      bounds.middle[midKey].maxX = Math.max(bounds.middle[midKey].maxX, p.x + 240);
+      bounds.middle[midKey].minY = Math.min(bounds.middle[midKey].minY, p.y);
+      bounds.middle[midKey].maxY = Math.max(bounds.middle[midKey].maxY, p.y + 80);
+    });
+
+    // 3. 그룹 노드(카테고리) 생성
+    const categoryNodes = [];
+    const padMajor = 150;
+    const padMiddle = 60;
+
+    Object.keys(bounds.major).forEach(key => {
+      const b = bounds.major[key];
+      categoryNodes.push({
+        id: `major-${key}`, type: 'category', zIndex: -2,
+        position: { x: b.minX - padMajor, y: b.minY - padMajor },
+        data: { label: key, level: 'major', width: (b.maxX - b.minX) + padMajor * 2, height: (b.maxY - b.minY) + padMajor * 2 }
+      });
+    });
+
+    Object.keys(bounds.middle).forEach(key => {
+      const b = bounds.middle[key];
+      categoryNodes.push({
+        id: `middle-${key}`, type: 'category', zIndex: -1,
+        position: { x: b.minX - padMiddle, y: b.minY - padMiddle },
+        data: { label: b.label, level: 'middle', width: (b.maxX - b.minX) + padMiddle * 2, height: (b.maxY - b.minY) + padMiddle * 2 }
+      });
+    });
+
+    return { 
+      nodes: [...categoryNodes, ...layoutedConcepts], 
+      edges: rawEdges.map(e => ({
+        ...e, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' }, style: { stroke: '#94a3b8', strokeWidth: 2 }
+      })) 
     };
   }, []);
 
-const loadOntologyData = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setIsLoading(true);
-    setError(null);
     try {
-      // 🚀 [CTO 패치: CRA 및 Next.js 환경변수 동시 지원]
-      const API_BASE_URL = process.env.REACT_APP_API_URL || process.env.NEXT_PUBLIC_API_URL;
-      
-      // 환경 변수 누락 원천 차단 (Fail-Fast)
-      if (!API_BASE_URL || API_BASE_URL.trim() === '') {
-        throw new Error("[환경 변수 누락] REACT_APP_API_URL이 설정되지 않았습니다. .env 파일을 확인하고 서버를 재시작해주세요.");
-      }
-
+      if (!API_BASE_URL) throw new Error("API URL이 설정되지 않았습니다.");
       const baseUrl = API_BASE_URL.replace(/\/$/, ''); 
       const endpoint = baseUrl.endsWith('/build.json') ? baseUrl : `${baseUrl}/build.json`;
 
-      console.log(`[Imperial API] 다음 주소로 데이터 요청을 시작합니다: ${endpoint}`);
+      const res = await fetch(endpoint);
+      if (!res.ok) throw new Error("서버 통신 실패");
+      const text = await res.text();
+      const result = JSON.parse(text);
 
-      const response = await fetch(endpoint, {
-        method: 'GET',
-        headers: getAuthHeaders(),
-      });
-
-      if (!response.ok) {
-        throw new Error(`데이터 통신 실패 (${response.status}): 서버 주소를 확인해주세요.`);
-      }
-
-      const textData = await response.text();
+      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedAndGroupedElements(result.nodes, result.edges);
       
-      let result;
-      try {
-        result = JSON.parse(textData);
-      } catch (parseError) {
-        console.error("[Data Parse Error] 수신된 데이터의 일부:", textData.substring(0, 150));
-        throw new Error("서버에서 올바른 JSON 데이터를 받지 못했습니다. API 주소를 다시 확인해주세요.");
-      }
-      
-      if (!result || !Array.isArray(result.nodes) || !Array.isArray(result.edges)) {
-        throw new Error("데이터 구조가 올바르지 않습니다. (nodes 또는 edges 배열 누락)");
-      }
-
-      const formattedNodes = result.nodes.map(node => {
-        const parsedData = node.data || {};
-        return {
-          id: node.id,
-          data: {
-            ...parsedData,
-            label: (
-              <div className="flex flex-col text-left pointer-events-none">
-                <span className="text-[10px] text-indigo-500 font-bold mb-1 truncate">
-                  {parsedData.sub_category || '분류 없음'}
-                </span>
-                <span className="text-sm font-black text-slate-800 leading-tight">
-                  {parsedData.title || '제목 없음'}
-                </span>
-                <span className="text-[9px] text-slate-400 mt-1 font-mono">
-                  {node.id}
-                </span>
-              </div>
-            )
-          },
-          position: { x: 0, y: 0 },
-          style: {
-            background: '#ffffff', border: '2px solid #e2e8f0', borderRadius: '12px',
-            padding: '12px 16px', minWidth: '280px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-            transition: 'opacity 0.3s ease',
-          },
-          hidden: false
-        };
-      });
-
-      const formattedEdges = result.edges.map(edge => ({
-        ...edge,
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1' },
-        style: { stroke: '#6366f1', strokeWidth: 2, transition: 'opacity 0.3s ease' },
-        animated: true,
-        hidden: false
-      }));
-
-      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(formattedNodes, formattedEdges, 'LR');
-      
-      setNodes(layoutedNodes);
-      setEdges(layoutedEdges);
+      // 초기 렌더링 시 시맨틱 줌 1단계(대분류) 적용
+      applySemanticZoom(layoutedNodes, layoutedEdges, 1);
 
     } catch (err) {
-      console.error("[Ontology Fetch Error]:", err);
-      setError(err.message || "커리큘럼 맵을 구성하는 중 오류가 발생했습니다.");
+      console.error(err);
+      setError("데이터를 불러오는 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
     }
-  }, [API_BASE_URL, getAuthHeaders, setNodes, setEdges]);
+  }, [API_BASE_URL, getLayoutedAndGroupedElements]);
 
-  useEffect(() => {
-    loadOntologyData();
-  }, [loadOntologyData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const handleNodeClick = useCallback((event, clickedNode) => {
-    const connectedEdges = edges.filter(
-      (edge) => edge.source === clickedNode.id || edge.target === clickedNode.id
-    );
+  // 🚀 [CTO 패치 2: 시맨틱 줌 레벨에 따른 렌더링 분기 로직]
+  const applySemanticZoom = useCallback((currentNodes, currentEdges, tier) => {
+    setNodes(currentNodes.map(node => {
+      let hidden = false;
+      let opacity = 1;
 
-    const visibleNodeIds = new Set([clickedNode.id]);
-    connectedEdges.forEach((edge) => {
-      visibleNodeIds.add(edge.source);
-      visibleNodeIds.add(edge.target);
-    });
+      if (node.type === 'concept') {
+        hidden = tier < 3; // 줌인 상태(3)에서만 개념 노드 표시
+        opacity = tier === 3 ? 1 : 0;
+      } else if (node.type === 'category') {
+        if (node.data.level === 'major') {
+          hidden = false; // 대분류는 항상 보이지만
+          opacity = tier === 1 ? 1 : (tier === 2 ? 0.3 : 0.05); // 줌인될수록 희미해져 배경화됨
+        } else if (node.data.level === 'middle') {
+          hidden = tier === 1; // 줌아웃 상태(1)에서는 중분류 숨김
+          opacity = tier === 2 ? 1 : 0.1;
+        }
+      }
+      return { ...node, hidden, style: { ...node.style, opacity, transition: 'opacity 0.4s ease' } };
+    }));
 
-    setNodes((currentNodes) => 
-      currentNodes.map((node) => ({ ...node, hidden: !visibleNodeIds.has(node.id) }))
-    );
-
-    setEdges((currentEdges) => 
-      currentEdges.map((edge) => ({
-        ...edge,
-        hidden: !(visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)),
-      }))
-    );
-
-    setIsFocused(true);
-  }, [edges, setNodes, setEdges]);
-
-  const resetFocus = useCallback(() => {
-    setNodes((currentNodes) => currentNodes.map((n) => ({ ...n, hidden: false })));
-    setEdges((currentEdges) => currentEdges.map((e) => ({ ...e, hidden: false })));
-    setIsFocused(false);
+    setEdges(currentEdges.map(edge => ({
+      ...edge,
+      hidden: tier < 3, // 선(엣지)은 상세 줌(3)에서만 표시하여 복잡도 제거
+      style: { ...edge.style, opacity: tier === 3 ? 1 : 0, transition: 'opacity 0.4s ease' }
+    })));
   }, [setNodes, setEdges]);
 
+  // 🚀 [CTO 패치 3: 뷰포트 변경 실시간 감지 및 티어 스위칭]
+  useOnViewportChange({
+    onChange: (viewport) => {
+      const z = viewport.zoom;
+      let newTier = 1; // 줌 아웃 (대분류)
+      if (z >= 0.8) newTier = 3; // 줌 인 (상세 개념)
+      else if (z >= 0.4) newTier = 2; // 중간 줌 (중분류)
+
+      // 티어가 변경되었을 때만 상태 업데이트 및 노드 속성 변경 ($O(1) 방어적 렌더링)
+      if (newTier !== currentZoomTier) {
+        setCurrentZoomTier(newTier);
+        setNodes((nds) => {
+          let tempNodes = [...nds];
+          setEdges((eds) => {
+            applySemanticZoom(tempNodes, eds, newTier);
+            return eds;
+          });
+          return tempNodes;
+        });
+      }
+    }
+  });
+
   return (
-    <div className="w-full h-[85vh] bg-slate-50 flex rounded-3xl overflow-hidden border border-slate-200 shadow-sm relative">
+    <div className="w-full h-[85vh] bg-[#f8fafc] flex rounded-3xl overflow-hidden shadow-inner relative">
+      {error && <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-50 text-rose-700 px-6 py-3 rounded-2xl shadow-lg font-bold flex items-center gap-2"><AlertCircle size={20}/>{error}</div>}
+      {isLoading && <div className="absolute inset-0 bg-slate-50/80 backdrop-blur-sm z-40 flex flex-col items-center justify-center"><Loader2 className="animate-spin text-indigo-600 mb-4" size={48}/><span className="font-black text-indigo-900">수학 지식 지도를 구축 중입니다...</span></div>}
+
+      <ReactFlow
+        nodes={nodes} edges={edges}
+        onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        fitView minZoom={0.05} maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="#cbd5e1" gap={24} size={2} />
+        <Controls className="bg-white rounded-xl shadow-md border border-slate-200" />
+        <MiniMap zoomable pannable nodeColor={(n) => n.type === 'category' ? '#e2e8f0' : '#818cf8'} maskColor="rgba(248, 250, 252, 0.7)" className="rounded-xl shadow-md border border-slate-200" />
+      </ReactFlow>
       
-      {error && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-50 text-rose-700 px-6 py-3 rounded-2xl shadow-lg border border-rose-200 font-bold flex items-center gap-2">
-          <AlertCircle size={20} /> {error}
-        </div>
-      )}
-
-      {isLoading && (
-        <div className="absolute inset-0 bg-slate-50/80 backdrop-blur-sm z-40 flex flex-col items-center justify-center">
-          <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
-          <span className="font-black text-indigo-900 text-lg">AI 수학 지식 맵을 렌더링 중입니다...</span>
-        </div>
-      )}
-
-      {isFocused && !isLoading && (
-        <button
-          onClick={resetFocus}
-          className="absolute top-6 right-6 z-50 flex items-center gap-2 px-5 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-lg font-bold transition-transform active:scale-95 animate-in fade-in"
-        >
-          <Maximize size={18} />
-          맵 전체 보기
-        </button>
-      )}
-
-      <div className="flex-1 w-full h-full">
-        <ReactFlow
-          nodes={nodes} 
-          edges={edges}
-          onNodesChange={onNodesChange} 
-          onEdgesChange={onEdgesChange}
-          onNodeClick={handleNodeClick}
-          fitView 
-          minZoom={0.1} 
-          maxZoom={1.5}
-        >
-          <Background color="#cbd5e1" gap={20} size={2} />
-          <Controls className="bg-white rounded-xl shadow-md border border-slate-200" />
-          <MiniMap nodeColor="#818cf8" maskColor="rgba(248, 250, 252, 0.8)" className="rounded-xl shadow-md border border-slate-200" />
-        </ReactFlow>
+      {/* 줌 레벨 인디케이터 (학부모 가시성 확보) */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur-md px-6 py-2 rounded-full shadow-lg border border-slate-200 font-bold text-slate-700 text-sm flex gap-4 transition-all">
+        <span className={currentZoomTier === 1 ? "text-indigo-600" : "opacity-40"}>초광역 (대분류)</span>
+        <span className="opacity-30">❯</span>
+        <span className={currentZoomTier === 2 ? "text-indigo-600" : "opacity-40"}>광역 (중분류)</span>
+        <span className="opacity-30">❯</span>
+        <span className={currentZoomTier === 3 ? "text-indigo-600" : "opacity-40"}>상세 (개념)</span>
       </div>
-
     </div>
+  );
+}
+
+// 최상위 Provider 래퍼
+export default function OntologyMap() {
+  return (
+    <ReactFlowProvider>
+      <OntologyMapContent />
+    </ReactFlowProvider>
   );
 }
