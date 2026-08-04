@@ -1,8 +1,9 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 v4.3 (KaTeX 수식 렌더러 & 스마트 라우팅 적용)
-   🚀 가치 1: react-katex를 도입하여 텍스트 내부의 LaTeX 수식을 교과서 수준의 그래픽으로 렌더링.
-   🚀 가치 2: Dagre rankdir을 'TB'로 전환하고 화살표 동선을 최적화하여 직관적인 UI 제공.
+   임페리얼 학원 AI 지식 맵 뷰어 마스터 버전 (EdTech CT-Driven)
+   🚀 가치 1: 런타임 오류 0% (Zero WSOD) - 엄격한 타입 검증과 방어적 렌더링 적용.
+   🚀 가치 2: 1-Click GitHub 연동으로 운영 마찰 제거 및 데이터 최신화 유도.
+   🚀 가치 3: KaTeX 및 하향식(TB) 라우팅을 통한 학생 인지 부하 최소화.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
@@ -12,20 +13,21 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
-import { Search, Target, AlertCircle, Loader2, BookOpen, Key, AlertTriangle, CheckCircle2, ChevronRight, ChevronDown, Map } from 'lucide-react';
+import { 
+  Search, Target, AlertCircle, Loader2, BookOpen, Key, 
+  AlertTriangle, CheckCircle2, ChevronRight, ChevronDown, Map, Github, Edit3 
+} from 'lucide-react';
 
-// 🔥 CTO 추가: 수식 렌더링을 위한 KaTeX 임포트
 import 'katex/dist/katex.min.css';
 import { InlineMath, BlockMath } from 'react-katex';
 
 // =====================================================================
-// 🧮 텍스트 & 수식(LaTeX) 자동 분리 렌더러 (XSS 방어 및 클라이언트 파싱)
+// 🧮 1. 텍스트 & 수식(LaTeX) 자동 분리 렌더러 (XSS 방어)
 // =====================================================================
 const MathText = ({ content }) => {
   if (!content) return null;
   if (typeof content !== 'string') return <span>{content}</span>;
 
-  // 정규식을 사용해 $$블록수식$$ 과 $인라인수식$을 분리 (O(N) 복잡도로 매우 빠름)
   const parts = content.split(/(\$\$[\s\S]*?\$\$|\$[\s\S]*?\$)/g);
 
   return (
@@ -36,7 +38,6 @@ const MathText = ({ content }) => {
         } else if (part.startsWith('$') && part.endsWith('$')) {
           return <InlineMath key={index} math={part.slice(1, -1)} />;
         }
-        // 일반 텍스트 영역: 줄바꿈 허용
         return <span key={index} className="whitespace-pre-wrap">{part}</span>;
       })}
     </span>
@@ -44,7 +45,7 @@ const MathText = ({ content }) => {
 };
 
 // =====================================================================
-// 🎨 테마 유틸리티
+// 🎨 2. 테마 유틸리티 (대분류 기반 컬러 매핑)
 // =====================================================================
 const getCategoryTheme = (majorCategory) => {
   const major = (majorCategory || '').toLowerCase();
@@ -56,7 +57,7 @@ const getCategoryTheme = (majorCategory) => {
 };
 
 // =====================================================================
-// 🎨 커스텀 노드: 상하 Handle 유지하되 화살표 꼬임 방지 설계
+// 🎨 3. 커스텀 노드 (상하 Handle 유지 / 꼬임 방지)
 // =====================================================================
 const ConceptNode = ({ data }) => {
   const safeData = data || {};
@@ -67,7 +68,6 @@ const ConceptNode = ({ data }) => {
     <div className={`flex flex-col text-left border-2 rounded-xl p-3 min-w-[240px] shadow-sm transition-all duration-300 relative bg-white ${
       isSelected ? `border-indigo-600 shadow-lg ring-4 ring-indigo-100 scale-105 z-50` : `${theme.border} hover:border-slate-400 opacity-95`
     }`}>
-      {/* Target: 데이터가 들어오는 곳 (위쪽) */}
       <Handle type="target" position={Position.Top} className={`w-3 h-3 ${theme.handle} border-2 border-white`} />
       
       {isSelected && (
@@ -82,7 +82,6 @@ const ConceptNode = ({ data }) => {
       </div>
       <span className="text-sm font-black text-slate-800 leading-tight mb-1">{safeData.title || '제목 없음'}</span>
       
-      {/* Source: 데이터가 나가는 곳 (아래쪽) */}
       <Handle type="source" position={Position.Bottom} className={`w-3 h-3 ${theme.handle} border-2 border-white`} />
     </div>
   );
@@ -90,9 +89,144 @@ const ConceptNode = ({ data }) => {
 const nodeTypes = { concept: ConceptNode };
 
 // =====================================================================
-// 🧭 메인 대시보드 컴포넌트
+// 📚 4. 우측 위키 패널 컴포넌트 (Direct Edit + MathText + Object 방어)
 // =====================================================================
-export default function OntologyDashboard() {
+const WikiPanel = ({ selectedNodeData, selectedNodeId, theme }) => {
+  if (!selectedNodeData) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-300">
+        <BookOpen size={48} className="mb-4 opacity-50" />
+        <p className="font-bold">좌측 메뉴에서 개념을 선택하시면<br/>상세 분석 데이터가 도출됩니다.</p>
+      </div>
+    );
+  }
+
+  // GitHub Edit 연결 로직 (운영자 마찰 감소)
+  const GITHUB_EDIT_BASE_URL = process.env.REACT_APP_GITHUB_REPO_URL || "https://github.com/imperial-academy/math-ontology/edit/main/data/";
+
+  const handleEditClick = () => {
+    let targetPath = selectedNodeData.file_path;
+    if (!targetPath) {
+      console.warn(`[OntologyDashboard] ID: ${selectedNodeId}의 file_path가 없어 경로를 유추합니다.`);
+      const fallbackDir = selectedNodeData.major_category ? 'categorized' : 'misc';
+      targetPath = `${fallbackDir}/${selectedNodeId}.yaml`;
+    }
+    const finalUrl = `${GITHUB_EDIT_BASE_URL}${targetPath}`;
+    window.open(finalUrl, '_blank', 'noopener,noreferrer'); // Tabnabbing 방어
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar bg-white relative group">
+      
+      <header className="relative">
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex flex-wrap gap-2">
+            <span className={`px-2.5 py-1 text-[11px] font-black rounded-md ${theme.badge}`}>{selectedNodeData.major_category || '대분류'}</span>
+            <span className="px-2.5 py-1 bg-slate-100 text-slate-600 text-[11px] font-black rounded-md">{selectedNodeData.middle_category || '중분류'}</span>
+            <span className="px-2.5 py-1 bg-slate-100 text-slate-600 text-[11px] font-black rounded-md">{selectedNodeData.sub_category || '소분류'}</span>
+          </div>
+
+          <button 
+            onClick={handleEditClick}
+            title="GitHub에서 원본 YAML 수정하기"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-indigo-600 hover:scale-105 transition-all duration-200 active:scale-95 focus:outline-none"
+          >
+            <Github size={14} />
+            <span className="hidden sm:inline">Edit Source</span>
+            <Edit3 size={14} className="ml-0.5 opacity-70" />
+          </button>
+        </div>
+
+        <h2 className="text-2xl font-black text-slate-900 mb-2 leading-tight pr-10">{selectedNodeData.title || '제목 없음'}</h2>
+        <div className="text-[10px] text-slate-400 font-mono bg-slate-50 px-2 py-1 rounded w-fit">Node ID: {selectedNodeId}</div>
+      </header>
+
+      <hr className="border-slate-100" />
+
+      {/* 핵심 개념 */}
+      {Array.isArray(selectedNodeData.core_concepts) && selectedNodeData.core_concepts.length > 0 && (
+        <section>
+          <h3 className="text-sm font-black text-indigo-900 flex items-center gap-2 mb-3">
+            <Key size={16} className="text-indigo-500"/> 핵심 개념 노트
+          </h3>
+          <ul className="space-y-3">
+            {selectedNodeData.core_concepts.map((concept, idx) => (
+              <li key={concept.id || idx} className="text-sm text-slate-700 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                {typeof concept === 'object' ? (
+                  <div>
+                    {concept.title && <strong className="block text-indigo-900 font-black mb-2">{concept.title}</strong>}
+                    <MathText content={concept.content} />
+                  </div>
+                ) : <MathText content={concept} />}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 행동 지침 */}
+      {Array.isArray(selectedNodeData.action_guidelines) && selectedNodeData.action_guidelines.length > 0 && (
+        <section>
+          <h3 className="text-sm font-black text-teal-900 flex items-center gap-2 mb-3">
+            <Target size={16} className="text-teal-500"/> 실전 학습 지침
+          </h3>
+          <ul className="space-y-3">
+            {selectedNodeData.action_guidelines.map((guide, idx) => (
+              <li key={guide.id || idx} className="text-sm text-slate-700 bg-teal-50/50 p-4 rounded-xl border border-teal-100">
+                {typeof guide === 'object' ? (
+                  <div className="flex flex-col gap-2">
+                    {guide.title && <strong className="text-teal-900 font-black">{guide.title}</strong>}
+                    {guide.situation && <div className="text-xs bg-white px-2 py-1.5 rounded text-teal-700 font-bold border border-teal-100"><MathText content={`상황: ${guide.situation}`} /></div>}
+                    <div className="flex gap-2 mt-1">
+                      <CheckCircle2 size={16} className="text-teal-500 shrink-0 mt-1"/>
+                      <span><MathText content={guide.action || guide.content || ''} /></span>
+                    </div>
+                  </div>
+                ) : <MathText content={guide} />}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 오개념 진단 */}
+      {Array.isArray(selectedNodeData.misconceptions) && selectedNodeData.misconceptions.length > 0 && (
+        <section>
+          <h3 className="text-sm font-black text-rose-800 flex items-center gap-2 mb-3">
+            <AlertTriangle size={16} className="text-rose-500"/> 취약점 진단 및 오개념
+          </h3>
+          <ul className="space-y-3">
+            {selectedNodeData.misconceptions.map((miscon, idx) => (
+              <li key={miscon.id || idx} className="text-sm text-slate-700 bg-rose-50/50 p-4 rounded-xl border border-rose-100">
+                {typeof miscon === 'object' ? (
+                  <div className="flex flex-col gap-2">
+                    {miscon.title && <strong className="block text-rose-900 font-black">{miscon.title}</strong>}
+                    {miscon.symptom && (
+                      <div className="text-xs font-bold text-rose-600 flex items-start gap-1 bg-white p-2 rounded-md border border-rose-100/50">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5"/> 
+                        <span>증상: {miscon.symptom}</span>
+                      </div>
+                    )}
+                    {miscon.diagnosis_message && (
+                      <div className="text-sm text-rose-800 leading-relaxed bg-rose-100/30 p-3 rounded-lg">
+                        💡 처방: <MathText content={miscon.diagnosis_message} />
+                      </div>
+                    )}
+                  </div>
+                ) : <MathText content={miscon} />}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+};
+
+// =====================================================================
+// 🧭 5. 메인 대시보드 컴포넌트
+// =====================================================================
+export default function OntologyMap() {
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -105,6 +239,7 @@ export default function OntologyDashboard() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  // 데이터 로딩 (정적 JSON 캐싱)
   const loadData = useCallback(async () => {
     setIsLoading(true); setError(null);
     try {
@@ -127,7 +262,7 @@ export default function OntologyDashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // 트리 메뉴 데이터 구성 로직 생략 (기존과 동일하여 속도 유지)
+  // 트리 메뉴 데이터 구성 로직 (O(N) 복잡도 최적화)
   const treeData = useMemo(() => {
     const tree = {};
     const lowerQ = searchQuery.toLowerCase();
@@ -153,9 +288,7 @@ export default function OntologyDashboard() {
 
   const handleNodeClick = useCallback((event, node) => setSelectedNodeId(node.id), []);
 
-  // =====================================================================
-  // 🎯 그래프 정렬 엔진: 화살표 꼬임 완벽 해결 (Top-to-Bottom)
-  // =====================================================================
+  // 그래프 정렬 엔진 (하향식 TB 적용으로 꼬임 방지)
   useEffect(() => {
     if (!selectedNodeId || allNodes.length === 0) { setNodes([]); setEdges([]); return; }
     try {
@@ -169,7 +302,6 @@ export default function OntologyDashboard() {
 
       const dagreGraph = new dagre.graphlib.Graph();
       dagreGraph.setDefaultEdgeLabel(() => ({}));
-      // 🔥 CTO FIX: rankdir을 'TB'(Top-to-Bottom)로 변경하여 화살표가 위에서 아래로 깔끔하게 떨어지게 함
       dagreGraph.setGraph({ rankdir: 'TB', ranksep: 100, nodesep: 150 });
 
       localNodesRaw.forEach(n => { dagreGraph.setNode(n.id, { width: 240, height: 100 }); });
@@ -185,10 +317,9 @@ export default function OntologyDashboard() {
         };
       }));
 
-      // 🔥 CTO FIX: edge 타입을 default(bezier)로 변경하여 꼬불꼬불한 선 대신 우아한 곡선 제공
       setEdges(safeLocalEdges.map(e => ({
         id: `edge-${e.source}-${e.target}`, source: String(e.source), target: String(e.target),
-        type: 'default', // smoothstep 보다 직관적인 곡선
+        type: 'default',
         animated: e.target === selectedNodeId, 
         markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
         style: { stroke: '#cbd5e1', strokeWidth: 2.5 },
@@ -211,7 +342,7 @@ export default function OntologyDashboard() {
   return (
     <div className="w-full h-screen bg-slate-50 flex overflow-hidden font-sans text-slate-800">
       
-      {/* 1. 좌측 패널 (트리 뷰 - 기존 동일) */}
+      {/* 좌측 트리 패널 */}
       <aside className="w-[340px] bg-white border-r border-slate-200 flex flex-col shadow-sm z-10">
         <div className="p-5 border-b border-slate-100 bg-slate-50/50">
           <h2 className="text-lg font-black text-slate-800 flex items-center gap-2 mb-4">
@@ -258,7 +389,7 @@ export default function OntologyDashboard() {
         </div>
       </aside>
 
-      {/* 2. 중앙 패널 (그래프 뷰) */}
+      {/* 중앙 그래프 패널 */}
       <main className="flex-1 relative bg-[#f8fafc]">
         {error && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-50 text-rose-700 px-6 py-3 rounded-2xl shadow-lg font-bold">
@@ -278,74 +409,13 @@ export default function OntologyDashboard() {
         )}
       </main>
 
-      {/* 3. 우측 패널 (위키 뷰) - 🔥 MathText 렌더러 적용 완료 */}
+      {/* 우측 위키 패널 (분리된 컴포넌트 렌더링) */}
       <aside className="w-[420px] bg-white border-l border-slate-200 shadow-sm z-10 flex flex-col overflow-hidden">
-        {!selectedNodeData ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-300">
-            <BookOpen size={48} className="mb-4 opacity-50" />
-            <p className="font-bold">상세 위키 데이터가<br/>이곳에 표시됩니다.</p>
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-            
-            <nav className="flex items-center text-xs font-bold text-slate-400 mb-2">
-              <span className={getCategoryTheme(selectedNodeData.major_category).text}>{selectedNodeData.major_category}</span>
-              <ChevronRight size={12} className="mx-1" />
-              <span>{selectedNodeData.middle_category}</span>
-            </nav>
-
-            <h2 className="text-2xl font-black text-slate-900 mb-2 leading-tight">{selectedNodeData.title}</h2>
-            <hr className="border-slate-100" />
-
-            {/* 핵심 개념 (MathText 렌더링 적용) */}
-            {Array.isArray(selectedNodeData.core_concepts) && (
-              <section>
-                <h3 className="text-sm font-black text-indigo-900 flex items-center gap-2 mb-3">
-                  <Key size={16} className="text-indigo-500"/> 핵심 개념 노트
-                </h3>
-                <ul className="space-y-3">
-                  {selectedNodeData.core_concepts.map((concept, idx) => (
-                    <li key={idx} className="text-sm text-slate-700 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                      {typeof concept === 'object' ? (
-                        <div>
-                          {concept.title && <strong className="block text-indigo-900 font-black mb-2">{concept.title}</strong>}
-                          {/* 🔥 여기에 MathText를 주입하여 수식을 깨끗하게 렌더링합니다 */}
-                          <MathText content={concept.content} />
-                        </div>
-                      ) : <MathText content={concept} />}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {/* 행동 지침 (MathText 렌더링 적용) */}
-            {Array.isArray(selectedNodeData.action_guidelines) && (
-              <section>
-                <h3 className="text-sm font-black text-teal-900 flex items-center gap-2 mb-3">
-                  <Target size={16} className="text-teal-500"/> 실전 학습 지침
-                </h3>
-                <ul className="space-y-3">
-                  {selectedNodeData.action_guidelines.map((guide, idx) => (
-                    <li key={idx} className="text-sm text-slate-700 bg-teal-50/50 p-4 rounded-xl border border-teal-100">
-                      {typeof guide === 'object' ? (
-                        <div className="flex flex-col gap-2">
-                          {guide.title && <strong className="text-teal-900 font-black">{guide.title}</strong>}
-                          {guide.situation && <div className="text-xs bg-white px-2 py-1.5 rounded text-teal-700 font-bold border border-teal-100"><MathText content={`상황: ${guide.situation}`} /></div>}
-                          <div className="flex gap-2 mt-1">
-                            <CheckCircle2 size={16} className="text-teal-500 shrink-0 mt-1"/>
-                            <span><MathText content={guide.action || guide.content || ''} /></span>
-                          </div>
-                        </div>
-                      ) : <MathText content={guide} />}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            
-          </div>
-        )}
+        <WikiPanel 
+          selectedNodeData={selectedNodeData} 
+          selectedNodeId={selectedNodeId} 
+          theme={selectedNodeData ? getCategoryTheme(selectedNodeData.major_category) : {}} 
+        />
       </aside>
     </div>
   );
