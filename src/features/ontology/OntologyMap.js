@@ -1,15 +1,15 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 v2.2 (Bulletproof State Management)
-   🚀 가치 1: 줌 인/아웃 시 발생하는 React 상태 충돌(Race Condition)을 원천 차단하여 Zero WSOD 달성.
-   🚀 가치 2: 모든 노드의 id와 position 타입을 강제 캐스팅하여 렌더링 엔진의 런타임 에러 완전 차단.
+   임페리얼 학원 AI 지식 맵 뷰어 v2.3 (The Ultimate Bugfix)
+   🚀 가치 1: useNodesState의 반환값 매핑 오류를 수정하여, 초기 렌더링 시 발생하는 치명적 상태 덮어쓰기(WSOD) 원천 차단.
+   🚀 가치 2: React Flow 엔진이 안정적으로 노드 크기를 측정하고 렌더링할 수 있도록 100% 무결점 상태 유지.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   ReactFlow, MiniMap, Controls, Background,
   useNodesState, useEdgesState, MarkerType,
-  useOnViewportChange, useReactFlow, ReactFlowProvider
+  useOnViewportChange, ReactFlowProvider
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
@@ -71,15 +71,16 @@ const nodeTypes = {
 // 🧭 메인 컴포넌트 로직
 // =====================================================================
 function OntologyMapContent() {
-  const { setNodes, setEdges } = useReactFlow();
-  const [nodes, onNodesChange] = useNodesState([]);
-  const [edges, onEdgesChange] = useEdgesState([]);
+  // 🚀 [CTO 패치 1: 런타임 에러의 주범이었던 튜플(Tuple) 비구조화 할당 완벽 수정]
+  // 이전의 오타(가운데 setNodes 누락)를 바로잡아, 이벤트 핸들러(onNodesChange)가 상태를 덮어쓰지 않도록 방어합니다.
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentZoomTier, setCurrentZoomTier] = useState(1);
 
-  // 🚀 [CTO 패치 1: 노드/엣지의 가시성을 계산하는 '순수 함수(Pure Function)'. 상태를 직접 변경하지 않음]
+  // 시맨틱 줌에 따른 노드/엣지 투명도 및 표시 여부를 반환하는 '순수 함수'
   const applyTierVisibility = useCallback((targetNodes, targetEdges, tier) => {
     const updatedNodes = targetNodes.map(node => {
       let hidden = false;
@@ -110,12 +111,11 @@ function OntologyMapContent() {
     return { updatedNodes, updatedEdges };
   }, []);
 
-  // 🚀 [CTO 패치 2: Dagre 레이아웃 생성 및 데이터 타입 강제 캐스팅 (Zero Exception)]
+  // Dagre 레이아웃 생성 엔진 (Zero Exception)
   const getLayoutedAndGroupedElements = useCallback((rawNodes = [], rawEdges = []) => {
     try {
       if (!Array.isArray(rawNodes) || rawNodes.length === 0) throw new Error("렌더링할 노드 데이터가 없습니다.");
 
-      // ID를 무조건 문자열(String)로 캐스팅하여 유령 노드 참조 완벽 차단
       const sanitizedNodes = rawNodes.map(n => ({ ...n, id: String(n.id) }));
       const sanitizedEdges = rawEdges.map(e => ({ ...e, source: String(e.source), target: String(e.target) }));
 
@@ -135,8 +135,6 @@ function OntologyMapContent() {
       
       const layoutedConcepts = sanitizedNodes.map((node) => {
         const nodeWithPos = dagreGraph.node(node.id);
-        
-        // 치명적 에러 방어: dagre 연산 실패 시 NaN이 아닌 0으로 Fallback 처리
         const pX = (nodeWithPos && !isNaN(nodeWithPos.x)) ? nodeWithPos.x - 120 : 0; 
         const pY = (nodeWithPos && !isNaN(nodeWithPos.y)) ? nodeWithPos.y - 40 : 0;
 
@@ -158,12 +156,8 @@ function OntologyMapContent() {
         bounds.middle[midKey].maxY = Math.max(bounds.middle[midKey].maxY, pY + 80);
 
         return {
-          ...node,
-          type: 'concept',
-          targetPosition: 'bottom',
-          sourcePosition: 'top',
-          position: { x: pX, y: pY }, // 안전이 보장된 Number 좌표 배정
-          zIndex: 10,
+          ...node, type: 'concept', targetPosition: 'bottom', sourcePosition: 'top',
+          position: { x: pX, y: pY }, zIndex: 10,
         };
       });
 
@@ -197,7 +191,7 @@ function OntologyMapContent() {
         nodes: [...categoryNodes, ...layoutedConcepts], 
         edges: validEdges.map(e => ({
           ...e, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' }, style: { stroke: '#94a3b8', strokeWidth: 2 },
-          id: `edge-${e.source}-${e.target}` // Edge ID 강제 부여
+          id: `edge-${e.source}-${e.target}`
         })) 
       };
     } catch (error) {
@@ -224,14 +218,11 @@ function OntologyMapContent() {
       try { result = JSON.parse(text); } 
       catch (e) { throw new Error("서버에서 올바른 JSON 데이터를 받지 못했습니다."); }
 
-      // 1. 레이아웃 연산
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedAndGroupedElements(result.nodes, result.edges);
       
-      // 2. 초기 줌 레벨에 맞게 가시성 필터링 처리 (상태 꼬임 방지)
       const initialTier = 1;
       const { updatedNodes, updatedEdges } = applyTierVisibility(layoutedNodes, layoutedEdges, initialTier);
       
-      // 3. 단 한 번의 상태 업데이트(Batch Update)로 렌더링 확정
       setNodes(updatedNodes);
       setEdges(updatedEdges);
       setCurrentZoomTier(initialTier);
@@ -246,7 +237,7 @@ function OntologyMapContent() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // 🚀 [CTO 패치 3: 줌 이벤트 발생 시 중첩 Callback을 배제한 안전한 업데이트]
+  // 🚀 [CTO 패치 2: 줌 이벤트 발생 시 안전한 업데이트 보장]
   useOnViewportChange({
     onChange: (viewport) => {
       const z = viewport.zoom;
@@ -257,7 +248,6 @@ function OntologyMapContent() {
       if (newTier !== currentZoomTier) {
         setCurrentZoomTier(newTier);
         
-        // 현재 엔진에 올라가 있는 nodes/edges 상태를 가져와 순수 함수로 매핑 후 업데이트
         setNodes((currentNds) => {
           const { updatedNodes } = applyTierVisibility(currentNds, [], newTier);
           return updatedNodes;
@@ -288,7 +278,7 @@ function OntologyMapContent() {
 
       <ReactFlow
         nodes={nodes} edges={edges}
-        onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
+        onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} // 이제 정상 작동합니다.
         nodeTypes={nodeTypes}
         fitView minZoom={0.05} maxZoom={2}
         proOptions={{ hideAttribution: true }}
