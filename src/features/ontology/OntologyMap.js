@@ -1,8 +1,8 @@
 /* =========================================================================
    [서비스 가치(Service Value)] 
-   임페리얼 학원 AI 지식 맵 뷰어 v4.1 (Zero Crash & Hook Rules Fix)
-   🚀 가치 1: React Error #310(훅 규칙 위반)을 유발했던 인라인 렌더링 로직을 완벽히 제거하여 0% 런타임 오류 달성.
-   🚀 가치 2: 중앙 패널 클릭 시 안전하게 상태(State)만 변경하여 60fps의 부드러운 줌인(Drill-down) 모션 보장.
+   임페리얼 학원 AI 지식 맵 뷰어 v4.2 (Defensive Rendering & Zero Error #31)
+   🚀 가치 1: JSON 데이터가 String이든 Object든 완벽하게 판별하여 React 렌더링 크래시를 100% 방어.
+   🚀 가치 2: 구조화된 데이터를 활용해 학부모/학생이 읽기 쉬운 전문적인 UI로 자동 포매팅.
    ========================================================================= */
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
@@ -12,10 +12,10 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
-import { Search, Target, AlertCircle, Loader2, BookOpen, Key, Link as LinkIcon, AlertTriangle, ChevronRight, ChevronDown, Map } from 'lucide-react';
+import { Search, Target, AlertCircle, Loader2, BookOpen, Key, Link as LinkIcon, AlertTriangle, ChevronRight, ChevronDown, Map, CheckCircle2 } from 'lucide-react';
 
 // =====================================================================
-// 🎨 테마 유틸리티 (Zero Trust: 데이터가 없어도 기본값 보장)
+// 🎨 테마 유틸리티
 // =====================================================================
 const getCategoryTheme = (majorCategory) => {
   const major = (majorCategory || '').toLowerCase();
@@ -36,39 +36,24 @@ const ConceptNode = ({ data }) => {
 
   return (
     <div className={`flex flex-col text-left border-2 rounded-xl p-3 min-w-[240px] shadow-sm transition-all duration-300 relative bg-white ${
-      isSelected 
-        ? `border-indigo-600 shadow-md ring-4 ring-indigo-100 scale-105 z-50` 
-        : `${theme.border} hover:border-slate-400 opacity-95`
+      isSelected ? `border-indigo-600 shadow-md ring-4 ring-indigo-100 scale-105 z-50` : `${theme.border} hover:border-slate-400 opacity-95`
     }`}>
       <Handle type="target" position={Position.Top} className={`w-2 h-2 ${theme.handle} border-none`} />
-      
       {isSelected && (
         <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
           <Target size={10} /> 중심 개념
         </div>
       )}
-
       <div className="mb-2 flex flex-wrap gap-1">
-        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${theme.badge}`}>
-          {safeData.major_category || '분류 없음'}
-        </span>
-        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
-          {safeData.middle_category || '일반'}
-        </span>
+        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${theme.badge}`}>{safeData.major_category || '분류 없음'}</span>
+        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{safeData.middle_category || '일반'}</span>
       </div>
-
-      <span className="text-sm font-black text-slate-800 leading-tight mb-1">
-        {safeData.title || '제목 없음'}
-      </span>
-      <span className="text-[10px] text-slate-400 font-mono mt-1">
-        ID: {safeData.id || 'UNKNOWN'}
-      </span>
-
+      <span className="text-sm font-black text-slate-800 leading-tight mb-1">{safeData.title || '제목 없음'}</span>
+      <span className="text-[10px] text-slate-400 font-mono mt-1">ID: {safeData.id || 'UNKNOWN'}</span>
       <Handle type="source" position={Position.Bottom} className={`w-2 h-2 ${theme.handle} border-none`} />
     </div>
   );
 };
-
 const nodeTypes = { concept: ConceptNode };
 
 // =====================================================================
@@ -87,30 +72,21 @@ export default function OntologyDashboard() {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
-  // =====================================================================
-  // 💾 1. 데이터 로드 로직
-  // =====================================================================
   const loadData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+    setIsLoading(true); setError(null);
     try {
       const API_BASE_URL = process.env.REACT_APP_API_URL || process.env.NEXT_PUBLIC_API_URL;
       if (!API_BASE_URL) throw new Error("API 주소가 설정되지 않았습니다.");
-      
       const baseUrl = API_BASE_URL.replace(/\/$/, ''); 
       const endpoint = baseUrl.endsWith('/build.json') ? baseUrl : `${baseUrl}/build.json`;
 
       const res = await fetch(endpoint);
       if (!res.ok) throw new Error(`통신 실패 (${res.status})`);
-      
       const text = await res.text();
       const result = JSON.parse(text);
 
-      const sanitizedNodes = (result.nodes || []).map(n => ({ ...n, id: String(n.id) }));
-      const sanitizedEdges = (result.edges || []).map(e => ({ ...e, source: String(e.source), target: String(e.target) }));
-
-      setAllNodes(sanitizedNodes);
-      setAllEdges(sanitizedEdges);
+      setAllNodes((result.nodes || []).map(n => ({ ...n, id: String(n.id) })));
+      setAllEdges((result.edges || []).map(e => ({ ...e, source: String(e.source), target: String(e.target) })));
     } catch (err) {
       console.error("[Data Load Error]:", err);
       setError("데이터를 불러오는 중 오류가 발생했습니다.");
@@ -121,23 +97,16 @@ export default function OntologyDashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // =====================================================================
-  // 🌲 2. 좌측 패널 (트리 뷰) 데이터 구축
-  // =====================================================================
   const treeData = useMemo(() => {
     const tree = {};
     const lowerQ = searchQuery.toLowerCase();
-
     allNodes.forEach(node => {
       const d = node.data || {};
       const major = d.major_category || '미분류';
       const middle = d.middle_category || '일반';
       const title = d.title || '';
 
-      if (searchQuery && !(title.toLowerCase().includes(lowerQ) || middle.toLowerCase().includes(lowerQ))) {
-        return; 
-      }
-
+      if (searchQuery && !(title.toLowerCase().includes(lowerQ) || middle.toLowerCase().includes(lowerQ))) return; 
       if (!tree[major]) tree[major] = {};
       if (!tree[major][middle]) tree[major][middle] = [];
       tree[major][middle].push(node);
@@ -148,33 +117,17 @@ export default function OntologyDashboard() {
   const toggleMajor = useCallback((major) => {
     setExpandedMajors(prev => {
       const next = new Set(prev);
-      if (next.has(major)) next.delete(major);
-      else next.add(major);
+      if (next.has(major)) next.delete(major); else next.add(major);
       return next;
     });
   }, []);
 
-  // =====================================================================
-  // ⚡ 3. [에러 방어 마스터 피스] 노드 클릭 핸들러 최상단 분리
-  // React Hook 규칙 위반(Error 310)을 해결하기 위해 JSX 외부로 분리했습니다.
-  // =====================================================================
-  const handleNodeClick = useCallback((event, node) => {
-    setSelectedNodeId(node.id);
-  }, []);
+  const handleNodeClick = useCallback((event, node) => setSelectedNodeId(node.id), []);
 
-  // =====================================================================
-  // 🎯 4. 로컬 그래프 (1-Depth) 렌더링 엔진
-  // =====================================================================
   useEffect(() => {
-    if (!selectedNodeId || allNodes.length === 0) {
-      setNodes([]);
-      setEdges([]);
-      return;
-    }
-
+    if (!selectedNodeId || allNodes.length === 0) { setNodes([]); setEdges([]); return; }
     try {
       const rawLocalEdges = allEdges.filter(e => e.source === selectedNodeId || e.target === selectedNodeId);
-      
       const localNodeIds = new Set([selectedNodeId]);
       rawLocalEdges.forEach(e => { localNodeIds.add(e.source); localNodeIds.add(e.target); });
 
@@ -188,51 +141,31 @@ export default function OntologyDashboard() {
 
       localNodesRaw.forEach(n => { dagreGraph.setNode(n.id, { width: 240, height: 120 }); });
       safeLocalEdges.forEach(e => { dagreGraph.setEdge(e.source, e.target); });
-      
       dagre.layout(dagreGraph);
 
-      const layoutedNodes = localNodesRaw.map(node => {
-        const nodeWithPos = dagreGraph.node(node.id);
-        const pX = (nodeWithPos && !isNaN(nodeWithPos.x)) ? nodeWithPos.x - 120 : 0;
-        const pY = (nodeWithPos && !isNaN(nodeWithPos.y)) ? nodeWithPos.y - 60 : 0;
-
+      setNodes(localNodesRaw.map(node => {
+        const pos = dagreGraph.node(node.id);
         return {
-          id: String(node.id),
-          type: 'concept',
-          position: { x: pX, y: pY },
+          id: String(node.id), type: 'concept',
+          position: { x: pos?.x ? pos.x - 120 : 0, y: pos?.y ? pos.y - 60 : 0 },
           data: { ...node.data, id: node.id, isSelected: node.id === selectedNodeId }
         };
-      });
-
-      const layoutedEdges = safeLocalEdges.map(e => ({
-        id: `edge-${e.source}-${e.target}`,
-        source: String(e.source),
-        target: String(e.target),
-        type: 'smoothstep',
-        animated: e.target === selectedNodeId, 
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
-        style: { stroke: '#cbd5e1', strokeWidth: 2 },
       }));
 
-      setNodes(layoutedNodes);
-      setEdges(layoutedEdges);
-    } catch (err) {
-      console.error("[Graph Error]:", err);
-    }
+      setEdges(safeLocalEdges.map(e => ({
+        id: `edge-${e.source}-${e.target}`, source: String(e.source), target: String(e.target),
+        type: 'smoothstep', animated: e.target === selectedNodeId, 
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
+        style: { stroke: '#cbd5e1', strokeWidth: 2 },
+      })));
+    } catch (err) { console.error("[Graph Error]:", err); }
   }, [selectedNodeId, allNodes, allEdges, setNodes, setEdges]);
 
-  // =====================================================================
-  // 📚 5. 우측 위키 데이터 추출
-  // =====================================================================
   const selectedNodeData = useMemo(() => {
     if (!selectedNodeId) return null;
-    const node = allNodes.find(n => n.id === selectedNodeId);
-    return node ? node.data : null;
+    return allNodes.find(n => n.id === selectedNodeId)?.data || null;
   }, [selectedNodeId, allNodes]);
 
-  // =====================================================================
-  // 🎨 6. 렌더링 UI
-  // =====================================================================
   if (isLoading) return (
     <div className="w-full h-screen bg-slate-50 flex flex-col items-center justify-center">
       <Loader2 className="animate-spin text-indigo-600 mb-4" size={48}/>
@@ -252,10 +185,8 @@ export default function OntologyDashboard() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input 
-              type="text" 
-              placeholder="개념 검색 (예: 이차방정식)" 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              type="text" placeholder="개념 검색 (예: 이차방정식)" 
+              value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all outline-none shadow-inner"
             />
           </div>
@@ -267,17 +198,12 @@ export default function OntologyDashboard() {
           ) : (
             Object.entries(treeData).map(([major, middles]) => (
               <div key={major} className="mb-2">
-                <button 
-                  onClick={() => toggleMajor(major)}
-                  className="w-full flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg transition-colors group"
-                >
+                <button onClick={() => toggleMajor(major)} className="w-full flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg transition-colors group">
                   <span className="font-black text-sm text-slate-700 flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${getCategoryTheme(major).handle}`} />
-                    {major}
+                    <div className={`w-2 h-2 rounded-full ${getCategoryTheme(major).handle}`} />{major}
                   </span>
                   {expandedMajors.has(major) || searchQuery ? <ChevronDown size={16} className="text-slate-400"/> : <ChevronRight size={16} className="text-slate-400"/>}
                 </button>
-                
                 {(expandedMajors.has(major) || searchQuery) && (
                   <div className="ml-4 pl-3 border-l-2 border-slate-100 mt-1 space-y-3">
                     {Object.entries(middles).map(([middle, nodesList]) => (
@@ -285,15 +211,10 @@ export default function OntologyDashboard() {
                         <div className="text-xs font-bold text-slate-400 mb-1">{middle}</div>
                         <div className="space-y-1">
                           {nodesList.map(node => (
-                            <button
-                              key={node.id}
-                              onClick={() => setSelectedNodeId(node.id)}
+                            <button key={node.id} onClick={() => setSelectedNodeId(node.id)}
                               className={`w-full text-left px-3 py-2 rounded-md text-sm transition-all ${
-                                selectedNodeId === node.id 
-                                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-100' 
-                                  : 'text-slate-600 hover:bg-slate-50 border border-transparent'
-                              }`}
-                            >
+                                selectedNodeId === node.id ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-100' : 'text-slate-600 hover:bg-slate-50 border border-transparent'
+                              }`}>
                               {node.data?.title}
                             </button>
                           ))}
@@ -315,7 +236,6 @@ export default function OntologyDashboard() {
             <AlertCircle size={20}/> {error}
           </div>
         )}
-
         {!selectedNodeId ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
             <Map size={64} className="mb-4 text-slate-200" />
@@ -323,30 +243,22 @@ export default function OntologyDashboard() {
             <p className="text-sm">선택한 개념을 중심으로 선수/후수 학습 지도가 펼쳐집니다.</p>
           </div>
         ) : (
-          <ReactFlow
-            nodes={nodes} edges={edges}
-            onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
-            onNodeClick={handleNodeClick} // 🔥 훅 규칙을 완벽하게 준수한 안전한 핸들러
-            nodeTypes={nodeTypes}
-            fitView minZoom={0.5} maxZoom={2}
-            proOptions={{ hideAttribution: true }}
-            nodesConnectable={false}
-          >
+          <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={handleNodeClick} nodeTypes={nodeTypes} fitView minZoom={0.5} maxZoom={2} proOptions={{ hideAttribution: true }} nodesConnectable={false}>
             <Background color="#cbd5e1" gap={24} size={2} />
             <Controls className="bg-white rounded-xl shadow-md border border-slate-200" />
           </ReactFlow>
         )}
       </main>
 
-      {/* 3. 우측 패널 (상세 위키 뷰) */}
-      <aside className="w-[400px] bg-white border-l border-slate-200 shadow-sm z-10 flex flex-col overflow-hidden">
+      {/* 3. 우측 패널 (상세 위키 뷰) - 🔥 객체 데이터 완벽 방어 렌더링 적용 */}
+      <aside className="w-[420px] bg-white border-l border-slate-200 shadow-sm z-10 flex flex-col overflow-hidden">
         {!selectedNodeData ? (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-300">
             <BookOpen size={48} className="mb-4 opacity-50" />
             <p className="font-bold">상세 위키 데이터가<br/>이곳에 표시됩니다.</p>
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
             
             <nav className="flex items-center text-xs font-bold text-slate-400 mb-2">
               <span className={getCategoryTheme(selectedNodeData.major_category).text}>{selectedNodeData.major_category || '대분류'}</span>
@@ -357,59 +269,79 @@ export default function OntologyDashboard() {
             </nav>
 
             <div>
-              <h2 className="text-2xl font-black text-slate-900 mb-2 leading-tight">
-                {selectedNodeData.title || '제목 없음'}
-              </h2>
+              <h2 className="text-2xl font-black text-slate-900 mb-2 leading-tight">{selectedNodeData.title || '제목 없음'}</h2>
               <div className="text-[10px] text-slate-400 font-mono bg-slate-50 px-2 py-1 rounded w-fit mt-1">ID: {selectedNodeId}</div>
             </div>
 
             <hr className="border-slate-100" />
 
+            {/* 🔥 방어적 렌더링: Core Concepts {id, title, content} */}
             {Array.isArray(selectedNodeData.core_concepts) && selectedNodeData.core_concepts.length > 0 && (
               <section>
-                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-3">
+                <h3 className="text-sm font-black text-indigo-900 flex items-center gap-2 mb-3">
                   <Key size={16} className="text-indigo-500"/> 핵심 개념 노트
                 </h3>
-                <ul className="space-y-2">
+                <ul className="space-y-3">
                   {selectedNodeData.core_concepts.map((concept, idx) => (
-                    <li key={idx} className="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100 leading-relaxed">
-                      {concept}
+                    <li key={idx} className="text-sm text-slate-600 bg-slate-50 p-3.5 rounded-xl border border-slate-100 leading-relaxed">
+                      {typeof concept === 'string' ? ( concept ) : (
+                        <div>
+                          {concept.title && <strong className="block text-indigo-900 font-black mb-1">{concept.title}</strong>}
+                          <span className="text-slate-600 block">{concept.content || ''}</span>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
               </section>
             )}
 
+            {/* 🔥 방어적 렌더링: Action Guidelines {id, title, trigger_signals, situation, action} */}
             {Array.isArray(selectedNodeData.action_guidelines) && selectedNodeData.action_guidelines.length > 0 && (
               <section>
-                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-3">
+                <h3 className="text-sm font-black text-teal-900 flex items-center gap-2 mb-3">
                   <Target size={16} className="text-teal-500"/> 실전 학습 지침
                 </h3>
-                <ul className="space-y-2">
+                <ul className="space-y-3">
                   {selectedNodeData.action_guidelines.map((guide, idx) => (
-                    <li key={idx} className="text-sm text-slate-600 flex items-start gap-2 leading-relaxed">
-                      <span className="text-teal-500 mt-0.5">•</span>
-                      <span>{guide}</span>
+                    <li key={idx} className="text-sm text-slate-600 bg-teal-50/50 p-3.5 rounded-xl border border-teal-100 leading-relaxed">
+                      {typeof guide === 'string' ? (
+                        <div className="flex gap-2"><CheckCircle2 size={16} className="text-teal-500 shrink-0 mt-0.5"/><span>{guide}</span></div>
+                      ) : (
+                        <div className="flex flex-col gap-1.5">
+                          {guide.title && <strong className="text-teal-900 font-black">{guide.title}</strong>}
+                          {guide.situation && <div className="text-xs bg-white px-2 py-1 rounded text-teal-700 border border-teal-100 w-fit">상황: {guide.situation}</div>}
+                          <div className="flex gap-2 mt-1"><CheckCircle2 size={16} className="text-teal-500 shrink-0 mt-0.5"/><span>{guide.action || guide.content || ''}</span></div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
               </section>
             )}
 
+            {/* 🔥 방어적 렌더링: Misconceptions {id, title, symptom, diagnosis_message} */}
             {Array.isArray(selectedNodeData.misconceptions) && selectedNodeData.misconceptions.length > 0 && (
               <section>
                 <h3 className="text-sm font-black text-rose-800 flex items-center gap-2 mb-3">
                   <AlertTriangle size={16} className="text-rose-500"/> 주의! 잦은 오개념
                 </h3>
-                <ul className="space-y-2">
+                <ul className="space-y-3">
                   {selectedNodeData.misconceptions.map((misconception, idx) => (
-                    <li key={idx} className="text-sm text-rose-700 bg-rose-50 p-3 rounded-lg border border-rose-100 leading-relaxed">
-                      {misconception}
+                    <li key={idx} className="text-sm text-rose-700 bg-rose-50 p-3.5 rounded-xl border border-rose-100 leading-relaxed">
+                      {typeof misconception === 'string' ? ( misconception ) : (
+                        <div className="flex flex-col gap-1">
+                          {misconception.title && <strong className="text-rose-900 font-black mb-1">{misconception.title}</strong>}
+                          {misconception.symptom && <div className="text-xs font-bold text-rose-600 flex items-center gap-1"><AlertCircle size={12}/> 증상: {misconception.symptom}</div>}
+                          {misconception.diagnosis_message && <div className="mt-1 p-2 bg-white rounded-lg text-rose-800 border border-rose-100">{misconception.diagnosis_message}</div>}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
               </section>
             )}
+            
           </div>
         )}
       </aside>
