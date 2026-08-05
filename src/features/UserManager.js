@@ -52,8 +52,8 @@ const UserManager = ({ currentUser }) => {
     const [modalTab, setModalTab] = useState('basic');
     const [isEditMode, setIsEditMode] = useState(false);
     
-    const [formData, setFormData] = useState({ 
-        id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '',
+    const [formData, setFormData] = useState({
+        id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '', monthlySalary: '',
         schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '',
         attendancePin: '', status: 'attending', linkedChildrenIds: []
     });
@@ -176,8 +176,8 @@ const UserManager = ({ currentUser }) => {
     };
 
     const handleOpenCreate = () => {
-        setFormData({ 
-            id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '', 
+        setFormData({
+            id: '', name: '', userId: '', password: '', phone: '', subject: '', hourlyRate: '', monthlySalary: '',
             schoolName: '', grade: '1학년', authUid: '', bankName: '', accountNumber: '', attendancePin: '', status: 'attending', linkedChildrenIds: []
         });
         setSchoolType('high');
@@ -189,7 +189,8 @@ const UserManager = ({ currentUser }) => {
     const handleOpenEdit = (user) => {
         setFormData({ 
             ...user, id: user.id, password: '', 
-            hourlyRate: user.hourlyRate || user.hourlyWage || '', 
+            hourlyRate: user.hourlyRate || user.hourlyWage || '',
+            monthlySalary: user.monthlySalary || user.baseSalary || user.fixedSalary || '',
             schoolName: user.schoolName || '', grade: user.grade || '1학년', authUid: user.authUid || '', bankName: user.bankName || '',
             accountNumber: user.accountNumber || '', attendancePin: user.attendancePin || '', status: user.status || 'attending', 
             linkedChildrenIds: user.linkedChildrenIds || []
@@ -260,6 +261,7 @@ const UserManager = ({ currentUser }) => {
             if (['ta', 'lecturer', 'admin', 'admin_assistant'].includes(currentRole)) { 
                 if (currentRole !== 'admin' && currentRole !== 'admin_assistant') payload.subject = formData.subject || '';
                 if (currentRole === 'ta' || currentRole === 'admin_assistant') payload.hourlyRate = formData.hourlyRate ? Number(formData.hourlyRate) : 0;
+                if (currentRole === 'lecturer' || currentRole === 'admin') payload.monthlySalary = formData.monthlySalary ? Number(formData.monthlySalary) : 0;
                 payload.bankName = formData.bankName || ''; payload.accountNumber = formData.accountNumber || '';
             }
             if (currentRole === 'parent') { payload.linkedChildrenIds = formData.linkedChildrenIds || []; }
@@ -662,6 +664,13 @@ const UserManager = ({ currentUser }) => {
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-600 mb-1">시급 (원)</label>
                                                 <input type="number" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white" placeholder="13000" value={formData.hourlyRate || ''} onChange={e => setFormData({...formData, hourlyRate: e.target.value})} />
+                                            </div>
+                                        )}
+                                        {/* 강사·관리자는 월급제입니다. 이 값이 없으면 급여 정산에서 기본급이 0원으로 계산됩니다. */}
+                                        {['lecturer', 'admin'].includes(activeTab === 'pending' ? formData.role : activeTab) && (
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-600 mb-1">월 기본급 (원)</label>
+                                                <input type="number" className="w-full border p-3 rounded-xl focus:ring-2 focus:ring-blue-300 outline-none bg-white" placeholder="3000000" value={formData.monthlySalary || ''} onChange={e => setFormData({...formData, monthlySalary: e.target.value})} />
                                             </div>
                                         )}
                                     </div>

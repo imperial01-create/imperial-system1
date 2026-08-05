@@ -59,11 +59,12 @@ export const Badge = React.memo(({ status, color, customLabel }) => {
   );
 });
 
-export const Modal = ({ isOpen, onClose, title, children }) => {
+// maxWidthClass: 표처럼 넓은 내용을 담을 때만 넘겨줍니다. (예: "max-w-6xl")
+export const Modal = ({ isOpen, onClose, title, children, maxWidthClass = 'max-w-xl' }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-[60] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm p-0 md:p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-t-2xl md:rounded-2xl w-full max-w-xl shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in slide-in-from-bottom-4 md:zoom-in-95 duration-200">
+      <div className={`bg-white rounded-t-2xl md:rounded-2xl w-full ${maxWidthClass} shadow-2xl max-h-[90vh] flex flex-col scale-100 animate-in slide-in-from-bottom-4 md:zoom-in-95 duration-200`}>
         <div className="flex justify-between items-center p-5 border-b border-gray-100 shrink-0">
           <h3 className="text-xl font-bold text-gray-900">{title}</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X size={24} className="text-gray-400" /></button>

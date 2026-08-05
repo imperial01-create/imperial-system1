@@ -28,6 +28,33 @@ const getLocalDateStr = (dateObj) => {
     return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}`;
 };
 
+// 🚨 근무시간은 반드시 '분'까지 계산합니다.
+// 클리닉 시간표는 30분 단위(TIME_SLOTS)라서 시(hour)만 빼면 급여가 어긋납니다.
+//   14:00~16:30 → 2시간으로 계산되어 30분치 미지급
+//   14:30~16:00 → 2시간으로 계산되어 30분치 과지급
+const sessionHours = (start, end) => {
+    if (!start || !end) return 0;
+    const [sH, sM] = String(start).split(':').map(Number);
+    const [eH, eM] = String(end).split(':').map(Number);
+    if (![sH, sM, eH, eM].every(Number.isFinite)) return 0;
+    const minutes = (eH * 60 + eM) - (sH * 60 + sM);
+    return minutes > 0 ? minutes / 60 : 0;
+};
+
+// 부동소수점 누적 오차로 '스케줄 변동 감지'가 계속 뜨는 것을 막습니다.
+const roundHours = (h) => Math.round((Number(h) || 0) * 100) / 100;
+
+// 세무사 급여대장의 지급액과 시스템이 계산한 지급액이 다르면 둘 중 하나가 틀린 것입니다.
+// (예: 조교 추가 근무를 세무사에게 전달하지 않은 경우) 반드시 눈에 보여야 합니다.
+const getPdfGap = (payroll) => {
+    const audit = payroll?.pdfAudit;
+    if (!audit) return null;
+    const grossGap = (Number(payroll.totalGross) || 0) - (Number(audit.grossTotal) || 0);
+    const netGap = (Number(payroll.netSalary) || 0) - (Number(audit.netPay) || 0);
+    if (grossGap === 0 && netGap === 0) return null;
+    return { grossGap, netGap, audit };
+};
+
 // 🚀 [CTO 패치] 월 걸침 주차(Spanning week) 조회 및 귀속월 판별 엔진
 const getExtendedMonthRange = (yearMonth) => {
     const [y, m] = yearMonth.split('-').map(Number);
@@ -73,7 +100,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
     const isManagementMode = viewMode === 'management';
 
     const targetUsers = useMemo(() => {
-        if (!isManagementMode) return [currentUser];
+        if (!isManagementMode) return currentUser ? [currentUser] : [];
         const filtered = (users || []).filter(u => ['admin', 'lecturer', 'ta', 'admin_assistant'].includes(u.role));
         
         const userMap = new Map();
@@ -190,11 +217,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         
         const { monthStartStr, monthEndStr } = getExtendedMonthRange(selectedMonth);
 
-        const validLogs = monthlySessions.filter(s => ['open', 'confirmed', 'completed', 'pending'].includes(s.status)).map(s => {
-            const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
-            const endH = parseInt((s.endTime||'00:00').split(':')[0], 10);
-            return { date: s.date, hours: endH - startH };
-        });
+        const validLogs = monthlySessions
+            .filter(s => ['open', 'confirmed', 'completed', 'pending'].includes(s.status))
+            .map(s => ({ date: s.date, hours: sessionHours(s.startTime, s.endTime) }));
 
         const weekGroups = {};
         validLogs.forEach(log => {
@@ -235,19 +260,22 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 holidayPay = Math.round((Math.min(group.totalHours, 40) / 40) * 8 * hourlyRate);
             }
 
-            const basePay = group.currentMonthHours * hourlyRate;
-            
-            const wEnd = new Date(weekKey);
-            const wStart = new Date(wEnd);
-            wStart.setDate(wEnd.getDate() - 6);
-            
+            const basePay = Math.floor(group.currentMonthHours * hourlyRate);
+
+            // new Date('2026-07-05')는 UTC 자정으로 해석됩니다. 시간대에 따라 주차 표기가 하루 밀리므로
+            // 숫자로 쪼개서 로컬 날짜로 만듭니다.
+            const [wy, wm, wd] = weekKey.split('-').map(Number);
+            const wEnd = new Date(wy, wm - 1, wd);
+            const wStart = new Date(wy, wm - 1, wd - 6);
+
+
             const weekStartStr = getLocalDateStr(wStart).substring(5).replace('-', '/');
             const weekEndStr = getLocalDateStr(wEnd).substring(5).replace('-', '/');
             
             return {
                 label: `${index + 1}주차 (${weekStartStr} ~ ${weekEndStr})`,
-                hours: group.currentMonthHours,
-                totalWeekHours: group.totalHours,
+                hours: roundHours(group.currentMonthHours),
+                totalWeekHours: roundHours(group.totalHours),
                 meetsHolidayPay,
                 holidayPay,
                 basePay,
@@ -274,11 +302,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
 
             const { monthStartStr, monthEndStr } = getExtendedMonthRange(selectedMonth);
 
-            const validLogs = userSessions.map(s => {
-                const startH = parseInt((s.startTime||'00:00').split(':')[0], 10);
-                const endH = parseInt((s.endTime||'00:00').split(':')[0], 10);
-                return { date: s.date, hours: endH - startH };
-            });
+            const validLogs = userSessions.map(s => ({ date: s.date, hours: sessionHours(s.startTime, s.endTime) }));
 
             const weekGroups = {};
             validLogs.forEach(log => {
@@ -305,7 +329,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 }
             });
 
-            totalHours = completedHours + expectedHours;
+            completedHours = roundHours(completedHours);
+            expectedHours = roundHours(expectedHours);
+            totalHours = roundHours(completedHours + expectedHours);
 
             // 주휴수당 전액 할당 (해당 주차의 모든 근로가 완료되는 시점이 이번 달에 있을 때)
             Object.values(weekGroups).forEach(group => {
@@ -318,62 +344,115 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             weeklyHolidayPay = Math.round(weeklyHolidayPay);
             baseSalary = Math.floor(totalHours * hourlyRate);
         } else {
-            baseSalary = parseInt(targetUser.monthlySalary || targetUser.baseSalary || targetUser.fixedSalary || targetUser.hourlyRate || targetUser.hourlyWage || 0, 10);
+            // 월급제(강사·관리자). 예전에는 여기서 시급 필드까지 대체값으로 썼는데,
+            // 그러면 시급 13,000원이 '월급 13,000원'으로 둔갑합니다. 그래서 월급 필드만 봅니다.
+            baseSalary = parseInt(targetUser.monthlySalary || targetUser.baseSalary || targetUser.fixedSalary || 0, 10);
             if (isNaN(baseSalary)) baseSalary = 0;
         }
 
         return { baseSalary, weeklyHolidayPay, totalHours, completedHours, expectedHours, totalGross: baseSalary + weeklyHolidayPay, hourlyRate };
     }, [monthlySessions, selectedMonth]);
 
-    const handlePdfDataExtracted = async (extractedData) => {
+    /**
+     * PdfAutoFiller에서 '적용'을 누른 뒤에만 호출됩니다.
+     * 넘어오는 rows는 이미 (1) 급여대장 검산 통과 (2) 직원 1:1 매칭 확인을 마친 것만 들어 있습니다.
+     *
+     * applyGross = false (기본): 공제 내역만 반영. 지급액은 시스템 계산을 그대로 둡니다.
+     *                            대신 대장의 지급액을 pdfAudit에 남겨서, 값이 다르면 목록에 경고를 띄웁니다.
+     * applyGross = true        : 지급액까지 대장 값으로 맞춥니다.
+     *                            대장의 기본급에 주휴수당·상여·식대가 이미 포함되어 있으므로
+     *                            해당 항목을 0으로 정리해야 이중 계상이 생기지 않습니다.
+     */
+    const handlePdfDataExtracted = async ({ rows, applyGross }) => {
+        if (!rows || rows.length === 0) return;
         setCalcProcessing(true);
         try {
             const updatedPayrolls = { ...payrolls };
             const promises = [];
-            let updateCount = 0;
-            const nowISO = new Date().toISOString(); 
+            const nowISO = new Date().toISOString();
+            const skipped = [];
 
-            for (const user of targetUsers) {
-                const autoData = extractedData[user.id || user.userId];
-                if (autoData) {
-                    let currentPayroll = updatedPayrolls[user.id || user.userId];
-                    
-                    if (!currentPayroll) {
-                        currentPayroll = {
-                            userId: user.id || user.userId, userName: user.name, userRole: user.role, yearMonth: selectedMonth, hourlyRate: Number(user.hourlyRate || user.hourlyWage) || 0,
-                            baseSalary: 0, totalHours: 0, weeklyHolidayPay: 0, mealAllowance: 0, bonus: 0, totalGross: 0,
-                            deductions: { '국민연금': 0, '건강보험': 0, '고용보험': 0, '장기요양보험료': 0, '소득세': 0, '지방소득세': 0 },
-                            netSalary: 0, status: 'calculated'
-                        };
-                    }
+            for (const row of rows) {
+                const uid = row.userId;
+                const user = targetUsers.find(u => (u.id || u.userId) === uid);
+                if (!uid || !user) { skipped.push(row.name); continue; }
 
-                    const newDeductions = {
-                        ...currentPayroll.deductions,
-                        '국민연금': autoData.nationalPension || 0, '건강보험': autoData.healthInsurance || 0, '고용보험': autoData.employmentInsurance || 0,
-                        '장기요양보험료': autoData.longTermCare || 0, '소득세': autoData.taxIncome || 0, '지방소득세': autoData.taxLocal || 0
+                const a = row.amounts;
+
+                // 아직 '정산 하기'를 누르지 않은 사람이면, 지급액을 먼저 시스템 계산으로 채웁니다.
+                // (예전에는 기본급 0원 상태에서 공제만 얹어 실수령액이 마이너스로 저장됐습니다)
+                let base = updatedPayrolls[uid];
+                if (!base) {
+                    const rt = getRealtimeCalculation(user);
+                    base = {
+                        userId: uid, userName: user.name, userRole: user.role, yearMonth: selectedMonth,
+                        hourlyRate: rt.hourlyRate || Number(user.hourlyRate || user.hourlyWage) || 0,
+                        baseSalary: rt.baseSalary, totalHours: rt.totalHours,
+                        completedHours: rt.completedHours, expectedHours: rt.expectedHours,
+                        weeklyHolidayPay: rt.weeklyHolidayPay,
+                        mealAllowance: 0, bonus: 0, allowance: 0, totalGross: rt.totalGross,
+                        deductions: Object.fromEntries(DEDUCTION_KEYS.map(k => [k, 0])),
+                        netSalary: 0, status: 'calculated'
                     };
-
-                    const gross = (Number(currentPayroll.baseSalary) || 0) + (Number(currentPayroll.weeklyHolidayPay) || 0) + (Number(currentPayroll.bonus) || 0) + (Number(currentPayroll.mealAllowance) || 0);
-                    const totalDeductions = Object.values(newDeductions).reduce((a, b) => a + (Number(b) || 0), 0);
-                    const net = gross - totalDeductions;
-
-                    const dbPayload = { ...currentPayroll, totalGross: gross, deductions: newDeductions, netSalary: net, status: 'confirmed', updatedAt: serverTimestamp() };
-                    delete dbPayload._docId; 
-
-                    const localPayload = { ...dbPayload, updatedAt: nowISO, _docId: `${user.id || user.userId}_${selectedMonth}` };
-                    updatedPayrolls[user.id || user.userId] = localPayload;
-                    
-                    promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', localPayload._docId), dbPayload, { merge: true }));
-                    updateCount++;
                 }
+
+                const newDeductions = {
+                    '국민연금': a.nationalPension || 0,
+                    '건강보험': a.healthInsurance || 0,
+                    '고용보험': a.employmentInsurance || 0,
+                    '장기요양보험료': a.longTermCare || 0,
+                    '소득세': a.taxIncome || 0,
+                    '지방소득세': a.taxLocal || 0
+                };
+                const totalDeductions = Object.values(newDeductions).reduce((s, v) => s + (Number(v) || 0), 0);
+
+                const pdfAudit = {
+                    baseSalary: a.baseSalary || 0, allowance: a.allowance || 0,
+                    grossTotal: a.grossTotal || 0, deductionTotal: a.deductionTotal || 0,
+                    netPay: a.netPay || 0, importedAt: nowISO
+                };
+
+                let payload;
+                if (applyGross) {
+                    payload = {
+                        ...base,
+                        baseSalary: a.baseSalary || 0,
+                        allowance: a.allowance || 0,
+                        weeklyHolidayPay: 0, bonus: 0, mealAllowance: 0,
+                        totalGross: a.grossTotal || 0,
+                        deductions: newDeductions,
+                        netSalary: a.netPay || 0,
+                        pdfAudit, status: 'confirmed', updatedAt: serverTimestamp()
+                    };
+                } else {
+                    const gross = (Number(base.baseSalary) || 0) + (Number(base.weeklyHolidayPay) || 0)
+                        + (Number(base.bonus) || 0) + (Number(base.mealAllowance) || 0);
+                    payload = {
+                        ...base,
+                        totalGross: gross,
+                        deductions: newDeductions,
+                        netSalary: gross - totalDeductions,
+                        pdfAudit, status: 'confirmed', updatedAt: serverTimestamp()
+                    };
+                }
+                delete payload._docId;
+
+                const docId = `${uid}_${selectedMonth}`;
+                updatedPayrolls[uid] = { ...payload, updatedAt: nowISO, _docId: docId };
+                promises.push(setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'payrolls', docId), payload, { merge: true }));
             }
+
             if (promises.length > 0) {
                 await Promise.all(promises);
                 setPayrolls(updatedPayrolls);
                 localStorage.setItem(`imperial_payroll_v8_${selectedMonth}_admin`, JSON.stringify({ timestamp: Date.now(), data: updatedPayrolls }));
-                alert(`성공! 총 ${updateCount}명의 공제 내역이 적용되었습니다.`);
             }
-        } catch (e) { alert("공제 내역 오류: " + e.message); } finally { setCalcProcessing(false); }
+            if (skipped.length > 0) {
+                alert(`${promises.length}명 적용 완료.\n\n다음 인원은 이번 달 정산 대상에 없어 건너뛰었습니다: ${skipped.join(', ')}`);
+            }
+        } catch (e) {
+            alert("공제 내역 저장 실패: " + e.message);
+        } finally { setCalcProcessing(false); }
     };
 
     const handleCalculate = async (targetUser) => {
@@ -381,11 +460,27 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         const uid = targetUser.id || targetUser.userId;
         const wage = targetUser.hourlyRate || targetUser.hourlyWage;
 
-        if ((targetUser.role === 'ta' || targetUser.role === 'admin_assistant') && !wage) { 
-            alert(`${targetUser.name}님의 시급 정보가 없습니다. 직원 관리 메뉴에서 시급을 설정해주세요.`); 
-            return; 
+        if ((targetUser.role === 'ta' || targetUser.role === 'admin_assistant') && !wage) {
+            alert(`${targetUser.name}님의 시급 정보가 없습니다. 직원 관리 메뉴에서 시급을 설정해주세요.`);
+            return;
         }
-        
+
+        // 월급제 직원인데 월 기본급이 비어 있으면 지급총액이 0원으로 저장됩니다.
+        // 예전에는 이 사실이 아무 안내 없이 지나갔습니다.
+        if (['lecturer', 'admin'].includes(targetUser.role)
+            && !(targetUser.monthlySalary || targetUser.baseSalary || targetUser.fixedSalary)) {
+            const go = window.confirm(
+                `${targetUser.name}님의 '월 기본급'이 등록되어 있지 않습니다.\n`
+                + `이대로 정산하면 기본급이 0원으로 저장됩니다.\n\n`
+                + `해결 방법\n`
+                + ` · 직원 관리 → 해당 직원 → '월 기본급' 입력\n`
+                + ` · 또는 세무사 급여대장 PDF 업로드 시 '지급액도 대장 값으로 맞추기' 사용\n\n`
+                + `그래도 진행할까요?`
+            );
+            if (!go) return;
+        }
+
+
         setCalcProcessing(true);
         try {
             const rt = getRealtimeCalculation(targetUser);
@@ -394,8 +489,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const initialDeductions = existingPayroll?.deductions || Object.fromEntries(DEDUCTION_KEYS.map(k => [k, 0]));
             const savedBonus = existingPayroll?.bonus || 0;
             const savedMeal = existingPayroll?.mealAllowance || 0;
+            const savedAllowance = existingPayroll?.allowance || 0;
 
-            const newTotalGross = rt.baseSalary + rt.weeklyHolidayPay + savedBonus + savedMeal;
+            const newTotalGross = rt.baseSalary + rt.weeklyHolidayPay + savedBonus + savedMeal + savedAllowance;
             const totalDeductionsAmount = Object.values(initialDeductions).reduce((a,b) => a + (Number(b)||0), 0);
             
             const dbPayload = { 
@@ -405,10 +501,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 totalHours: rt.totalHours, 
                 completedHours: rt.completedHours, 
                 expectedHours: rt.expectedHours, 
-                weeklyHolidayPay: rt.weeklyHolidayPay, 
-                mealAllowance: savedMeal, 
-                bonus: savedBonus, 
-                totalGross: newTotalGross, 
+                weeklyHolidayPay: rt.weeklyHolidayPay,
+                mealAllowance: savedMeal,
+                bonus: savedBonus,
+                allowance: savedAllowance,
+                totalGross: newTotalGross,
                 deductions: initialDeductions, 
                 netSalary: newTotalGross - totalDeductionsAmount, 
                 status: existingPayroll?.status || 'calculated', 
@@ -434,12 +531,13 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
             const safeHolidayPay = Number(editingPayroll.weeklyHolidayPay) || 0;
             const safeBonus = Number(editingPayroll.bonus) || 0;
             const safeMeal = Number(editingPayroll.mealAllowance) || 0;
-            
-            const gross = safeBaseSalary + safeHolidayPay + safeBonus + safeMeal;
-            const totalDeductions = Object.values(editingPayroll.deductions).reduce((a, b) => a + (Number(b) || 0), 0);
+            const safeAllowance = Number(editingPayroll.allowance) || 0; // 급여대장에서 가져온 제수당
+
+            const gross = safeBaseSalary + safeHolidayPay + safeBonus + safeMeal + safeAllowance;
+            const totalDeductions = Object.values(editingPayroll.deductions || {}).reduce((a, b) => a + (Number(b) || 0), 0);
             const net = gross - totalDeductions;
-            
-            const dbPayload = { ...editingPayroll, baseSalary: safeBaseSalary, bonus: safeBonus, mealAllowance: safeMeal, totalGross: gross, netSalary: net, status: 'confirmed', updatedAt: serverTimestamp() };
+
+            const dbPayload = { ...editingPayroll, baseSalary: safeBaseSalary, bonus: safeBonus, mealAllowance: safeMeal, allowance: safeAllowance, totalGross: gross, netSalary: net, status: 'confirmed', updatedAt: serverTimestamp() };
             delete dbPayload._docId;
             
             const docId = `${editingPayroll.userId}_${editingPayroll.yearMonth}`;
@@ -453,14 +551,31 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
         } catch(e) { alert('수정 실패: ' + e.message); } finally { setCalcProcessing(false); }
     };
 
+    // 실제로 돈이 이체되는 파일이라, 만들기 전에 문제될 항목을 먼저 알려줍니다.
     const handleDownloadExcel = () => {
-        const data = Object.values(payrolls).map((p, index) => {
+        const list = Object.values(payrolls).filter(p => p && p.userId);
+        if (list.length === 0) {
+            alert(`${selectedMonth} 정산된 급여가 없습니다. 먼저 '정산 하기'를 눌러주세요.`);
+            return;
+        }
+
+        const noAccount = [];
+        const badAmount = [];
+        const data = list.map((p, index) => {
             const user = targetUsers.find(u => (u.id || u.userId) === p.userId) || {};
+            if (!user.bankName || !user.accountNumber) noAccount.push(p.userName || p.userId);
+            if (!(Number(p.netSalary) > 0)) badAmount.push(`${p.userName || p.userId}(${formatCurrency(p.netSalary)})`);
             return {
                 '순번': index + 1, '입금은행': user.bankName || '', '입금계좌예금주명': p.userName,
-                '입금계좌번호': user.accountNumber || '', '입금금액': p.netSalary
+                '입금계좌번호': user.accountNumber || '', '입금금액': Number(p.netSalary) || 0
             };
         });
+
+        const problems = [];
+        if (noAccount.length) problems.push(`⚠ 은행/계좌번호가 비어 있음: ${noAccount.join(', ')}`);
+        if (badAmount.length) problems.push(`⚠ 실수령액이 0원 이하: ${badAmount.join(', ')}`);
+        if (problems.length && !window.confirm(`${problems.join('\n')}\n\n이대로 이체 파일을 만들까요?`)) return;
+
         const ws = XLSX.utils.json_to_sheet(data); const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "이체대행목록");
         XLSX.writeFile(wb, `급여 이체대행 목록_${selectedMonth}.xlsx`);
@@ -513,10 +628,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             let needsSync = false;
                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
                                 const rt = getRealtimeCalculation(user);
-                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
+                                if (roundHours(payroll.totalHours) !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
                                     needsSync = true;
                                 }
                             }
+                            const pdfGap = getPdfGap(payroll);
 
                             return (
                                 <Card key={uid} className={`p-5 flex flex-col gap-3 transition-all ${needsSync ? 'border-orange-300 shadow-md ring-2 ring-orange-50' : ''}`}>
@@ -541,8 +657,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                         </div>
                                         <div className="flex justify-between"><span>주휴수당</span><span className="text-blue-500">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</span></div>
                                         <div className="flex justify-between font-bold text-gray-800 border-t pt-1 mt-1"><span>지급총액(세전)</span><span>{payroll ? formatCurrency(payroll.totalGross) : '-'}</span></div>
+                                        {pdfGap && (
+                                            <div className="text-[11px] font-bold text-red-600 bg-red-50 border border-red-100 rounded-lg px-2 py-1.5 leading-relaxed">
+                                                세무사 급여대장과 지급액이 다릅니다<br />
+                                                <span className="font-normal">대장: 지급합계 {formatCurrency(pdfGap.audit.grossTotal)} / 실수령 {formatCurrency(pdfGap.audit.netPay)}</span>
+                                            </div>
+                                        )}
                                     </div>
-                                    
+
                                     <div className="flex flex-col gap-2 mt-2">
                                         {payroll ? (
                                             <>
@@ -601,10 +723,11 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                             let needsSync = false;
                                             if (payroll && ['ta', 'admin_assistant'].includes(user.role)) {
                                                 const rt = getRealtimeCalculation(user);
-                                                if (payroll.totalHours !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
+                                                if (roundHours(payroll.totalHours) !== rt.totalHours || (payroll.baseSalary + payroll.weeklyHolidayPay) !== (rt.baseSalary + rt.weeklyHolidayPay)) {
                                                     needsSync = true;
                                                 }
                                             }
+                                            const pdfGap = getPdfGap(payroll);
 
                                             return (
                                                 <tr key={uid} className={`hover:bg-gray-50 ${needsSync ? 'bg-orange-50/30' : ''}`}>
@@ -616,7 +739,14 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                         {payroll && payroll.expectedHours > 0 && <span className="ml-2 text-xs text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-bold">예정 {payroll.expectedHours}h 포함</span>}
                                                     </td>
                                                     <td className="p-4 text-blue-600 font-bold">{payroll ? formatCurrency(payroll.weeklyHolidayPay) : '-'}</td>
-                                                    <td className="p-4 font-bold">{payroll ? formatCurrency(payroll.totalGross) : '-'}</td>
+                                                    <td className="p-4 font-bold">
+                                                        {payroll ? formatCurrency(payroll.totalGross) : '-'}
+                                                        {pdfGap && (
+                                                            <span className="block mt-1 text-[10px] font-bold text-red-600 bg-red-50 border border-red-100 rounded px-1.5 py-1 leading-snug whitespace-nowrap">
+                                                                대장과 다름 · 대장 {formatCurrency(pdfGap.audit.grossTotal)}
+                                                            </span>
+                                                        )}
+                                                    </td>
                                                     <td className="p-4 font-bold text-green-600">{payroll ? formatCurrency(payroll.netSalary) : '-'}</td>
                                                     <td className="p-4 flex flex-col items-end gap-2">
                                                         {payroll ? (
@@ -652,7 +782,7 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                 </>
             ) : (
                 <div className="w-full animate-in fade-in">
-                    {payrolls[currentUser.id] ? (
+                    {currentUser && payrolls[currentUser.id] ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <Card className="lg:col-span-1 border-t-4 border-t-blue-600 shadow-lg h-fit">
                                 <div className="text-center mb-6 border-b pb-4">
@@ -689,6 +819,9 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                                                 <p className="font-bold text-blue-600 mb-3 flex items-center gap-2"><Plus size={16}/> 지급 내역</p>
                                                 <div className="space-y-2">
                                                     <div className="flex justify-between text-sm"><span>기본급</span><span>{formatCurrency(payrolls[currentUser.id].baseSalary)}</span></div>
+                                                    {Number(payrolls[currentUser.id].allowance) > 0 && (
+                                                        <div className="flex justify-between text-sm"><span>제수당</span><span>{formatCurrency(payrolls[currentUser.id].allowance)}</span></div>
+                                                    )}
                                                     <div className="flex justify-between text-sm"><span>주휴수당</span><span>{formatCurrency(payrolls[currentUser.id].weeklyHolidayPay)}</span></div>
                                                     <div className="flex justify-between text-sm"><span>식대</span><span>{formatCurrency(payrolls[currentUser.id].mealAllowance)}</span></div>
                                                     <div className="flex justify-between text-sm font-bold text-blue-600 bg-blue-50 p-1 rounded"><span>상여금</span><span>{formatCurrency(payrolls[currentUser.id].bonus)}</span></div>
@@ -792,7 +925,17 @@ const PayrollManager = ({ currentUser, users, viewMode = 'personal' }) => {
                             <div><label className="block text-xs font-bold text-gray-500 mb-1">상여금</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.bonus} onChange={e => setEditingPayroll({...editingPayroll, bonus: Number(e.target.value)})} /></div>
                             <div><label className="block text-xs font-bold text-gray-500 mb-1">식대</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.mealAllowance} onChange={e => setEditingPayroll({...editingPayroll, mealAllowance: Number(e.target.value)})} /></div>
                             <div><label className="block text-xs font-bold text-gray-500 mb-1">주휴수당 (자동계산됨)</label><input type="number" className="w-full border p-2 rounded bg-gray-100" value={editingPayroll.weeklyHolidayPay} readOnly /></div>
+                            <div><label className="block text-xs font-bold text-gray-500 mb-1">제수당 (급여대장의 '수당')</label><input type="number" className="w-full border p-2 rounded" value={editingPayroll.allowance || 0} onChange={e => setEditingPayroll({...editingPayroll, allowance: Number(e.target.value)})} /></div>
                         </div>
+                        {getPdfGap(editingPayroll) && (
+                            <div className="p-3 rounded-xl border border-red-100 bg-red-50 text-red-700 text-xs font-bold leading-relaxed">
+                                세무사 급여대장과 지급액이 다릅니다.<br />
+                                <span className="font-normal">
+                                    대장: 기본급 {formatCurrency(editingPayroll.pdfAudit.baseSalary)} · 수당 {formatCurrency(editingPayroll.pdfAudit.allowance)} ·
+                                    지급합계 {formatCurrency(editingPayroll.pdfAudit.grossTotal)} · 실수령 {formatCurrency(editingPayroll.pdfAudit.netPay)}
+                                </span>
+                            </div>
+                        )}
                         <div className="border-t pt-4">
                             <h4 className="font-bold text-sm text-red-500 mb-2">공제 내역 입력 (세무사 전달값 자동입력됨)</h4>
                             <div className="grid grid-cols-2 gap-2">
