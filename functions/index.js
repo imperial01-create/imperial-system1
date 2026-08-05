@@ -1120,7 +1120,8 @@ exports.syncUserClaims = onDocumentWritten(
     }
 );
 
-/** 기존 사용자 전원에게 역할 토큰을 한 번에 부여한다. (도입 시 1회 실행) */
+/** 기존 사용자 전원에게 역할 토큰을 한 번에 부여한다. (도입 시 1회 실행)
+ *  인증 계정이 없어 실패한 사용자는 '왜 실패했고 어떻게 해결되는지'까지 함께 알려준다. */
 exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
 
@@ -1135,17 +1136,42 @@ exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, a
         await Promise.all(chunk.map(async (d) => {
             const data = d.data();
             const uid = await resolveAuthUid(d.id, data);
-            if (!uid) { failed.push(data.name || d.id); return; }
+
+            const describe = (reason) => {
+                // 평문 비밀번호가 남아 있으면 다음 로그인 때 서버가 계정을 만들어 주므로 저절로 해결된다
+                const canSelfHeal = !!data.password;
+                return {
+                    id: d.id,
+                    name: data.name || d.id,
+                    userId: data.userId || d.id,
+                    role: data.role || 'none',
+                    status: data.status || '-',
+                    reason,
+                    canSelfHeal,
+                    advice: canSelfHeal
+                        ? '이 사용자가 다음에 로그인하면 인증 계정이 자동 생성되고 역할도 함께 부여됩니다. 별도 조치가 필요 없습니다.'
+                        : '비밀번호 정보가 없어 자동 복구가 불가능합니다. [사용자 관리]에서 이 사용자의 [비번 변경]을 눌러 새 비밀번호를 지정해 주세요.'
+                };
+            };
+
+            if (!uid) { failed.push(describe('인증 계정 없음')); return; }
             try {
                 await admin.auth().setCustomUserClaims(uid, { role: data.role || 'none' });
                 done++;
             } catch (e) {
-                failed.push(data.name || d.id);
+                failed.push(describe(`토큰 부여 실패: ${e.message}`));
             }
         }));
     }
 
-    return { total: docs.length, done, failedCount: failed.length, failedSample: failed.slice(0, 20) };
+    return {
+        total: docs.length,
+        done,
+        failedCount: failed.length,
+        failed,
+        selfHealCount: failed.filter(f => f.canSelfHeal).length,
+        needsActionCount: failed.filter(f => !f.canSelfHeal).length
+    };
 });
 
 // ============================================================================

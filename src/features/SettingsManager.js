@@ -49,6 +49,7 @@ const SettingsManager = ({ currentUser }) => {
     const [migrationProcessing, setMigrationProcessing] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
+    const [claimsResult, setClaimsResult] = useState(null);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -320,18 +321,11 @@ const SettingsManager = ({ currentUser }) => {
     const handleBackfillClaims = async () => {
         if (!window.confirm("전체 사용자에게 역할 정보를 로그인 토큰에 부여합니다.\n\n인원 수에 따라 1~2분 걸릴 수 있습니다. 안전한 작업이며 여러 번 눌러도 됩니다.\n진행할까요?")) return;
         setClaimsProcessing(true);
+        setClaimsResult(null);
         try {
             const backfill = httpsCallable(functions, 'backfillUserClaims');
             const res = await backfill({});
-            const d = res?.data || {};
-            let msg = `✅ 역할 토큰 부여 완료!\n\n대상: ${d.total ?? 0}명\n성공: ${d.done ?? 0}명`;
-            if (d.failedCount) {
-                msg += `\n실패: ${d.failedCount}명 (인증 계정이 아직 없는 사용자)\n`;
-                msg += `예시: ${(d.failedSample || []).join(', ')}\n\n`;
-                msg += `실패한 분들은 다음 로그인 시 자동으로 처리됩니다.`;
-            }
-            msg += `\n\n※ 이미 로그인 중인 사용자는 다시 로그인하면 즉시 반영됩니다.`;
-            alert(msg);
+            setClaimsResult(res?.data || null);
         } catch (err) {
             alert("역할 토큰 부여 중 오류가 발생했습니다: " + (err.message || ''));
         } finally {
@@ -739,6 +733,58 @@ const SettingsManager = ({ currentUser }) => {
                         >
                             {claimsProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '전체 사용자 역할 토큰 부여'}
                         </Button>
+
+                        {claimsResult && (
+                            <div className="space-y-4 animate-in fade-in">
+                                <div className="grid grid-cols-3 gap-3">
+                                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
+                                        <div className="text-[11px] font-bold text-slate-500 mb-1">전체</div>
+                                        <div className="text-2xl font-black text-slate-800">{claimsResult.total ?? 0}</div>
+                                    </div>
+                                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-center">
+                                        <div className="text-[11px] font-bold text-emerald-600 mb-1">성공</div>
+                                        <div className="text-2xl font-black text-emerald-700">{claimsResult.done ?? 0}</div>
+                                    </div>
+                                    <div className={`border rounded-xl p-3 text-center ${claimsResult.failedCount ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
+                                        <div className={`text-[11px] font-bold mb-1 ${claimsResult.failedCount ? 'text-rose-600' : 'text-slate-500'}`}>미완료</div>
+                                        <div className={`text-2xl font-black ${claimsResult.failedCount ? 'text-rose-700' : 'text-slate-400'}`}>{claimsResult.failedCount ?? 0}</div>
+                                    </div>
+                                </div>
+
+                                {claimsResult.failedCount > 0 && (
+                                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                                        <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 text-sm font-black text-slate-700">
+                                            인증 계정이 없는 사용자 ({claimsResult.failedCount}명)
+                                        </div>
+                                        <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto custom-scrollbar">
+                                            {(claimsResult.failed || []).map(u => (
+                                                <div key={u.id} className="p-4 flex flex-col sm:flex-row sm:items-center gap-2">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <span className="font-black text-slate-800">{u.name}</span>
+                                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{u.role}</span>
+                                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{u.status}</span>
+                                                            <span className="text-[10px] font-mono text-slate-400">{u.userId}</span>
+                                                        </div>
+                                                        <p className="text-xs text-slate-600 mt-1.5 break-keep leading-relaxed">{u.advice}</p>
+                                                    </div>
+                                                    <span className={`shrink-0 text-[11px] font-black px-2.5 py-1.5 rounded-lg whitespace-nowrap ${
+                                                        u.canSelfHeal ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                                      : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                                    }`}>
+                                                        {u.canSelfHeal ? '조치 불필요' : '비번 변경 필요'}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <p className="text-xs font-bold text-slate-500">
+                                    ※ 이미 로그인 중인 사용자는 다시 로그인하면 즉시 반영됩니다.
+                                </p>
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-emerald-200 space-y-6 md:col-span-2">
