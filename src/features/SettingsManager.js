@@ -3,7 +3,8 @@
    '연도 + 하드코딩된 드롭다운(윈터/중간/기말/서머)' 방식으로 강제하여 데이터 파편화를 원천 차단했습니다.) */
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -46,6 +47,7 @@ const SettingsManager = ({ currentUser }) => {
     const [savingSchools, setSavingSchools] = useState(false);
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
+    const [staffDirProcessing, setStaffDirProcessing] = useState(false);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -289,6 +291,25 @@ const SettingsManager = ({ currentUser }) => {
             alert("작업 중 오류가 발생했습니다: " + err.message);
         } finally {
             setSystemProcessing(false);
+        }
+    };
+
+    /* 🔒 교직원 명부(staff_directory) 채우기
+       학생/학부모 화면은 '담당 강사 이름'만 필요한데, 예전에는 그걸 위해 전체 사용자 목록을
+       내려받았습니다(전 원생 연락처와 교직원 계좌번호까지 함께 노출).
+       이제는 이름/역할/과목만 담긴 명부를 따로 두고 그것만 읽습니다.
+       앞으로 추가되는 교직원은 서버가 자동 반영하므로, 이 버튼은 기존 인원을 한 번 채울 때만 씁니다. */
+    const handleSyncStaffDirectory = async () => {
+        if (!window.confirm("현재 등록된 교직원(관리자·행정조교·강사·수업조교)을 학생/학부모용 명부에 반영합니다.\n\n안전한 작업이며 여러 번 눌러도 문제없습니다. 진행할까요?")) return;
+        setStaffDirProcessing(true);
+        try {
+            const backfill = httpsCallable(functions, 'backfillStaffDirectory');
+            const res = await backfill({});
+            alert(`✅ 교직원 명부 동기화 완료!\n\n반영된 인원: ${res?.data?.count ?? 0}명\n\n이제 학생/학부모 화면에서도 담당 강사 이름이 정상 표시됩니다.`);
+        } catch (err) {
+            alert("동기화 중 오류가 발생했습니다: " + (err.message || ''));
+        } finally {
+            setStaffDirProcessing(false);
         }
     };
 
@@ -663,12 +684,34 @@ const SettingsManager = ({ currentUser }) => {
                             <p className="text-indigo-600 font-bold mt-2 pt-2 border-t border-indigo-200">※ 에러 없이 언제든 반복해서 실행할 수 있는 안전한 스크립트입니다.</p>
                         </div>
 
-                        <Button 
-                            onClick={handleDataMigration} 
-                            disabled={migrationProcessing} 
+                        <Button
+                            onClick={handleDataMigration}
+                            disabled={migrationProcessing}
                             className="w-full bg-indigo-600 hover:bg-indigo-700 font-bold py-4 text-lg shadow-md border-0"
                         >
                             {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '과목 자동 할당 스크립트 실행'}
+                        </Button>
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-emerald-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-emerald-800 border-b border-emerald-100 pb-4 flex items-center gap-2">
+                            <Users className="text-emerald-600"/> 교직원 명부 동기화 (개인정보 보호)
+                        </h2>
+
+                        <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><ShieldCheck size={18}/> 왜 필요한가요?</p>
+                            <p>• 예전에는 학생·학부모 화면이 <strong>담당 강사 이름 하나</strong> 때문에 전체 사용자 목록을 내려받았습니다.</p>
+                            <p>• 그 과정에서 <strong>전 원생의 연락처</strong>와 <strong>교직원의 계좌번호</strong>까지 함께 전달되고 있었습니다.</p>
+                            <p>• 이제는 이름·역할·과목만 담은 별도 명부를 사용합니다.</p>
+                            <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">※ 도입 시 <strong>한 번만</strong> 실행하면 됩니다. 이후 추가되는 교직원은 자동 반영됩니다.</p>
+                        </div>
+
+                        <Button
+                            onClick={handleSyncStaffDirectory}
+                            disabled={staffDirProcessing}
+                            className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {staffDirProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '교직원 명부 채우기 실행'}
                         </Button>
                     </div>
 

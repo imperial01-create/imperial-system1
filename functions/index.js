@@ -8,7 +8,7 @@
 
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore"); 
+const { onDocumentCreated, onDocumentDeleted, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -962,6 +962,76 @@ exports.adminCreateUser = onCall({ timeoutSeconds: 60 }, async (request) => {
     });
 
     return { success: true, id: safeId, authUid };
+});
+
+// ============================================================================
+// 🔒 [기능 17] 교직원 명부(staff_directory) 자동 동기화
+//
+// 문제: 학생/학부모 화면도 '담당 강사 이름'이 필요해서 users 컬렉션 전체를 구독했다.
+//       그 결과 학생 한 명이 로그인하면 전 원생의 전화번호는 물론
+//       강사·조교의 은행 계좌번호까지 브라우저로 내려갔다.
+// 해결: 이름/역할/과목만 담은 별도 명부를 서버가 유지하고, 학생/학부모는 이것만 읽는다.
+// ============================================================================
+const STAFF_DIR_PATH = `artifacts/${APP_ID}/public/data/staff_directory`;
+
+exports.syncStaffDirectory = onDocumentWritten(
+    `artifacts/${APP_ID}/public/data/users/{userId}`,
+    async (event) => {
+        const userId = event.params.userId;
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+        const ref = admin.firestore().doc(`${STAFF_DIR_PATH}/${userId}`);
+
+        // 교직원이 아니거나 삭제된 경우 → 명부에서 제거
+        if (!after || !STAFF_ROLES.includes(after.role)) {
+            if (before && STAFF_ROLES.includes(before.role)) {
+                await ref.delete().catch(() => {});
+            }
+            return null;
+        }
+
+        // 마지막 로그인 시각 갱신 등으로도 트리거되므로, 실제 변경이 있을 때만 쓴다
+        if (before &&
+            before.name === after.name &&
+            before.role === after.role &&
+            (before.subject || '') === (after.subject || '')) {
+            return null;
+        }
+
+        await ref.set({
+            id: userId,
+            name: after.name || '',
+            role: after.role,
+            subject: after.subject || ''
+        });
+        return null;
+    }
+);
+
+/** 기존 교직원을 명부에 한 번에 채워 넣는다. (도입 시 1회 실행) */
+exports.backfillStaffDirectory = onCall({ timeoutSeconds: 120 }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+
+    const snap = await usersCol().get();
+    const db = admin.firestore();
+    const batch = db.batch();
+    let count = 0;
+
+    snap.forEach(d => {
+        const u = d.data();
+        if (STAFF_ROLES.includes(u.role)) {
+            batch.set(db.doc(`${STAFF_DIR_PATH}/${d.id}`), {
+                id: d.id,
+                name: u.name || '',
+                role: u.role,
+                subject: u.subject || ''
+            });
+            count++;
+        }
+    });
+
+    await batch.commit();
+    return { count };
 });
 
 // ============================================================================
