@@ -2,9 +2,10 @@
    (🚀 CTO 패치: 시즌 네이밍 룰(Naming Convention) 표준화. 시즌 이름을 자유 입력 방식에서 
    '연도 + 하드코딩된 드롭다운(윈터/중간/기말/서머)' 방식으로 강제하여 데이터 파편화를 원천 차단했습니다.) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch, deleteField } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
+import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -352,6 +353,166 @@ const SettingsManager = ({ currentUser }) => {
             setClaimsProcessing(false);
         }
     };
+
+    /* ─────────────────────────────────────────────────────────────────────
+       학교명 표기 통합
+
+       [무엇을 하나]
+       같은 학교가 '영일고' / '영일 고등학교' / '영일고등학교' 로 흩어져 저장된 것을
+       학교 마스터 목록의 정식 명칭 하나로 맞춥니다.
+
+       [무엇을 하지 않나 — 중요]
+       기출·내신 자료(integrated_exams)의 학교명은 '진단만' 하고 고치지 않습니다.
+       그 컬렉션은 문서 번호 자체에 학교명이 들어 있어서, 학교명을 바꾸면 다음에
+       그 리포트를 수정할 때 문서 번호가 새로 만들어지고 옛 문서가 지워집니다.
+       그러면 학생 성적 진단이 참조하던 연결이 끊어져 예측 등급이 사라집니다.
+       조회는 이미 표기가 달라도 찾도록 고쳐 두었으므로 실사용에는 지장이 없습니다.
+       ───────────────────────────────────────────────────────────────────── */
+    const SCHOOL_FIX_TARGETS = [
+        { id: 'users', label: '학생/학부모 계정', writable: true },
+        { id: 'academic_calendars', label: '학사일정', writable: true },
+        { id: 'integrated_exams', label: '기출·내신 자료', writable: false }
+    ];
+
+    // Firestore 일괄 쓰기 상한은 500건입니다. 초과하면 묶음 전체가 취소되므로 여유를 둡니다.
+    const SCHOOL_FIX_CHUNK = 400;
+
+    const [schoolScan, setSchoolScan] = useState(null);
+    const [schoolFixProcessing, setSchoolFixProcessing] = useState(false);
+
+    const scanSchoolNames = async () => {
+        const report = [];
+        for (const t of SCHOOL_FIX_TARGETS) {
+            const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', t.id));
+            const pending = [];
+            const groups = new Map();
+
+            snap.forEach(d => {
+                const v = d.data();
+                const raw = v.schoolName || v.school || '';
+                if (!raw) return;
+
+                const key = normalizeSchoolName(raw);
+                if (!key) return;
+
+                if (!groups.has(key)) groups.set(key, new Set());
+                groups.get(key).add(raw);
+
+                // 마스터 목록에 정식 명칭이 있고 현재 값이 그것과 다르면 정리 대상
+                const canonical = findCanonicalSchool(raw, schools);
+                if (t.writable && canonical && canonical !== raw) {
+                    pending.push({ id: d.id, from: raw, to: canonical });
+                }
+            });
+
+            const merged = [...groups.entries()]
+                .filter(([, names]) => names.size > 1)
+                .map(([key, names]) => ({ key, names: [...names] }));
+
+            report.push({ ...t, total: snap.size, pending, merged });
+        }
+        return report;
+    };
+
+    const handleScanSchoolNames = async () => {
+        setSchoolFixProcessing(true);
+        try {
+            setSchoolScan(await scanSchoolNames());
+        } catch (e) {
+            alert('진단 중 오류가 발생했습니다: ' + e.message);
+        } finally {
+            setSchoolFixProcessing(false);
+        }
+    };
+
+    const handleApplySchoolNames = async () => {
+        if (!schoolScan) return alert('먼저 [1) 진단하기]를 눌러 무엇이 바뀌는지 확인해주세요.');
+        const total = schoolScan.reduce((s, t) => s + t.pending.length, 0);
+        if (total === 0) return alert('정리할 항목이 없습니다. 이미 모두 통일되어 있습니다.');
+
+        if (!window.confirm(
+            `총 ${total}건의 학교명을 마스터 목록의 정식 명칭으로 맞춥니다.\n\n` +
+            `원래 이름은 따로 보관하므로 [되돌리기]로 언제든 취소할 수 있습니다.\n` +
+            `여러 번 눌러도 문제없습니다.\n\n진행할까요?`
+        )) return;
+
+        setSchoolFixProcessing(true);
+        let written = 0;
+        const failed = [];
+        try {
+            for (const t of schoolScan) {
+                if (!t.writable) continue;
+                for (let i = 0; i < t.pending.length; i += SCHOOL_FIX_CHUNK) {
+                    const slice = t.pending.slice(i, i + SCHOOL_FIX_CHUNK);
+                    const batch = writeBatch(db);
+                    slice.forEach(p => {
+                        const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', t.id, p.id);
+                        // 원본을 남겨야 되돌릴 수 있습니다. 이미 있으면 덮어쓰지 않습니다.
+                        batch.update(ref, { schoolName: p.to, schoolNameOriginal: p.from });
+                    });
+                    try {
+                        await batch.commit();
+                        written += slice.length;
+                    } catch (e) {
+                        failed.push(`${t.label} ${i + 1}~${i + slice.length}번째 (${e.message})`);
+                    }
+                }
+            }
+            alert(
+                `✅ 학교명 통합 완료!\n\n정리된 항목: ${written}건` +
+                (failed.length ? `\n\n실패한 묶음 ${failed.length}개:\n${failed.join('\n')}\n\n[진단하기]를 다시 눌러 남은 건수를 확인해주세요.` : '')
+            );
+            setSchoolScan(await scanSchoolNames());
+        } finally {
+            setSchoolFixProcessing(false);
+        }
+    };
+
+    const handleRollbackSchoolNames = async () => {
+        if (!window.confirm('학교명을 통합 이전의 원래 표기로 되돌립니다.\n\n진행할까요?')) return;
+        setSchoolFixProcessing(true);
+        let restored = 0;
+        try {
+            for (const t of SCHOOL_FIX_TARGETS) {
+                if (!t.writable) continue;
+                const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', t.id));
+                const targets = snap.docs.filter(d => d.data().schoolNameOriginal !== undefined);
+                for (let i = 0; i < targets.length; i += SCHOOL_FIX_CHUNK) {
+                    const batch = writeBatch(db);
+                    targets.slice(i, i + SCHOOL_FIX_CHUNK).forEach(d => {
+                        batch.update(d.ref, {
+                            schoolName: d.data().schoolNameOriginal,
+                            schoolNameOriginal: deleteField()
+                        });
+                    });
+                    await batch.commit();
+                    restored += Math.min(SCHOOL_FIX_CHUNK, targets.length - i);
+                }
+            }
+            alert(`되돌리기 완료: ${restored}건`);
+            setSchoolScan(null);
+        } catch (e) {
+            alert('되돌리기 중 오류가 발생했습니다: ' + e.message);
+        } finally {
+            setSchoolFixProcessing(false);
+        }
+    };
+
+    /** 마스터 목록 자체에 같은 학교가 두 표기로 등록돼 있는지 찾습니다. */
+    const masterDuplicates = React.useMemo(() => {
+        const out = [];
+        for (const type of ['elementary', 'middle', 'high']) {
+            const map = new Map();
+            (schools[type] || []).forEach(name => {
+                const key = normalizeSchoolName(name);
+                if (!map.has(key)) map.set(key, []);
+                map.get(key).push(name);
+            });
+            [...map.entries()].filter(([, names]) => names.length > 1)
+                .forEach(([key, names]) => out.push({ type, key, names }));
+        }
+        return out;
+    }, [schools]);
 
     const handleDataMigration = async () => {
         if (!window.confirm("⚠️ [데이터 마이그레이션]\n\n과거에 생성되어 '과목(subject)' 정보가 누락된 클래스(반) 데이터를 스캔합니다. 스캔 후 클래스 이름을 바탕으로 자동으로 과목을 할당합니다.\n\n이 작업은 아카데미 유니버스 등 최신 기능과의 정상적인 연동을 위해 반드시 필요합니다. 계속하시겠습니까?")) return;
@@ -736,6 +897,97 @@ const SettingsManager = ({ currentUser }) => {
                         >
                             {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '과목 자동 할당 스크립트 실행'}
                         </Button>
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">
+                            <School className="text-indigo-600"/> 학교명 표기 통합
+                        </h2>
+
+                        <div className="bg-indigo-50 text-indigo-900 p-5 rounded-2xl border border-indigo-200 space-y-2 text-sm">
+                            <p>• 같은 학교가 <strong>'영일고' / '영일 고등학교' / '영일고등학교'</strong> 처럼 다르게 적혀 있는 것을 하나로 맞춥니다.</p>
+                            <p>• 원래 이름을 따로 보관하므로 <strong>언제든 되돌릴 수 있습니다.</strong></p>
+                            <p className="pt-2 border-t border-indigo-200 mt-2">
+                                <strong>기출·내신 자료는 진단만 하고 고치지 않습니다.</strong> 그 자료는 문서 번호에 학교명이
+                                들어 있어, 이름을 바꾸면 나중에 리포트를 수정할 때 학생 성적 진단과의 연결이 끊어집니다.
+                                검색은 이미 표기가 달라도 찾도록 고쳐 두었으니 사용에는 지장이 없습니다.
+                            </p>
+                        </div>
+
+                        {masterDuplicates.length > 0 && (
+                            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-sm">
+                                <p className="font-black text-rose-800 mb-2 flex items-center gap-1.5">
+                                    <AlertTriangle size={16}/> 학교 목록에 같은 학교가 두 번 등록돼 있습니다
+                                </p>
+                                <p className="text-rose-700 mb-3 text-xs font-bold">
+                                    아래는 자동으로 합칠 수 없습니다. [학교 마스터 관리] 탭에서 하나만 남기고 지워주세요.
+                                </p>
+                                {masterDuplicates.map(d => (
+                                    <div key={d.type + d.key} className="font-bold text-rose-900 py-0.5">
+                                        {d.names.join('  ·  ')} <span className="text-rose-500">→ 같은 학교</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                            <Button onClick={handleScanSchoolNames} disabled={schoolFixProcessing}
+                                className="bg-white border-2 border-indigo-300 text-indigo-700 font-black py-3 px-5 hover:bg-indigo-50">
+                                {schoolFixProcessing ? <Loader className="animate-spin" size={20}/> : '1) 진단하기'}
+                            </Button>
+                            <Button onClick={handleApplySchoolNames} disabled={schoolFixProcessing || !schoolScan}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-5 border-0 disabled:opacity-40">
+                                2) 통합 실행
+                            </Button>
+                            <Button onClick={handleRollbackSchoolNames} disabled={schoolFixProcessing}
+                                className="ml-auto bg-white border-2 border-gray-300 text-gray-500 font-bold py-3 px-5 hover:bg-gray-50">
+                                되돌리기
+                            </Button>
+                        </div>
+
+                        {schoolScan && (
+                            <div className="space-y-3">
+                                {schoolScan.map(t => (
+                                    <div key={t.id} className="bg-white rounded-xl p-4 border border-slate-200">
+                                        <div className="font-black text-sm text-slate-800">
+                                            {t.label} — 전체 {t.total}건 중{' '}
+                                            {!t.writable ? (
+                                                <span className="text-slate-500">진단 전용 (수정하지 않음)</span>
+                                            ) : (
+                                                <span className={t.pending.length ? 'text-rose-600' : 'text-emerald-600'}>
+                                                    {t.pending.length ? `${t.pending.length}건 정리 필요` : '정리 완료 ✓'}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {t.merged.length > 0 && (
+                                            <div className="mt-2 text-xs font-bold text-slate-600">
+                                                <div className="mb-1">같은 학교로 묶이는 표기 ({t.merged.length}건):</div>
+                                                {t.merged.slice(0, 10).map(g => (
+                                                    <div key={g.key} className="pl-2 py-0.5">
+                                                        {g.names.join('  ,  ')} <span className="text-indigo-600">→ {g.key}</span>
+                                                    </div>
+                                                ))}
+                                                {t.merged.length > 10 && (
+                                                    <div className="pl-2 text-slate-400">…외 {t.merged.length - 10}건</div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {t.writable && t.pending.length > 0 && (
+                                            <div className="mt-2 text-xs font-bold text-slate-600">
+                                                <div className="mb-1">바뀔 내용 (앞 5건):</div>
+                                                {t.pending.slice(0, 5).map(p => (
+                                                    <div key={p.id} className="pl-2 py-0.5">
+                                                        {p.from} <span className="text-indigo-600">→ {p.to}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-300 space-y-6 md:col-span-2">

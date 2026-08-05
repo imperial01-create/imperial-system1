@@ -74,23 +74,18 @@ const stemOf = (normalized) => {
 };
 
 /**
- * 지역 접두사를 뗀 형태. 마스터 목록 대조와 비교에만 씁니다.
+ * 지역 접두사를 분리합니다. → [접두사 또는 null, 나머지]
  *
- * ⚠️ 조건이 핵심입니다. 접두사를 뗀 뒤에도 '이름 부분'이 남아 있을 때만 뗍니다.
- *    이 조건이 없으면 '서울고등학교' → '고등학교', '경기고등학교' → '고등학교' 가 되어
- *    실존하는 서로 다른 학교가 같은 학교로 합쳐집니다.
- *      서울고척초등학교 → 고척초등학교   (이름 '고척'이 남음 → 뗀다)
- *      서울고등학교     → 그대로          (이름이 안 남음 → 떼지 않는다)
- *      경기고등학교     → 그대로
+ *   '서울고척초등학교' → ['서울', '고척초등학교']
+ *   '서울고등학교'     → [null, '서울고등학교']   (이름이 안 남으므로 접두사로 보지 않음)
  */
-const stripRegionPrefix = (normalized) => {
+const splitRegionPrefix = (normalized) => {
   for (const p of REGION_PREFIXES) {
     if (!normalized.startsWith(p)) continue;
     const rest = normalized.slice(p.length);
-    // 뗀 나머지가 여전히 '이름 + 학교종류' 형태여야 합니다.
-    if (stemOf(rest).length >= 2) return rest;
+    if (stemOf(rest).length >= 2) return [p, rest];
   }
-  return normalized;
+  return [null, normalized];
 };
 
 /**
@@ -106,7 +101,17 @@ export const isSameSchool = (a, b) => {
   const nb = normalizeSchoolName(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  return stripRegionPrefix(na) === stripRegionPrefix(nb);
+
+  const [pa, ra] = splitRegionPrefix(na);
+  const [pb, rb] = splitRegionPrefix(nb);
+
+  /* ⚠️ 핵심 규칙: 지역을 '생략한 것'만 같다고 보고, '지역이 다른 것'은 다른 학교로 봅니다.
+     양쪽 모두 지역을 명시했는데 문자열이 다르다면 서로 다른 학교입니다.
+     이 조건이 없으면 '서울과학고등학교'와 '경기과학고등학교'가 둘 다 '과학고등학교'가 되어
+     전국 시도별 과학고·외국어고·예술고가 한 학교로 뭉칩니다. */
+  if (pa && pb) return false;
+
+  return ra === rb;
 };
 
 /** 학교급을 추론합니다. 못 하면 null. */
@@ -135,16 +140,26 @@ export const findCanonicalSchool = (raw, schoolsData) => {
     if (hit) return hit;
   }
 
-  // 2차: 지역 접두사 유무만 다른 경우 ('고척초' → '서울고척초등학교')
-  const bare = stripRegionPrefix(key);
+  /* 2차: 사용자가 지역 접두사를 '생략'한 경우만 찾아줍니다. ('고척초' → '서울고척초등학교')
+     지역을 명시했는데 1차에서 못 찾았다면, 그건 마스터 목록에 없는 학교입니다.
+     이때 억지로 다른 지역 학교에 붙이면 안 됩니다. */
+  const [inPrefix] = splitRegionPrefix(key);
+  if (inPrefix) return null;
+
+  const hits = [];
   for (const type of ['elementary', 'middle', 'high']) {
     const list = schoolsData[type];
     if (!Array.isArray(list)) continue;
-    const hit = list.find(name => stripRegionPrefix(normalizeSchoolName(name)) === bare);
-    if (hit) return hit;
+    for (const name of list) {
+      if (isSameSchool(name, key)) hits.push(name);
+    }
   }
 
-  return null;
+  /* 후보가 둘 이상이면 고르지 않습니다.
+     예를 들어 마스터에 '서울대신중학교'와 '부산대신중학교'가 함께 있는데
+     사용자가 '대신중'이라고만 적었다면, 어느 쪽인지 알 수 없습니다.
+     이럴 때 첫 번째를 골라 저장하면 조용히 잘못된 학교로 기록됩니다. */
+  return hits.length === 1 ? hits[0] : null;
 };
 
 /**
