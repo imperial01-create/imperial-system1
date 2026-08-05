@@ -2,9 +2,8 @@
    (🚀 CTO 패치: 시즌 네이밍 룰(Naming Convention) 표준화. 시즌 이름을 자유 입력 방식에서 
    '연도 + 하드코딩된 드롭다운(윈터/중간/기말/서머)' 방식으로 강제하여 데이터 파편화를 원천 차단했습니다.) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocs, getDocsFromServer, query, collection, writeBatch } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, secondaryAuth } from '../firebase';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
+import { db } from '../firebase';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -248,17 +247,24 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
+    /* 🔒 [보안 패치] 이 스크립트에서 '인증 계정 일괄 생성' 부분을 제거했습니다.
+       기존 방식의 문제:
+         - 비밀번호가 없는 계정에 소스코드에 적힌 고정 비밀번호를 그대로 부여했습니다.
+           (같은 값이 SMS 게이트웨이 앱에도 하드코딩되어 사실상 공개된 비밀번호였습니다)
+         - 부여한 비밀번호를 Firestore에 평문으로 다시 저장했습니다.
+       대체 방식:
+         - 인증 계정은 사용자가 처음 로그인할 때 서버(legacyLoginBridge)가 자동으로 만들어 주고,
+           그 즉시 평문 비밀번호를 삭제합니다. 별도 스크립트가 필요 없습니다.
+       따라서 이 버튼은 이제 '중복 문서 정리'만 수행합니다. */
     const handleAuthSyncAndDedupe = async () => {
-        if (!window.confirm("⚠️ [최고 관리자 전용 스크립트]\n시스템에 남아있는 모든 직군의 '중복 계정'을 완벽하게 삭제하고, '회색 방패 계정'을 '초록 방패(안전 연동)'로 일괄 변환하시겠습니까?\n\n* 중복 문서는 진짜(인증된 것)만 남기고 완벽히 삭제됩니다.\n* 데이터베이스 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
-        
+        if (!window.confirm("⚠️ [최고 관리자 전용]\n같은 아이디로 중복 생성된 사용자 문서를 정리합니다.\n\n* 인증 계정이 연결된 문서를 우선 남기고 나머지를 삭제합니다.\n* 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
+
         setSystemProcessing(true);
         try {
             let dedupeCount = 0;
-            let authSyncCount = 0;
-
             const seenIds = new Set();
             const duplicatesToDelete = [];
-            
+
             const sortedUsers = [...users].sort((a, b) => {
                 if (a.authUid && !b.authUid) return -1;
                 if (!a.authUid && b.authUid) return 1;
@@ -269,11 +275,8 @@ const SettingsManager = ({ currentUser }) => {
 
             for (const u of sortedUsers) {
                 const canonicalId = (u.userId || u.id).toLowerCase();
-                if (seenIds.has(canonicalId)) {
-                    duplicatesToDelete.push(u); 
-                } else {
-                    seenIds.add(canonicalId); 
-                }
+                if (seenIds.has(canonicalId)) duplicatesToDelete.push(u);
+                else seenIds.add(canonicalId);
             }
 
             for (const dupe of duplicatesToDelete) {
@@ -281,40 +284,7 @@ const SettingsManager = ({ currentUser }) => {
                 dedupeCount++;
             }
 
-            const freshSnap = await getDocsFromServer(query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users')));
-            const freshUsers = freshSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-            for (const u of freshUsers) {
-                if (!u.authUid) {
-                    const safeId = encodeURIComponent(u.userId || u.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-                    const email = `${safeId}@imperial.com`;
-                    const userPassword = (u.password && String(u.password).length >= 6) ? String(u.password) : 'imperial123!';
-
-                    try {
-                        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, userPassword);
-                        const newAuthUid = userCredential.user.uid;
-                        await signOut(secondaryAuth); 
-                        
-                        await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
-                            authUid: newAuthUid,
-                            password: userPassword,
-                            updatedAt: serverTimestamp()
-                        }, { merge: true });
-                        authSyncCount++;
-                    } catch (authError) {
-                        if (authError.code === 'auth/email-already-in-use') {
-                            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', u.id), {
-                                authUid: 'legacy_verified_account',
-                                updatedAt: serverTimestamp()
-                            }, { merge: true });
-                            authSyncCount++;
-                        } else {
-                            console.error(`보안망 가입 실패: ${email}`, authError);
-                        }
-                    }
-                }
-            }
-            alert(`✅ [최적화 완수] 계정 청소 및 보안망 동기화 완료!\n\n* 제거된 중복 찌꺼기 계정: ${dedupeCount}건\n* 초록 방패(정식 보안망) 연동 성공: ${authSyncCount}건`);
+            alert(`✅ 중복 문서 정리 완료!\n\n* 제거된 중복 계정 문서: ${dedupeCount}건\n\n인증 계정 연동은 각 사용자가 다음 로그인 시 자동으로 처리됩니다.`);
         } catch (err) {
             alert("작업 중 오류가 발생했습니다: " + err.message);
         } finally {

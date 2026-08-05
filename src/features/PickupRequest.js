@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 // [Import Check] UI 컴포넌트 및 아이콘 로드
 import { Send, FileText, User, Clock, AlertCircle } from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 import { Card, Button, LoadingSpinner } from '../components/UI';
 
-const TELEGRAM_API_URL = "https://api.telegram.org/bot8435500018:AAGY4gcNhiRBx2fHf8OzbHy74wIkzN5qvB0/sendMessage";
-const CHAT_ID = "8466973475";
+/* 🔒 [보안 패치] 텔레그램 봇 토큰과 채팅 ID를 코드에서 제거했습니다.
+   기존에는 브라우저 번들(build/static/js)에 토큰이 그대로 포함되어
+   사이트 방문자 누구나 봇을 탈취할 수 있었습니다.
+   이제 서버(Functions의 sendTelegramAlert)가 토큰을 보관하고 대신 발송합니다. */
 
 const PickupRequest = ({ currentUser }) => {
     const [formData, setFormData] = useState({
@@ -30,31 +34,22 @@ const PickupRequest = ({ currentUser }) => {
         setIsLoading(true);
 
         try {
-            // 2. 메시지 구성 (HTML 모드)
-            const messageText = `
-<b>🖨 픽업 데스크 신청 도착</b>
+            // 2. 메시지 구성 (일반 텍스트)
+            const messageText = [
+                '🖨 픽업 데스크 신청 도착',
+                '',
+                `👨‍🏫 요청 강사: ${currentUser?.name || '미상'}`,
+                `🎓 학생 이름: ${formData.studentName}`,
+                `📄 프린트명: ${formData.printName}`,
+                `📅 픽업 기한: ${formatDeadline(formData.deadline)}`
+            ].join('\n');
 
-<b>👨‍🏫 요청 강사:</b> ${currentUser.name}
-<b>🎓 학생 이름:</b> ${formData.studentName}
-<b>📄 프린트명:</b> ${formData.printName}
-<b>📅 픽업 기한:</b> ${formatDeadline(formData.deadline)}
-            `.trim();
+            // 3. 서버 경유 발송 (토큰은 서버에만 존재)
+            const sendAlert = httpsCallable(functions, 'sendTelegramAlert');
+            const result = await sendAlert({ text: messageText });
 
-            // 3. Telegram API 호출
-            const response = await fetch(TELEGRAM_API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    chat_id: CHAT_ID,
-                    text: messageText,
-                    parse_mode: 'HTML'
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`API Error: ${response.status}`);
+            if (!result?.data?.success) {
+                throw new Error(result?.data?.message || '서버가 발송을 처리하지 못했습니다.');
             }
 
             // 4. 성공 처리
@@ -63,7 +58,7 @@ const PickupRequest = ({ currentUser }) => {
 
         } catch (error) {
             console.error("Telegram Send Error:", error);
-            alert("전송 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.\n" + error.message);
+            alert("전송 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.\n" + (error.message || ''));
         } finally {
             setIsLoading(false);
         }

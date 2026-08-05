@@ -9,10 +9,9 @@ import {
   Users, Search, Plus, Edit2, Trash2, X, Shield, Phone, Loader, Key, Link as LinkIcon,
   BookMarked, Clock, Calendar, CheckCircle, Bell, AlertTriangle
 } from 'lucide-react';
-import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch, addDoc, query, where, getDocs, getDocsFromServer } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { doc, setDoc, deleteDoc, serverTimestamp, getDoc, collection, writeBatch, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, secondaryAuth, functions } from '../firebase'; 
+import { db, functions } from '../firebase';
 import { Button, Card, Modal, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 
@@ -205,21 +204,11 @@ const UserManager = ({ currentUser }) => {
         if (!window.confirm(`[${user.name}]님의 가입을 승인하시겠습니까?\n승인 시 즉시 로그인이 가능해집니다.`)) return;
         setLoading(true);
         try {
-            const safeId = encodeURIComponent(user.userId || user.id).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-            const email = `${safeId}@imperial.com`;
-            let authUid = '';
-
-            try {
-                const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, user.password);
-                authUid = userCredential.user.uid;
-                await signOut(secondaryAuth);
-            } catch (authError) {
-                if (authError.code === 'auth/email-already-in-use') { authUid = 'legacy_verified_account';
-                } else { throw new Error("인증 서버 등록 실패: " + authError.message); }
-            }
-
+            /* 🔒 [보안 패치] 예전에는 승인 시점에 Firestore에 저장된 평문 비밀번호로
+               브라우저에서 인증 계정을 만들었습니다. 이제 가입 시점에 서버(registerUser)가
+               이미 인증 계정을 만들어 두므로, 승인은 상태만 바꾸면 됩니다. */
             const targetStatus = user.role === 'student' ? 'attending' : 'active';
-            const approvalPayload = { authUid: authUid, status: targetStatus, updatedAt: serverTimestamp() };
+            const approvalPayload = { status: targetStatus, updatedAt: serverTimestamp() };
             await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', user.id), approvalPayload, { merge: true });
             if (user.phone) {
                 const cleanPhone = user.phone.replace(/[^0-9]/g, '');
@@ -340,21 +329,22 @@ const UserManager = ({ currentUser }) => {
                 showToast('사용자 정보가 성공적으로 수정되었습니다.', 'success');
             } else {
                 if (users.some(u => u.id === targetDocId)) throw new Error("이미 존재하는 아이디입니다.");
-                const email = `${targetDocId}@imperial.com`;
-                let authUid = '';
-                try {
-                    const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, formData.password);
-                    authUid = userCredential.user.uid;
-                    await signOut(secondaryAuth);
-                } catch (authError) {
-                    if (authError.code === 'auth/email-already-in-use') throw new Error("이미 인증서버에 등록된 계정입니다.");
-                    throw authError;
-                }
-                payload.authUid = authUid;
-                payload.createdAt = serverTimestamp();
-                await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), payload);
+                /* 🔒 [보안 패치] 계정 생성을 서버로 옮겼습니다.
+                   기존에는 브라우저의 '그림자 앱(secondaryAuth)'으로 계정을 만들었는데,
+                   이 방식은 호출자의 권한을 서버가 확인할 수 없었습니다.
+                   이제 adminCreateUser가 호출자가 데스크 권한인지 검증한 뒤 생성합니다. */
+                const { name, userId, role, updatedAt, ...restPayload } = payload;
+                const createFn = httpsCallable(functions, 'adminCreateUser');
+                const result = await createFn({
+                    userId: formData.userId,
+                    password: formData.password,
+                    name: formData.name,
+                    role: currentRole,
+                    profile: restPayload
+                });
+                const newAuthUid = result?.data?.authUid || '';
                 setIsEditMode(true);
-                setFormData(prev => ({ ...prev, id: targetDocId, authUid }));
+                setFormData(prev => ({ ...prev, id: targetDocId, authUid: newAuthUid, password: '' }));
                 showToast('사용자가 성공적으로 생성되었습니다.', 'success');
                 setLoading(false); return;
             }

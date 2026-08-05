@@ -14,9 +14,10 @@ import {
   PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays, Share2 
 } from 'lucide-react'; // 🚀 CTO Patch: 온톨로지 맵을 위한 Share2 아이콘 추가
 
-import { collection, getDocs, query, where, doc, updateDoc, getDoc, setDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
-import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { auth, db } from './firebase';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthStateChanged } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
 
 // 컴포넌트 Lazy 로딩
@@ -52,6 +53,11 @@ const CareReportManager = React.lazy(() => import('./features/CareReportManager'
 const OntologyMap = React.lazy(() => import('./features/ontology/OntologyMap'));
 
 const APP_ID = 'imperial-clinic-v1';
+
+/* 로그인 아이디를 Firebase Auth 이메일로 쓸 수 있는 안전한 문자열로 변환합니다.
+   서버(functions/index.js)의 toSafeId와 반드시 동일한 규칙이어야 합니다. */
+const toSafeId = (raw) =>
+  encodeURIComponent(String(raw || '')).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
 
 // 메뉴 생성 함수 (권한에 따라 동적으로 메뉴명을 할당합니다)
 const getMenuGroups = (currentUser) => [
@@ -187,7 +193,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
     const [showPassword, setShowPassword] = useState(false); 
     const [form, setForm] = useState({ role: 'student', userId: '', password: '', name: '', phone: '', schoolName: '', grade: '1학년', childName: '', subject: '' });
-    const [smsAuth, setSmsAuth] = useState({ code: '', input: '', sent: false, verified: false, timer: 0 });
+    const [smsAuth, setSmsAuth] = useState({ ticket: '', input: '', sent: false, verified: false, timer: 0 });
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [schoolType, setSchoolType] = useState('high');
     const [isCustomSchool, setIsCustomSchool] = useState(false); 
@@ -208,30 +214,42 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
         if (smsAuth.timer > 0 && !smsAuth.verified) {
             interval = setInterval(() => { setSmsAuth(prev => ({ ...prev, timer: prev.timer - 1 })); }, 1000);
         } else if (smsAuth.timer === 0 && smsAuth.sent && !smsAuth.verified) {
-            setSmsAuth(prev => ({ ...prev, code: '', sent: false }));
+            setSmsAuth(prev => ({ ...prev, sent: false }));
             setLoginErrorModal({ isOpen: true, msg: "인증 시간이 만료되었습니다. 다시 시도해주세요." });
         }
         return () => clearInterval(interval);
     }, [smsAuth.timer, smsAuth.sent, smsAuth.verified, setLoginErrorModal]);
 
+    /* 🔒 인증번호는 서버가 발급하고 서버가 채점합니다.
+       (기존에는 브라우저가 번호를 만들고 브라우저가 비교해서 우회가 가능했습니다) */
     const handleSendAuthCode = async () => {
         const cleanPhone = form.phone.replace(/[^0-9]/g, '');
         if (cleanPhone.length < 10) return setLoginErrorModal({ isOpen: true, msg: '유효한 휴대폰 번호를 입력해주세요.' });
         setLoading(true);
         try {
-            const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
-            const message = `[목동임페리얼학원]\n회원가입 본인인증 번호는 [${generatedCode}] 입니다. 3분 이내에 입력해주세요.`;
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: cleanPhone, message: message, status: 'pending', type: 'auth_code', studentName: form.name || '신규가입자', createdAt: serverTimestamp()
-            });
-            setSmsAuth({ code: generatedCode, input: '', sent: true, verified: false, timer: 180 });
+            const requestCode = httpsCallable(functions, 'requestSignupCode');
+            await requestCode({ phone: cleanPhone, name: form.name || '신규가입자' });
+            setSmsAuth({ ticket: '', input: '', sent: true, verified: false, timer: 180 });
             alert('인증번호가 발송되었습니다.');
-        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + error.message }); } finally { setLoading(false); }
+        } catch (error) {
+            setLoginErrorModal({ isOpen: true, msg: '인증번호 발송 실패: ' + (error.message || '잠시 후 다시 시도해주세요.') });
+        } finally { setLoading(false); }
     };
 
-    const handleVerifyCode = () => {
-        if (smsAuth.input === smsAuth.code) { setSmsAuth(prev => ({ ...prev, verified: true })); } 
-        else { setLoginErrorModal({ isOpen: true, msg: '인증번호가 일치하지 않습니다.' }); }
+    const handleVerifyCode = async () => {
+        const cleanPhone = form.phone.replace(/[^0-9]/g, '');
+        setLoading(true);
+        try {
+            const verifyCode = httpsCallable(functions, 'verifySignupCode');
+            const res = await verifyCode({ phone: cleanPhone, code: smsAuth.input });
+            if (res?.data?.verified) {
+                setSmsAuth(prev => ({ ...prev, verified: true, ticket: res.data.ticket }));
+            } else {
+                setLoginErrorModal({ isOpen: true, msg: '인증번호가 일치하지 않습니다.' });
+            }
+        } catch (error) {
+            setLoginErrorModal({ isOpen: true, msg: error.message || '인증번호가 일치하지 않습니다.' });
+        } finally { setLoading(false); }
     };
 
     const getGradeOptions = (type) => {
@@ -251,32 +269,26 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
 
         setLoading(true);
         try {
-            const safeId = encodeURIComponent(form.userId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-            const docRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', safeId);
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) { setLoading(false); return setLoginErrorModal({ isOpen: true, msg: '이미 사용 중인 아이디입니다.' }); }
-
-            const cleanPhone = form.phone.replace(/[^0-9]/g, '');
-            const payload = { id: safeId, userId: form.userId, name: form.name, phone: cleanPhone, role: form.role, password: form.password, status: 'pending', createdAt: serverTimestamp() };
-            if (form.role === 'student') { 
-                payload.schoolName = form.schoolName;
-                payload.grade = form.grade; 
-                payload.attendancePin = cleanPhone.slice(-4); 
-            } else if (form.role === 'parent') { 
-                payload.childName = form.childName;
-                payload.schoolName = form.schoolName; 
-                payload.grade = form.grade;           
-            } else if (['ta', 'lecturer'].includes(form.role)) { 
-                payload.subject = form.subject;
-            }
-
-            await setDoc(docRef, payload);
-            await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'sms_outbox'), {
-                phoneNumber: '01012345678', message: `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${form.name}\n데스크에서 승인해주세요.`, status: 'pending', type: 'system_alert', studentName: '시스템', createdAt: serverTimestamp()
+            /* 🔒 계정 생성은 서버가 담당합니다.
+               비밀번호는 Firebase Auth에만 저장되고 Firestore에는 남지 않습니다. */
+            const register = httpsCallable(functions, 'registerUser');
+            await register({
+                ticket: smsAuth.ticket,
+                phone: form.phone.replace(/[^0-9]/g, ''),
+                userId: form.userId,
+                password: form.password,
+                name: form.name,
+                role: form.role,
+                schoolName: form.schoolName,
+                grade: form.grade,
+                childName: form.childName,
+                subject: form.subject
             });
             alert('가입 신청이 완료되었습니다. 데스크 승인 후 로그인 가능합니다.');
-            onCancel(); 
-        } catch (error) { setLoginErrorModal({ isOpen: true, msg: '오류가 발생했습니다: ' + error.message }); } finally { setLoading(false); }
+            onCancel();
+        } catch (error) {
+            setLoginErrorModal({ isOpen: true, msg: error.message || '가입 처리 중 오류가 발생했습니다.' });
+        } finally { setLoading(false); }
     };
 
     return (
@@ -723,105 +735,103 @@ const AppContent = () => {
 
   const navigate = useNavigate();
 
+  /* 🔒 세션 복원은 Firebase Auth 세션을 기준으로 합니다.
+     이제 모든 Firestore 접근이 인증을 요구하므로, sessionStorage만 남아 있고
+     Auth 세션이 끊긴 상태로 앱에 들어가면 화면 전체가 권한 오류로 깨집니다.
+     따라서 Auth 세션이 없으면 저장된 프로필도 함께 버립니다. */
   useEffect(() => {
-    if ('caches' in window) {
-      caches.keys().then((names) => {
-        names.forEach(name => caches.delete(name));
-      });
-    }
-
-    const savedUser = sessionStorage.getItem('imperial_user');
-    if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      if (parsedUser.id && parsedUser.id !== parsedUser.id.toLowerCase()) {
-          parsedUser.id = parsedUser.id.toLowerCase();
-          sessionStorage.setItem('imperial_user', JSON.stringify(parsedUser));
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      const savedUser = sessionStorage.getItem('imperial_user');
+      if (firebaseUser && savedUser) {
+        try {
+          const parsed = JSON.parse(savedUser);
+          if (parsed.id) parsed.id = String(parsed.id).toLowerCase();
+          setCurrentUser(parsed);
+        } catch (e) {
+          sessionStorage.removeItem('imperial_user');
+          setCurrentUser(null);
+        }
+      } else {
+        sessionStorage.removeItem('imperial_user');
+        setCurrentUser(null);
       }
-      setCurrentUser(parsedUser);
-    }
-    setLoading(false);
+      setLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
+  /* 🔒 로그인은 반드시 Firebase Auth 세션을 확보한 뒤에 프로필을 읽습니다.
+     1) 정상 계정  : Auth로 바로 로그인
+     2) 과거 계정  : 서버(legacyLoginBridge)가 대조 후 Auth 계정을 만들어 주고
+                     Firestore의 평문 비밀번호를 즉시 삭제 → 자동 이관
+     어느 경로든 최종적으로 Auth 세션이 있어야만 앱에 들어옵니다. */
   const handleLogin = async () => {
       if (!loginForm.id || !loginForm.password) { setLoginErrorModal({ isOpen: true, msg: '정보를 입력하세요.' }); return; }
       setLoginProcessing(true);
       try {
           const rawId = loginForm.id.trim();
-          let loginPassword = loginForm.password;
-          if (loginPassword.length < 6) loginPassword = loginPassword.padEnd(6, '0');
+          const safeId = toSafeId(rawId);
+          let docId = safeId;
 
-          const idVariants = [...new Set([rawId, rawId.normalize('NFC'), rawId.normalize('NFD')])];
-          let authUid = null;
-          let finalSafeId = null;
+          /* ⚠️ 과거 호환: Firebase Auth는 비밀번호가 6자리 이상이어야 합니다.
+             예전 코드는 6자리 미만 비밀번호를 '0'으로 채워서 Auth에 저장했기 때문에,
+             그런 계정은 사용자가 입력한 원본으로는 로그인이 되지 않습니다.
+             따라서 원본과 패딩본을 모두 시도해야 기존 사용자가 잠기지 않습니다. */
+          const pwCandidates = [...new Set([
+              loginForm.password,
+              loginForm.password.length < 6 ? loginForm.password.padEnd(6, '0') : loginForm.password
+          ])];
 
-          for (const idVariant of idVariants) {
-              const safeId = encodeURIComponent(idVariant).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
-              const email = `${safeId}@imperial.com`;
+          let signedIn = false;
+          for (const pw of pwCandidates) {
               try {
-                  const userCredential = await signInWithEmailAndPassword(auth, email, loginPassword);
-                  authUid = userCredential.user.uid;
-                  finalSafeId = safeId;
-                  break; 
-              } catch (authErr) {}
+                  await signInWithEmailAndPassword(auth, `${safeId}@imperial.com`, pw);
+                  signedIn = true;
+                  break;
+              } catch (e) { /* 다음 후보로 계속 */ }
           }
 
-          if (!finalSafeId) { finalSafeId = encodeURIComponent(rawId).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase(); }
-          
-          try {
-              let userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', finalSafeId);
-              let userDoc = await getDoc(userDocRef);
-              let docData = null;
-              let originalDocId = null;
-              
-              if (!userDoc.exists()) {
-                  const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'users'), where('userId', '==', rawId));
-                  const s = await getDocs(q);
-                  if (!s.empty) {
-                      userDoc = s.docs[0];
-                      docData = userDoc.data();
-                      originalDocId = userDoc.id; 
-                  }
-              } else {
-                  docData = userDoc.data();
-                  originalDocId = userDoc.id;
-              }
-              
-              if(docData) {
-                  if (docData.status === 'pending') {
-                      setLoginProcessing(false);
-                      return setLoginErrorModal({ isOpen: true, msg: '가입 승인이 대기 중인 계정입니다.\n\n학원 데스크에서 승인을 완료해야 로그인이 가능합니다.' });
-                  }
-
-                  if (!authUid && docData.password !== loginForm.password) throw new Error("비밀번호 불일치");
-
-                  const userData = { id: finalSafeId, ...docData, authUid: authUid || docData.authUid };
-
-                  if (originalDocId && originalDocId !== finalSafeId) {
-                      setDoc(userDocRef, { ...docData, lastLogin: new Date().toISOString() }, { merge: true })
-                          .then(() => {
-                              const oldDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', originalDocId);
-                              deleteDoc(oldDocRef).catch(e => console.error("Failed to delete old duplicate doc:", e));
-                          })
-                          .catch(e => console.error("Self-healing failed:", e));
-                  } else {
-                      updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
-                          .catch(e => console.error("Last login update failed:", e));
-                  }
-
-                  setCurrentUser(userData);
-                  sessionStorage.setItem('imperial_user', JSON.stringify(userData));
-                  navigate('/dashboard'); 
-              } else { 
-                  setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' });
-              }
-          } catch (dbErr) {
-              console.error("Firestore Permission Denied:", dbErr);
-              throw new Error("보안 규칙(Zero Trust) 접근 거부");
+          if (!signedIn) {
+              const bridge = httpsCallable(functions, 'legacyLoginBridge');
+              const res = await bridge({ userId: rawId, password: loginForm.password });
+              if (!res?.data?.token) throw new Error('AUTH_FAILED');
+              docId = res.data.docId || safeId;
+              await signInWithCustomToken(auth, res.data.token);
           }
-      } catch (e) { 
-          console.error("Login Final Error:", e);
-          setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.' });
-      } 
+
+          const userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', docId);
+          const userDoc = await getDoc(userDocRef);
+          if (!userDoc.exists()) {
+              await signOut(auth);
+              setLoginErrorModal({ isOpen: true, msg: '로그인 실패: 시스템에 등록된 계정 정보가 없습니다.' });
+              return;
+          }
+
+          const docData = userDoc.data();
+          if (docData.status === 'pending') {
+              await signOut(auth);
+              setLoginErrorModal({ isOpen: true, msg: '가입 승인이 대기 중인 계정입니다.\n\n학원 데스크에서 승인을 완료해야 로그인이 가능합니다.' });
+              return;
+          }
+
+          // 혹시 남아 있을 수 있는 비밀번호 필드는 브라우저 세션에 절대 담지 않습니다.
+          const { password, ...safeProfile } = docData;
+          const userData = { ...safeProfile, id: docId, authUid: auth.currentUser?.uid || safeProfile.authUid || null };
+
+          updateDoc(userDocRef, { lastLogin: new Date().toISOString() })
+              .catch(e => console.error('Last login update failed:', e));
+
+          setCurrentUser(userData);
+          sessionStorage.setItem('imperial_user', JSON.stringify(userData));
+          navigate('/dashboard');
+      } catch (e) {
+          console.error('Login Error:', e);
+          try { await signOut(auth); } catch (_) {}
+          const msg = e?.code === 'functions/resource-exhausted'
+              ? (e.message || '로그인 시도가 많습니다. 잠시 후 다시 시도해주세요.')
+              : '로그인 실패: 아이디 또는 비밀번호를 다시 확인해 주세요.';
+          setLoginErrorModal({ isOpen: true, msg });
+      }
       finally { setLoginProcessing(false); }
   };
 

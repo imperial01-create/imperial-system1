@@ -66,8 +66,12 @@ export const DataProvider = ({ children, currentUser }) => {
         };
     }, [currentUser]);
 
+    /* 🐛 [버그 수정] currentUser를 Context에 함께 제공합니다.
+       ConsultationManager / RecruitmentManager / AcademicCalendarManager는
+       useData()에서 currentUser를 꺼내 쓰고 있었지만 Provider가 넘겨주지 않아
+       항상 undefined였습니다. (예: 상담 등록 시 담당자가 비어 있던 원인) */
     return (
-        <DataContext.Provider value={{ users, classes, enrollments, masterData, englishStats, loadingData }}>
+        <DataContext.Provider value={{ currentUser, users, classes, enrollments, masterData, englishStats, loadingData }}>
             {children}
         </DataContext.Provider>
     );

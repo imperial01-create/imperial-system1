@@ -10,8 +10,8 @@ import {
     ChevronLeft, ChevronRight, Check
 } from 'lucide-react';
 import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, addDoc, where } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { db, secondaryAuth } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button, Badge, Card, Toast } from '../components/UI';
 
@@ -250,21 +250,22 @@ export default function ConsultationManager({ isKiosk = false }) {
             const generatedPw = cleanPhone.slice(-4) + '00'; 
             const mergedGrade = `${leadForm.schoolType} ${leadForm.gradeLevel}학년`; 
 
-            const email = `${targetDocId}@imperial.com`;
-            let authUid = 'legacy_verified_account';
-            try {
-                const credential = await createUserWithEmailAndPassword(secondaryAuth, email, generatedPw);
-                authUid = credential.user.uid;
-                await signOut(secondaryAuth);
-            } catch (authErr) { if (authErr.code !== 'auth/email-already-in-use') throw authErr; }
-
-            const userPayload = {
-                id: targetDocId, userId: targetDocId, name: leadForm.name, phone: cleanPhone,
-                role: 'student', status: 'attending', authUid: authUid,
-                schoolName: leadForm.schoolName, grade: mergedGrade, attendancePin: cleanPhone.slice(-4),
-                createdAt: serverTimestamp()
-            };
-            await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', targetDocId), userPayload);
+            /* 🔒 [보안 패치] 계정 생성을 서버(adminCreateUser)로 옮겼습니다.
+               비밀번호는 Firebase Auth에만 저장되고 Firestore에는 남지 않습니다. */
+            const createUser = httpsCallable(functions, 'adminCreateUser');
+            await createUser({
+                userId: targetDocId,
+                password: generatedPw,
+                name: leadForm.name,
+                role: 'student',
+                profile: {
+                    phone: cleanPhone,
+                    status: 'attending',
+                    schoolName: leadForm.schoolName,
+                    grade: mergedGrade,
+                    attendancePin: cleanPhone.slice(-4)
+                }
+            });
 
             if (leadForm.checkedSubjects['영어'] && leadForm.english.catScore) {
                 const score = Number(leadForm.english.catScore);

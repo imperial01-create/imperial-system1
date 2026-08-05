@@ -1,0 +1,295 @@
+/* =========================================================================
+   임페리얼 학원 Firestore 보안 규칙 v9.0
+
+   [v8.10 대비 핵심 변경]
+   1. isStaff()의 '.*@imperial.com$' 이메일 패턴 제거.
+      → 모든 계정 이메일이 @imperial.com 이므로 학생·학부모까지 교직원이 되던 치명적 구멍을 차단.
+   2. isAdmin()의 이메일/아이디 패턴('admin','master','imperialsys*' 등) 제거.
+      → 아이디를 'admin'으로 가입하면 관리자가 되던 권한 상승 경로를 차단.
+      → 원장님 계정은 authUid 직접 지정(isOwner)으로만 보장.
+   3. users의 'allow get: if true' 제거.
+      → 로그인 없이 사용자 문서(과거 평문 비밀번호 포함)를 읽던 경로를 차단.
+   4. sms_outbox의 'allow create: if true' 제거.
+      → 외부인이 학원 폰으로 임의 문자를 발송(=요금 발생)시키던 경로를 차단.
+      → 가입 인증 문자는 이제 서버(Functions)가 admin SDK로 직접 생성한다.
+   5. 누락되어 차단 상태였던 raw_call_logs / student_context / daily_briefings 규칙 추가.
+      → 안드로이드 앱의 통화요약 등록과 출결 AI 인사이트가 정상 작동하게 됨.
+   6. SMS 게이트웨이 계정(admin@imperial.com)을 '관리자'가 아닌
+      '제한된 서비스 계정(isGateway)'으로 격하. 업무에 필요한 최소 권한만 부여.
+   ========================================================================= */
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =====================================================================
+    // 1. 공통 헬퍼
+    // =====================================================================
+    function isAuth() { return request.auth != null; }
+
+    function uid() { return isAuth() ? request.auth.uid : 'NO_UID'; }
+
+    // 로그인 이메일 '{safeId}@imperial.com' 에서 safeId 만 추출
+    function emailId() {
+      return (isAuth() && request.auth.token.email != null)
+        ? request.auth.token.email.lower().split('@')[0]
+        : 'NO_EMAIL';
+    }
+
+    function userPath(appId, id) {
+      return /databases/$(database)/documents/artifacts/$(appId)/public/data/users/$(id);
+    }
+
+    // 사용자 문서에서 role 조회 (문서/필드가 없어도 안전하게 'none' 반환)
+    function docRole(appId) {
+      return exists(userPath(appId, emailId()))
+        ? get(userPath(appId, emailId())).data.get('role', 'none').lower()
+        : (exists(userPath(appId, uid()))
+            ? get(userPath(appId, uid())).data.get('role', 'none').lower()
+            : 'none');
+    }
+
+    // Custom Claims 우선, 없으면 Firestore 문서 기준 (향후 claims 전환 대비)
+    function role(appId) {
+      return (isAuth() && request.auth.token.role != null)
+        ? request.auth.token.role.lower()
+        : docRole(appId);
+    }
+
+    // 원장님 계정 비상 통로 (uid는 위조 불가하므로 안전한 안전장치)
+    function isOwner() { return isAuth() && uid() == 'PZYN2Ui7mGUGRgQiByvjRutzzPE3'; }
+
+    // SMS 게이트웨이 전용 서비스 계정 (안드로이드 앱). 관리자 아님.
+    function isGateway() { return isAuth() && emailId() == 'admin'; }
+
+    function isAdmin(appId)  { return isOwner() || (isAuth() && role(appId) == 'admin'); }
+    function isAsst(appId)   { return isAuth() && role(appId) == 'admin_assistant'; }
+    function isDesk(appId)   { return isAdmin(appId) || isAsst(appId); }
+    function isLecturer(appId) { return isAuth() && role(appId) == 'lecturer'; }
+    function isTA(appId)     { return isAuth() && role(appId) == 'ta'; }
+    function isStudent(appId){ return isAuth() && role(appId) == 'student'; }
+    function isParent(appId) { return isAuth() && role(appId) == 'parent'; }
+
+    // 교직원 = 관리자 + 행정조교 + 강사 + 수업조교 (학생/학부모 절대 포함 안 됨)
+    function isStaff(appId)  { return isDesk(appId) || isLecturer(appId) || isTA(appId); }
+
+    function isMe(id) { return isAuth() && (id == emailId() || id == uid()); }
+
+    function myChildren(appId) {
+      return exists(userPath(appId, emailId()))
+        ? get(userPath(appId, emailId())).data.get('linkedChildrenIds', [])
+        : (exists(userPath(appId, uid()))
+            ? get(userPath(appId, uid())).data.get('linkedChildrenIds', [])
+            : []);
+    }
+
+    function isParentOf(appId, studentId) {
+      return isParent(appId) && studentId in myChildren(appId);
+    }
+
+    // 본인 또는 내 자녀의 데이터인가
+    function isMineOrChild(appId, studentId) {
+      return isMe(studentId) || isParentOf(appId, studentId);
+    }
+
+    // =====================================================================
+    // 2. 영단어 마스터 DB
+    // =====================================================================
+    match /VocabularyDB/{docId} {
+      allow read:  if isAuth();
+      allow write: if isStaff('imperial-clinic-v1');
+    }
+
+    // =====================================================================
+    // 3. 아카데미 메인 데이터
+    // =====================================================================
+    match /artifacts/{appId}/public/data {
+
+      // ---------------------------------------------------------------
+      // 사용자
+      // 로그인 전 조회는 전면 차단한다. 로그인은 Functions(legacyLoginBridge)가
+      // admin SDK로 처리하므로 클라이언트의 비인증 조회가 더 이상 필요 없다.
+      // ---------------------------------------------------------------
+      match /users/{docId} {
+        allow get:    if isAuth();
+        // TODO(Phase 2): staff_directory 도입 후 list 를 교직원 전용으로 축소.
+        //                현재는 학생/학부모 화면이 users 전체 구독에 의존하므로 유지.
+        allow list:   if isAuth();
+        allow create: if isDesk(appId);
+        // 본인 수정은 허용하되 role/status 변경은 데스크만 가능 (권한 자가상승 차단)
+        allow update: if isDesk(appId)
+                      || (isMe(docId)
+                          && request.resource.data.get('role', '')   == resource.data.get('role', '')
+                          && request.resource.data.get('status', '') == resource.data.get('status', ''));
+        allow delete: if isAdmin(appId);
+      }
+
+      // ---------------------------------------------------------------
+      // 급여 — 본인 명세서 외 타인 조회 차단
+      // ---------------------------------------------------------------
+      match /payrolls/{docId} {
+        allow read: if isDesk(appId)
+                    || (isAuth() && resource != null && (
+                          resource.data.get('userId', '') == emailId() ||
+                          resource.data.get('userId', '') == uid()
+                       ))
+                    || (isAuth() && docId.matches('^' + emailId() + '_.*'));
+        allow write, delete: if isDesk(appId);
+      }
+
+      // ---------------------------------------------------------------
+      // 재무
+      // ---------------------------------------------------------------
+      match /work_logs/{docId}     { allow read, write: if isStaff(appId); }
+      match /incomes/{docId}       { allow read, write: if isDesk(appId); }
+      match /transactions/{docId}  { allow read, write: if isDesk(appId); }
+      match /budgets/{docId}       { allow read, write: if isDesk(appId); }
+      // 지출결의: 교직원은 작성 가능, 승인/삭제는 데스크만
+      match /expenses/{docId} {
+        allow read:   if isStaff(appId);
+        allow create: if isStaff(appId);
+        allow update: if isDesk(appId)
+                      || (isStaff(appId) && resource.data.get('status', 'PENDING') == 'PENDING');
+        allow delete: if isDesk(appId);
+      }
+
+      // ---------------------------------------------------------------
+      // 교무 / 행정
+      // ---------------------------------------------------------------
+      match /recruitment/{docId}     { allow read, write: if isDesk(appId); }
+      match /consultations/{docId}   { allow read, write: if isStaff(appId); }
+      match /consult_history/{docId} { allow read, write: if isStaff(appId); }
+      match /academic_calendars/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /clinic_tasks/{docId} {
+        allow read: if isAuth();
+        allow create, update: if isStaff(appId);
+        allow delete: if isAdmin(appId) || isLecturer(appId);
+      }
+      match /daily_requests/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /call_logs/{docId}      { allow read: if isStaff(appId); allow write: if isStaff(appId); }
+
+      // 안드로이드 게이트웨이 앱이 등록하는 S25 통화 요약 원본
+      // (기존 규칙에 누락되어 차단 상태였음 → 기능이 동작하지 않았음)
+      match /raw_call_logs/{docId} {
+        allow read:   if isStaff(appId);
+        allow create: if isGateway() || isStaff(appId);
+        allow update, delete: if isAdmin(appId);
+      }
+
+      // Functions(processCallLog)가 생성하는 학생 특이사항 태그
+      // (기존 규칙에 누락되어 출결 화면 AI 인사이트가 표시되지 않았음)
+      match /student_context/{studentId} {
+        allow read:  if isStaff(appId) || isMineOrChild(appId, studentId);
+        allow write: if isStaff(appId);
+      }
+
+      // Functions(generateMorningBriefing)가 생성. 클라이언트는 읽기만.
+      match /daily_briefings/{docId} {
+        allow read:  if isAuth();
+        allow write: if false;
+      }
+
+      // ---------------------------------------------------------------
+      // 수업 / 출결
+      // ---------------------------------------------------------------
+      match /classes/{docId}     { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /lectures/{docId}    { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /enrollments/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /attendance_logs/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /school_strategies/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /exam_leaves/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+
+      match /sessions/{docId} {
+        allow read: if isAuth();
+        allow create, delete: if isStaff(appId);
+        // 학생/학부모는 예약 신청·취소요청을 위해 update 필요
+        allow update: if isStaff(appId) || isStudent(appId) || isParent(appId);
+      }
+
+      match /schedule_requests/{docId} {
+        allow read, create: if isStaff(appId);
+        allow update, delete: if isAdmin(appId);
+      }
+
+      match /lecture_completions/{docId} {
+        allow read:  if isStaff(appId) || (isAuth() && isMineOrChild(appId, resource.data.get('studentId', '')));
+        allow write: if isStaff(appId) || (isAuth() && isMe(request.resource.data.get('studentId', '')));
+      }
+
+      // ---------------------------------------------------------------
+      // 시험 / 성적
+      // ---------------------------------------------------------------
+      match /integrated_exams/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+      match /exam_archive/{docId}     { allow read, write: if isStaff(appId); }
+
+      match /student_exam_diagnostics/{docId} {
+        allow read: if isStaff(appId) || (isAuth() && isMineOrChild(appId, resource.data.get('studentId', '')));
+        allow create, update: if isStaff(appId)
+                              && request.resource.data.score is number
+                              && request.resource.data.score >= 0
+                              && request.resource.data.score <= 100
+                              && request.resource.data.testCategory in ['school', 'concept', 'mock'];
+        allow delete: if isAdmin(appId) || isLecturer(appId);
+      }
+
+      match /grades/{docId} {
+        allow read:   if isStaff(appId) || (isAuth() && isMineOrChild(appId, resource.data.get('studentId', '')));
+        allow create: if isStaff(appId) || (isAuth() && isMe(request.resource.data.get('studentId', '')));
+        allow update, delete: if isDesk(appId);
+      }
+
+      match /concept_stats/{studentId} {
+        allow read:  if isStaff(appId) || isMineOrChild(appId, studentId);
+        allow write: if isStaff(appId) && request.resource.data.subjectStats is map;
+      }
+
+      // ---------------------------------------------------------------
+      // 영단어(Voca)
+      // ---------------------------------------------------------------
+      match /english_stats/{studentId} {
+        allow read:  if isStaff(appId) || isMineOrChild(appId, studentId);
+        allow write: if isStaff(appId) || isMe(studentId);
+
+        match /word_history/{wordId} {
+          allow read:  if isStaff(appId) || isMineOrChild(appId, studentId);
+          allow write: if isStaff(appId) || isMe(studentId);
+        }
+      }
+
+      match /test_sessions/{docId} {
+        allow read: if isStaff(appId)
+                    || (isAuth() && resource != null && isMineOrChild(appId, resource.data.get('studentId', '')));
+        allow create, update, delete: if isStaff(appId)
+                    || (isAuth() && isMe(request.resource.data.get('studentId', '')));
+      }
+
+      match /voca_rankings/{docId} {
+        allow read:  if isAuth();
+        allow write: if isStaff(appId) || isStudent(appId);
+      }
+
+      // ---------------------------------------------------------------
+      // 문자 발송함
+      // 가입 인증 문자는 Functions(admin SDK)가 직접 만든다.
+      // 클라이언트 무제한 create 를 막아 문자 요금 도용을 차단한다.
+      // ---------------------------------------------------------------
+      match /sms_outbox/{docId} {
+        allow read:   if isStaff(appId) || isGateway();
+        allow create: if isStaff(appId);
+        allow update: if isStaff(appId) || isGateway();
+        allow delete: if isDesk(appId);
+      }
+
+      // ---------------------------------------------------------------
+      // 환경설정
+      // 'schools' 문서만 회원가입 화면(로그인 전)에서 필요하므로 공개 읽기 허용
+      // ---------------------------------------------------------------
+      match /settings/{docId} {
+        allow read:  if isAuth() || docId == 'schools';
+        allow write: if isDesk(appId);
+      }
+
+    } // /artifacts/{appId}/public/data
+  }
+}

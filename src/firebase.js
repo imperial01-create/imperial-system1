@@ -1,13 +1,12 @@
 import { initializeApp } from "firebase/app";
-import { 
-  getFirestore, 
-  initializeFirestore, 
-  persistentLocalCache, 
-  persistentMultipleTabManager 
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager
 } from "firebase/firestore";
-import { getAuth } from "firebase/auth"; 
+import { getAuth } from "firebase/auth";
 // 🚀 [CTO 추가] 서버(Cloud Functions) 모듈 임포트
-import { getFunctions } from "firebase/functions"; 
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBN0Zy0-GOqN0sB0bTouDohZp7B2zfFjWc",
@@ -21,8 +20,9 @@ const firebaseConfig = {
 // 1. Firebase 메인 앱 초기화
 const app = initializeApp(firebaseConfig);
 
-// 💡 [CTO 핵심 기술] 관리자가 새 사용자를 등록할 때 기존 세션이 끊기지 않도록 하는 '계정 생성 전용' 그림자 앱
-const secondaryApp = initializeApp(firebaseConfig, "Secondary");
+/* 🔒 [보안 패치] '계정 생성 전용 그림자 앱(secondaryApp)'을 제거했습니다.
+   사용자 계정 생성은 이제 서버(Functions의 adminCreateUser / registerUser)가 담당하며,
+   서버가 호출자의 권한을 검증하므로 브라우저에서 계정을 만들 필요가 없습니다. */
 
 // 2. Firestore DB 초기화
 export const db = initializeFirestore(app, {
@@ -32,8 +32,7 @@ export const db = initializeFirestore(app, {
 });
 
 // 3. Auth 인스턴스 추출 (Export)
-export const auth = getAuth(app); // 학부모/학생 등 일반 로그인용
-export const secondaryAuth = getAuth(secondaryApp); // 관리자의 사용자 계정 발급 전용
+export const auth = getAuth(app);
 
 // 🚀 4. [신규 추가] 비밀번호 강제 변경 등 백엔드 기능용 Functions 인스턴스 추출
 export const functions = getFunctions(app, 'asia-northeast3');

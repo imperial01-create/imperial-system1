@@ -1,1 +1,39 @@
-node_modules
+# 의존성
+node_modules/
+functions/node_modules/
+
+# 빌드 산출물 (Cloudflare Pages가 소스에서 직접 빌드하므로 커밋하지 않는다)
+build/
+
+# 환경변수 / 비밀정보
+#
+# 주의: 루트의 .env 는 의도적으로 커밋합니다.
+#   현재 담긴 값은 REACT_APP_API_URL(온톨로지 Worker 주소) 하나뿐이고 비밀이 아니며,
+#   이 값이 없으면 Cloudflare 빌드 시 'AI 수학 지식 맵' 화면이 통째로 실패합니다.
+#   ⚠️ 비밀번호/토큰/API 키는 절대 .env 에 넣지 마세요.
+#      프론트엔드 .env 값은 빌드 결과물에 그대로 박혀 브라우저에 공개됩니다.
+#      비밀값은 Firebase Functions 환경변수(functions/.env)나 Cloudflare Secret에 두세요.
+.env.local
+.env.*.local
+functions/.env
+functions/.env.*
+*-service-account.json
+serviceAccountKey.json
+
+# Firebase 로컬 산출물
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+
+# 에디터 / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

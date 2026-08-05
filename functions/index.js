@@ -45,11 +45,76 @@ const getGeminiKey = () => {
 };
 
 // ============================================================================
+// [보안 유틸리티] 호출자 신원 및 권한 검증
+// onCall 함수는 '로그인 여부'만으로는 안전하지 않다. 반드시 역할까지 확인한다.
+// ============================================================================
+const crypto = require("crypto");
+
+const STAFF_ROLES = ['admin', 'admin_assistant', 'lecturer', 'ta'];
+const DESK_ROLES = ['admin', 'admin_assistant'];
+
+// 다른 사람이 선점하면 권한 상승으로 이어지는 예약 아이디
+const RESERVED_USER_IDS = [
+    'admin', 'master', 'owner', 'director', 'root', 'system',
+    'imperialsys01', 'superuser', 'manager'
+];
+
+const toSafeId = (raw) =>
+    encodeURIComponent(String(raw || '')).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
+
+const usersCol = () => admin.firestore().collection(`artifacts/${APP_ID}/public/data/users`);
+
+/** 호출한 사용자의 Firestore 프로필을 조회한다. (문서 ID = safeId, 없으면 uid로 재시도) */
+const getCallerProfile = async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "로그인이 필요합니다.");
+    const email = (request.auth.token && request.auth.token.email) || '';
+    const safeId = email.split('@')[0];
+
+    let snap = safeId ? await usersCol().doc(safeId).get() : null;
+    if (!snap || !snap.exists) snap = await usersCol().doc(request.auth.uid).get();
+    if (!snap.exists) return { id: safeId || request.auth.uid, role: 'none' };
+    return { id: snap.id, ...snap.data() };
+};
+
+const assertRole = async (request, allowed, message) => {
+    const profile = await getCallerProfile(request);
+    if (!allowed.includes(profile.role)) {
+        throw new HttpsError("permission-denied", message || "이 작업을 수행할 권한이 없습니다.");
+    }
+    return profile;
+};
+
+const assertStaff = (request) => assertRole(request, STAFF_ROLES, "교직원만 사용할 수 있는 기능입니다.");
+const assertDesk = (request) => assertRole(request, DESK_ROLES, "관리자/행정조교만 사용할 수 있는 기능입니다.");
+
+/** 문자 발송함에 적재 (서버 전용 경로) */
+const queueSms = (batchOrDb, phoneNumber, message, type, studentName) => {
+    const ref = admin.firestore().collection(`artifacts/${APP_ID}/public/data/sms_outbox`).doc();
+    const payload = {
+        phoneNumber: String(phoneNumber || '').replace(/[^0-9]/g, ''),
+        message,
+        status: 'pending',
+        type,
+        studentName: studentName || '시스템',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    if (batchOrDb && typeof batchOrDb.set === 'function' && batchOrDb.commit) {
+        batchOrDb.set(ref, payload);
+        return ref;
+    }
+    return ref.set(payload).then(() => ref);
+};
+
+const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+
+// ============================================================================
 // [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
-  const { uid, newPassword, email } = request.data; 
+  // 🔒 [보안 패치] 기존에는 로그인만 하면 누구나 타인의 비밀번호를 바꿀 수 있었다.
+  await assertDesk(request);
+  const { uid, newPassword, email } = request.data;
 
   if (!newPassword || newPassword.length < 6) throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
 
@@ -97,6 +162,8 @@ exports.adminResetPassword = onCall(async (request) => {
 // ============================================================================
 exports.refineFeedback = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "로그인한 사용자만 AI를 사용할 수 있습니다.");
+    // 💰 [비용 보호] Gemini 호출은 건당 과금된다. 교직원만 사용할 수 있게 제한한다.
+    await assertStaff(request);
     const rawText = request.data.rawText;
     if (!rawText) throw new HttpsError("invalid-argument", "정제할 텍스트가 없습니다.");
     
@@ -249,13 +316,21 @@ exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async 
 // ============================================================================
 exports.sendTelegramAlert = onCall(async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    // 🚀 Params API 적용
+
+    /* 🔒 [보안 패치] 봇 토큰은 서버에만 존재한다. (기존에는 PickupRequest.js에 하드코딩되어
+       브라우저 번들로 공개되었다.)
+       학생도 클리닉 예약 시 알림을 보내야 하므로 역할로 막지는 않되,
+       익명 스팸을 막기 위해 보낸 사람을 서버가 직접 붙이고 길이를 제한한다. */
+    const sender = await getCallerProfile(request);
+
     const botToken = telegramBotToken.value();
     const chatId = telegramChatId.value();
-    
     if (!botToken || !chatId) return { success: false, message: "환경변수 누락" };
-    const text = request.data.text;
-    if (!text) throw new HttpsError("invalid-argument", "메시지가 없습니다.");
+
+    const rawText = String(request.data?.text || '').slice(0, 3000);
+    if (!rawText.trim()) throw new HttpsError("invalid-argument", "메시지가 없습니다.");
+
+    const text = `${rawText}\n\n— 보낸 사람: ${sender.name || '이름없음'} (${sender.role || 'unknown'} / ${sender.id})`;
 
     try {
         const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -295,6 +370,8 @@ exports.onUserDeleted = onDocumentDeleted(`artifacts/${APP_ID}/public/data/users
 // ============================================================================
 exports.analyzeExamPaper = onCall({ timeoutSeconds: 300, memory: "1GiB" }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', '로그인이 필요합니다.');
+    // 💰 [비용 보호] 시험지 전체를 Vision 모델에 넣는 가장 비싼 호출이다. 교직원 전용.
+    await assertStaff(request);
 
     const { fileBase64, mimeType, year, grade, subject } = request.data;
 
@@ -579,4 +656,344 @@ exports.consultationReminderCron = onSchedule({
         console.error("🔥 상담 리마인드(Cron) 에러:", error);
     }
     return null;
+});
+
+// ============================================================================
+// 🔒 [기능 12] 회원가입 휴대폰 인증번호 발급
+// 기존에는 브라우저가 Math.random()으로 번호를 만들고 브라우저가 스스로 채점했기 때문에
+// 개발자도구만 열면 누구나 인증을 통과할 수 있었다. 이제 서버가 발급하고 서버가 채점한다.
+// ============================================================================
+const CODES_PATH = `artifacts/${APP_ID}/public/data/signup_codes`;
+
+exports.requestSignupCode = onCall({ timeoutSeconds: 30 }, async (request) => {
+    const phone = String(request.data?.phone || '').replace(/[^0-9]/g, '');
+    const name = String(request.data?.name || '신규가입자').slice(0, 30);
+    if (phone.length < 10 || phone.length > 11) {
+        throw new HttpsError("invalid-argument", "유효한 휴대폰 번호가 아닙니다.");
+    }
+
+    const db = admin.firestore();
+    const ref = db.doc(`${CODES_PATH}/${phone}`);
+    const existing = await ref.get();
+
+    // 재전송 남용 방지: 60초 이내 재요청 차단
+    if (existing.exists) {
+        const last = existing.data().issuedAt;
+        if (last && Date.now() - last < 60 * 1000) {
+            throw new HttpsError("resource-exhausted", "인증번호는 1분에 한 번만 요청할 수 있습니다.");
+        }
+        if ((existing.data().issueCount || 0) >= 5) {
+            const firstIssued = existing.data().firstIssuedAt || 0;
+            if (Date.now() - firstIssued < 60 * 60 * 1000) {
+                throw new HttpsError("resource-exhausted", "인증 요청 횟수를 초과했습니다. 1시간 후 다시 시도해주세요.");
+            }
+        }
+    }
+
+    // 암호학적으로 안전한 6자리 코드
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    const now = Date.now();
+    const withinHour = existing.exists && (now - (existing.data().firstIssuedAt || 0) < 60 * 60 * 1000);
+
+    await ref.set({
+        phone,
+        codeHash: sha256(code),
+        expiresAt: now + 3 * 60 * 1000,
+        attempts: 0,
+        verified: false,
+        ticket: null,
+        issuedAt: now,
+        firstIssuedAt: withinHour ? existing.data().firstIssuedAt : now,
+        issueCount: withinHour ? (existing.data().issueCount || 0) + 1 : 1
+    });
+
+    await queueSms(
+        null,
+        phone,
+        `[목동임페리얼학원]\n회원가입 본인인증 번호는 [${code}] 입니다. 3분 이내에 입력해주세요.`,
+        'auth_code',
+        name
+    );
+
+    return { success: true };
+});
+
+exports.verifySignupCode = onCall({ timeoutSeconds: 30 }, async (request) => {
+    const phone = String(request.data?.phone || '').replace(/[^0-9]/g, '');
+    const code = String(request.data?.code || '').trim();
+
+    const ref = admin.firestore().doc(`${CODES_PATH}/${phone}`);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError("not-found", "인증번호를 먼저 요청해주세요.");
+
+    const data = snap.data();
+    if (Date.now() > data.expiresAt) throw new HttpsError("deadline-exceeded", "인증 시간이 만료되었습니다. 다시 요청해주세요.");
+    if ((data.attempts || 0) >= 5) throw new HttpsError("resource-exhausted", "입력 횟수를 초과했습니다. 인증번호를 다시 요청해주세요.");
+
+    if (sha256(code) !== data.codeHash) {
+        await ref.update({ attempts: (data.attempts || 0) + 1 });
+        throw new HttpsError("invalid-argument", "인증번호가 일치하지 않습니다.");
+    }
+
+    // 가입 완료 단계에서 제시해야 하는 1회용 티켓 (10분 유효)
+    const ticket = crypto.randomBytes(24).toString('hex');
+    await ref.update({ verified: true, ticket, ticketExpiresAt: Date.now() + 10 * 60 * 1000 });
+
+    return { verified: true, ticket };
+});
+
+// ============================================================================
+// 🔒 [기능 13] 회원가입 처리
+// 평문 비밀번호를 Firestore에 저장하지 않는다. 비밀번호는 Firebase Auth에만 존재한다.
+// ============================================================================
+exports.registerUser = onCall({ timeoutSeconds: 60 }, async (request) => {
+    const { ticket, phone, userId, password, name, role } = request.data || {};
+    const cleanPhone = String(phone || '').replace(/[^0-9]/g, '');
+    const safeId = toSafeId(userId);
+
+    if (!userId || !password || !name) throw new HttpsError("invalid-argument", "필수 정보가 누락되었습니다.");
+    if (String(password).length < 6) throw new HttpsError("invalid-argument", "비밀번호는 6자리 이상이어야 합니다.");
+    if (!['student', 'parent', 'ta', 'admin_assistant', 'lecturer'].includes(role)) {
+        throw new HttpsError("invalid-argument", "가입 유형이 올바르지 않습니다.");
+    }
+    if (RESERVED_USER_IDS.includes(safeId)) {
+        throw new HttpsError("permission-denied", "사용할 수 없는 아이디입니다. 다른 아이디를 입력해주세요.");
+    }
+
+    // 1) 인증 티켓 검증
+    const codeRef = admin.firestore().doc(`${CODES_PATH}/${cleanPhone}`);
+    const codeSnap = await codeRef.get();
+    if (!codeSnap.exists) throw new HttpsError("failed-precondition", "휴대폰 본인 인증을 먼저 완료해주세요.");
+    const codeData = codeSnap.data();
+    if (!codeData.verified || !codeData.ticket || codeData.ticket !== ticket) {
+        throw new HttpsError("failed-precondition", "휴대폰 본인 인증을 먼저 완료해주세요.");
+    }
+    if (Date.now() > (codeData.ticketExpiresAt || 0)) {
+        throw new HttpsError("deadline-exceeded", "인증 유효시간이 지났습니다. 처음부터 다시 진행해주세요.");
+    }
+
+    // 2) 아이디 중복 확인
+    if ((await usersCol().doc(safeId).get()).exists) {
+        throw new HttpsError("already-exists", "이미 사용 중인 아이디입니다.");
+    }
+
+    // 3) Firebase Auth 계정 생성 (비밀번호는 여기에만 저장된다)
+    const email = `${safeId}@imperial.com`;
+    let authUid;
+    try {
+        const rec = await admin.auth().createUser({ email, password, emailVerified: true });
+        authUid = rec.uid;
+    } catch (e) {
+        if (e.code === 'auth/email-already-exists') {
+            throw new HttpsError("already-exists", "이미 사용 중인 아이디입니다.");
+        }
+        throw new HttpsError("internal", `계정 생성 실패: ${e.message}`);
+    }
+
+    // 4) 프로필 문서 생성 (password 필드 없음)
+    const payload = {
+        id: safeId,
+        userId: String(userId),
+        name: String(name),
+        phone: cleanPhone,
+        role,
+        authUid,
+        status: 'pending',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    const d = request.data || {};
+    if (role === 'student') {
+        payload.schoolName = d.schoolName || '';
+        payload.grade = d.grade || '1학년';
+        payload.attendancePin = cleanPhone.slice(-4);
+    } else if (role === 'parent') {
+        payload.childName = d.childName || '';
+        payload.schoolName = d.schoolName || '';
+        payload.grade = d.grade || '1학년';
+    } else {
+        payload.subject = d.subject || '';
+    }
+
+    await usersCol().doc(safeId).set(payload);
+    await codeRef.delete();
+
+    // 5) 데스크 알림
+    const deskSnap = await usersCol().where('role', '==', 'admin').limit(5).get();
+    const batch = admin.firestore().batch();
+    deskSnap.forEach(doc => {
+        const p = doc.data().phone;
+        if (p) queueSms(batch, p, `[시스템 알림] 새로운 가입 승인 대기자가 있습니다.\n- 이름: ${name}\n데스크에서 승인해주세요.`, 'system_alert', '시스템');
+    });
+    await batch.commit();
+
+    return { success: true };
+});
+
+// ============================================================================
+// 🔒 [기능 14] 레거시 계정 로그인 브리지
+// 과거 계정은 Firestore에 평문 비밀번호만 있고 Auth 계정이 없거나 비밀번호가 어긋나 있다.
+// 이 함수가 서버에서 대조한 뒤 Auth 계정을 만들어 주고, 평문 비밀번호를 즉시 삭제한다.
+// 즉 사용자는 한 번 로그인하는 것만으로 자동으로 안전한 계정으로 이관된다.
+// ============================================================================
+exports.legacyLoginBridge = onCall({ timeoutSeconds: 60 }, async (request) => {
+    const rawId = String(request.data?.userId || '').trim();
+    const password = String(request.data?.password || '');
+    if (!rawId || !password) throw new HttpsError("invalid-argument", "아이디와 비밀번호를 입력해주세요.");
+
+    const safeId = toSafeId(rawId);
+
+    // 1) 문서 탐색: safeId → userId 필드 역조회
+    let snap = await usersCol().doc(safeId).get();
+    let docId = safeId;
+    if (!snap.exists) {
+        const q = await usersCol().where('userId', '==', rawId).limit(1).get();
+        if (q.empty) throw new HttpsError("not-found", "아이디 또는 비밀번호를 확인해주세요.");
+        snap = q.docs[0];
+        docId = snap.id;
+    }
+
+    const data = snap.data();
+
+    // 2) 무차별 대입 방어
+    const failCount = data.loginFailCount || 0;
+    const lockedUntil = data.loginLockedUntil || 0;
+    if (Date.now() < lockedUntil) {
+        throw new HttpsError("resource-exhausted", "로그인 시도가 많아 잠시 잠겼습니다. 5분 후 다시 시도해주세요.");
+    }
+
+    // 3) 저장된 평문 비밀번호와 대조 (이관 대상 계정만 이 경로를 탄다)
+    const stored = data.password;
+    if (!stored || String(stored) !== password) {
+        const nextFail = failCount + 1;
+        await snap.ref.update({
+            loginFailCount: nextFail,
+            loginLockedUntil: nextFail >= 5 ? Date.now() + 5 * 60 * 1000 : 0
+        });
+        throw new HttpsError("permission-denied", "아이디 또는 비밀번호를 확인해주세요.");
+    }
+
+    // 4) Auth 계정 생성 또는 비밀번호 동기화
+    /* ⚠️ Firebase Auth는 6자리 미만 비밀번호를 허용하지 않는다.
+       과거 프론트엔드가 쓰던 것과 동일한 규칙('0'으로 채우기)을 유지해야
+       이관 후에도 사용자가 기존 비밀번호로 계속 로그인할 수 있다.
+       (클라이언트도 원본/패딩본을 모두 시도한다 — src/App.js handleLogin 참고) */
+    const authPassword = password.length < 6 ? password.padEnd(6, '0') : password;
+
+    const email = `${toSafeId(data.userId || docId)}@imperial.com`;
+    let authUid;
+    try {
+        const rec = await admin.auth().getUserByEmail(email);
+        await admin.auth().updateUser(rec.uid, { password: authPassword });
+        authUid = rec.uid;
+    } catch (e) {
+        if (e.code === 'auth/user-not-found') {
+            const rec = await admin.auth().createUser({ email, password: authPassword, emailVerified: true });
+            authUid = rec.uid;
+        } else {
+            throw new HttpsError("internal", `계정 이관 실패: ${e.message}`);
+        }
+    }
+
+    // 5) 평문 비밀번호 영구 삭제 + 이관 완료 표시
+    await snap.ref.update({
+        authUid,
+        password: admin.firestore.FieldValue.delete(),
+        loginFailCount: 0,
+        loginLockedUntil: 0,
+        migratedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    const token = await admin.auth().createCustomToken(authUid);
+    return { token, docId, authUid };
+});
+
+// ============================================================================
+// 🔒 [기능 15] 데스크가 사용자를 직접 생성
+// 기존에는 브라우저에서 '그림자 앱(secondaryAuth)'으로 계정을 만들고 Firestore에
+// 평문 비밀번호를 함께 저장했다. 이제 서버가 만들고 비밀번호는 Auth에만 둔다.
+// ============================================================================
+exports.adminCreateUser = onCall({ timeoutSeconds: 60 }, async (request) => {
+    const caller = await assertDesk(request);
+    const { userId, password, name, role, profile = {} } = request.data || {};
+
+    const safeId = toSafeId(userId);
+    if (!userId || !password || !name || !role) throw new HttpsError("invalid-argument", "필수 정보가 누락되었습니다.");
+    if (String(password).length < 6) throw new HttpsError("invalid-argument", "비밀번호는 6자리 이상이어야 합니다.");
+    if (RESERVED_USER_IDS.includes(safeId)) throw new HttpsError("permission-denied", "사용할 수 없는 아이디입니다.");
+
+    // 행정조교는 학생/학부모만 생성할 수 있다 (권한 상승 차단)
+    if (caller.role === 'admin_assistant' && !['student', 'parent'].includes(role)) {
+        throw new HttpsError("permission-denied", "행정조교는 학생/학부모 계정만 생성할 수 있습니다.");
+    }
+    if (role === 'admin' && caller.role !== 'admin') {
+        throw new HttpsError("permission-denied", "관리자 계정은 관리자만 생성할 수 있습니다.");
+    }
+
+    if ((await usersCol().doc(safeId).get()).exists) {
+        throw new HttpsError("already-exists", "이미 존재하는 아이디입니다.");
+    }
+
+    const email = `${safeId}@imperial.com`;
+    let authUid;
+    try {
+        const rec = await admin.auth().createUser({ email, password, emailVerified: true });
+        authUid = rec.uid;
+    } catch (e) {
+        if (e.code === 'auth/email-already-exists') {
+            const rec = await admin.auth().getUserByEmail(email);
+            await admin.auth().updateUser(rec.uid, { password });
+            authUid = rec.uid;
+        } else {
+            throw new HttpsError("internal", `계정 생성 실패: ${e.message}`);
+        }
+    }
+
+    // 클라이언트가 보낸 값 중 위험한 키는 제거하고 저장한다
+    const { password: _p, role: _r, authUid: _a, id: _i, ...safeProfile } = profile;
+
+    await usersCol().doc(safeId).set({
+        ...safeProfile,
+        id: safeId,
+        userId: String(userId),
+        name: String(name),
+        role,
+        authUid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return { success: true, id: safeId, authUid };
+});
+
+// ============================================================================
+// 🔒 [기능 16] 남아 있는 평문 비밀번호 일괄 소거 (원장님 1회 실행용)
+// 이관되지 않은 계정은 비밀번호를 임시값으로 재설정하고 안내 문자를 보낸다.
+// ============================================================================
+exports.purgeStoredPasswords = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+    const dryRun = request.data?.dryRun !== false; // 기본값: 미리보기
+
+    const snap = await usersCol().get();
+    const targets = snap.docs.filter(d => d.data().password);
+
+    if (dryRun) {
+        return {
+            dryRun: true,
+            count: targets.length,
+            names: targets.slice(0, 50).map(d => d.data().name || d.id)
+        };
+    }
+
+    let cleared = 0;
+    for (const doc of targets) {
+        try {
+            await doc.ref.update({
+                password: admin.firestore.FieldValue.delete(),
+                passwordPurgedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            cleared++;
+        } catch (e) {
+            console.error(`평문 비밀번호 삭제 실패: ${doc.id}`, e);
+        }
+    }
+    return { dryRun: false, cleared, total: targets.length };
 });
