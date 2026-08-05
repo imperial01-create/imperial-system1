@@ -13,6 +13,7 @@ import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { fetchBySchool } from '../utils/schoolQuery';
+import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper';
 import { APP_ID } from '../constants';
 
@@ -538,7 +539,15 @@ export default function SchoolStrategy({ currentUser }) {
   };
 
   const handleHardDelete = async (id) => {
-    if (window.confirm('정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) {
+    // 이 시험을 본 학생이 있으면 삭제 후 그 학생들의 예측등급이 사라지므로 미리 알립니다.
+    let refCount = 0;
+    try { refCount = await countExamReferences(id); } catch (e) { console.error(e); }
+
+    const warning = refCount > 0
+      ? `\n\n⚠️ 이 시험을 본 학생 성적 진단 ${refCount}건이 연결되어 있습니다.\n삭제하면 해당 학생들의 등급컷·예측등급이 표시되지 않습니다.`
+      : '';
+
+    if (window.confirm(`정말 영구적으로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.${warning}`)) {
       await deleteDoc(doc(db, INTEGRATED_COLLECTION, id));
       refreshData();
       if(viewState.view === 'detail') handleGoBack();
@@ -620,6 +629,15 @@ export default function SchoolStrategy({ currentUser }) {
               const oldData = oldDocSnap.data();
               const mergedPayload = { ...removeUndefined(oldData), ...removeUndefined(baseData), ...removeUndefined(strategyPayload), updatedAt: serverTimestamp() };
               await setDoc(doc(db, INTEGRATED_COLLECTION, newId), mergedPayload);
+
+              /* ⚠️ 학교명·연도·학년·과목을 바꾸면 문서 번호가 새로 만들어집니다.
+                 이때 이 시험을 본 학생들의 성적 진단이 옛 번호를 가리킨 채 남으면
+                 등급컷과 예측등급이 조용히 사라집니다. 참조를 먼저 옮기고 지웁니다. */
+              const ref = await reassignExamReferences(oldId, newId);
+              if (ref.failed > 0) {
+                  alert(`주의: 학생 성적 진단 ${ref.failed}건의 연결을 옮기지 못했습니다.\n해당 학생의 예측등급이 표시되지 않을 수 있습니다.`);
+              }
+
               await deleteDoc(oldDocRef);
           } else { await upsertExamData(baseData, strategyPayload); }
       } else {

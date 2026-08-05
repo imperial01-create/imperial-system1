@@ -6,6 +6,7 @@ import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, col
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
+import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -498,6 +499,150 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
+    /* ─────────────────────────────────────────────────────────────────────
+       중복 기출·내신 자료 병합
+
+       학교명 표기가 갈려서 검색이 안 되면, 담당자가 "없네" 하고 같은 시험을
+       다시 등록하게 됩니다. 그 결과 같은 시험이 두 문서로 쪼개집니다.
+       (예: '영일 고등학교 2025 1학년 1학기 중간고사 수학' 과
+             '영일고등학교 2025 1학년 1학기 중간고사 수학')
+
+       이 도구는 그런 쌍을 찾아 하나로 합칩니다.
+       - 내용이 가장 충실한 문서를 남기고
+       - 나머지 문서에만 있는 정보는 빈 칸을 채우는 식으로 옮기며
+       - 학생 성적 진단의 연결도 함께 옮긴 뒤
+       - 빈 문서를 지웁니다.
+       ───────────────────────────────────────────────────────────────────── */
+    const [dupScan, setDupScan] = useState(null);
+    const [dupProcessing, setDupProcessing] = useState(false);
+
+    /** 같은 시험인지 판단하는 열쇠. 학교명은 표기 차이를 흡수해 비교합니다. */
+    const buildExamKey = (v) => {
+        const school = normalizeSchoolName(v.schoolName || v.school || '');
+        if (!school) return null;
+        const norm = (x) => String(x || '').replace(/\s+/g, '');
+        return [
+            school,
+            norm(v.year),
+            norm(v.grade || '1학년'),
+            norm(v.semester || '1학기'),
+            norm(v.termType || v.term || '중간고사'),
+            norm(v.standardCode || v.subject)
+        ].join('|');
+    };
+
+    /** 내용이 얼마나 충실한지 점수화해 남길 문서를 고릅니다. */
+    const richnessOf = (v) => {
+        let s = 0;
+        if (v.review) s += 5;
+        s += Math.min((v.questions || []).length, 60);
+        if (v.gradeCuts && (v.gradeCuts.grade1 || v.gradeCuts.grade2)) s += 5;
+        if (v.files && Object.values(v.files).some(f => f && f.url)) s += 5;
+        if (v.internalMemo) s += 2;
+        if (v.trendData?.length) s += 2;
+        return s;
+    };
+
+    const handleScanDuplicateExams = async () => {
+        setDupProcessing(true);
+        try {
+            const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams'));
+            const groups = new Map();
+
+            snap.forEach(d => {
+                const v = d.data();
+                if (v.isDeleted) return;
+                const key = buildExamKey(v);
+                if (!key) return;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push({ id: d.id, data: v, richness: richnessOf(v) });
+            });
+
+            const dups = [];
+            for (const [key, docs] of groups.entries()) {
+                if (docs.length < 2) continue;
+                // 문서 번호가 실제로 다른 것만 (같은 번호면 애초에 한 문서입니다)
+                const uniqueIds = new Set(docs.map(x => x.id));
+                if (uniqueIds.size < 2) continue;
+
+                const sorted = [...docs].sort((a, b) => b.richness - a.richness);
+                const keeper = sorted[0];
+                const losers = sorted.slice(1);
+
+                // 각 문서를 참조하는 학생 진단 건수도 함께 보여줍니다
+                const refCounts = {};
+                for (const x of docs) {
+                    try { refCounts[x.id] = await countExamReferences(x.id); }
+                    catch (e) { refCounts[x.id] = -1; }
+                }
+
+                dups.push({ key, keeper, losers, refCounts });
+            }
+
+            setDupScan(dups);
+        } catch (e) {
+            alert('중복 검사 중 오류가 발생했습니다: ' + e.message);
+        } finally {
+            setDupProcessing(false);
+        }
+    };
+
+    const handleMergeDuplicateExams = async () => {
+        if (!dupScan || dupScan.length === 0) return alert('먼저 [중복 찾기]를 눌러주세요.');
+
+        const totalRemoved = dupScan.reduce((s, g) => s + g.losers.length, 0);
+        if (!window.confirm(
+            `같은 시험으로 판단된 ${dupScan.length}묶음을 합칩니다.\n` +
+            `문서 ${totalRemoved}개가 정리되고, 학생 성적 진단 연결은 남는 문서로 옮겨집니다.\n\n` +
+            `⚠️ 이 작업은 되돌릴 수 없습니다. 위 목록을 확인하셨나요?`
+        )) return;
+
+        setDupProcessing(true);
+        let merged = 0, movedRefs = 0;
+        const problems = [];
+
+        try {
+            for (const g of dupScan) {
+                const keepRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams', g.keeper.id);
+
+                for (const loser of g.losers) {
+                    try {
+                        // 남길 문서에 비어 있는 항목만 채웁니다 (기존 내용은 덮어쓰지 않습니다)
+                        const patch = {};
+                        const k = g.keeper.data, l = loser.data;
+                        if (!k.review && l.review) patch.review = l.review;
+                        if (!(k.questions || []).length && (l.questions || []).length) patch.questions = l.questions;
+                        if (!k.internalMemo && l.internalMemo) patch.internalMemo = l.internalMemo;
+                        if (!k.specialNotes && l.specialNotes) patch.specialNotes = l.specialNotes;
+                        if (!(k.gradeCuts?.grade1) && l.gradeCuts?.grade1) patch.gradeCuts = l.gradeCuts;
+                        if (!k.files && l.files) patch.files = l.files;
+                        if (Object.keys(patch).length > 0) {
+                            patch.updatedAt = serverTimestamp();
+                            await setDoc(keepRef, patch, { merge: true });
+                        }
+
+                        const r = await reassignExamReferences(loser.id, g.keeper.id);
+                        movedRefs += r.moved;
+                        if (r.failed > 0) problems.push(`${loser.id}: 진단 ${r.failed}건 이동 실패`);
+
+                        await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams', loser.id));
+                        merged++;
+                    } catch (e) {
+                        problems.push(`${loser.id}: ${e.message}`);
+                    }
+                }
+            }
+
+            alert(
+                `✅ 중복 자료 병합 완료!\n\n합쳐진 문서: ${merged}개\n옮겨진 학생 성적 진단: ${movedRefs}건` +
+                (problems.length ? `\n\n문제 ${problems.length}건:\n${problems.slice(0, 5).join('\n')}` : '')
+            );
+            setDupScan(null);
+        } finally {
+            setDupProcessing(false);
+        }
+    };
+
     /** 마스터 목록 자체에 같은 학교가 두 표기로 등록돼 있는지 찾습니다. */
     const masterDuplicates = React.useMemo(() => {
         const out = [];
@@ -987,6 +1132,70 @@ const SettingsManager = ({ currentUser }) => {
                                     </div>
                                 ))}
                             </div>
+                        )}
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-purple-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-purple-800 border-b border-purple-100 pb-4 flex items-center gap-2">
+                            <BookOpen className="text-purple-600"/> 중복 기출·내신 자료 병합
+                        </h2>
+
+                        <div className="bg-purple-50 text-purple-900 p-5 rounded-2xl border border-purple-200 space-y-2 text-sm">
+                            <p>• 학교명 표기가 갈려 검색이 안 되면, 담당자가 같은 시험을 다시 등록하게 됩니다. 그렇게 <strong>두 문서로 쪼개진 자료</strong>를 찾아 합칩니다.</p>
+                            <p>• 내용이 가장 충실한 문서를 남기고, 나머지에만 있던 내용은 <strong>빈 칸을 채우는 식</strong>으로 옮깁니다. 기존 내용은 덮어쓰지 않습니다.</p>
+                            <p>• <strong>학생 성적 진단 연결도 함께 옮깁니다.</strong> 그래서 예측등급이 사라지지 않습니다.</p>
+                            <p className="text-rose-700 font-bold mt-2 pt-2 border-t border-purple-200">
+                                ⚠️ 병합은 되돌릴 수 없습니다. 반드시 [중복 찾기]로 목록을 확인한 뒤 실행하세요.
+                            </p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                            <Button onClick={handleScanDuplicateExams} disabled={dupProcessing}
+                                className="bg-white border-2 border-purple-300 text-purple-700 font-black py-3 px-5 hover:bg-purple-50">
+                                {dupProcessing ? <Loader className="animate-spin" size={20}/> : '1) 중복 찾기'}
+                            </Button>
+                            <Button onClick={handleMergeDuplicateExams} disabled={dupProcessing || !dupScan || dupScan.length === 0}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-black py-3 px-5 border-0 disabled:opacity-40">
+                                2) 병합 실행
+                            </Button>
+                        </div>
+
+                        {dupScan && (
+                            dupScan.length === 0 ? (
+                                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm font-bold text-emerald-800">
+                                    ✓ 중복된 기출 자료가 없습니다.
+                                </div>
+                            ) : (
+                                <div className="space-y-3 max-h-96 overflow-y-auto custom-scrollbar">
+                                    <div className="text-sm font-black text-slate-800">
+                                        같은 시험으로 판단된 묶음 {dupScan.length}개
+                                    </div>
+                                    {dupScan.map(g => (
+                                        <div key={g.key} className="bg-white border border-slate-200 rounded-xl p-4 text-xs">
+                                            <div className="font-black text-emerald-700 mb-1">
+                                                남길 자료: {g.keeper.data.schoolName || g.keeper.data.school}
+                                                <span className="ml-2 font-bold text-slate-500">
+                                                    (문항 {(g.keeper.data.questions || []).length}개
+                                                    {g.keeper.data.review ? ', 총평 있음' : ''}
+                                                    , 학생 진단 {g.refCounts[g.keeper.id] ?? '?'}건)
+                                                </span>
+                                            </div>
+                                            <div className="font-mono text-[10px] text-slate-400 mb-2 break-all">{g.keeper.id}</div>
+                                            {g.losers.map(l => (
+                                                <div key={l.id} className="pl-3 border-l-2 border-rose-200 py-1">
+                                                    <span className="font-bold text-rose-700">합쳐질 자료: {l.data.schoolName || l.data.school}</span>
+                                                    <span className="ml-2 font-bold text-slate-500">
+                                                        (문항 {(l.data.questions || []).length}개
+                                                        {l.data.review ? ', 총평 있음' : ''}
+                                                        , 학생 진단 {g.refCounts[l.id] ?? '?'}건 → 옮겨짐)
+                                                    </span>
+                                                    <div className="font-mono text-[10px] text-slate-400 break-all">{l.id}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            )
                         )}
                     </div>
 

@@ -11,6 +11,7 @@ import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { fetchBySchool } from '../utils/schoolQuery';
+import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
 import { APP_ID } from '../constants';
@@ -254,8 +255,16 @@ const ExamArchive = ({ currentUser }) => {
 
                 if (oldDocSnap.exists()) {
                     const oldData = oldDocSnap.data();
-                    const newData = { ...oldData, ...updateData }; 
+                    const newData = { ...oldData, ...updateData };
                     await setDoc(doc(db, INTEGRATED_COLLECTION, newId), newData);
+
+                    /* ⚠️ 문서 번호가 바뀌면 학생 성적 진단의 연결이 끊깁니다.
+                       (SchoolStrategy 의 같은 지점과 동일한 처리입니다) */
+                    const ref = await reassignExamReferences(oldId, newId);
+                    if (ref.failed > 0) {
+                        alert(`주의: 학생 성적 진단 ${ref.failed}건의 연결을 옮기지 못했습니다.`);
+                    }
+
                     await deleteDoc(oldDocRef);
                 } else {
                     await setDoc(doc(db, INTEGRATED_COLLECTION, newId), updateData);
@@ -272,8 +281,16 @@ const ExamArchive = ({ currentUser }) => {
 
     const handleDeleteExam = async (examId) => {
         if (!isAdmin) return;
-        if (!window.confirm("정말로 이 통합 기출자료를 삭제하시겠습니까?\n(아카이브와 내신연구소에서 모두 삭제됩니다)")) return;
-        
+
+        // 이 시험을 본 학생이 있으면 삭제 후 예측등급이 사라지므로 미리 알립니다.
+        let refCount = 0;
+        try { refCount = await countExamReferences(examId); } catch (e) { console.error(e); }
+        const warning = refCount > 0
+            ? `\n\n⚠️ 이 시험을 본 학생 성적 진단 ${refCount}건이 연결되어 있습니다.\n삭제하면 해당 학생들의 등급컷·예측등급이 표시되지 않습니다.`
+            : '';
+
+        if (!window.confirm(`정말로 이 통합 기출자료를 삭제하시겠습니까?\n(아카이브와 내신연구소에서 모두 삭제됩니다)${warning}`)) return;
+
         setIsProcessing(true);
         try {
             await deleteDoc(doc(db, INTEGRATED_COLLECTION, examId));
