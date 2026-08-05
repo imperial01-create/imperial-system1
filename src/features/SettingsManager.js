@@ -16,8 +16,28 @@ import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
 
 
+/* ⚠️ Tailwind 클래스 이름은 절대 조립하지 마세요.
+   `bg-${color}-50` 처럼 이름 중간에 변수를 넣으면, 빌드가 소스를 문자열로 훑을 때
+   완성된 이름을 찾지 못해 그 스타일이 CSS에서 통째로 빠집니다.
+   (예전에 이 파일이 그랬고, 영어과·사회과 카드의 테두리 색이 실제로 사라졌습니다.)
+   그래서 완성된 클래스 문자열을 아래 표에 미리 적어 둡니다. */
+const DEPT_STYLES = {
+    rose:    { box: 'bg-rose-50 border-rose-500',       title: 'text-rose-900',    toggle: 'text-rose-600',    chip: 'bg-white text-rose-700 border-rose-200' },
+    orange:  { box: 'bg-orange-50 border-orange-500',   title: 'text-orange-900',  toggle: 'text-orange-600',  chip: 'bg-white text-orange-700 border-orange-200' },
+    blue:    { box: 'bg-blue-50 border-blue-500',       title: 'text-blue-900',    toggle: 'text-blue-600',    chip: 'bg-white text-blue-700 border-blue-200' },
+    emerald: { box: 'bg-emerald-50 border-emerald-500', title: 'text-emerald-900', toggle: 'text-emerald-600', chip: 'bg-white text-emerald-700 border-emerald-200' },
+    purple:  { box: 'bg-purple-50 border-purple-500',   title: 'text-purple-900',  toggle: 'text-purple-600',  chip: 'bg-white text-purple-700 border-purple-200' }
+};
+
+/** 학교급 목록 카드 색상 (아래 school_mdm 탭에서 사용) */
+const SCHOOL_CAT_STYLES = {
+    emerald: { head: 'bg-emerald-50 border-emerald-100', title: 'text-emerald-800' },
+    blue:    { head: 'bg-blue-50 border-blue-100',       title: 'text-blue-800' },
+    rose:    { head: 'bg-rose-50 border-rose-100',       title: 'text-rose-800' }
+};
+
 const DEPT_INFO = [
-    { 
+    {
         id: 'DEPT_KOR', label: '국어과', color: 'rose',
         subjects: ['국어 (모든 국어 과목 통합)'] 
     },
@@ -578,18 +598,19 @@ const SettingsManager = ({ currentUser }) => {
                                 <div className="grid grid-cols-1 gap-4">
                                     {DEPT_INFO.map(dept => {
                                         const isActive = activeDepartments.includes(dept.id);
+                                        const st = DEPT_STYLES[dept.color] || DEPT_STYLES.blue;
                                         return (
-                                            <div key={dept.id} onClick={() => toggleDepartment(dept.id)} className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col gap-3 ${isActive ? `bg-${dept.color}-50 border-${dept.color}-500 shadow-sm` : 'bg-white border-gray-200 hover:border-gray-300'}`}>
+                                            <div key={dept.id} onClick={() => toggleDepartment(dept.id)} className={`p-4 rounded-xl border-2 cursor-pointer transition-all flex flex-col gap-3 ${isActive ? `${st.box} shadow-sm` : 'bg-white border-gray-200 hover:border-gray-300'}`}>
                                                 <div className="flex justify-between items-center w-full">
-                                                    <span className={`font-black text-lg flex items-center gap-2 ${isActive ? `text-${dept.color}-900` : 'text-gray-400'}`}>
+                                                    <span className={`font-black text-lg flex items-center gap-2 ${isActive ? st.title : 'text-gray-400'}`}>
                                                         <Layers size={20} /> {dept.label}
                                                     </span>
-                                                    {isActive ? <ToggleRight size={32} className={`text-${dept.color}-600`} /> : <ToggleLeft size={32} className="text-gray-300" />}
+                                                    {isActive ? <ToggleRight size={32} className={st.toggle} /> : <ToggleLeft size={32} className="text-gray-300" />}
                                                 </div>
-                                                
+
                                                 <div className={`flex flex-wrap gap-1.5 ${isActive ? 'opacity-100' : 'opacity-40 grayscale'}`}>
                                                     {dept.subjects.map(subj => (
-                                                        <span key={subj} className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded-md border ${isActive ? `bg-white text-${dept.color}-700 border-${dept.color}-200` : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                                                        <span key={subj} className={`text-[10px] md:text-xs font-bold px-2 py-1 rounded-md border ${isActive ? st.chip : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
                                                             {subj}
                                                         </span>
                                                     ))}
@@ -637,10 +658,12 @@ const SettingsManager = ({ currentUser }) => {
                                 { id: 'elementary', title: '초등학교', color: 'emerald' },
                                 { id: 'middle', title: '중학교', color: 'blue' },
                                 { id: 'high', title: '고등학교', color: 'rose' }
-                            ].map(cat => (
+                            ].map(cat => {
+                                const cs = SCHOOL_CAT_STYLES[cat.color] || SCHOOL_CAT_STYLES.blue;
+                                return (
                                 <div key={cat.id} className="border-2 border-gray-100 rounded-2xl overflow-hidden bg-white shadow-sm flex flex-col">
-                                    <div className={`bg-${cat.color}-50 p-4 border-b border-${cat.color}-100 flex justify-between items-center`}>
-                                        <span className={`font-black text-${cat.color}-800`}>{cat.title} <span className="text-xs bg-white px-2 py-0.5 rounded-full border">{(schools[cat.id]||[]).length}교</span></span>
+                                    <div className={`${cs.head} p-4 border-b flex justify-between items-center`}>
+                                        <span className={`font-black ${cs.title}`}>{cat.title} <span className="text-xs bg-white px-2 py-0.5 rounded-full border">{(schools[cat.id]||[]).length}교</span></span>
                                     </div>
                                     <div className="p-4 flex-1 h-[400px] overflow-y-auto custom-scrollbar bg-gray-50/50">
                                         {(schools[cat.id]||[]).length === 0 ? <div className="text-center text-gray-400 font-bold mt-10">등록된 학교 없음</div> : (
@@ -662,7 +685,8 @@ const SettingsManager = ({ currentUser }) => {
                                         )}
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </Card>
                 </div>

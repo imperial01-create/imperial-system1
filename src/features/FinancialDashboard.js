@@ -306,12 +306,23 @@ const FinancialDashboard = ({ currentUser }) => {
     const totalBudgetSpent = budgetTracking.reduce((sum, c) => sum + c.spent, 0);
     const totalBudgetUtilization = totalBudgetAllocated > 0 ? (totalBudgetSpent / totalBudgetAllocated) * 100 : (totalBudgetSpent > 0 ? 100 : 0);
 
+    /* ⚠️ Tailwind 클래스 이름은 조립하지 않고 완성된 문자열로 들고 다닙니다.
+       `text-${color}-500` 처럼 쓰면 빌드가 소스에서 그 이름을 찾지 못해
+       스타일이 CSS에서 빠집니다. (특히 아래 bar는 예산 소진율 막대의 채움색이라
+       빠지면 막대가 아예 보이지 않습니다.) */
+    const BUDGET_STATUS_STYLES = {
+        emerald: { box: 'bg-emerald-50 border-emerald-200', icon: 'text-emerald-500', text: 'text-emerald-700', bar: 'bg-emerald-500', pct: 'text-emerald-600' },
+        amber:   { box: 'bg-amber-50 border-amber-200',     icon: 'text-amber-500',   text: 'text-amber-700',   bar: 'bg-amber-500',   pct: 'text-amber-600' },
+        rose:    { box: 'bg-rose-50 border-rose-200',       icon: 'text-rose-500',    text: 'text-rose-700',    bar: 'bg-rose-500',    pct: 'text-rose-600' }
+    };
+
     let budgetStatus = { color: 'emerald', text: '현재 예산이 건강하게 관리되고 있습니다.', icon: CheckCircle };
     if (totalBudgetUtilization >= 91) {
         budgetStatus = { color: 'rose', text: '목표 예산을 초과할 위험이 있습니다!', icon: AlertTriangle };
     } else if (totalBudgetUtilization >= 71) {
         budgetStatus = { color: 'amber', text: '예산 소진이 빠릅니다. 추가 지출을 확인하세요.', icon: AlertCircle };
     }
+    budgetStatus.styles = BUDGET_STATUS_STYLES[budgetStatus.color] || BUDGET_STATUS_STYLES.emerald;
 
     const budgetAlerts = budgetTracking.filter(cat => cat.utilization >= 85);
 
@@ -661,24 +672,21 @@ const FinancialDashboard = ({ currentUser }) => {
                 <ShieldAlert className="text-rose-500" size={24}/> AI 예산 통제 및 리스크 관리
             </h2>
 
-            <div className={`p-6 rounded-2xl border mb-8 flex items-center gap-5 sm:gap-6 ${
-                aiAnalytics.budgetStatus.color === 'emerald' ? 'bg-emerald-50 border-emerald-200' : 
-                (aiAnalytics.budgetStatus.color === 'amber' ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200')
-            }`}>
-                <div className={`p-4 rounded-full bg-white text-${aiAnalytics.budgetStatus.color}-500 shadow-sm shrink-0`}>
+            <div className={`p-6 rounded-2xl border mb-8 flex items-center gap-5 sm:gap-6 ${aiAnalytics.budgetStatus.styles.box}`}>
+                <div className={`p-4 rounded-full bg-white ${aiAnalytics.budgetStatus.styles.icon} shadow-sm shrink-0`}>
                     <aiAnalytics.budgetStatus.icon size={36} />
                 </div>
                 <div className="flex-1 w-full">
-                    <p className={`font-black text-lg md:text-xl text-${aiAnalytics.budgetStatus.color}-700 mb-1`}>{aiAnalytics.budgetStatus.text}</p>
+                    <p className={`font-black text-lg md:text-xl ${aiAnalytics.budgetStatus.styles.text} mb-1`}>{aiAnalytics.budgetStatus.text}</p>
                     <div className="flex justify-between text-xs sm:text-sm mt-2 font-bold text-gray-600 mb-2">
                         <span>현재 총 지출: {formatCurrency(aiAnalytics.totalBudgetSpent)}</span>
                         <span>전체 예산 한도 (매출의 85%): {formatCurrency(aiAnalytics.totalBudgetAllocated)}</span>
                     </div>
                     <div className="w-full bg-white/60 h-4 rounded-full overflow-hidden border border-white/50 shadow-inner">
-                        <div className={`h-full bg-${aiAnalytics.budgetStatus.color}-500 transition-all duration-1000 ease-out`} style={{ width: `${Math.min(aiAnalytics.totalBudgetUtilization, 100)}%` }} />
+                        <div className={`h-full ${aiAnalytics.budgetStatus.styles.bar} transition-all duration-1000 ease-out`} style={{ width: `${Math.min(aiAnalytics.totalBudgetUtilization, 100)}%` }} />
                     </div>
                 </div>
-                <div className={`hidden sm:block text-4xl font-black shrink-0 text-${aiAnalytics.budgetStatus.color}-600`}>
+                <div className={`hidden sm:block text-4xl font-black shrink-0 ${aiAnalytics.budgetStatus.styles.pct}`}>
                     {aiAnalytics.totalBudgetUtilization.toFixed(1)}%
                 </div>
             </div>

@@ -39,7 +39,10 @@
     "eject": "react-scripts eject"
   },
   "devDependencies": {
-    "react-scripts": "latest"
+    "postcss": "^8.5.25",
+    "react-scripts": "latest",
+    "tailwindcss": "^3.4.19",
+    "tailwindcss-animate": "^1.0.7"
   },
   "browserslist": {
     "production": [

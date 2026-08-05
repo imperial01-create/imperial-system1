@@ -1672,8 +1672,10 @@ export default function SchoolStrategy({ currentUser }) {
   }
 
   function InfoBox({ label, value, colSpan = 1 }) {
+    // 주의: col-span 뒤에 변수를 이어 붙이면 빌드가 클래스를 찾지 못하므로 완성 문자열로 고릅니다.
+    const spanClass = colSpan === 2 ? 'col-span-2' : 'col-span-1';
     return (
-      <div className={`bg-white border rounded-xl p-3 md:p-4 shadow-sm col-span-${colSpan} hover:shadow-md transition-shadow`}>
+      <div className={`bg-white border rounded-xl p-3 md:p-4 shadow-sm ${spanClass} hover:shadow-md transition-shadow`}>
         <p className="text-[10px] md:text-xs text-gray-500 font-medium mb-1">{label}</p>
         <p className="font-bold text-gray-800 text-xs md:text-sm">{value || '-'}</p>
       </div>
