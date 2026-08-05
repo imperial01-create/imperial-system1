@@ -9,10 +9,11 @@ import {
 import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
-import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager'; 
+import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const FILE_TYPES = [
     { key: 'studentWork', label: '학생풀이(원본)', icon: FileQuestion },
@@ -24,75 +25,6 @@ const FILE_TYPES = [
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
 
-const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect, disabled = false }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [searchKeyword, setSearchKeyword] = useState('');
-
-    const schools = schoolsData[schoolType] || [];
-    const favorites = schoolsData.favorites || [];
-    
-    const pinned = schools.filter(s => favorites.includes(s) && s.includes(searchKeyword));
-    const others = schools.filter(s => !favorites.includes(s) && s.includes(searchKeyword));
-
-    return (
-        <div className="relative w-full" style={disabled ? { pointerEvents: 'none', opacity: 0.5 } : {}}>
-            <div 
-                className={`w-full border p-2.5 rounded-lg outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-blue-500 bg-blue-50' : 'bg-white hover:bg-gray-50'}`}
-                onClick={() => !disabled && setIsOpen(!isOpen)}
-            >
-                <span className={value ? "text-blue-900" : "text-gray-400"}>{value || '👇 학교명 검색 및 선택'}</span>
-            </div>
-            
-            {isOpen && (
-                <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
-                    <div className="absolute z-50 w-full mt-1 bg-white border-2 border-blue-200 rounded-xl shadow-xl max-h-64 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                        <div className="p-2 border-b border-gray-100 bg-gray-50">
-                            <div className="relative">
-                                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                                <input 
-                                    type="text" autoFocus 
-                                    className="w-full pl-8 pr-2 py-1.5 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-xs" 
-                                    placeholder="학교명 검색..." 
-                                    value={searchKeyword} onChange={e => setSearchKeyword(e.target.value)}
-                                />
-                            </div>
-                        </div>
-                        
-                        <div className="overflow-y-auto flex-1 custom-scrollbar pb-1">
-                            {pinned.length > 0 && (
-                                <div className="p-1.5 bg-yellow-50/40">
-                                    <div className="text-[10px] font-black text-yellow-600 mb-1 px-1">📌 자주 찾는 학교</div>
-                                    <div className="grid grid-cols-1 gap-0.5">
-                                        {pinned.map(s => (
-                                            <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-white rounded cursor-pointer font-bold text-xs text-gray-800">{s}</div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                            
-                            {pinned.length > 0 && <div className="h-px bg-gray-100"></div>}
-                            
-                            <div className="p-1.5">
-                                {others.length === 0 && searchKeyword && pinned.length === 0 && (
-                                    <div className="text-center py-2 text-[10px] font-bold text-gray-400">결과 없음</div>
-                                )}
-                                <div className="grid grid-cols-1 gap-0.5">
-                                    {others.map(s => (
-                                        <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-blue-50 rounded cursor-pointer font-bold text-xs text-gray-700">{s}</div>
-                                    ))}
-                                    {onCustomSelect && (
-                                        <div onClick={() => { onCustomSelect(); setIsOpen(false); setSearchKeyword(''); }} className="px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer font-bold text-xs text-blue-600 mt-1 border border-dashed border-gray-300 text-center">➕ 직접 입력</div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </>
-            )}
-        </div>
-    );
-};
 
 const ExamArchive = ({ currentUser }) => {
     const [filters, setFilters] = useState({

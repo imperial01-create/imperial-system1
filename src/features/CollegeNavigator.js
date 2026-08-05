@@ -15,8 +15,8 @@ import { db, functions } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { useParams, useNavigate } from 'react-router-dom';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 🚀 [CTO 패치] 시험 구분에 따른 조건부 드롭다운 매핑 데이터
 const EXAM_TYPES = {

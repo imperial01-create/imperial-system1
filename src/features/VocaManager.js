@@ -13,8 +13,10 @@ import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button } from '../components/UI';
 import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } from '../utils/vocaEngine';
+import { getTierProgress } from '../utils/vocaTier';
+import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const PRESET_GUIDE = [
     { name: '밸런스 모드', desc: '신규 50% / 복습 30% / 오답 15% / 패시브 5%', color: 'text-indigo-600', bg: 'bg-indigo-50' },
@@ -25,30 +27,6 @@ const PRESET_GUIDE = [
     { name: '초기 영점 조절', desc: '타겟 50% / 의심스캔 45% / 딥스캔 5%', color: 'text-slate-600', bg: 'bg-slate-100' }
 ];
 
-const getTierProgress = (masteredCount = 0, catScore = 0) => {
-    const baseVocab = catScore ? Math.floor(catScore * 8.5) : 0;
-    const totalEstimatedWords = baseVocab + masteredCount;
-    const TIERS = [
-        { name: '초등 기초 (초3~4)', limit: 500, color: 'bg-amber-400', bg: 'bg-amber-50', text: 'text-amber-700' },
-        { name: '초등 필수 (초5~6)', limit: 800, color: 'bg-orange-400', bg: 'bg-orange-50', text: 'text-orange-700' },
-        { name: '중등 기초 (중1)', limit: 1400, color: 'bg-lime-500', bg: 'bg-lime-50', text: 'text-lime-700' },
-        { name: '중등 발전 (중2)', limit: 2000, color: 'bg-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700' },
-        { name: '중등 마스터 (중3)', limit: 2800, color: 'bg-teal-500', bg: 'bg-teal-50', text: 'text-teal-700' },
-        { name: '고등 기초 (고1)', limit: 4000, color: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700' },
-        { name: '고등 발전 (고2)', limit: 6000, color: 'bg-indigo-500', bg: 'bg-indigo-50', text: 'text-indigo-700' },
-        { name: '수능 완성 (고3)', limit: 8500, color: 'bg-purple-500', bg: 'bg-purple-50', text: 'text-purple-700' },
-        { name: '최상위 (TEPS/TOEFL)', limit: 99999, color: 'bg-rose-500', bg: 'bg-rose-50', text: 'text-rose-700' }
-    ];
-    let prevLimit = 0; let currentTier = TIERS[0];
-    for (let i = 0; i < TIERS.length; i++) {
-        if (totalEstimatedWords < TIERS[i].limit) { currentTier = TIERS[i]; break; }
-        prevLimit = TIERS[i].limit; if (i === TIERS.length - 1) currentTier = TIERS[i];
-    }
-    const currentBracketMastered = Math.max(0, totalEstimatedWords - prevLimit);
-    const bracketTotal = currentTier.limit - prevLimit;
-    const percent = Math.min(100, Math.round((currentBracketMastered / bracketTotal) * 100));
-    return { ...currentTier, percent, currentBracketMastered, bracketTotal, totalMastered: totalEstimatedWords };
-};
 
 const VocaManager = ({ currentUser }) => {
     const { users = [], classes = [], enrollments = [], englishStats = [], masterData = {}, loadingData = true } = useData() || {};
@@ -65,27 +43,9 @@ const VocaManager = ({ currentUser }) => {
         return [...masterData.seasons].sort((a, b) => (a?.startDate || '').localeCompare(b?.startDate || ''));
     }, [masterData]);
 
-    const [selectedSeasonId, setSelectedSeasonId] = useState('');
-    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+    const { selectedSeasonId, setSelectedSeasonId, isSeasonAutoSet } =
+        useSeasonAutoSelect(dynamicSeasons, loadingData, 'legacy');
 
-    useEffect(() => {
-        if (!isSeasonAutoSet && !loadingData) {
-            if (dynamicSeasons && dynamicSeasons.length > 0) {
-                const todayStr = new Date().toISOString().split('T')[0];
-                const current = dynamicSeasons.find(s => todayStr >= (s?.startDate || '') && todayStr <= (s?.endDate || ''));
-                if (current && current.id) { setSelectedSeasonId(current.id); } 
-                else {
-                    const future = dynamicSeasons.filter(s => (s?.startDate || '') > todayStr);
-                    if (future.length > 0 && future[0].id) { setSelectedSeasonId(future[0].id); } 
-                    else {
-                        const past = [...dynamicSeasons].reverse();
-                        if (past.length > 0 && past[0].id) { setSelectedSeasonId(past[0].id); } else { setSelectedSeasonId('legacy'); }
-                    }
-                }
-            } else { setSelectedSeasonId('legacy'); }
-            setIsSeasonAutoSet(true);
-        }
-    }, [dynamicSeasons, isSeasonAutoSet, loadingData]);
 
     const [selectedClassId, setSelectedClassId] = useState('');
     const [searchQuery, setSearchQuery] = useState('');

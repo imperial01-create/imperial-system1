@@ -9,8 +9,8 @@ import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp,
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Card, Button, Badge } from '../components/UI';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 🚀 원장님 제공 실제 CSV 데이터
 const RAW_CSV_DATA = `NVH2_D08_281,maintain,M1,preserve,

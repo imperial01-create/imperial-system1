@@ -9,8 +9,8 @@ import {
     Search, FileText, Calendar, Loader, Plus, Trash2, ListTodo, Send, X, PhoneCall
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 🚀 [최적화] 대용량 학생 렌더링 방지용 스마트 검색 콤보박스
 const SmartStudentSelect = ({ users, value, onChange }) => {

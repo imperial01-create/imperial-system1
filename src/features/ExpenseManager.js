@@ -6,8 +6,8 @@ import {
   DollarSign, List, Clock, XCircle, AlertCircle, Loader, Edit, Trash2, 
   Image as ImageIcon, AlertTriangle, PlusCircle, ChevronLeft, ChevronRight, FileSpreadsheet
 } from 'lucide-react';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const compressImageToBase64 = (file) => new Promise((resolve, reject) => {
   if (file.type === 'application/pdf') {

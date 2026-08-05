@@ -14,8 +14,9 @@ import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp,
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Button, Modal, Badge } from '../components/UI';
+import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
 const TIME_SLOTS = Array.from({ length: 29 }, (_, i) => {
@@ -75,36 +76,16 @@ export default function AttendanceManager({ currentUser }) {
     const [newPinValue, setNewPinValue] = useState('');
 
     // 🚀 [CTO 패치] 동적 시즌 데이터 연동
+    /* ⚠️ [버그 수정] 예전에는 .sort()를 원본 배열에 직접 걸어 전역 시즌 데이터의
+       순서를 훼손했습니다. 복사본을 만들어 정렬합니다. */
     const dynamicSeasons = useMemo(() => {
-        return (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        return [...(masterData?.seasons || [])].sort((a, b) => String(a?.startDate || '').localeCompare(String(b?.startDate || '')));
     }, [masterData]);
 
-    const [selectedSeasonId, setSelectedSeasonId] = useState('');
-    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+    const { selectedSeasonId, setSelectedSeasonId, isSeasonAutoSet } =
+        useSeasonAutoSelect(dynamicSeasons, loadingData, 'legacy');
 
     // 🚀 타임머신 자동 시즌 선택 엔진
-    useEffect(() => {
-        if (!isSeasonAutoSet && !loadingData) {
-            if (dynamicSeasons.length > 0) {
-                const todayStr = new Date().toISOString().split('T')[0];
-                const current = dynamicSeasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
-                if (current) {
-                    setSelectedSeasonId(current.id);
-                } else {
-                    const future = dynamicSeasons.filter(s => s.startDate > todayStr);
-                    if (future.length > 0) {
-                        setSelectedSeasonId(future[0].id);
-                    } else {
-                        const past = [...dynamicSeasons].reverse();
-                        setSelectedSeasonId(past[0].id);
-                    }
-                }
-            } else {
-                setSelectedSeasonId('legacy');
-            }
-            setIsSeasonAutoSet(true);
-        }
-    }, [dynamicSeasons, isSeasonAutoSet, loadingData]);
 
     // 🚀 [중복 렌더링 완벽 차단] 선택된 시즌의 클래스만 추출합니다!
     const seasonFilteredClasses = useMemo(() => {

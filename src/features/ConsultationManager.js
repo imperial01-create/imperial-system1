@@ -14,8 +14,8 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button, Badge, Card, Toast } from '../components/UI';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 업무 시간 슬롯 생성
 const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {

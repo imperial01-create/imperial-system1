@@ -8,8 +8,8 @@ import {
   deleteDoc, serverTimestamp, orderBy, limit, arrayUnion, documentId, writeBatch 
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 export const VOCA_PRESETS = {
     '밸런스 모드':  { wrong: 15, review: 30, passive: 5, new: 50 },  

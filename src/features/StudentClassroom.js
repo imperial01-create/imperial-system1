@@ -7,8 +7,8 @@ import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { BookOpen, Video, PlayCircle, Lock, Loader, ChevronRight, CheckCircle, Users, AlertCircle } from 'lucide-react';
 import { Button, Modal } from '../components/UI';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const StudentClassroom = ({ currentUser }) => {
     // 🚀 [CTO 패치] 자녀 정보를 가져오기 위해 users 데이터를 추가로 불러옵니다.

@@ -12,8 +12,8 @@ import { collection, query, onSnapshot, doc, deleteDoc, serverTimestamp, addDoc,
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button, Card, Badge } from '../components/UI';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const getLocalDateStr = (dateObj) => {
     const pad = (n) => String(n).padStart(2, '0');

@@ -11,8 +11,8 @@ import {
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getDynamicSubjectLabel } from '../utils/subjectMapper';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 🚀 개념 테스트용 루브릭 및 등급 환산 보조 함수
 const getRubricGrade = (score) => {

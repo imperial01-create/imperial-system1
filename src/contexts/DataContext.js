@@ -19,9 +19,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { APP_ID } from '../constants';
 
 const DataContext = createContext();
-const APP_ID = 'imperial-clinic-v1';
 const BASE = `artifacts/${APP_ID}/public/data`;
 
 const STAFF_ROLES = ['admin', 'admin_assistant', 'lecturer', 'ta'];

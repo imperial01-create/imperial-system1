@@ -13,8 +13,8 @@ import { collection, doc, setDoc, getDoc, getDocs, getDocFromServer, getDocsFrom
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 import PdfAutoFiller from './PdfAutoFiller';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const DEDUCTION_KEYS = [
     '국민연금', '건강보험', '고용보험', '장기요양보험료', '소득세', '지방소득세'

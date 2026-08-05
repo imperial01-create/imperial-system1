@@ -19,6 +19,8 @@ import { signInWithEmailAndPassword, signInWithCustomToken, signOut, onAuthState
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
+import SmartSchoolSelect from './components/SmartSchoolSelect';
+import { APP_ID } from './constants';
 
 // 컴포넌트 Lazy 로딩
 const ClinicDashboard = React.lazy(() => import('./features/ClinicDashboard'));
@@ -52,7 +54,6 @@ const CareReportManager = React.lazy(() => import('./features/CareReportManager'
 // 🚀 CTO Patch: OntologyMap Lazy 로딩 추가 (초기 로딩 최적화로 이탈률 0% 방어)
 const OntologyMap = React.lazy(() => import('./features/ontology/OntologyMap'));
 
-const APP_ID = 'imperial-clinic-v1';
 
 /* 로그인 아이디를 Firebase Auth 이메일로 쓸 수 있는 안전한 문자열로 변환합니다.
    서버(functions/index.js)의 toSafeId와 반드시 동일한 규칙이어야 합니다. */
@@ -132,62 +133,6 @@ const ReportWrapper = () => {
   return <ExamDiagnosticReport diagnosticId={diagnosticId} />;
 };
 
-const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomSelect }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState('');
-
-    const schools = schoolsData[schoolType] || [];
-    const favorites = schoolsData.favorites || [];
-    const pinned = schools.filter(s => favorites.includes(s) && s.includes(search));
-    const others = schools.filter(s => !favorites.includes(s) && s.includes(search));
-
-    return (
-        <div className="relative w-2/3">
-            <div 
-                className={`w-full border-2 p-3 rounded-xl outline-none font-bold text-sm cursor-pointer flex justify-between items-center transition-colors ${isOpen ? 'border-blue-500 bg-blue-50/50' : 'bg-white hover:bg-gray-50'}`}
-                onClick={() => setIsOpen(!isOpen)}
-            >
-                <span className={value ? "text-blue-900" : "text-gray-400"}>{value || '👇 학교명 검색 및 선택'}</span>
-            </div>
-            
-            {isOpen && (
-                <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
-                    <div className="absolute z-50 w-full mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl max-h-72 flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                        <div className="p-3 border-b border-gray-100 bg-gray-50/80">
-                            <div className="relative">
-                                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                                <input type="text" autoFocus className="w-full pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 font-bold text-sm" placeholder="학교명 키워드 검색..." value={search} onChange={e => setSearch(e.target.value)} />
-                            </div>
-                        </div>
-                        <div className="overflow-y-auto flex-1 custom-scrollbar pb-2">
-                            {pinned.length > 0 && (
-                                <div className="p-2 bg-yellow-50/40">
-                                    <div className="text-[11px] font-black text-yellow-600 mb-1.5 px-2 tracking-tight">📌 자주 찾는 학교</div>
-                                    <div className="grid grid-cols-1 gap-1">
-                                        {pinned.map(s => (
-                                            <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-white border border-transparent hover:border-yellow-200 hover:shadow-sm rounded-lg cursor-pointer font-bold text-sm text-gray-800 transition-all">{s}</div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                            {pinned.length > 0 && <div className="h-1 bg-gray-50 border-y border-gray-100"></div>}
-                            <div className="p-2">
-                                {others.length === 0 && search && pinned.length === 0 && <div className="text-center py-4 text-xs font-bold text-gray-400">검색 결과가 없습니다.</div>}
-                                <div className="grid grid-cols-1 gap-1">
-                                    {others.map(s => (
-                                        <div key={s} onClick={() => { onChange(s); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-blue-50 rounded-lg cursor-pointer font-bold text-sm text-gray-700 transition-colors">{s}</div>
-                                    ))}
-                                    <div onClick={() => { onCustomSelect(); setIsOpen(false); setSearch(''); }} className="px-3 py-2.5 hover:bg-gray-100 rounded-lg cursor-pointer font-bold text-sm text-blue-600 mt-1 border border-dashed border-gray-300 text-center">➕ 목록에 없음 (직접 입력)</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </>
-            )}
-        </div>
-    );
-};
 
 const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
     const [loading, setLoading] = useState(false);
@@ -360,7 +305,7 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                                 <option value="high">고등학교</option>
                             </select>
                             {!isCustomSchool ? (
-                                <SmartSchoolSelect schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
+                                <SmartSchoolSelect size="lg" className="w-2/3" schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
                             ) : (
                                 <div className="w-2/3 relative">
                                     <input required className="w-full border-2 border-blue-400 p-3 rounded-xl bg-white font-bold text-sm pr-8 outline-none" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />

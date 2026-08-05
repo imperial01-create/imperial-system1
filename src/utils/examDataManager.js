@@ -1,7 +1,7 @@
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 export const INTEGRATED_COLLECTION = `artifacts/${APP_ID}/public/data/integrated_exams`;
 
 /**

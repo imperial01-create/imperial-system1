@@ -11,8 +11,8 @@ import { collection, addDoc, writeBatch, doc, setDoc, serverTimestamp, query, or
 import { db } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 // 기본 템플릿 프리셋 (삭제 불가)
 const DEFAULT_TEMPLATES = [

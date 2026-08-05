@@ -17,8 +17,9 @@ import {
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const parseCSV = (str) => {
@@ -554,7 +555,7 @@ export const AdminLectureManager = () => {
     const { users = [], classes = [], masterData = {}, loadingData } = useData();
     
     const dynamicSeasons = useMemo(() => {
-        const customSeasons = (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        const customSeasons = [...(masterData?.seasons || [])].sort((a, b) => String(a?.startDate || "").localeCompare(String(b?.startDate || "")));
         return [
             { id: 'all', name: '전체 시즌 (All)' },
             { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
@@ -563,36 +564,9 @@ export const AdminLectureManager = () => {
     }, [masterData]);
 
     const [adminTab, setAdminTab] = useState('master');
-    const [selectedSeason, setSelectedSeason] = useState('');
-    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+    const { selectedSeasonId: selectedSeason, setSelectedSeasonId: setSelectedSeason, isSeasonAutoSet } =
+        useSeasonAutoSelect(masterData?.seasons, loadingData, 'all');
 
-    useEffect(() => {
-        if (!isSeasonAutoSet && !loadingData) {
-            const seasons = masterData?.seasons || [];
-            if (seasons.length > 0) {
-                const todayStr = new Date().toISOString().split('T')[0];
-                const current = seasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
-                if (current) {
-                    setSelectedSeason(current.id);
-                } else {
-                    const future = seasons.filter(s => s.startDate > todayStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
-                    if (future.length > 0) {
-                        setSelectedSeason(future[0].id);
-                    } else {
-                        const past = seasons.filter(s => s.endDate < todayStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
-                        if (past.length > 0) {
-                            setSelectedSeason(past[0].id);
-                        } else {
-                            setSelectedSeason('all');
-                        }
-                    }
-                }
-            } else {
-                setSelectedSeason('all');
-            }
-            setIsSeasonAutoSet(true);
-        }
-    }, [masterData, isSeasonAutoSet, loadingData]);
 
     const [selectedLecturerId, setSelectedLecturerId] = useState(null);
     const [selectedClass, setSelectedClass] = useState(null);
@@ -1465,7 +1439,7 @@ export const LecturerDashboard = ({ currentUser }) => {
     const { classes: allClasses = [], users = [], masterData = {}, loadingData } = useData();
     
     const dynamicSeasons = useMemo(() => {
-        const customSeasons = (masterData?.seasons || []).sort((a, b) => a.startDate.localeCompare(b.startDate));
+        const customSeasons = [...(masterData?.seasons || [])].sort((a, b) => String(a?.startDate || "").localeCompare(String(b?.startDate || "")));
         return [
             { id: 'all', name: '전체 시즌 (All)' },
             { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
@@ -1473,36 +1447,9 @@ export const LecturerDashboard = ({ currentUser }) => {
         ];
     }, [masterData]);
 
-    const [selectedSeason, setSelectedSeason] = useState('');
-    const [isSeasonAutoSet, setIsSeasonAutoSet] = useState(false);
+    const { selectedSeasonId: selectedSeason, setSelectedSeasonId: setSelectedSeason, isSeasonAutoSet } =
+        useSeasonAutoSelect(masterData?.seasons, loadingData, 'all');
 
-    useEffect(() => {
-        if (!isSeasonAutoSet && !loadingData) {
-            const seasons = masterData?.seasons || [];
-            if (seasons.length > 0) {
-                const todayStr = new Date().toISOString().split('T')[0];
-                const current = seasons.find(s => todayStr >= s.startDate && todayStr <= s.endDate);
-                if (current) {
-                    setSelectedSeason(current.id);
-                } else {
-                    const future = seasons.filter(s => s.startDate > todayStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
-                    if (future.length > 0) {
-                        setSelectedSeason(future[0].id);
-                    } else {
-                        const past = seasons.filter(s => s.endDate < todayStr).sort((a, b) => b.endDate.localeCompare(a.endDate));
-                        if (past.length > 0) {
-                            setSelectedSeason(past[0].id);
-                        } else {
-                            setSelectedSeason('all');
-                        }
-                    }
-                }
-            } else {
-                setSelectedSeason('all');
-            }
-            setIsSeasonAutoSet(true);
-        }
-    }, [masterData, isSeasonAutoSet, loadingData]);
 
     const [selectedClass, setSelectedClass] = useState(null);
 

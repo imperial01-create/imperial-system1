@@ -13,8 +13,8 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const escapeRegExp = (string) => {

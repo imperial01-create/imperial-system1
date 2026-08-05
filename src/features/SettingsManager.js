@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 const DEPT_INFO = [
     { 
@@ -461,7 +461,8 @@ const SettingsManager = ({ currentUser }) => {
 
                         <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar p-1">
                             {(!settings.seasons || settings.seasons.length === 0) && <div className="text-sm text-gray-400 font-bold text-center py-6 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">등록된 시즌 데이터가 없습니다. 상단에서 시즌을 추가해 주세요.</div>}
-                            {(settings.seasons || []).sort((a,b) => a.startDate.localeCompare(b.startDate)).map((season, idx) => (
+                            {/* ⚠️ 렌더링 중에 원본 배열을 직접 정렬하면 상태가 훼손되므로 복사본을 정렬합니다 */}
+                            {[...(settings.seasons || [])].sort((a, b) => String(a?.startDate || '').localeCompare(String(b?.startDate || ''))).map((season, idx) => (
                                 <div key={season.id} className="bg-white border-2 border-gray-100 p-3 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-sm hover:border-indigo-200 transition-colors">
                                     <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3">
                                         <span className="font-black text-indigo-900 text-base">{season.name}</span>

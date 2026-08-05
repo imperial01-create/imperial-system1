@@ -14,8 +14,8 @@ import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp,
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button, Badge } from '../components/UI';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 export default function RecruitmentManager() {
     // Context 데이터 안전망 적용

@@ -1,7 +1,7 @@
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
+import { APP_ID } from '../constants';
 
-const APP_ID = 'imperial-clinic-v1';
 
 /**
  * 학생의 영어 종합 스탯(english_stats) 문서를 조회하고, 
