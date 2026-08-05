@@ -36,8 +36,11 @@ import {
 import 'katex/dist/katex.min.css';
 import { InlineMath, BlockMath } from 'react-katex';
 
-/* 온톨로지 원본 저장소. 환경변수로 덮어쓸 수 있다. */
-const ONTOLOGY_REPO = process.env.REACT_APP_ONTOLOGY_REPO || 'imperial01-create/math-ontology-data';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../../firebase';
+import { useData } from '../../contexts/DataContext';
+
+const STAFF_ROLES = ['admin', 'admin_assistant', 'lecturer', 'ta'];
 
 /* 화면을 드나들 때마다 2.7MB를 다시 받지 않도록 세션 동안 메모리에 보관한다. */
 let ontologyCache = null;
@@ -118,7 +121,9 @@ const nodeTypes = { concept: ConceptNode };
 // =====================================================================
 // 4. 우측 위키 패널
 // =====================================================================
-const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJumpToNode }) => {
+const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJumpToNode, canEditSource }) => {
+  const [isResolving, setIsResolving] = useState(false);
+
   if (!selectedNodeData) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-300">
@@ -129,14 +134,30 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
   }
 
   /* 원본 YAML 편집 링크.
-     데이터에 file_path가 없으므로(현재 571개 전부 없음) 저장소 코드 검색으로 보낸다.
-     검색어가 개념 ID라 파일이 어느 폴더에 있든 정확히 찾아진다. */
-  const handleEditClick = () => {
-    const filePath = selectedNodeData.file_path;
-    const url = filePath
-      ? `https://github.com/${ONTOLOGY_REPO}/edit/main/${String(filePath).replace(/^\/+/, '')}`
-      : `https://github.com/search?q=${encodeURIComponent(`repo:${ONTOLOGY_REPO} "${selectedNodeId}"`)}&type=code`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+     원본 저장소가 비공개라 브라우저에서는 경로를 알 수 없다.
+     서버가 GitHub 토큰으로 실제 경로를 찾아 편집 주소를 만들어 준다.
+     (팝업 차단을 피하려고 창을 먼저 연 뒤 주소를 채운다) */
+  const handleEditClick = async () => {
+    if (isResolving) return;
+    const win = window.open('about:blank', '_blank');
+    if (win) win.opener = null;
+    setIsResolving(true);
+    try {
+      const resolve = httpsCallable(functions, 'resolveOntologySource');
+      const res = await resolve({
+        nodeId: selectedNodeId,
+        majorCategory: selectedNodeData.major_category || ''
+      });
+      const url = res?.data?.url;
+      if (!url) throw new Error('편집 주소를 받지 못했습니다.');
+      if (res.data.found === false && res.data.message) alert(res.data.message);
+      if (win) win.location.href = url; else window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      if (win) win.close();
+      alert('원본 파일 위치를 찾지 못했습니다.\n' + (err.message || ''));
+    } finally {
+      setIsResolving(false);
+    }
   };
 
   const prerequisites = Array.isArray(selectedNodeData?.relations?.prerequisite)
@@ -192,15 +213,19 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
             <span className="px-2.5 py-1 bg-slate-100 text-slate-600 text-[11px] font-black rounded-md">{selectedNodeData.sub_category || '소분류'}</span>
           </div>
 
-          <button
-            onClick={handleEditClick}
-            title={selectedNodeData.file_path ? 'GitHub에서 원본 YAML 수정하기' : 'GitHub 저장소에서 이 개념의 원본 파일 찾기'}
-            className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-indigo-600 transition-colors active:scale-95 focus:outline-none"
-          >
-            <Github size={14} />
-            <span className="hidden sm:inline">원본 수정</span>
-            <Edit3 size={14} className="ml-0.5 opacity-70" />
-          </button>
+          {/* 원본 수정은 교직원에게만 노출한다. (예전에는 학생·학부모에게도 보였다) */}
+          {canEditSource && (
+            <button
+              onClick={handleEditClick}
+              disabled={isResolving}
+              title="GitHub에서 이 개념의 원본 YAML 수정하기"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-indigo-600 transition-colors active:scale-95 focus:outline-none disabled:opacity-60"
+            >
+              {isResolving ? <Loader2 size={14} className="animate-spin" /> : <Github size={14} />}
+              <span className="hidden sm:inline">{isResolving ? '위치 확인 중' : '원본 수정'}</span>
+              {!isResolving && <Edit3 size={14} className="ml-0.5 opacity-70" />}
+            </button>
+          )}
         </div>
 
         <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-2 leading-tight break-keep">
@@ -307,6 +332,9 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
 // 5. 메인 컴포넌트
 // =====================================================================
 export default function OntologyMap() {
+  const { currentUser } = useData() || {};
+  const canEditSource = STAFF_ROLES.includes(currentUser?.role);
+
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -622,6 +650,7 @@ export default function OntologyMap() {
             theme={selectedNodeData ? getCategoryTheme(selectedNodeData.major_category) : {}}
             nodeTitleById={nodeTitleById}
             onJumpToNode={selectNode}
+            canEditSource={canEditSource}
           />
         </aside>
       </div>

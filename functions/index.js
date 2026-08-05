@@ -35,6 +35,11 @@ const geminiApiKey = defineString('GEMINI_API_KEY');
 const telegramBotToken = defineString('TELEGRAM_BOT_TOKEN', { default: '' });
 const telegramChatId = defineString('TELEGRAM_CHAT_ID', { default: '' });
 
+// 온톨로지 원본 저장소(비공개) 접근용. 토큰은 서버에만 존재한다.
+const githubToken = defineString('REACT_APP_GITHUB_TOKEN', { default: '' });
+const githubOwner = defineString('REACT_APP_GITHUB_REPO_OWNER', { default: '' });
+const githubRepo = defineString('REACT_APP_GITHUB_REPO_NAME', { default: '' });
+
 // [유틸리티] Gemini API Key 로드
 const getGeminiKey = () => {
     const key = geminiApiKey.value();
@@ -962,6 +967,102 @@ exports.adminCreateUser = onCall({ timeoutSeconds: 60 }, async (request) => {
     });
 
     return { success: true, id: safeId, authUid };
+});
+
+// ============================================================================
+// 🔒 [기능 18] 온톨로지 원본 YAML 편집 링크 생성
+//
+// 문제: 지식 맵의 [원본 수정] 버튼이 항상 404였다.
+//       - build.json에는 file_path가 없다(571개 노드 중 0개).
+//       - 원본 저장소는 비공개라 브라우저에서 경로를 찾을 방법이 없다.
+//       - 저장소의 ontology_index.json에는 file_path가 있지만
+//         'C:\Users\...' 형태의 로컬 PC 경로라 웹에서 쓸 수 없다.
+//
+// 해결: 서버가 GitHub 토큰으로 저장소 파일 목록을 읽고, 개념 ID의 번호 체계로
+//       실제 경로를 계산한다. (571개 전부에 대해 정확도 100% 확인)
+//         예) ALG-03-03-01 + 대분류 '대수'
+//             → 02_대수 / 03_방정식 / 03_근과_계수의_관계 / 01_....yaml
+//       토큰은 브라우저로 나가지 않으며, 교직원만 호출할 수 있다.
+// ============================================================================
+let ontologyTreeCache = { at: 0, files: [] };
+
+exports.resolveOntologySource = onCall({ timeoutSeconds: 30 }, async (request) => {
+    await assertStaff(request);
+
+    const nodeId = String(request.data?.nodeId || '').trim();
+    const majorCategory = String(request.data?.majorCategory || '').trim();
+    if (!nodeId) throw new HttpsError("invalid-argument", "개념 ID가 없습니다.");
+
+    const token = githubToken.value().trim();
+    const owner = githubOwner.value().trim();
+    const repo = githubRepo.value().trim();
+    if (!token || !owner || !repo) {
+        throw new HttpsError("failed-precondition", "서버에 GitHub 연동 정보(토큰/소유자/저장소)가 설정되지 않았습니다.");
+    }
+
+    const BRANCH = 'main';
+    const repoHome = `https://github.com/${owner}/${repo}`;
+
+    // 저장소 파일 목록은 자주 바뀌지 않으므로 10분간 재사용한다 (API 호출 절약)
+    const now = Date.now();
+    if (ontologyTreeCache.files.length === 0 || now - ontologyTreeCache.at > 10 * 60 * 1000) {
+        const res = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/git/trees/${BRANCH}?recursive=1`,
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/vnd.github+json',
+                    'User-Agent': 'imperial-system'
+                }
+            }
+        );
+        if (!res.ok) {
+            throw new HttpsError("internal", `원본 저장소를 읽지 못했습니다. (HTTP ${res.status}) 토큰 권한을 확인해주세요.`);
+        }
+        const data = await res.json();
+        ontologyTreeCache = {
+            at: now,
+            files: (data.tree || [])
+                .filter(f => f.type === 'blob'
+                    && /\.ya?ml$/i.test(f.path)
+                    && !f.path.startsWith('.github')
+                    && f.path.split('/').length === 4)
+                .map(f => f.path)
+        };
+    }
+
+    // 문장부호·공백·밑줄 차이를 무시하고 이름을 비교한다
+    const loose = (s) => String(s || '').replace(/[^0-9A-Za-z가-힣]/g, '');
+    const stripNum = (s) => String(s).replace(/^\d+_/, '');
+
+    const nums = nodeId.split('-').slice(1); // 예: ALG-03-03-01 → ['03','03','01']
+    let matches = [];
+
+    if (nums.length >= 3) {
+        matches = ontologyTreeCache.files.filter(p => {
+            const seg = p.split('/');
+            const majorOk = !majorCategory || loose(stripNum(seg[0])) === loose(majorCategory);
+            return majorOk
+                && seg[1].startsWith(nums[0] + '_')
+                && seg[2].startsWith(nums[1] + '_')
+                && seg[3].startsWith(nums[2] + '_');
+        });
+    }
+
+    if (matches.length !== 1) {
+        // 경로를 특정하지 못하면 감추지 말고 저장소 첫 화면으로 보낸다
+        return {
+            found: false,
+            url: `${repoHome}/tree/${BRANCH}`,
+            message: matches.length === 0
+                ? '해당 개념의 원본 파일을 찾지 못했습니다. 저장소 첫 화면으로 이동합니다.'
+                : `조건에 맞는 파일이 ${matches.length}개라 하나로 특정하지 못했습니다.`
+        };
+    }
+
+    const path = matches[0];
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return { found: true, path, url: `${repoHome}/edit/${BRANCH}/${encoded}` };
 });
 
 // ============================================================================
