@@ -171,6 +171,9 @@ const LectureManagementPanel = ({ selectedClass }) => {
         return (users || []).filter(u => u?.role === 'student' && activeStudentIds.includes(u.id));
     }, [selectedClass, enrollments, users]);
 
+    /* 반이 바뀔 때만 다시 구독합니다.
+       예전에는 selectedClass 객체 자체를 의존성으로 써서, 반은 그대로인데 목록이
+       갱신되어 객체가 새로 만들어지기만 해도 구독을 끊었다 다시 걸었습니다. */
     useEffect(() => {
         if (!selectedClass?.id) return;
         const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lectures'), where('classId', '==', selectedClass.id));
@@ -178,22 +181,50 @@ const LectureManagementPanel = ({ selectedClass }) => {
             const lectureList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             lectureList.sort((a, b) => new Date(b.date) - new Date(a.date));
             setLectures(lectureList);
-        });
+        }, (e) => console.error('[LectureManager] 강의 목록 구독 실패:', e));
         return () => unsub();
-    }, [selectedClass]);
+    }, [selectedClass?.id]);
 
-    const currentLectures = (lectures || []).filter(l => l?.date === selectedDate);
+    const currentLectures = useMemo(
+        () => (lectures || []).filter(l => l?.date === selectedDate),
+        [lectures, selectedDate]
+    );
+
+    /* ⚠️ 여기가 핵심입니다.
+       예전 의존성은 [selectedDate, currentLectures.length] 였습니다. 즉 '강의 개수'가
+       같으면 다시 구독하지 않았는데, 정작 구독에 쓰는 값은 '강의 ID 목록'이었습니다.
+
+       그래서 개수는 같고 내용만 바뀌면 옛 강의를 계속 구독했습니다.
+         · 그날 강의가 2개인 반에서 다른 반(역시 2개)으로 전환
+           → 화면은 새 반인데 수강 현황은 이전 반의 것이 표시됨
+         · 같은 날 강의 하나를 지우고 하나를 추가
+           → 새 강의의 수강 현황이 영영 뜨지 않음
+       ID 목록 자체를 의존성으로 삼아 해결합니다. */
+    const currentLectureIds = useMemo(
+        () => currentLectures.map(l => l.id).filter(Boolean).sort().join(','),
+        [currentLectures]
+    );
 
     useEffect(() => {
-        if (currentLectures.length === 0) {
-            setCompletions([]);
-            return;
-        }
-        const lectureIds = currentLectures.map(l => l.id);
-        const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('lectureId', 'in', lectureIds));
-        const unsub = onSnapshot(q, (s) => setCompletions(s.docs.map(d => d.data())));
-        return () => unsub();
-    }, [selectedDate, currentLectures.length]);
+        const ids = currentLectureIds ? currentLectureIds.split(',') : [];
+        if (ids.length === 0) { setCompletions([]); return; }
+
+        // Firestore의 in 연산자는 최대 30개까지만 허용하므로 나눠서 구독합니다.
+        const chunks = [];
+        for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+
+        const buckets = chunks.map(() => []);
+        const unsubs = chunks.map((chunk, idx) => onSnapshot(
+            query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'lecture_completions'), where('lectureId', 'in', chunk)),
+            (s) => {
+                buckets[idx] = s.docs.map(d => d.data());
+                setCompletions(buckets.flat());
+            },
+            (e) => console.error('[LectureManager] 수강 현황 구독 실패:', e)
+        ));
+
+        return () => unsubs.forEach(u => { try { u(); } catch (_) {} });
+    }, [currentLectureIds]);
 
     useEffect(() => {
         if (!isClinicModalOpen) return;
