@@ -72,8 +72,20 @@ const SmartSchoolSelect = ({
 
   const schools = schoolsData?.[schoolType] || [];
   const favorites = schoolsData?.favorites || [];
-  const pinned = schools.filter(x => favorites.includes(x) && x.includes(search));
-  const others = schools.filter(x => !favorites.includes(x) && x.includes(search));
+
+  /* '영일고'를 쳐도 '영일고등학교'가 나오도록 공백·접미사 차이를 무시하고 찾습니다.
+     검색 결과가 0건이면 사용자가 '새 학교로 추가'를 눌러 중복 표기를 만들게 되므로,
+     검색이 잘 되는 것 자체가 오염을 막는 장치입니다. */
+    const matches = (name) => {
+    const q = search.trim();
+    if (!q) return true;
+    if (name.includes(q)) return true;
+    const nq = normalizeSchoolName(q);
+    return !!nq && normalizeSchoolName(name).includes(nq.replace(/(초등학교|중학교|고등학교)$/, ''));
+  };
+
+  const pinned = schools.filter(x => favorites.includes(x) && matches(x));
+  const others = schools.filter(x => !favorites.includes(x) && matches(x));
 
   const close = () => { setIsOpen(false); setSearch(''); setAddMode(false); setNewName(''); setAddError(''); };
 

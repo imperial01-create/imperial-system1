@@ -12,6 +12,7 @@ import { Search, X, CheckCircle, BookOpen, AlertTriangle, Database, Check, Check
 import { useData } from '../contexts/DataContext';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { fetchBySchool } from '../utils/schoolQuery';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper';
 import { APP_ID } from '../constants';
 
@@ -145,21 +146,15 @@ export default function SchoolStrategy({ currentUser }) {
               }
 
               const rawUserSchool = user.childSnapshot?.schoolName || user.childSchool || user.schoolname || user.schoolName || user.school || "";
-              let baseSchool = rawUserSchool.replace(/\s+/g, '');
-              baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
-              
-              if (!baseSchool) {
+              if (!rawUserSchool.trim()) {
                   setTrendReports([]); setIndividualReports([]); setLoading(false); return;
               }
 
-              const schoolVariations = [...new Set([
-                  baseSchool, `${baseSchool}고`, `${baseSchool}고등학교`, `${baseSchool} 고등학교`,
-                  `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, rawUserSchool
-              ])];
-
-              const qStudent = query(collection(db, INTEGRATED_COLLECTION), where("schoolName", "in", schoolVariations));
-              const snap = await getDocs(qStudent);
-              const allDocs = snap.docs.map(d => ({id: d.id, ...d.data()}));
+              /* 예전에는 학교급 접미사를 '잘라내서'(고등학교→'') 변형을 만들었습니다.
+                 그 방식은 '서울여고'와 '서울여중'이 똑같은 '서울여'가 되어
+                 중학교 리포트가 고등학생에게 보일 수 있는 위험이 있었습니다.
+                 이제 공용 헬퍼가 접미사를 '펼치는' 방식으로 처리합니다. */
+              const allDocs = await fetchBySchool(collection(db, INTEGRATED_COLLECTION), rawUserSchool, { schoolsData });
 
               const targetTerm = getStudentTargetTerm(activeTerm, user);
               
@@ -239,21 +234,15 @@ export default function SchoolStrategy({ currentUser }) {
       try {
           let q = collection(db, INTEGRATED_COLLECTION);
           if (filterInput.year !== '전체') q = query(q, where("year", "==", String(filterInput.year)));
-          
+
+          let results;
           if (filterInput.school.trim() !== '') {
-              const searchSchoolRaw = filterInput.school.trim();
-              let baseSchool = searchSchoolRaw.replace(/\s+/g, '');
-              baseSchool = baseSchool.replace(/고등학교$/, '').replace(/중학교$/, '').replace(/고$/, '').replace(/중$/, '');
-              
-              const searchVariations = [...new Set([
-                  baseSchool, `${baseSchool}고`, `${baseSchool}고등학교`, `${baseSchool} 고등학교`,
-                  `${baseSchool}중`, `${baseSchool}중학교`, `${baseSchool} 중학교`, searchSchoolRaw
-              ])];
-              q = query(q, where("schoolName", "in", searchVariations));
+              // 학교명 매칭은 공용 헬퍼로 통일합니다. (기존 수제 변형 배열 제거)
+              results = await fetchBySchool(q, filterInput.school, { schoolsData });
+          } else {
+              const snap = await getDocs(q);
+              results = snap.docs.map(d => ({id: d.id, ...d.data()}));
           }
-          
-          const snap = await getDocs(q);
-          let results = snap.docs.map(d => ({id: d.id, ...d.data()}));
 
           if (!filterInput.school) {
               const typeKor = {'elementary':'초등학교', 'middle':'중학교', 'high':'고등학교'}[filterSchoolType] || '고등학교';

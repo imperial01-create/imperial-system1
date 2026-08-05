@@ -10,6 +10,7 @@ import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setD
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { fetchBySchool } from '../utils/schoolQuery';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
 import { APP_ID } from '../constants';
@@ -103,12 +104,16 @@ const ExamArchive = ({ currentUser }) => {
                 q = query(q, where('standardCode', '==', String(filters.subjectCode)));
             }
 
+            /* 예전에는 완전 일치라, 등록할 때 '영일 고등학교'로 저장된 자료를
+               '영일고등학교'로 검색하면 조용히 0건이 나왔습니다.
+               담당자가 "없네" 하고 같은 시험을 다시 등록해 자료가 쪼개지는 원인이었습니다. */
+            let results;
             if (filters.schoolName && filters.schoolName.trim() !== '') {
-                q = query(q, where('schoolName', '==', String(filters.schoolName.trim())));
+                results = await fetchBySchool(q, filters.schoolName, { schoolsData });
+            } else {
+                const snapshot = await getDocs(q);
+                results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             }
-
-            const snapshot = await getDocs(q);
-            let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             
             if (!filters.schoolName) {
                 const targetSchoolTypeKor = getSchoolTypeKorean(filters.schoolType);

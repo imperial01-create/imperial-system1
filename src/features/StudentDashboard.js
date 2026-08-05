@@ -8,6 +8,7 @@ import { useData } from '../contexts/DataContext';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
+import { fetchBySchool } from '../utils/schoolQuery';
 
 const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -82,10 +83,14 @@ export default function StudentDashboard({ currentUser }) {
 
                 // 🚀 2. [CTO 패치] 내 학교의 다가오는 학사일정(D-Day) 로드
                 if (currentUser.schoolName) {
-                    const calQ = query(collection(db, `artifacts/imperial-clinic-v1/public/data/academic_calendars`), where('schoolName', '==', currentUser.schoolName));
-                    const calSnap = await getDocs(calQ);
-                    const cals = calSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    
+                    /* 예전에는 학교명 완전일치로 조회해서, 프로필이 '목동중'이고
+                       학사일정이 '목동중학교'면 D-Day 배너가 조용히 안 떴습니다.
+                       이제 표기가 달라도 같은 학교면 찾습니다. */
+                    const cals = await fetchBySchool(
+                        collection(db, `artifacts/imperial-clinic-v1/public/data/academic_calendars`),
+                        currentUser.schoolName
+                    );
+
                     // 종료일이 지나지 않은 일정 중 가장 가까운 시작일 찾기
                     const validExams = cals.filter(c => c.endDate >= todayDateStr).sort((a, b) => a.startDate.localeCompare(b.startDate));
                     

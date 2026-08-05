@@ -13,6 +13,7 @@ import {
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
+import { isSameSchool } from '../utils/schoolName';
 import { Button, Modal, Badge } from '../components/UI';
 import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
@@ -170,7 +171,10 @@ export default function AttendanceManager({ currentUser }) {
             if (searchQuery && !(student.name||'').includes(searchQuery) && !(enroll.className || '').includes(searchQuery)) return;
 
             const isExamLeave = academicCalendars.some(cal => {
-                const isTargetMatch = cal.schoolName === student.schoolName;
+                /* 학교명 표기가 달라도 같은 학교면 면제로 인정합니다.
+                   예전에는 완전일치라, 프로필이 '목동중'이고 학사일정이 '목동중학교'면
+                   시험기간에 면제 대상 학생이 지각·결석으로 집계됐습니다. */
+                const isTargetMatch = isSameSchool(cal.schoolName, student.schoolName);
                 return isTargetMatch && selectedDateStr >= cal.startDate && selectedDateStr <= cal.endDate && cal.isAttendanceExempt;
             });
             
@@ -267,7 +271,8 @@ export default function AttendanceManager({ currentUser }) {
             activeEnrolls.forEach(e => {
                 const sObj = users.find(u => u.id === e.studentId);
                 const isExamLeave = academicCalendars.some(cal => {
-                    const isTargetMatch = cal.schoolName === sObj?.schoolName;
+                    // 위와 같은 이유로 표기 차이를 흡수합니다. (반별 예상 인원 집계)
+                    const isTargetMatch = isSameSchool(cal.schoolName, sObj?.schoolName);
                     return isTargetMatch && selectedDateStr >= cal.startDate && selectedDateStr <= cal.endDate && cal.isAttendanceExempt;
                 });
 

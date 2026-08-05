@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getDynamicSubjectLabel } from '../utils/subjectMapper';
+import { fetchBySchool } from '../utils/schoolQuery';
 import { APP_ID } from '../constants';
 
 
@@ -79,14 +80,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
     setErrorMsg(null);
     
     try {
+      /* \uc608\uc804\uc5d0\ub294 \uc811\ub450\uc0ac \ubc94\uc704 \uac80\uc0c9\uc774\ub77c '\uc601\uc77c\uace0'\ub85c\ub294 '\uc11c\uc6b8\uc601\uc77c\uace0\ub4f1\ud559\uad50'\ub97c \ubabb \ucc3e\uace0,
+         \uc774\ub984 \uc911\uac04\uc5d0 \uacf5\ubc31\uc774 \uc788\uc73c\uba74 \ub193\ucce4\uc2b5\ub2c8\ub2e4. \ub2e4\ub978 \ud654\uba74\uacfc \uac19\uc740 \uaddc\uce59\uc73c\ub85c \ud1b5\uc77c\ud569\ub2c8\ub2e4. */
       const examsRef = collection(db, `artifacts/${APP_ID}/public/data/integrated_exams`);
-      const q = query(
-        examsRef,
-        where('schoolName', '>=', filters.schoolName.trim()),
-        where('schoolName', '<=', filters.schoolName.trim() + '\uf8ff')
-      );
-      const snap = await getDocs(q);
-      let results = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      let results = await fetchBySchool(examsRef, filters.schoolName);
 
       if (filters.year) results = results.filter(e => e.year === filters.year);
       if (filters.gradeSem) {
