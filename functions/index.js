@@ -1066,6 +1066,89 @@ exports.resolveOntologySource = onCall({ timeoutSeconds: 30 }, async (request) =
 });
 
 // ============================================================================
+// 🔒 [기능 19] 역할(role)을 로그인 토큰에 심는다 — Custom Claims 동기화
+//
+// [왜 필요한가]
+// 보안 규칙이 "이 사람이 학생인가?"를 판단하려면 users 문서를 읽어야 했다.
+// 그런데 Firestore 규칙에는 문서 조회 횟수 제한이 있다(일괄 작업 20회).
+// 학생이 클리닉 시간대를 여러 개 골라 한 번에 신청하면 이 한도를 넘어
+// 'missing or insufficient permissions' 오류가 났다.
+// 또 과거 계정처럼 문서 ID가 로그인 아이디와 다르면 조회 자체가 빗나갔다.
+//
+// [해결]
+// 역할을 로그인 토큰(Custom Claims)에 넣으면 규칙이 문서를 한 번도 읽지 않는다.
+// 토큰은 authUid 기준이라 문서 ID가 달라도 정확하다.
+// ============================================================================
+
+/** 사용자 문서로부터 실제 Firebase Auth uid를 알아낸다. */
+const resolveAuthUid = async (docId, data) => {
+    const stored = data?.authUid;
+    if (stored && stored !== 'legacy_verified_account') return stored;
+    const email = `${toSafeId(data?.userId || docId)}@imperial.com`;
+    try {
+        const rec = await admin.auth().getUserByEmail(email);
+        return rec.uid;
+    } catch (e) {
+        return null;
+    }
+};
+
+exports.syncUserClaims = onDocumentWritten(
+    `artifacts/${APP_ID}/public/data/users/{userId}`,
+    async (event) => {
+        const userId = event.params.userId;
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+        if (!after) return null; // 삭제는 onUserDeleted가 계정을 통째로 지운다
+
+        // 역할이나 인증 연결이 바뀔 때만 처리 (lastLogin 갱신 등으로는 동작하지 않게)
+        if (before && before.role === after.role && before.authUid === after.authUid) return null;
+
+        const uid = await resolveAuthUid(userId, after);
+        if (!uid) {
+            console.warn(`[syncUserClaims] 인증 계정을 찾지 못함: ${userId}`);
+            return null;
+        }
+
+        try {
+            await admin.auth().setCustomUserClaims(uid, { role: after.role || 'none' });
+        } catch (e) {
+            console.error(`[syncUserClaims] 실패: ${userId}`, e);
+        }
+        return null;
+    }
+);
+
+/** 기존 사용자 전원에게 역할 토큰을 한 번에 부여한다. (도입 시 1회 실행) */
+exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+
+    const snap = await usersCol().get();
+    let done = 0;
+    const failed = [];
+
+    // Auth 서버 부하를 고려해 소규모 묶음으로 순차 처리한다
+    const docs = snap.docs;
+    for (let i = 0; i < docs.length; i += 10) {
+        const chunk = docs.slice(i, i + 10);
+        await Promise.all(chunk.map(async (d) => {
+            const data = d.data();
+            const uid = await resolveAuthUid(d.id, data);
+            if (!uid) { failed.push(data.name || d.id); return; }
+            try {
+                await admin.auth().setCustomUserClaims(uid, { role: data.role || 'none' });
+                done++;
+            } catch (e) {
+                failed.push(data.name || d.id);
+            }
+        }));
+    }
+
+    return { total: docs.length, done, failedCount: failed.length, failedSample: failed.slice(0, 20) };
+});
+
+// ============================================================================
 // 🔒 [기능 17] 교직원 명부(staff_directory) 자동 동기화
 //
 // 문제: 학생/학부모 화면도 '담당 강사 이름'이 필요해서 users 컬렉션 전체를 구독했다.

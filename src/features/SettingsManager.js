@@ -48,6 +48,7 @@ const SettingsManager = ({ currentUser }) => {
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
+    const [claimsProcessing, setClaimsProcessing] = useState(false);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -310,6 +311,31 @@ const SettingsManager = ({ currentUser }) => {
             alert("동기화 중 오류가 발생했습니다: " + (err.message || ''));
         } finally {
             setStaffDirProcessing(false);
+        }
+    };
+
+    /* 🔑 역할 토큰(Custom Claims) 일괄 부여
+       보안 규칙이 권한을 판단할 때 사용자 문서를 조회하지 않고 로그인 토큰만 보게 합니다.
+       조회 한도에 걸려 '권한 없음' 오류가 나던 문제(클리닉 예약 실패 등)를 없앱니다. */
+    const handleBackfillClaims = async () => {
+        if (!window.confirm("전체 사용자에게 역할 정보를 로그인 토큰에 부여합니다.\n\n인원 수에 따라 1~2분 걸릴 수 있습니다. 안전한 작업이며 여러 번 눌러도 됩니다.\n진행할까요?")) return;
+        setClaimsProcessing(true);
+        try {
+            const backfill = httpsCallable(functions, 'backfillUserClaims');
+            const res = await backfill({});
+            const d = res?.data || {};
+            let msg = `✅ 역할 토큰 부여 완료!\n\n대상: ${d.total ?? 0}명\n성공: ${d.done ?? 0}명`;
+            if (d.failedCount) {
+                msg += `\n실패: ${d.failedCount}명 (인증 계정이 아직 없는 사용자)\n`;
+                msg += `예시: ${(d.failedSample || []).join(', ')}\n\n`;
+                msg += `실패한 분들은 다음 로그인 시 자동으로 처리됩니다.`;
+            }
+            msg += `\n\n※ 이미 로그인 중인 사용자는 다시 로그인하면 즉시 반영됩니다.`;
+            alert(msg);
+        } catch (err) {
+            alert("역할 토큰 부여 중 오류가 발생했습니다: " + (err.message || ''));
+        } finally {
+            setClaimsProcessing(false);
         }
     };
 
@@ -690,6 +716,28 @@ const SettingsManager = ({ currentUser }) => {
                             className="w-full bg-indigo-600 hover:bg-indigo-700 font-bold py-4 text-lg shadow-md border-0"
                         >
                             {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '과목 자동 할당 스크립트 실행'}
+                        </Button>
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-300 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
+                            <ShieldCheck className="text-amber-600"/> 역할 토큰 일괄 부여 (권한 오류 해결)
+                        </h2>
+
+                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 언제 필요한가요?</p>
+                            <p>• 학생이 <strong>클리닉을 여러 시간대 신청</strong>할 때 '권한 없음' 오류가 나는 경우</p>
+                            <p>• 그 외 정상적인 사용자가 저장·신청에서 권한 오류를 겪는 경우</p>
+                            <p className="pt-2 border-t border-amber-200 mt-2">보안 규칙이 권한을 확인할 때마다 사용자 정보를 조회하면 횟수 제한에 걸립니다. 역할을 로그인 정보에 미리 넣어두면 조회 없이 즉시 판단합니다.</p>
+                            <p className="text-amber-700 font-bold">※ 새로 가입하는 분은 자동 처리됩니다. 이 버튼은 기존 인원용입니다.</p>
+                        </div>
+
+                        <Button
+                            onClick={handleBackfillClaims}
+                            disabled={claimsProcessing}
+                            className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {claimsProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '전체 사용자 역할 토큰 부여'}
                         </Button>
                     </div>
 

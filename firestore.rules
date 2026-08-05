@@ -50,12 +50,25 @@ service cloud.firestore {
             : 'none');
     }
 
-    // Custom Claims 우선, 없으면 Firestore 문서 기준 (향후 claims 전환 대비)
+    /* 역할 판정.
+       ⚠️ 성능이 아니라 '정상 동작'이 걸린 부분이다.
+       Firestore 규칙에는 문서 조회 횟수 제한이 있다(일괄 작업 20회).
+       docRole()은 조회를 하므로, 여러 문서를 한 번에 쓰는 작업(예: 학생이
+       클리닉 시간대를 여러 개 신청)에서 한도를 넘겨 권한 거부가 발생했다.
+       그래서 로그인 토큰(Custom Claims)의 role을 우선 사용한다 — 조회 0회.
+       토큰에 아직 role이 없는 사용자를 위해 문서 조회를 남겨두되,
+       아래 규칙들은 role()을 '한 번만' 호출하도록 작성해야 한다. */
     function role(appId) {
       return (isAuth() && request.auth.token.role != null)
         ? request.auth.token.role.lower()
         : docRole(appId);
     }
+
+    // 조회를 아끼기 위해 여러 역할을 한 번의 role() 호출로 검사한다
+    function roleIn(appId, allowed) { return isAuth() && role(appId) in allowed; }
+
+    function STAFF() { return ['admin', 'admin_assistant', 'lecturer', 'ta']; }
+    function MEMBERS() { return ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent']; }
 
     // 원장님 계정 비상 통로 (uid는 위조 불가하므로 안전한 안전장치)
     function isOwner() { return isAuth() && uid() == 'PZYN2Ui7mGUGRgQiByvjRutzzPE3'; }
@@ -63,16 +76,19 @@ service cloud.firestore {
     // SMS 게이트웨이 전용 서비스 계정 (안드로이드 앱). 관리자 아님.
     function isGateway() { return isAuth() && emailId() == 'admin'; }
 
-    function isAdmin(appId)  { return isOwner() || (isAuth() && role(appId) == 'admin'); }
-    function isAsst(appId)   { return isAuth() && role(appId) == 'admin_assistant'; }
-    function isDesk(appId)   { return isAdmin(appId) || isAsst(appId); }
-    function isLecturer(appId) { return isAuth() && role(appId) == 'lecturer'; }
-    function isTA(appId)     { return isAuth() && role(appId) == 'ta'; }
-    function isStudent(appId){ return isAuth() && role(appId) == 'student'; }
-    function isParent(appId) { return isAuth() && role(appId) == 'parent'; }
+    /* 아래 판정 함수들은 모두 role()을 '한 번만' 호출한다.
+       예전처럼 isDesk = isAdmin || isAsst 식으로 겹쳐 부르면 문서 조회가
+       배로 늘어나 일괄 작업에서 조회 한도를 넘긴다. */
+    function isAdmin(appId)  { return isOwner() || roleIn(appId, ['admin']); }
+    function isAsst(appId)   { return roleIn(appId, ['admin_assistant']); }
+    function isDesk(appId)   { return isOwner() || roleIn(appId, ['admin', 'admin_assistant']); }
+    function isLecturer(appId) { return roleIn(appId, ['lecturer']); }
+    function isTA(appId)     { return roleIn(appId, ['ta']); }
+    function isStudent(appId){ return roleIn(appId, ['student']); }
+    function isParent(appId) { return roleIn(appId, ['parent']); }
 
     // 교직원 = 관리자 + 행정조교 + 강사 + 수업조교 (학생/학부모 절대 포함 안 됨)
-    function isStaff(appId)  { return isDesk(appId) || isLecturer(appId) || isTA(appId); }
+    function isStaff(appId)  { return isOwner() || roleIn(appId, STAFF()); }
 
     function isMe(id) { return isAuth() && (id == emailId() || id == uid()); }
 
@@ -222,9 +238,12 @@ service cloud.firestore {
 
       match /sessions/{docId} {
         allow read: if isAuth();
-        allow create, delete: if isStaff(appId);
-        // 학생/학부모는 예약 신청·취소요청을 위해 update 필요
-        allow update: if isStaff(appId) || isStudent(appId) || isParent(appId);
+        allow create, delete: if roleIn(appId, STAFF());
+        /* 학생/학부모는 예약 신청·취소요청을 위해 update가 필요하다.
+           학생이 연속 시간대를 한 번에 신청하면 여러 문서를 일괄 수정하므로,
+           역할 판정을 role() 한 번으로 끝내 조회 한도를 넘지 않게 한다.
+           (이 부분이 '클리닉 예약 시 권한 오류'의 원인이었다) */
+        allow update: if roleIn(appId, MEMBERS());
       }
 
       match /schedule_requests/{docId} {

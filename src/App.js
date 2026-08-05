@@ -738,10 +738,14 @@ const AppContent = () => {
      Auth 세션이 끊긴 상태로 앱에 들어가면 화면 전체가 권한 오류로 깨집니다.
      따라서 Auth 세션이 없으면 저장된 프로필도 함께 버립니다. */
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       const savedUser = sessionStorage.getItem('imperial_user');
       if (firebaseUser && savedUser) {
         try {
+          /* 이미 로그인된 상태로 앱을 다시 열었을 때도 역할 토큰을 최신화합니다.
+             역할이 바뀌었거나 토큰에 역할이 없던 사용자를 자동으로 복구합니다. */
+          try { await firebaseUser.getIdToken(true); } catch (e) { console.warn('토큰 갱신 실패:', e); }
+
           const parsed = JSON.parse(savedUser);
           if (parsed.id) parsed.id = String(parsed.id).toLowerCase();
           setCurrentUser(parsed);
@@ -796,6 +800,12 @@ const AppContent = () => {
               docId = res.data.docId || safeId;
               await signInWithCustomToken(auth, res.data.token);
           }
+
+          /* 🔑 로그인 토큰에 담긴 역할(role) 정보를 최신으로 갱신합니다.
+             보안 규칙은 이 값으로 권한을 판정하며, 이 값이 없으면 규칙이 매번
+             사용자 문서를 조회하다 조회 한도에 걸립니다.
+             (학생이 클리닉 시간대를 여러 개 신청할 때 권한 오류가 나던 원인) */
+          try { await auth.currentUser?.getIdToken(true); } catch (e) { console.warn('토큰 갱신 실패:', e); }
 
           const userDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', docId);
           const userDoc = await getDoc(userDocRef);
