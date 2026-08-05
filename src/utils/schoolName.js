@@ -62,12 +62,33 @@ export const normalizeSchoolName = (raw) => {
   return s;
 };
 
-/** 지역 접두사를 뗀 형태. 마스터 목록 대조에만 씁니다. */
+/* 학교 종류 접미사. 긴 것부터 확인해야 '여자고등학교'가 '고등학교'로 잘리지 않습니다. */
+const TYPE_SUFFIXES = ['여자고등학교', '여자중학교', '초등학교', '중학교', '고등학교'];
+
+/** 학교 종류를 뗀 '이름 부분'. 예: '서울고척초등학교' → '서울고척' */
+const stemOf = (normalized) => {
+  for (const suf of TYPE_SUFFIXES) {
+    if (normalized.endsWith(suf)) return normalized.slice(0, -suf.length);
+  }
+  return normalized;
+};
+
+/**
+ * 지역 접두사를 뗀 형태. 마스터 목록 대조와 비교에만 씁니다.
+ *
+ * ⚠️ 조건이 핵심입니다. 접두사를 뗀 뒤에도 '이름 부분'이 남아 있을 때만 뗍니다.
+ *    이 조건이 없으면 '서울고등학교' → '고등학교', '경기고등학교' → '고등학교' 가 되어
+ *    실존하는 서로 다른 학교가 같은 학교로 합쳐집니다.
+ *      서울고척초등학교 → 고척초등학교   (이름 '고척'이 남음 → 뗀다)
+ *      서울고등학교     → 그대로          (이름이 안 남음 → 떼지 않는다)
+ *      경기고등학교     → 그대로
+ */
 const stripRegionPrefix = (normalized) => {
   for (const p of REGION_PREFIXES) {
-    if (normalized.startsWith(p) && normalized.length > p.length + 2) {
-      return normalized.slice(p.length);
-    }
+    if (!normalized.startsWith(p)) continue;
+    const rest = normalized.slice(p.length);
+    // 뗀 나머지가 여전히 '이름 + 학교종류' 형태여야 합니다.
+    if (stemOf(rest).length >= 2) return rest;
   }
   return normalized;
 };
