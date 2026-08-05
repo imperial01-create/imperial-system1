@@ -390,20 +390,34 @@ const SettingsManager = ({ currentUser }) => {
 
             snap.forEach(d => {
                 const v = d.data();
-                const raw = v.schoolName || v.school || '';
-                if (!raw) return;
 
-                const key = normalizeSchoolName(raw);
-                if (!key) return;
+                /* 학부모 계정은 '자녀 학교'를 childSchool 에 갖고 있고, 화면(내신 연구소)도
+                   그 필드를 먼저 읽습니다. schoolName 만 보면 학부모가 통째로 누락됩니다. */
+                const fields = t.id === 'users' ? ['schoolName', 'school', 'childSchool'] : ['schoolName', 'school'];
 
-                if (!groups.has(key)) groups.set(key, new Set());
-                groups.get(key).add(raw);
+                fields.forEach(field => {
+                    const raw = v[field];
+                    if (!raw) return;
 
-                // 마스터 목록에 정식 명칭이 있고 현재 값이 그것과 다르면 정리 대상
-                const canonical = findCanonicalSchool(raw, schools);
-                if (t.writable && canonical && canonical !== raw) {
-                    pending.push({ id: d.id, from: raw, to: canonical });
-                }
+                    const key = normalizeSchoolName(raw);
+                    if (!key) return;
+
+                    if (!groups.has(key)) groups.set(key, new Set());
+                    groups.get(key).add(raw);
+
+                    // 마스터 목록에 정식 명칭이 있고 현재 값이 그것과 다르면 정리 대상
+                    const canonical = findCanonicalSchool(raw, schools);
+                    if (t.writable && canonical && canonical !== raw) {
+                        pending.push({
+                            id: d.id,
+                            field,
+                            from: raw,
+                            to: canonical,
+                            // 이미 원본이 보관돼 있으면 다시 덮어쓰지 않습니다.
+                            hasOriginal: v[`${field}Original`] !== undefined
+                        });
+                    }
+                });
             });
 
             const merged = [...groups.entries()]
@@ -448,13 +462,25 @@ const SettingsManager = ({ currentUser }) => {
                     const batch = writeBatch(db);
                     slice.forEach(p => {
                         const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', t.id, p.id);
-                        // 원본을 남겨야 되돌릴 수 있습니다. 이미 있으면 덮어쓰지 않습니다.
-                        batch.update(ref, { schoolName: p.to, schoolNameOriginal: p.from });
+                        const patch = { [p.field]: p.to };
+                        // 원본은 '최초 한 번만' 보관합니다. 다시 덮어쓰면 되돌릴 수 없게 됩니다.
+                        if (!p.hasOriginal) patch[`${p.field}Original`] = p.from;
+                        batch.update(ref, patch);
                     });
                     try {
                         await batch.commit();
                         written += slice.length;
                     } catch (e) {
+                        /* 권한 거부는 대부분 '역할 토큰'이 없어서 생깁니다.
+                           보안 규칙이 역할을 확인하려고 문서를 조회하는데, 일괄 쓰기에는
+                           조회 횟수 제한이 있어 묶음 전체가 거부됩니다. */
+                        if (e?.code === 'permission-denied') {
+                            throw new Error(
+                                '권한이 거부되었습니다.\n\n' +
+                                '위쪽 [전체 사용자 역할 토큰 부여]를 먼저 실행한 뒤,\n' +
+                                '로그아웃했다가 다시 로그인하고 시도해주세요.'
+                            );
+                        }
                         failed.push(`${t.label} ${i + 1}~${i + slice.length}번째 (${e.message})`);
                     }
                 }
@@ -464,6 +490,13 @@ const SettingsManager = ({ currentUser }) => {
                 (failed.length ? `\n\n실패한 묶음 ${failed.length}개:\n${failed.join('\n')}\n\n[진단하기]를 다시 눌러 남은 건수를 확인해주세요.` : '')
             );
             setSchoolScan(await scanSchoolNames());
+        } catch (e) {
+            // 중간에 멈춰도 이미 반영된 건수는 알려드립니다. (부분 적용 상태를 감추지 않습니다)
+            alert(
+                `작업이 중단되었습니다.\n\n${e.message}\n\n` +
+                `여기까지 반영된 항목: ${written}건\n` +
+                `[진단하기]를 다시 눌러 남은 건수를 확인한 뒤 재실행하면 이어서 진행됩니다.`
+            );
         } finally {
             setSchoolFixProcessing(false);
         }
@@ -477,17 +510,25 @@ const SettingsManager = ({ currentUser }) => {
             for (const t of SCHOOL_FIX_TARGETS) {
                 if (!t.writable) continue;
                 const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', t.id));
-                const targets = snap.docs.filter(d => d.data().schoolNameOriginal !== undefined);
+                const FIELDS = t.id === 'users' ? ['schoolName', 'school', 'childSchool'] : ['schoolName', 'school'];
+                const targets = snap.docs.filter(d => FIELDS.some(f => d.data()[`${f}Original`] !== undefined));
+
                 for (let i = 0; i < targets.length; i += SCHOOL_FIX_CHUNK) {
+                    const slice = targets.slice(i, i + SCHOOL_FIX_CHUNK);
                     const batch = writeBatch(db);
-                    targets.slice(i, i + SCHOOL_FIX_CHUNK).forEach(d => {
-                        batch.update(d.ref, {
-                            schoolName: d.data().schoolNameOriginal,
-                            schoolNameOriginal: deleteField()
+                    slice.forEach(d => {
+                        const v = d.data();
+                        const patch = {};
+                        FIELDS.forEach(f => {
+                            if (v[`${f}Original`] !== undefined) {
+                                patch[f] = v[`${f}Original`];
+                                patch[`${f}Original`] = deleteField();
+                            }
                         });
+                        batch.update(d.ref, patch);
                     });
                     await batch.commit();
-                    restored += Math.min(SCHOOL_FIX_CHUNK, targets.length - i);
+                    restored += slice.length;
                 }
             }
             alert(`되돌리기 완료: ${restored}건`);
@@ -1122,9 +1163,14 @@ const SettingsManager = ({ currentUser }) => {
                                         {t.writable && t.pending.length > 0 && (
                                             <div className="mt-2 text-xs font-bold text-slate-600">
                                                 <div className="mb-1">바뀔 내용 (앞 5건):</div>
-                                                {t.pending.slice(0, 5).map(p => (
-                                                    <div key={p.id} className="pl-2 py-0.5">
+                                                {t.pending.slice(0, 5).map((p, i) => (
+                                                    <div key={p.id + p.field + i} className="pl-2 py-0.5">
                                                         {p.from} <span className="text-indigo-600">→ {p.to}</span>
+                                                        {p.field !== 'schoolName' && (
+                                                            <span className="ml-1 text-slate-400">
+                                                                ({p.field === 'childSchool' ? '자녀 학교' : p.field})
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>
