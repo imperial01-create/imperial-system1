@@ -14,6 +14,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Button, Card, Modal, Toast } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { toStorableSchoolName } from '../utils/schoolName';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
 
@@ -248,9 +249,12 @@ const UserManager = ({ currentUser }) => {
         try {
             const payload = { name: formData.name, userId: formData.userId, role: currentRole, phone: formData.phone || '', updatedAt: serverTimestamp() };
             
-            if (currentRole === 'student') { 
-                payload.schoolName = formData.schoolName;
-                payload.grade = formData.grade; 
+            if (currentRole === 'student') {
+                // 학교명은 마스터 목록의 정식 명칭으로 맞춰 저장합니다.
+                // (예전에는 .trim()조차 없어 ' 영일고등학교 ' 같은 값이 그대로 들어갔고,
+                //  학사일정과 이름이 어긋나 시험기간 출결 면제가 적용되지 않았습니다.)
+                payload.schoolName = toStorableSchoolName(formData.schoolName, schoolsData);
+                payload.grade = formData.grade;
                 payload.attendancePin = formData.attendancePin; payload.status = formData.status;
             }
             if (['ta', 'lecturer', 'admin', 'admin_assistant'].includes(currentRole)) { 

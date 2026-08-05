@@ -9,13 +9,17 @@ import {
     CheckCircle, AlertCircle, Loader, MessageSquare, BookOpen, Calculator, Languages, FlaskConical, Sparkles,
     ChevronLeft, ChevronRight, Check
 } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, serverTimestamp, addDoc, where } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc, setDoc, getDoc, serverTimestamp, addDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { Modal, Button, Badge, Card, Toast } from '../components/UI';
+import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { toStorableSchoolName } from '../utils/schoolName';
 import { APP_ID } from '../constants';
 
+/* 이 화면의 학교급 표기('초등/중등/고등')를 학교 마스터 목록의 키로 옮깁니다. */
+const SCHOOL_TYPE_KEY = { '초등': 'elementary', '중등': 'middle', '고등': 'high' };
 
 // 업무 시간 슬롯 생성
 const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {
@@ -224,11 +228,26 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [onboardTab, setOnboardTab] = useState('basic');
 
     const [leadForm, setLeadForm] = useState({
-        name: '', phone: '', schoolName: '', schoolType: '중등', gradeLevel: '2', 
+        name: '', phone: '', schoolName: '', schoolType: '중등', gradeLevel: '2',
         checkedSubjects: { "국어": false, "수학": false, "영어": false, "과학": false },
         korean: { lastScore: '', weakType: '', note: '' }, math: { currentProgress: '', hardestConcept: '', note: '' },
         english: { catScore: '', readingLevel: '', vocabularyNote: '' }, science: { selectedSubject: '', note: '' }
     });
+
+    /* 학교 마스터 목록. 이 화면은 원래 학교명을 자유 입력으로 받아
+       같은 학교가 여러 표기로 저장되는 주된 원인이었습니다. */
+    const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
+
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const snap = await getDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'settings', 'schools'));
+                if (alive && snap.exists()) setSchoolsData(snap.data());
+            } catch (e) { console.error('학교 목록 로드 실패:', e); }
+        })();
+        return () => { alive = false; };
+    }, []);
 
     const showToast = (message, type = 'error') => setToast({ message, type });
     const handleSubjectCheck = (subject) => setLeadForm(prev => ({ ...prev, checkedSubjects: { ...prev.checkedSubjects, [subject]: !prev.checkedSubjects[subject] } }));
@@ -261,7 +280,8 @@ export default function ConsultationManager({ isKiosk = false }) {
                 profile: {
                     phone: cleanPhone,
                     status: 'attending',
-                    schoolName: leadForm.schoolName,
+                    // 마스터 목록에 있으면 그 정식 명칭으로 저장합니다.
+                    schoolName: toStorableSchoolName(leadForm.schoolName, schoolsData),
                     grade: mergedGrade,
                     attendancePin: cleanPhone.slice(-4)
                 }
@@ -500,7 +520,17 @@ export default function ConsultationManager({ isKiosk = false }) {
                                     <div className="grid grid-cols-2 gap-4">
                                         <div>
                                             <label className="block text-xs font-bold text-gray-500 mb-1">학교명</label>
-                                            <input className="w-full border p-3 rounded-xl outline-none font-bold bg-gray-50 focus:bg-white focus:border-blue-500 transition-all" placeholder="목동중학교" value={leadForm.schoolName} onChange={e=>setLeadForm({...leadForm, schoolName: e.target.value})}/>
+                                            {/* 🔧 예전에는 자유 입력이었습니다. 그래서 '목동중'처럼 저장된 학생은
+                                                학사일정(항상 정식 명칭으로 등록됨)과 이름이 어긋나
+                                                시험기간 출결 면제를 받지 못했습니다.
+                                                이제 마스터 목록에서 고르고, 없으면 목록에 추가합니다. */}
+                                            <SmartSchoolSelect
+                                                schoolType={SCHOOL_TYPE_KEY[leadForm.schoolType] || 'middle'}
+                                                schoolsData={schoolsData}
+                                                value={leadForm.schoolName}
+                                                onChange={(val) => setLeadForm({ ...leadForm, schoolName: val })}
+                                                onSchoolAdded={(type, name, list) => setSchoolsData(prev => ({ ...prev, [type]: list }))}
+                                            />
                                         </div>
                                         <div>
                                             <label className="block text-xs font-bold text-gray-500 mb-1">학교급 및 학년 *</label>

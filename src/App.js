@@ -20,6 +20,7 @@ import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
 import SmartSchoolSelect from './components/SmartSchoolSelect';
+import { toStorableSchoolName } from './utils/schoolName';
 import { APP_ID } from './constants';
 
 // 컴포넌트 Lazy 로딩
@@ -224,7 +225,8 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                 password: form.password,
                 name: form.name,
                 role: form.role,
-                schoolName: form.schoolName,
+                // 마스터 목록에 있는 학교면 그 정식 명칭으로 통일해 저장합니다.
+                schoolName: toStorableSchoolName(form.schoolName, schoolsData),
                 grade: form.grade,
                 childName: form.childName,
                 subject: form.subject
@@ -304,8 +306,11 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                                 <option value="middle">중학교</option>
                                 <option value="high">고등학교</option>
                             </select>
+                            {/* 회원가입은 로그인 전이라 학교 마스터 목록에 쓸 권한이 없습니다.
+                                그래서 여기서는 '새 학교로 추가'를 막고 기존 직접 입력을 남기되,
+                                저장 시점에 목록의 정식 명칭으로 맞춥니다(handleSignUp 참고). */}
                             {!isCustomSchool ? (
-                                <SmartSchoolSelect size="lg" className="w-2/3" schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
+                                <SmartSchoolSelect size="lg" className="w-2/3" allowAddNew={false} schoolType={schoolType} schoolsData={schoolsData} value={form.schoolName} onChange={(val) => setForm({...form, schoolName: val})} onCustomSelect={() => setIsCustomSchool(true)}/>
                             ) : (
                                 <div className="w-2/3 relative">
                                     <input required className="w-full border-2 border-blue-400 p-3 rounded-xl bg-white font-bold text-sm pr-8 outline-none" placeholder="학교명 직접 입력" value={form.schoolName} onChange={e => setForm({...form, schoolName: e.target.value})} />
