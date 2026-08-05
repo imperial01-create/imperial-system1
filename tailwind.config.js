@@ -19,7 +19,25 @@ module.exports = {
   ],
 
   theme: {
-    extend: {},
+    extend: {
+      /* 학원 기본 글꼴을 Tailwind에 등록합니다.
+         이렇게 하면 Preflight가 <html>에 Pretendard를 걸어주므로,
+         index.html의 `body { ... !important }` 한 줄에 의존하지 않게 됩니다.
+         font-sans 유틸리티도 같은 글꼴을 가리킵니다.
+         (Pretendard 로드가 실패해도 한글이 깨지지 않도록 대체 글꼴을 둡니다.) */
+      fontFamily: {
+        sans: [
+          'Pretendard',
+          'Apple SD Gothic Neo',
+          'Malgun Gothic',
+          'ui-sans-serif',
+          'system-ui',
+          'sans-serif',
+          'Apple Color Emoji',
+          'Segoe UI Emoji',
+        ],
+      },
+    },
   },
 
   // ───────────────────────────────────────────────────────────────────────────
