@@ -724,8 +724,6 @@ const AppLayout = ({ currentUser, handleLogout }) => {
   );
 };
 
-const Navigation = () => null;
-
 const AppContent = () => {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);

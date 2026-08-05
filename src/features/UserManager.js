@@ -85,11 +85,13 @@ const SmartSchoolSelect = ({ schoolType, schoolsData, value, onChange, onCustomS
 };
 
 const UserManager = ({ currentUser }) => {
-    if (!['admin', 'admin_assistant'].includes(currentUser?.role)) {
-        return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
-    }
+    /* ⚠️ [React 규칙 수정] 예전에는 여기서 곧바로 return 했습니다.
+       React는 컴포넌트가 매번 '같은 순서로 같은 개수의 Hook'을 호출할 것을 요구하는데,
+       Hook보다 먼저 return이 있으면 그 조건이 바뀌는 순간 렌더링이 깨집니다(흰 화면).
+       그래서 권한 확인은 모든 Hook을 호출한 뒤 화면을 그리기 직전에 합니다. */
+    const isAuthorized = ['admin', 'admin_assistant'].includes(currentUser?.role);
 
-    const isAssistant = currentUser.role === 'admin_assistant';
+    const isAssistant = currentUser?.role === 'admin_assistant';
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
     
     // 🚀 [CTO 패치] masterData 추출 (시즌 데이터 확보)
@@ -447,6 +449,7 @@ const UserManager = ({ currentUser }) => {
         return ['1학년','2학년','3학년','N수생'];
     };
 
+    if (!isAuthorized) return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
     if (loadingData) return <div className="h-full flex items-center justify-center"><Loader className="animate-spin text-blue-600" size={40} /></div>;
 
     return (

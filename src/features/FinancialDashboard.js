@@ -58,7 +58,10 @@ const normalizeDateStr = (dateVal) => {
 };
 
 const FinancialDashboard = ({ currentUser }) => {
-  if (currentUser?.role !== 'admin') return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
+  /* ⚠️ [React 규칙 수정] 권한 확인용 return을 Hook보다 먼저 두면
+     렌더링마다 Hook 호출 개수가 달라져 화면이 깨질 수 있습니다.
+     확인 자체는 유지하되, 위치를 화면을 그리기 직전으로 옮겼습니다. */
+  const isAuthorized = currentUser?.role === 'admin';
 
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -576,9 +579,11 @@ const FinancialDashboard = ({ currentUser }) => {
       }
   };
 
+  if (!isAuthorized) return <div className="p-10 text-center text-red-500 font-bold">접근 권한이 없습니다.</div>;
+
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in">
-      
+
       <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><Activity className="text-yellow-400"/> AI 재무 진단 시스템</h1>
