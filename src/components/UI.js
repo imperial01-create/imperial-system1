@@ -5,6 +5,34 @@
 import React, { useEffect } from 'react';
 import { Loader, X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 
+/* ──────────────────────────────────────────────────────────────────────────
+   기본 스타일 + 개별 지정(className) 합치기
+
+   CSS 는 class 를 쓴 순서가 아니라 '스타일시트에 정의된 순서'로 승부가 납니다.
+   Tailwind 는 text-white 를 text-indigo-700 보다 뒤에 만들기 때문에,
+     <Button className="bg-white text-indigo-700">
+   라고 써도 배경만 하얘지고 글씨는 기본값인 흰색이 그대로 이겼습니다.
+   → 흰 배경에 흰 글씨. 실제로 여러 버튼이 보이지 않는 상태였습니다.
+
+   그래서 개별 지정에 배경색/글자색이 있으면 기본 스타일에서 같은 종류를 빼고 넘깁니다.
+   '나중에 쓴 쪽이 이긴다'는 상식대로 동작하게 만드는 것입니다.
+   ────────────────────────────────────────────────────────────────────────── */
+const isBgClass = (c) => /^(?:[a-z-]+:)?bg-/.test(c);
+const isTextColorClass = (c) =>
+  /^(?:[a-z-]+:)?text-(?:inherit|current|transparent|black|white|[a-z]+-\d{2,3})$/.test(c);
+
+const mergeClasses = (base, custom) => {
+  const list = String(custom || '').split(/\s+/).filter(Boolean);
+  const hasBg = list.some(isBgClass);
+  const hasTextColor = list.some(isTextColorClass);
+  return String(base || '').split(/\s+/).filter((c) => {
+    if (!c) return false;
+    if (hasBg && isBgClass(c)) return false;            // hover:bg-* 도 함께 뺍니다
+    if (hasTextColor && isTextColorClass(c)) return false;
+    return true;
+  }).join(' ');
+};
+
 export const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md', type = 'button' }) => {
   /* 좁은 화면에서는 버튼을 한 단계 작게 만든다.
      버튼이 여러 개 놓인 줄(달력 헤더 등)이 화면 폭을 넘기는 일이 잦았고,
@@ -25,8 +53,10 @@ export const Button = React.memo(({ children, onClick, variant = 'primary', clas
     outline: 'border-2 border-blue-600 text-blue-600 bg-white hover:bg-blue-50 active:scale-95', 
     selected: 'bg-blue-600 text-white border-2 border-blue-600 shadow-inner'
   };
+  const variantClass = mergeClasses(variants[variant], className);
+
   return (
-    <button type={type} onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variants[variant]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
+    <button type={type} onClick={onClick} className={`rounded-xl font-bold transition-all duration-200 flex items-center justify-center gap-2 ${sizes[size]} ${variantClass} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`} disabled={disabled}>
       {Icon && <Icon size={size === 'sm' ? 18 : 22} />} {children}
     </button>
   );
@@ -35,7 +65,7 @@ export const Button = React.memo(({ children, onClick, variant = 'primary', clas
 export const Card = ({ children, className = '' }) => <div className={`bg-white rounded-2xl shadow-sm border border-gray-100 p-5 md:p-6 ${className}`}>{children}</div>;
 
 // 🚀 [CTO 수정] 클리닉 전용이었던 Badge를 범용 컴포넌트로 리팩토링 (하위 호환성 유지)
-export const Badge = React.memo(({ status, color, customLabel }) => {
+export const Badge = React.memo(({ status, color, customLabel, className = '', children }) => {
   const styles = { 
     // 기존 클리닉 상태 호환
     open: 'bg-blue-50 text-blue-700 border border-blue-100', 
@@ -58,11 +88,15 @@ export const Badge = React.memo(({ status, color, customLabel }) => {
   // 적용할 스타일: status가 있으면 status 스타일, color가 있으면 color 스타일, 둘 다 없으면 기본 completed(회색) 스타일
   const appliedStyle = styles[status] || styles[color] || styles.completed;
   
-  // 표시할 텍스트: customLabel이 우선, 그 다음 labels[status], 매칭 안 되면 원본 status 출력
-  const displayedLabel = customLabel || labels[status] || status;
+  /* 표시할 텍스트
+     ⚠️ 예전에는 children(태그 사이에 쓴 글자)을 아예 무시했습니다. 그래서
+          <Badge className="...">진단 불가</Badge>
+        처럼 쓴 곳은 글자가 통째로 비어 보였습니다(아카데미 유니버스에 여러 곳).
+        className 도 받지 않아 지정한 색이 하나도 적용되지 않았습니다. */
+  const displayedLabel = children ?? customLabel ?? labels[status] ?? status;
 
   return (
-    <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold whitespace-nowrap ${appliedStyle}`}>
+    <span className={`px-2.5 py-1 rounded-lg text-xs md:text-sm font-bold whitespace-nowrap ${mergeClasses(appliedStyle, className)} ${className}`}>
       {displayedLabel}
     </span>
   );
