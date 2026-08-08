@@ -121,6 +121,41 @@ const nodeTypes = { concept: ConceptNode };
 // =====================================================================
 // 4. 우측 위키 패널
 // =====================================================================
+// 온톨로지 원본에는 아직 채우지 못한 항목이 "[2~3단계에서 작성 예정] …" 형태로 남아 있다.
+// 표식 뒤에 실제 원고가 이어지는 경우가 대부분이므로 표식만 떼어내고,
+// 남는 것이 대기 문구뿐일 때만 화면에서 감춘다.
+// 세 가지 형태가 섞여 있다.
+//   "[2~3단계에서 작성 예정] 실제 원고"   → 표식만 떼면 원고가 나온다
+//   "…기록 예정. (예고: 실제 원고)"       → 괄호 안이 원고다
+//   "…기록 예정"                          → 내용이 없다. 감춘다.
+const DRAFT_MARK = /\[[^\]]*단계에서\s*(?:작성|입력|기록)\s*예정\]/g;
+const DRAFT_PREVIEW = /^[\s\S]*?예정\.?\s*\(\s*예고\s*:\s*([\s\S]+?)\s*\)\s*$/;
+const DRAFT_ONLY = /예정\.?$/;
+const DRAFT_FIELDS = ['title', 'situation', 'symptom', 'content', 'action', 'diagnosis_message'];
+
+const cleanDraftText = (value) => {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(DRAFT_MARK, '').trim();
+  if (!text) return null;
+  const preview = text.match(DRAFT_PREVIEW);
+  if (preview) return preview[1];
+  return DRAFT_ONLY.test(text) ? null : text;
+};
+
+const cleanDraftItem = (item) => {
+  if (typeof item !== 'object' || item === null) return cleanDraftText(item);
+  const cleaned = { ...item };
+  let hasContent = false;
+  DRAFT_FIELDS.forEach((field) => {
+    if (!(field in cleaned)) return;
+    cleaned[field] = cleanDraftText(cleaned[field]);
+    if (cleaned[field]) hasContent = true;
+  });
+  return hasContent ? cleaned : null;
+};
+
+const cleanDraftList = (list) => (Array.isArray(list) ? list.map(cleanDraftItem).filter(Boolean) : []);
+
 const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJumpToNode, canEditSource }) => {
   const [isResolving, setIsResolving] = useState(false);
 
@@ -164,6 +199,10 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
     ? selectedNodeData.relations.prerequisite
     : [];
   const keywords = Array.isArray(selectedNodeData.keywords) ? selectedNodeData.keywords : [];
+  const coreConcepts = cleanDraftList(selectedNodeData.core_concepts);
+  const practicalConcepts = cleanDraftList(selectedNodeData.practical_concepts);
+  const actionGuidelines = cleanDraftList(selectedNodeData.action_guidelines);
+  const misconceptions = cleanDraftList(selectedNodeData.misconceptions);
 
   const renderBlock = (item, idx, accent) => {
     if (typeof item !== 'object' || item === null) return <MathText content={item} />;
@@ -271,10 +310,10 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
       )}
 
       {/* 핵심 개념 */}
-      {Array.isArray(selectedNodeData.core_concepts) && selectedNodeData.core_concepts.length > 0 && (
+      {coreConcepts.length > 0 && (
         <Section icon={Key} title="핵심 개념 노트" color="text-indigo-900" iconColor="text-indigo-500">
           <ul className="space-y-3">
-            {selectedNodeData.core_concepts.map((concept, idx) => (
+            {coreConcepts.map((concept, idx) => (
               <li key={concept?.id || idx} className="text-sm text-slate-700 bg-slate-50 p-4 rounded-xl border border-slate-100">
                 {renderBlock(concept, idx, 'text-indigo-900')}
               </li>
@@ -284,10 +323,10 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
       )}
 
       {/* 실전 적용 개념 — 기존에는 화면에 전혀 나오지 않던 데이터 */}
-      {Array.isArray(selectedNodeData.practical_concepts) && selectedNodeData.practical_concepts.length > 0 && (
+      {practicalConcepts.length > 0 && (
         <Section icon={Wrench} title="실전 적용 포인트" color="text-amber-900" iconColor="text-amber-500">
           <ul className="space-y-3">
-            {selectedNodeData.practical_concepts.map((item, idx) => (
+            {practicalConcepts.map((item, idx) => (
               <li key={item?.id || idx} className="text-sm text-slate-700 bg-amber-50/50 p-4 rounded-xl border border-amber-100">
                 {renderBlock(item, idx, 'text-amber-900')}
               </li>
@@ -297,10 +336,10 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
       )}
 
       {/* 행동 지침 */}
-      {Array.isArray(selectedNodeData.action_guidelines) && selectedNodeData.action_guidelines.length > 0 && (
+      {actionGuidelines.length > 0 && (
         <Section icon={Target} title="실전 학습 지침" color="text-teal-900" iconColor="text-teal-500">
           <ul className="space-y-3">
-            {selectedNodeData.action_guidelines.map((guide, idx) => (
+            {actionGuidelines.map((guide, idx) => (
               <li key={guide?.id || idx} className="text-sm text-slate-700 bg-teal-50/50 p-4 rounded-xl border border-teal-100">
                 <div className="flex gap-2">
                   <CheckCircle2 size={16} className="text-teal-500 shrink-0 mt-1" />
@@ -313,10 +352,10 @@ const WikiPanel = ({ selectedNodeData, selectedNodeId, theme, nodeTitleById, onJ
       )}
 
       {/* 오개념 진단 */}
-      {Array.isArray(selectedNodeData.misconceptions) && selectedNodeData.misconceptions.length > 0 && (
+      {misconceptions.length > 0 && (
         <Section icon={AlertTriangle} title="취약점 진단 및 오개념" color="text-rose-800" iconColor="text-rose-500">
           <ul className="space-y-3">
-            {selectedNodeData.misconceptions.map((miscon, idx) => (
+            {misconceptions.map((miscon, idx) => (
               <li key={miscon?.id || idx} className="text-sm text-slate-700 bg-rose-50/50 p-4 rounded-xl border border-rose-100">
                 {renderBlock(miscon, idx, 'text-rose-900')}
               </li>
