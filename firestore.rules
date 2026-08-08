@@ -272,11 +272,35 @@ service cloud.firestore {
       match /sessions/{docId} {
         allow read: if isAuth();
         allow create, delete: if roleIn(appId, STAFF());
-        /* 학생/학부모는 예약 신청·취소요청을 위해 update가 필요하다.
-           학생이 연속 시간대를 한 번에 신청하면 여러 문서를 일괄 수정하므로,
-           역할 판정을 role() 한 번으로 끝내 조회 한도를 넘지 않게 한다.
-           (이 부분이 '클리닉 예약 시 권한 오류'의 원인이었다) */
-        allow update: if roleIn(appId, MEMBERS());
+
+        /* [예전] allow update: if roleIn(appId, MEMBERS());
+           로그인한 사람이면 누구나 '아무 예약 문서의 아무 필드'를 바꿀 수 있었다.
+           소유자 확인도, 바꿀 수 있는 필드 제한도, 상태 검사도 없었다. 그래서
+             - writeBatch 한 번으로 학원 전체 클리닉 스케줄을 백지로 만들거나
+             - 남의 예약을 내 것으로 가로채거나
+             - 강사가 쓴 피드백(clinicDetails·nextAction)을 위조해
+               학부모에게 엉뚱한 리포트가 나가게
+           만들 수 있었다.
+
+           [지금]
+           교직원은 이전과 완전히 동일하다(기능 변화 없음).
+           학생은 '비어 있거나 이미 내 것인 슬롯'에 '예약에 필요한 필드'만 쓸 수 있다.
+           허용 필드는 실제 예약 코드가 쓰는 것과 정확히 일치시켰다
+           (ClinicDashboard.js submitStudentApplication).
+
+           ⚠️ 두 번째 조건에서 role() 을 부르지 않는 것이 중요하다.
+              '학생이 연속 시간대를 한 번에 신청' 하면 여러 문서를 일괄 수정하는데,
+              역할 판정을 두 번 하면 문서 조회 한도를 넘겨
+              예전의 'missing or insufficient permissions' 오류가 재발한다.
+              isMe() 는 토큰만 보므로 조회가 0회다. */
+        allow update: if roleIn(appId, STAFF())
+                      || (isAuth()
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                               .hasOnly(['status', 'studentId', 'studentName', 'studentPhone',
+                                         'students', 'topic', 'questionRange', 'source'])
+                          && isMe(request.resource.data.get('studentId', ''))
+                          && (resource.data.get('studentId', '') == ''
+                              || isMe(resource.data.get('studentId', ''))));
       }
 
       match /schedule_requests/{docId} {

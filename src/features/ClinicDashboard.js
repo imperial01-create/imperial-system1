@@ -464,9 +464,13 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                     {!isAdminView && !isAsstSlot && s.classroom && <div className="text-sm font-bold text-blue-600 mt-2 flex items-center gap-1 bg-blue-50 w-fit px-2 py-1 rounded"><CheckCircle size={14}/> {s.classroom}</div>}
                   </div>
                   <div className="flex flex-col gap-2 ml-2 shrink-0">
-                    {isInteractive && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
-                    {isInteractive && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
-                    {isInteractive && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s)}>철회</Button>}
+                    {/* 근무 취소/추가 '요청'과 그 '철회'는 조교 본인의 근무 일정 화면에서만 쓰는 기능이다.
+                        게이트가 isInteractive 로 잡혀 있어서 학생 예약 화면(isMyScheduleView=false)에도
+                        그대로 노출됐다. 학생이 이걸 누르면 조교의 근무 슬롯 상태를 바꾸게 된다.
+                        원래 의도대로 isMyScheduleView 로 좁힌다. */}
+                    {isMyScheduleView && !isParent && s.status==='open' && !isSlotPast && <Button size="sm" variant="ghost" className="text-red-500 hover:bg-red-50 h-10 w-10 p-0" onClick={()=>onAction('cancel_request', s)}><XCircle size={20}/></Button>}
+                    {isMyScheduleView && !isParent && s.status==='cancellation_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_cancel', s)}>철회</Button>}
+                    {isMyScheduleView && !isParent && s.status==='addition_requested' && <Button size="sm" variant="secondary" onClick={()=>onAction('withdraw_add', s)}>철회</Button>}
                     
                     {isAdminView && s.status==='pending' && <Button size="sm" variant="success" onClick={()=>onAction('approve_booking', s)} disabled={!s.classroom}>승인</Button>}
                     
