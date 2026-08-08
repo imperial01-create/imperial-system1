@@ -355,6 +355,19 @@ service cloud.firestore {
                               || isMe(resource.data.get('studentId', ''))));
       }
 
+      /* 강사가 쓴 클리닉 피드백 본문.
+         예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽어야 해서, 피드백을 거기 두면
+         '강사가 특정 학생에 대해 쓴 코멘트'를 같은 반 친구가 브라우저로 읽을 수 있었다.
+         (화면에서는 감췄지만 데이터는 그대로 나갔다)
+         그래서 본문만 여기로 옮기고, 예약 문서에는 '작성됨' 표시만 남긴다.
+         문서 ID = 예약 ID 라서 화면에서 1:1로 이어 붙일 수 있다. */
+      match /clinic_feedbacks/{docId} {
+        allow read: if isStaff(appId)
+                    || (isAuth() && resource != null && isMineOrChild(appId, resource.data.get('studentId', '')));
+        allow create, update: if isStaff(appId);
+        allow delete: if isDesk(appId);
+      }
+
       match /schedule_requests/{docId} {
         allow read, create: if isStaff(appId);
         allow update, delete: if isAdmin(appId);

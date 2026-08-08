@@ -72,6 +72,7 @@ const SettingsManager = ({ currentUser }) => {
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [studentDirProcessing, setStudentDirProcessing] = useState(false);
     const [phonePurgeProcessing, setPhonePurgeProcessing] = useState(false);
+    const [feedbackMigrating, setFeedbackMigrating] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
     const [claimsResult, setClaimsResult] = useState(null);
     // 문자 게이트웨이 계정 발급 — 비밀번호는 화면에만 잠시 존재하고 어디에도 저장하지 않는다
@@ -372,6 +373,27 @@ const SettingsManager = ({ currentUser }) => {
     /* 과거 예약 문서에 남아 있는 전화번호를 걷어낸다.
        예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽을 수 있어서,
        여기에 남은 번호는 다른 학생이 브라우저로 그대로 가져갈 수 있다. */
+    /* 예약 문서 안에 남아 있는 강사 피드백 본문을 별도 컬렉션으로 옮긴다.
+       예약은 로그인한 누구나 읽으므로, 거기 남은 피드백은 다른 학생도 볼 수 있다. */
+    const handleMigrateFeedbacks = async () => {
+        if (!window.confirm(
+            '지난 클리닉 예약에 저장된 강사 피드백을 별도 보관함으로 옮깁니다.\n\n'
+            + '• 옮긴 뒤에는 교직원과 본인(학부모 포함)만 볼 수 있습니다.\n'
+            + '• 화면 표시는 지금과 똑같습니다.\n'
+            + '• 되돌릴 수 없습니다.\n\n계속할까요?'
+        )) return;
+        setFeedbackMigrating(true);
+        try {
+            const fn = httpsCallable(functions, 'migrateClinicFeedbacks');
+            const res = await fn({});
+            alert(`✅ 이전 완료!\n\n검사한 예약: ${res?.data?.scanned ?? 0}건\n옮긴 피드백: ${res?.data?.moved ?? 0}건`);
+        } catch (err) {
+            alert("이전 중 오류가 발생했습니다: " + (err.message || ''));
+        } finally {
+            setFeedbackMigrating(false);
+        }
+    };
+
     const handlePurgeSessionPhones = async () => {
         if (!window.confirm(
             "지난 클리닉 예약 기록에 남아 있는 학생 전화번호를 모두 지웁니다.\n\n" +
@@ -1512,6 +1534,28 @@ const SettingsManager = ({ currentUser }) => {
                             className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
                         >
                             {phonePurgeProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '지난 예약 전화번호 지우기'}
+                        </Button>
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
+                            <ShieldCheck className="text-amber-600"/> 강사 피드백 보관함 분리
+                        </h2>
+
+                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 왜 필요한가요?</p>
+                            <p>• 강사가 학생에 대해 쓴 <strong>진행 내용·다음 과제</strong>가 예약 기록 안에 함께 저장되어 있었습니다.</p>
+                            <p>• 예약 기록은 예약 화면 특성상 <strong>로그인한 누구나</strong> 읽을 수 있어서, 같은 반 친구도 가져갈 수 있었습니다. (화면에서는 감춰져 있었지만 데이터는 나갔습니다)</p>
+                            <p>• 옮긴 뒤에는 <strong>교직원과 본인·학부모만</strong> 볼 수 있습니다. 화면 표시는 지금과 똑같습니다.</p>
+                            <p className="text-amber-700 font-bold mt-2 pt-2 border-t border-amber-200">※ 이 버튼을 먼저 실행한 뒤에 확인해 주세요.</p>
+                        </div>
+
+                        <Button
+                            onClick={handleMigrateFeedbacks}
+                            disabled={feedbackMigrating}
+                            className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {feedbackMigrating ? <Loader className="animate-spin mx-auto" size={24}/> : '피드백 보관함으로 옮기기'}
                         </Button>
                     </div>
 

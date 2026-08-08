@@ -1449,6 +1449,55 @@ exports.syncStudentDirectory = onDocumentWritten(
    번호는 다른 학생이 브라우저로 그대로 가져갈 수 있다. 앞으로는 저장하지 않지만
    과거 문서에는 남아 있으므로 한 번 정리해야 한다.
    문자 발송 경로는 모두 users 에서 번호를 먼저 조회하므로 기능에는 영향이 없다. */
+/* 예약 문서 안에 들어 있던 강사 피드백 본문을 clinic_feedbacks 로 옮긴다.
+   예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽어야 해서, 피드백이 거기 있으면
+   '강사가 특정 학생에 대해 쓴 코멘트'를 같은 반 친구가 브라우저로 읽을 수 있다.
+   본문을 옮긴 뒤 예약 문서에서는 지운다. '작성됨' 표시(feedbackStatus)는 남겨둔다 —
+   목록 필터에 필요하고 민감하지 않다. */
+exports.migrateClinicFeedbacks = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+
+    const db = admin.firestore();
+    const col = db.collection(`artifacts/${APP_ID}/public/data/sessions`);
+    const snap = await col.get();
+
+    const CONTENT = ['rating', 'tags', 'clinicDetails', 'nextAction', 'clinicContent', 'improvement', 'feedback'];
+    let moved = 0;
+    let batch = db.batch();
+    let pending = 0;
+
+    for (const d of snap.docs) {
+        const s = d.data();
+        const hasContent = CONTENT.some((k) => s[k] !== undefined && s[k] !== null && s[k] !== '');
+        if (!hasContent) continue;
+
+        // 옛 필드명(clinicContent/improvement/feedback)도 새 이름으로 정리해 옮긴다
+        const payload = {
+            sessionId: d.id,
+            studentId: s.studentId || '',
+            taId: s.taId || '',
+            date: s.date || '',
+            rating: s.rating ?? 5,
+            tags: s.tags || '',
+            clinicDetails: s.clinicDetails || s.clinicContent || s.feedback || '',
+            nextAction: s.nextAction || s.improvement || '',
+            migratedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        batch.set(db.doc(`artifacts/${APP_ID}/public/data/clinic_feedbacks/${d.id}`), payload, { merge: true });
+
+        const strip = {};
+        CONTENT.forEach((k) => { if (s[k] !== undefined) strip[k] = admin.firestore.FieldValue.delete(); });
+        batch.update(d.ref, strip);
+
+        moved++;
+        pending += 2;
+        if (pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    }
+    if (pending > 0) await batch.commit();
+
+    return { scanned: snap.size, moved };
+});
+
 exports.purgeSessionPhones = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
 

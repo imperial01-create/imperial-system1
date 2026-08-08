@@ -74,6 +74,8 @@ const seed = async () => {
         await setDoc(doc(db, `${BASE}/sessions/mine1`), { date: '2026-08-10', startTime: '15:00', endTime: '16:00', taId: 'ta1', status: 'pending', studentId: 'stu1', clinicDetails: '' });
         await setDoc(doc(db, `${BASE}/sessions/others1`), { date: '2026-08-10', startTime: '16:00', endTime: '17:00', taId: 'ta1', status: 'pending', studentId: 'stu2', clinicDetails: '강사 피드백 원문' });
 
+        await setDoc(doc(db, `${BASE}/clinic_feedbacks/mine1`), { sessionId: 'mine1', studentId: 'stu1', taId: 'ta1', date: '2026-08-10', rating: 5, clinicDetails: '집중력이 좋아졌습니다', nextAction: '워크북 3장' });
+        await setDoc(doc(db, `${BASE}/clinic_feedbacks/others1`), { sessionId: 'others1', studentId: 'stu2', taId: 'ta1', date: '2026-08-10', rating: 3, clinicDetails: '남의 아이에 대한 강사 코멘트', nextAction: '보충 필요' });
         await setDoc(doc(db, `${BASE}/student_directory/stu1`), { id: 'stu1', name: '학생일', schoolName: '목동중', grade: '2학년' });
         await setDoc(doc(db, `${BASE}/attendance_logs/a1`), { studentId: 'stu2', status: 'absent', reason: '병결' });
         await setDoc(doc(db, `${BASE}/payrolls/teacher1_2026-07`), { userId: 'teacher1', netSalary: 2800000 });
@@ -155,7 +157,24 @@ const run = async () => {
     await check('교직원은 피드백을 쓸 수 있다', () =>
         assertSucceeds(updateDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/sessions/mine1`), { clinicDetails: '오늘 잘했습니다' })));
 
-    console.log('\n[6] 급여·게이트웨이·비로그인');
+    console.log('\n[6] 강사 피드백 분리');
+    await check('학생이 남의 피드백을 읽을 수 없다', () =>
+        assertFails(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/clinic_feedbacks/others1`))));
+    await check('학생이 피드백을 통째로 긁을 수 없다', () =>
+        assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/clinic_feedbacks`))));
+    await check('학생은 자기 피드백은 읽을 수 있다', () =>
+        assertSucceeds(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/clinic_feedbacks/mine1`))));
+    await check('학부모는 자녀 피드백을 조회할 수 있다 (자녀 2명 in 쿼리)', () =>
+        assertSucceeds(getDocs(query(collection(as('mom2', parentToken('mom2')), `${BASE}/clinic_feedbacks`), where('studentId', 'in', ['stu1', 'stu2'])))));
+    await check('학생이 피드백을 위조할 수 없다', () =>
+        assertFails(setDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/clinic_feedbacks/mine1`), { studentId: 'stu1', clinicDetails: '조작' })));
+    await check('교직원은 피드백을 작성하고 월 범위로 조회할 수 있다', async () => {
+        const db = as('admin1', staffToken('admin1'));
+        await assertSucceeds(setDoc(doc(db, `${BASE}/clinic_feedbacks/open1`), { sessionId: 'open1', studentId: 'stu1', date: '2026-08-10', clinicDetails: '작성' }));
+        await assertSucceeds(getDocs(query(collection(db, `${BASE}/clinic_feedbacks`), where('date', '>=', '2026-08-01'), where('date', '<=', '2026-08-31'))));
+    });
+
+    console.log('\n[7] 급여·게이트웨이·비로그인');
     await check('남의 급여는 못 본다', () =>
         assertFails(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/payrolls/teacher1_2026-07`))));
     await check('본인 급여는 볼 수 있다', () =>

@@ -591,6 +591,12 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     const [sessionMap, setSessionMap] = useState({});
     const [sessions, setSessions] = useState([]);
+    /* 🔒 [개인정보] 강사 피드백은 예약 문서가 아니라 clinic_feedbacks 에 따로 저장한다.
+       예약 화면은 그날 전체 시간표를 봐야 해서 sessions 는 로그인한 누구나 읽는다.
+       피드백을 거기 두면 '강사가 특정 학생에 대해 쓴 코멘트'를 같은 반 친구가
+       브라우저로 그대로 읽을 수 있다. (화면에서 감췄을 뿐 데이터는 나갔다)
+       여기서 따로 불러와 화면에 넘기기 직전에만 합치므로, 기존 화면 코드는 그대로 동작한다. */
+    const [feedbackMap, setFeedbackMap] = useState({});
     const [appLoading, setAppLoading] = useState(true);
     const [notifications, setNotifications] = useState([]);
     const [modalState, setModalState] = useState({ type: null, actionType: null, partialIds: [] });
@@ -750,6 +756,48 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
     useEffect(() => { fetchSessions(false); }, [fetchSessions]);
 
+    /* 피드백은 볼 수 있는 사람만 가져온다.
+       - 교직원: 이번 달 범위
+       - 학부모: 자녀 것만 (규칙이 문서마다 '내 자녀인가'를 확인하므로 in 조건이 필요하다)
+       - 학생: 화면에 피드백을 표시하지 않으므로 아예 조회하지 않는다 */
+    const fetchFeedbacks = useCallback(async () => {
+        if (currentUser.role === 'student') { setFeedbackMap({}); return; }
+        try {
+            const col = collection(db, 'artifacts', APP_ID, 'public', 'data', 'clinic_feedbacks');
+            const snaps = [];
+
+            if (currentUser.role === 'parent') {
+                const kids = Array.isArray(currentUser.linkedChildrenIds) ? currentUser.linkedChildrenIds : [];
+                if (kids.length === 0) { setFeedbackMap({}); return; }
+                for (let i = 0; i < kids.length; i += 30) {
+                    // eslint-disable-next-line no-await-in-loop
+                    snaps.push(await getDocs(query(col, where('studentId', 'in', kids.slice(i, i + 30)))));
+                }
+            } else {
+                const year = currentDate.getFullYear(); const month = currentDate.getMonth() + 1;
+                const startOfMonth = `${year}-${String(month).padStart(2, '0')}-01`;
+                const endOfMonth = `${year}-${String(month).padStart(2, '0')}-31`;
+                snaps.push(await getDocs(query(col, where('date', '>=', startOfMonth), where('date', '<=', endOfMonth))));
+            }
+
+            const map = {};
+            snaps.forEach(sn => sn.forEach(d => {
+                const f = d.data();
+                // 내용만 합친다. date·studentId 까지 덮어쓰면 예약 정보가 오염될 수 있다.
+                map[d.id] = {
+                    rating: f.rating, tags: f.tags,
+                    clinicDetails: f.clinicDetails, nextAction: f.nextAction
+                };
+            }));
+            setFeedbackMap(map);
+        } catch (e) {
+            console.error('[클리닉] 피드백 조회 실패:', e);
+            setFeedbackMap({});
+        }
+    }, [currentUser, currentDate]);
+
+    useEffect(() => { fetchFeedbacks(); }, [fetchFeedbacks]);
+
     const updateLocalAndCacheState = (updater) => {
         setSessionMap(prev => {
             const newState = typeof updater === 'function' ? updater(prev) : updater;
@@ -766,9 +814,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     };
 
     useEffect(() => {
-        const sorted = Object.values(sessionMap).sort((a,b) => (String(a.date||'')).localeCompare(String(b.date||'')) || (String(a.startTime||'')).localeCompare(String(b.startTime||'')));
+        /* 예약 정보 + 피드백을 여기서 한 번만 합친다.
+           덕분에 아래 화면 코드는 예전처럼 s.clinicDetails 를 그대로 쓸 수 있다.
+           (합친 결과는 localStorage 캐시에 저장하지 않는다 — 캐시는 sessionMap 만 담는다) */
+        const sorted = Object.values(sessionMap)
+            .map(s => (feedbackMap[s.id] ? { ...s, ...feedbackMap[s.id] } : s))
+            .sort((a,b) => (String(a.date||'')).localeCompare(String(b.date||'')) || (String(a.startTime||'')).localeCompare(String(b.startTime||'')));
         setSessions(sorted);
-    }, [sessionMap]);
+    }, [sessionMap, feedbackMap]);
 
     const notify = (msg, type = 'success') => {
         const id = Date.now(); setNotifications(prev => [...prev, { id, msg, type }]);
@@ -1517,14 +1570,31 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{ 
             const ids = selectedSession.originalIds || [selectedSession.id];
             const batch = writeBatch(db);
-            ids.forEach(id => batch.update(doc(db,'artifacts',APP_ID,'public','data','sessions',id), {...feedbackData,status:'completed',feedbackStatus:'submitted'}));
+            ids.forEach(id => {
+                /* 예약 문서에는 '작성됨' 표시만 남긴다. 이 값은 목록 필터에 필요하고 민감하지 않다.
+                   피드백 본문은 교직원·본인만 읽을 수 있는 별도 컬렉션에 저장한다. */
+                batch.update(doc(db,'artifacts',APP_ID,'public','data','sessions',id), { status:'completed', feedbackStatus:'submitted' });
+                batch.set(doc(db,'artifacts',APP_ID,'public','data','clinic_feedbacks',id), {
+                    sessionId: id,
+                    studentId: selectedSession.studentId || '',
+                    taId: selectedSession.taId || '',
+                    date: selectedSession.date || '',
+                    ...feedbackData,
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            });
             await batch.commit();
 
+            setFeedbackMap(prev => {
+                const next = { ...prev };
+                ids.forEach(id => { next[id] = { ...(next[id] || {}), ...feedbackData }; });
+                return next;
+            });
             updateLocalAndCacheState(prev => {
                 const next = { ...prev };
-                ids.forEach(id => { next[id] = { ...(next[id] || {}), ...feedbackData, status: 'completed', feedbackStatus: 'submitted' }; });
+                ids.forEach(id => { next[id] = { ...(next[id] || {}), status: 'completed', feedbackStatus: 'submitted' }; });
                 return next;
-            }); 
+            });
             setModalState({type:null}); 
             notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
         }}>저장 및 검수 요청하기</Button>
