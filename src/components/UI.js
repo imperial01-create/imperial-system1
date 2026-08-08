@@ -6,7 +6,16 @@ import React, { useEffect } from 'react';
 import { Loader, X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 
 export const Button = React.memo(({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon, size = 'md', type = 'button' }) => {
-  const sizes = { sm: 'px-4 py-2 text-sm', md: 'px-5 py-3 text-base', lg: 'px-8 py-4 text-xl' };
+  /* 좁은 화면에서는 버튼을 한 단계 작게 만든다.
+     버튼이 여러 개 놓인 줄(달력 헤더 등)이 화면 폭을 넘기는 일이 잦았고,
+     main 에 overflow-x-hidden 이 걸려 있어 넘친 부분이 스크롤도 안 되고
+     그대로 잘려 보였다. 폭을 줄이는 쪽이 근본 해결이다.
+     sm(640px) 이상에서는 기존 크기를 그대로 쓴다. */
+  const sizes = {
+    sm: 'px-3 py-2 text-xs sm:px-4 sm:text-sm',
+    md: 'px-4 py-2.5 text-sm sm:px-5 sm:py-3 sm:text-base',
+    lg: 'px-5 py-3 text-lg sm:px-8 sm:py-4 sm:text-xl'
+  };
   const variants = {
     primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm active:scale-95',
     secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 active:scale-95',

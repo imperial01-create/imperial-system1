@@ -250,13 +250,16 @@ export default function AcademicCalendarManager() {
                 <div className="space-y-6 animate-in fade-in">
                     <Card className="p-5 md:p-6 rounded-3xl border border-slate-200">
                         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-5">
-                            <div className="flex items-center gap-3">
-                                <Button variant="ghost" onClick={() => moveMonth(-1)} className="px-3">‹</Button>
-                                <h2 className="text-xl font-black text-slate-800 min-w-[140px] text-center">
+                            {/* 좁은 화면에서 이 줄이 화면 폭을 넘겨 오른쪽이 잘렸다.
+                                고정 폭(min-w-[140px])을 없애고 제목이 남는 자리를 차지하게 한다.
+                                제목 자체는 절대 줄바꿈되지 않도록 nowrap 을 준다. */}
+                            <div className="flex items-center gap-1 sm:gap-3 w-full md:w-auto">
+                                <Button variant="ghost" onClick={() => moveMonth(-1)} className="px-2 sm:px-3 shrink-0">‹</Button>
+                                <h2 className="text-lg sm:text-xl font-black text-slate-800 flex-1 md:flex-none md:min-w-[140px] text-center whitespace-nowrap">
                                     {viewDate.getFullYear()}년 {viewDate.getMonth() + 1}월
                                 </h2>
-                                <Button variant="ghost" onClick={() => moveMonth(1)} className="px-3">›</Button>
-                                <Button variant="ghost" onClick={() => setViewDate(new Date())} className="text-xs">오늘</Button>
+                                <Button variant="ghost" onClick={() => moveMonth(1)} className="px-2 sm:px-3 shrink-0">›</Button>
+                                <Button variant="ghost" onClick={() => setViewDate(new Date())} className="text-xs px-2 sm:px-3 shrink-0 whitespace-nowrap">오늘</Button>
                             </div>
                             {isDesk && (
                                 <div className="flex flex-wrap gap-2">

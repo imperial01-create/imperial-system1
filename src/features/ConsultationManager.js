@@ -369,19 +369,22 @@ export default function ConsultationManager({ isKiosk = false }) {
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-                            <div className="p-5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                                <div className="flex items-center gap-4">
-                                    <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-white rounded-xl transition-colors shadow-sm border border-transparent hover:border-slate-200">
+                            {/* 좁은 화면에서 '2026년 8월' 과 '오늘로 이동' 이 글자 단위로 줄바꿈되어
+                                읽기 어려웠다. 두 글자 덩어리는 절대 줄바꿈되지 않게 고정하고,
+                                여백은 간격을 줄여 확보한다. */}
+                            <div className="p-3 sm:p-5 bg-slate-50 border-b border-slate-200 flex justify-between items-center gap-2">
+                                <div className="flex items-center gap-1 sm:gap-4 min-w-0">
+                                    <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-white rounded-xl transition-colors shadow-sm border border-transparent hover:border-slate-200 shrink-0">
                                         <ChevronLeft size={20} className="text-slate-600"/>
                                     </button>
-                                    <h2 className="text-xl font-black text-slate-800">
+                                    <h2 className="text-lg sm:text-xl font-black text-slate-800 whitespace-nowrap">
                                         {currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월
                                     </h2>
-                                    <button onClick={() => changeMonth(1)} className="p-2 hover:bg-white rounded-xl transition-colors shadow-sm border border-transparent hover:border-slate-200">
+                                    <button onClick={() => changeMonth(1)} className="p-2 hover:bg-white rounded-xl transition-colors shadow-sm border border-transparent hover:border-slate-200 shrink-0">
                                         <ChevronRight size={20} className="text-slate-600"/>
                                     </button>
                                 </div>
-                                <Button onClick={() => { setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDate(today.toISOString().split('T')[0]); }} variant="outline" className="text-sm font-bold border-slate-300">
+                                <Button onClick={() => { setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDate(today.toISOString().split('T')[0]); }} variant="outline" className="font-bold border-slate-300 shrink-0 whitespace-nowrap">
                                     오늘로 이동
                                 </Button>
                             </div>

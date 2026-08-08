@@ -111,7 +111,7 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
     return (
         <div className="p-4 md:p-6 border rounded-2xl bg-white shadow-sm w-full">
             <div className="flex justify-between items-center mb-6">
-                <span className="font-bold text-lg md:text-xl text-gray-800">{currentDate.getFullYear()}년 {currentDate.getMonth() + 1}월</span>
+                <span className="font-bold text-base sm:text-lg md:text-xl text-gray-800 whitespace-nowrap">{currentDate.getFullYear()}년 {currentDate.getMonth() + 1}월</span>
                 <div className="flex gap-1 bg-gray-50 rounded-lg p-1">
                     <button onClick={handlePrev} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronLeft size={20}/></button>
                     <button onClick={handleNext} className="p-1 hover:bg-white rounded shadow-sm transition-all"><ChevronRight size={20}/></button>
