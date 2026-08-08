@@ -13,6 +13,7 @@ import { collection, query, onSnapshot, doc, setDoc, getDoc, serverTimestamp, ad
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useData } from '../contexts/DataContext';
+import { getDayInfo } from '../utils/academyCalendar';
 import { Modal, Button, Badge, Card, Toast } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { toStorableSchoolName } from '../utils/schoolName';
@@ -29,7 +30,7 @@ const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {
 });
 
 export default function ConsultationManager({ isKiosk = false }) {
-    const { currentUser, users = [], loadingData } = useData() || {};
+    const { currentUser, users = [], academyCalendar = [], loadingData } = useData() || {};
     const [mainTab, setMainTab] = useState('schedule');
     const isMounted = useRef(true);
 
@@ -399,18 +400,28 @@ export default function ConsultationManager({ isKiosk = false }) {
                                         const isToday = day.fullDate === today.toISOString().split('T')[0];
                                         const isSelected = day.fullDate === selectedDate;
                                         const pendingConsults = day.consults.filter(c => c.status === 'scheduled');
+                                        /* 공휴일·휴원일은 '보여주기만' 한다. 상담 예약을 막지는 않는다 —
+                                           휴원일에도 데스크가 나와 상담을 진행할 수 있기 때문이다. */
+                                        const dayInfo = getDayInfo(day.fullDate, { calendar: academyCalendar });
+                                        const dayLabel = dayInfo.closures[0]?.title || dayInfo.holidayName;
 
                                         return (
                                             <div 
                                                 key={day.key} 
                                                 onClick={() => setSelectedDate(day.fullDate)}
-                                                className={`bg-white min-h-[100px] p-2 cursor-pointer transition-colors hover:bg-indigo-50 relative ${isSelected ? 'ring-2 ring-indigo-500 ring-inset z-10' : ''}`}
+                                                className={`min-h-[100px] p-2 cursor-pointer transition-colors hover:bg-indigo-50 relative ${dayInfo.isClosed ? 'bg-slate-100' : 'bg-white'} ${isSelected ? 'ring-2 ring-indigo-500 ring-inset z-10' : ''}`}
                                             >
                                                 <div className="flex justify-between items-start mb-1">
-                                                    <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-slate-700'}`}>
+                                                    <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : (dayInfo.holidayName ? 'text-red-500' : 'text-slate-700')}`}>
                                                         {day.date}
                                                     </span>
+                                                    {dayInfo.isClosed && <span className="text-[9px] font-black bg-slate-700 text-white px-1 rounded">휴원</span>}
                                                 </div>
+                                                {dayLabel && (
+                                                    <div className={`text-[10px] font-bold truncate ${dayInfo.isClosed ? 'text-slate-500' : 'text-red-500'}`} title={dayLabel}>
+                                                        {dayLabel}
+                                                    </div>
+                                                )}
                                                 
                                                 <div className="space-y-1 mt-2">
                                                     {pendingConsults.slice(0, 3).map(c => (

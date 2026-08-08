@@ -240,6 +240,8 @@ const AdminStudentMultiSelect = ({ users, classes, selectedStudents, onAdd, onRe
 };
 
 const CalendarView = React.memo(({ isInteractive, sessions, currentUser, currentDate, setCurrentDate, selectedDateStr, onDateChange, onAction, selectedSlots = [], users, taSubjectMap, onRefresh, isAdminView, isMyScheduleView, checkRoomAvailability, masterClassrooms, myClassIds }) => {
+  // 공휴일·휴원일 표시용. 호출부를 늘리지 않으려고 여기서 직접 읽는다.
+  const { academyCalendar = [] } = useData() || {};
   
   const mySessions = useMemo(() => {
      const safeSessions = Array.isArray(sessions) ? sessions : [];
@@ -531,7 +533,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
             else if (isMyScheduleView) { hasEvent = safeSessions.some(s => s.date === dStr && (s.taId === currentUser.id || s.taName === currentUser.name)); }
             else { hasEvent = safeSessions.some(s => s.date === dStr); }
 
+            const dayInfo = getDayInfo(dStr, { calendar: academyCalendar });
+
             let dayClass = 'text-gray-700 hover:bg-gray-100';
+            if (dayInfo.holidayName) dayClass = 'text-red-500 hover:bg-red-50';
             if ((isStudent || isParent) && !isAllowedDate) {
                 dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; 
             } else if (isSel) {
@@ -550,6 +555,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 disabled={(isStudent || isParent) && !isAllowedDate}
               >
                 <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
+                {/* 휴원일은 표시만 한다. 예약이나 슬롯 생성을 막지는 않는다 —
+                    휴원일이어도 조교가 나와 필요한 클리닉을 진행할 수 있기 때문이다. */}
+                {dayInfo.isClosed && <span className={`absolute top-1 left-1 text-[9px] font-black px-1 rounded ${isSel ? 'bg-white/30 text-white' : 'bg-slate-700 text-white'}`}>휴원</span>}
+                {!dayInfo.isClosed && dayInfo.holidayName && <span className={`absolute top-1 left-1 text-[9px] font-black ${isSel ? 'text-white/80' : 'text-red-400'}`}>●</span>}
                 {isToday && !isSel && <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel ? 'bg-white' : 'bg-blue-400'}`}/>}
               </button>
@@ -562,6 +571,16 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
         <div className="p-5 md:p-0 border-b md:border-none bg-white sticky top-0 z-10">
            <h3 className="font-bold text-xl flex items-center gap-2">
             <span className="text-blue-600">{selectedDateStr.split('-')[2]}일</span> 상세 스케줄
+            {(() => {
+                const info = getDayInfo(selectedDateStr, { calendar: academyCalendar });
+                const label = info.closures[0]?.title || info.holidayName;
+                if (!label) return null;
+                return (
+                    <span className={`ml-2 text-xs font-black px-2 py-1 rounded-lg align-middle ${info.isClosed ? 'bg-slate-700 text-white' : 'bg-red-50 text-red-600 border border-red-200'}`}>
+                        {label}{info.isClosed ? ' · 휴원' : ''}
+                    </span>
+                );
+            })()}
            </h3>
         </div>
         <div className="flex-1 overflow-y-auto p-4 md:p-0 custom-scrollbar space-y-3">

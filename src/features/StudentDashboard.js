@@ -3,8 +3,9 @@
    학원 전체의 'academic_calendars' 마스터 데이터를 실시간으로 읽어와, 본인 학교의 시험 D-Day가 30일 이내로 떨어지면 최상단에 압도적인 텐션의 붉은색 경고 배너를 노출하여 내신 몰입도를 극대화합니다. */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Sparkles, Clock, MapPin, ChevronRight, Calendar, BookOpen, User, Loader, Target, Flame, AlertTriangle } from 'lucide-react';
+import { Sparkles, Clock, MapPin, ChevronRight, Calendar, CalendarDays, BookOpen, User, Loader, Target, Flame, AlertTriangle } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { getDayInfo, toDateStr } from '../utils/academyCalendar';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -14,8 +15,12 @@ const DAYS_OF_WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 
 export default function StudentDashboard({ currentUser }) {
     const dataContext = useData() || {};
-    const { enrollments = [], classes = [], masterData = {}, users = [], loadingData = false } = dataContext;
+    const { enrollments = [], classes = [], masterData = {}, users = [], academyCalendar = [], loadingData = false } = dataContext;
     
+    // 오늘이 공휴일/휴원일인지 — 학생이 헛걸음하지 않도록 알려준다
+    const todayInfo = getDayInfo(toDateStr(new Date()), { calendar: academyCalendar });
+    const todayNotice = todayInfo.closures[0]?.title || todayInfo.holidayName;
+
     const [briefing, setBriefing] = useState('');
     const [isLoadingBriefing, setIsLoadingBriefing] = useState(true);
     const [todaySessions, setTodaySessions] = useState([]);
@@ -178,6 +183,25 @@ export default function StudentDashboard({ currentUser }) {
                     {currentUser?.name ? currentUser.name[0] : 'S'}
                 </div>
             </div>
+
+            {/* 오늘이 휴원일이거나 공휴일이면 먼저 알려준다.
+                휴원이 아닌 공휴일은 '학원은 정상 운영'이라는 것까지 함께 알려야
+                학생이 헷갈리지 않는다. */}
+            {todayNotice && (
+                <div className={`rounded-2xl p-4 md:p-5 flex items-start gap-3 border ${todayInfo.isClosed ? 'bg-slate-800 text-white border-slate-700' : 'bg-red-50 text-red-800 border-red-200'}`}>
+                    <CalendarDays size={22} className="shrink-0 mt-0.5" />
+                    <div>
+                        <p className="font-black text-base">
+                            오늘은 {todayNotice}입니다{todayInfo.isClosed ? ' — 학원이 쉽니다' : ''}
+                        </p>
+                        <p className={`text-sm font-bold mt-1 ${todayInfo.isClosed ? 'text-slate-300' : 'text-red-600'}`}>
+                            {todayInfo.isClosed
+                                ? '정규 수업과 클리닉이 없습니다. 궁금한 점은 학원으로 문의해 주세요.'
+                                : '공휴일이지만 학원은 정상 운영합니다. 예정된 수업과 클리닉을 확인해 주세요.'}
+                        </p>
+                    </div>
+                </div>
+            )}
 
             {/* 🚀 [초강력 D-Day 배너] 시험 기간 30일 이내에만 렌더링됩니다 */}
             {upcomingExam && (
