@@ -415,10 +415,11 @@ export default function ConsultationManager({ isKiosk = false }) {
                                                     <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : (dayInfo.holidayName ? 'text-red-500' : 'text-slate-700')}`}>
                                                         {day.date}
                                                     </span>
-                                                    {dayInfo.isClosed && <span className="text-[9px] font-black bg-slate-700 text-white px-1 rounded">휴원</span>}
+                                                    {/* 모바일에서는 칸이 좁아 배지가 겹친다. 배경색으로 대신 알린다. */}
+                                                    {dayInfo.isClosed && <span className="hidden sm:inline text-[9px] font-black bg-slate-700 text-white px-1 rounded leading-none py-0.5">휴원</span>}
                                                 </div>
                                                 {dayLabel && (
-                                                    <div className={`text-[10px] font-bold truncate ${dayInfo.isClosed ? 'text-slate-500' : 'text-red-500'}`} title={dayLabel}>
+                                                    <div className={`hidden sm:block text-[10px] font-bold truncate ${dayInfo.isClosed ? 'text-slate-500' : 'text-red-500'}`} title={dayLabel}>
                                                         {dayLabel}
                                                     </div>
                                                 )}

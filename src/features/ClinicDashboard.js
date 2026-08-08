@@ -535,8 +535,12 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             const dayInfo = getDayInfo(dStr, { calendar: academyCalendar });
 
+            /* 좁은 화면에서는 칸이 40px 남짓이라 배지를 여러 개 얹으면 겹친다.
+               그래서 정보를 '색'으로 옮긴다 — 공휴일은 빨간 글씨, 휴원일은 회색 배경.
+               글씨 배지는 자리가 있는 넓은 화면(sm 이상)에서만 보여준다. */
             let dayClass = 'text-gray-700 hover:bg-gray-100';
             if (dayInfo.holidayName) dayClass = 'text-red-500 hover:bg-red-50';
+            if (dayInfo.isClosed) dayClass = 'bg-slate-200 text-slate-500 hover:bg-slate-300';
             if ((isStudent || isParent) && !isAllowedDate) {
                 dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; 
             } else if (isSel) {
@@ -556,10 +560,10 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
               >
                 <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
                 {/* 휴원일은 표시만 한다. 예약이나 슬롯 생성을 막지는 않는다 —
-                    휴원일이어도 조교가 나와 필요한 클리닉을 진행할 수 있기 때문이다. */}
-                {dayInfo.isClosed && <span className={`absolute top-1 left-1 text-[9px] font-black px-1 rounded ${isSel ? 'bg-white/30 text-white' : 'bg-slate-700 text-white'}`}>휴원</span>}
-                {!dayInfo.isClosed && dayInfo.holidayName && <span className={`absolute top-1 left-1 text-[9px] font-black ${isSel ? 'text-white/80' : 'text-red-400'}`}>●</span>}
-                {isToday && !isSel && <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
+                    휴원일이어도 조교가 나와 필요한 클리닉을 진행할 수 있기 때문이다.
+                    모바일에서는 배경색만으로 알리고, 글씨 배지는 sm 이상에서만 띄운다. */}
+                {dayInfo.isClosed && <span className={`hidden sm:block absolute top-1 left-1 text-[9px] font-black px-1 rounded leading-none py-0.5 ${isSel ? 'bg-white/30 text-white' : 'bg-slate-700 text-white'}`}>휴원</span>}
+                {isToday && !isSel && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"/>}
                 {hasEvent && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSel ? 'bg-white' : 'bg-blue-400'}`}/>}
               </button>
             );

@@ -279,22 +279,28 @@ export default function AcademicCalendarManager() {
                                 const isToday = cell.dateStr === todayStr;
                                 return (
                                     <div key={cell.dateStr}
-                                        className={`min-h-[84px] border rounded-xl p-1.5 text-left transition-colors ${cell.inMonth ? 'bg-white border-slate-200' : 'bg-slate-50/60 border-slate-100 opacity-50'} ${DAY_TONE_CLASS[style.tone] || ''}`}>
+                                        className={`min-h-[52px] sm:min-h-[84px] border rounded-xl p-1 sm:p-1.5 text-left transition-colors overflow-hidden ${cell.inMonth ? 'bg-white border-slate-200' : 'bg-slate-50/60 border-slate-100 opacity-50'} ${DAY_TONE_CLASS[style.tone] || ''} ${cell.info.isClosed ? 'bg-slate-200' : ''}`}>
                                         <div className="flex items-center justify-between">
                                             <span className={`text-xs font-black ${isToday ? 'bg-indigo-600 text-white rounded-full w-5 h-5 flex items-center justify-center' : ''} ${!isToday && cell.info.isSunday ? 'text-red-500' : ''}`}>
                                                 {cell.day}
                                             </span>
-                                            {cell.info.isClosed && <span className="text-[9px] font-black bg-slate-700 text-white px-1 rounded">휴원</span>}
+                                            {cell.info.isClosed && <span className="hidden sm:inline text-[9px] font-black bg-slate-700 text-white px-1 rounded leading-none py-0.5">휴원</span>}
                                         </div>
-                                        {style.label && <div className="text-[10px] font-bold mt-1 leading-tight break-keep">{style.label}</div>}
+                                        {style.label && <div className="hidden sm:block text-[10px] font-bold mt-1 leading-tight break-keep">{style.label}</div>}
                                         {cell.info.schoolExams.slice(0, 2).map(ex => (
-                                            <div key={ex.id} className="text-[9px] text-slate-500 mt-0.5 truncate" title={`${ex.schoolName} ${ex.eventName}`}>
+                                            <div key={ex.id} className="hidden sm:block text-[9px] text-slate-500 mt-0.5 truncate" title={`${ex.schoolName} ${ex.eventName}`}>
                                                 · {ex.schoolName} {ex.eventName}
                                             </div>
                                         ))}
                                         {cell.info.season && cell.inMonth && (
-                                            <div className="text-[9px] text-indigo-400 font-bold mt-0.5 truncate">{cell.info.season.name}</div>
+                                            <div className="hidden sm:block text-[9px] text-indigo-400 font-bold mt-0.5 truncate">{cell.info.season.name}</div>
                                         )}
+                                        {/* 모바일에서는 글씨 대신 점으로만 알린다 (칸이 40px 남짓이라 겹친다) */}
+                                        <div className="sm:hidden flex gap-0.5 mt-1">
+                                            {cell.info.holidayName && <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />}
+                                            {cell.info.events.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />}
+                                            {cell.info.schoolExams.length > 0 && <span className="w-1.5 h-1.5 rounded-full bg-slate-400 inline-block" />}
+                                        </div>
                                     </div>
                                 );
                             })}
