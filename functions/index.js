@@ -112,16 +112,67 @@ const queueSms = (batchOrDb, phoneNumber, message, type, studentName) => {
 
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 
+/* ────────────────────────────────────────────────────────────────────────────
+   [비용 방어] 호출 횟수 제한기
+   Gemini·문자처럼 건당 돈이 나가는 기능은 '누가 부를 수 있는가'만으로는 부족하다.
+   정상 사용자 한 명이 스크립트를 돌려도 요금이 폭증하기 때문에 횟수 자체를 막는다.
+   저장 위치(ai_quota)는 보안 규칙에 없는 컬렉션이라 서버(admin SDK)만 접근한다.
+   ──────────────────────────────────────────────────────────────────────────── */
+const QUOTA_PATH = `artifacts/${APP_ID}/public/data/ai_quota`;
+
+const consumeQuota = async (key, limit, windowMs, message) => {
+    const ref = admin.firestore().doc(`${QUOTA_PATH}/${toSafeId(key)}`);
+    const now = Date.now();
+    await admin.firestore().runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const d = snap.exists ? snap.data() : null;
+        const fresh = !d || (now - (d.windowStart || 0) >= windowMs);
+        const windowStart = fresh ? now : d.windowStart;
+        const count = (fresh ? 0 : (d.count || 0)) + 1;
+        if (count > limit) throw new HttpsError("resource-exhausted", message);
+        tx.set(ref, { windowStart, count, updatedAt: now }, { merge: true });
+    });
+};
+
+/** 비밀번호 초기화·조회 대상을 실제 사용자 문서로 특정한다. */
+const findUserDoc = async ({ uid, email }) => {
+    if (email) {
+        const safeId = String(email).split('@')[0];
+        const s = await usersCol().doc(safeId).get();
+        if (s.exists) return { id: s.id, ...s.data() };
+    }
+    if (uid) {
+        const s = await usersCol().doc(uid).get();
+        if (s.exists) return { id: s.id, ...s.data() };
+        const q = await usersCol().where('authUid', '==', uid).limit(1).get();
+        if (!q.empty) return { id: q.docs[0].id, ...q.docs[0].data() };
+    }
+    return null;
+};
+
 // ============================================================================
 // [기능 1] 관리자 비밀번호 강제 초기화 및 유령 계정 복구 엔진
 // ============================================================================
 exports.adminResetPassword = onCall(async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "인증 티켓이 만료되었습니다. 다시 로그인 해주세요.");
   // 🔒 [보안 패치] 기존에는 로그인만 하면 누구나 타인의 비밀번호를 바꿀 수 있었다.
-  await assertDesk(request);
+  const caller = await assertDesk(request);
   const { uid, newPassword, email } = request.data;
 
   if (!newPassword || newPassword.length < 6) throw new HttpsError("invalid-argument", "비밀번호는 최소 6자리 이상이어야 합니다.");
+
+  /* 🔒 [보안 패치] '데스크면 누구나' 였던 것을 '누구의 비밀번호인가'까지 본다.
+     이 검사가 없으면 행정조교가 원장 계정의 비밀번호를 바꿔 시스템을 통째로 가져갈 수 있고,
+     아래 '유령 계정 복구' 경로로 존재하지 않는 이메일의 인증 계정을 마음대로 찍어낼 수 있었다. */
+  if (caller.role !== 'admin') {
+      const target = await findUserDoc({ uid, email });
+      if (!target) {
+          throw new HttpsError("permission-denied", "등록된 사용자만 초기화할 수 있습니다. 관리자에게 문의해주세요.");
+      }
+      if (!['student', 'parent'].includes(target.role)) {
+          throw new HttpsError("permission-denied", "행정조교는 학생/학부모 계정만 초기화할 수 있습니다.");
+      }
+  }
 
   if (email) {
     try {
@@ -286,8 +337,20 @@ exports.clinicReminderCron = onSchedule({
 // ============================================================================
 exports.parseReportCard = onCall({ timeoutSeconds: 120, memory: "1GiB" }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    const { fileData, type } = request.data; 
+    /* 💰 [비용 보호] 이 함수는 Gemini 비전 모델을 부르므로 호출 1건마다 돈이 나간다.
+       예전에는 '로그인만 하면' 누구나 무제한으로 이미지를 밀어 넣을 수 있었다.
+       입시 내비게이터는 학생·학부모·데스크가 쓰는 화면이라 역할로 완전히 막을 수는 없으니,
+       화면에 접근 가능한 역할로 좁히고 하루 호출 횟수를 함께 제한한다. */
+    const caller = await assertRole(request, ['admin', 'admin_assistant', 'student', 'parent'],
+        "성적표 분석을 사용할 수 없는 계정입니다.");
+    await consumeQuota(`ocr_${caller.id}`, 20, 24 * 60 * 60 * 1000,
+        "오늘 성적표 분석 가능 횟수(20회)를 모두 사용했습니다. 내일 다시 시도해주세요.");
+
+    const { fileData, type } = request.data;
     if (!fileData) throw new HttpsError("invalid-argument", "업로드된 파일이 없습니다.");
+    if (String(fileData).length > 8 * 1024 * 1024) {
+        throw new HttpsError("invalid-argument", "이미지 용량이 너무 큽니다. 8MB 이하로 올려주세요.");
+    }
 
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
@@ -547,8 +610,26 @@ exports.processCallLog = onDocumentCreated(`artifacts/${APP_ID}/public/data/raw_
 // ============================================================================
 exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" }, async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "인증이 필요합니다.");
-    const studentUid = request.auth.uid;
-    const { studentId, studentName, todaySchedules, contextTag } = request.data;
+    const { todaySchedules, contextTag } = request.data || {};
+
+    /* 💰 [비용 보호] 예전에는 브라우저가 보낸 studentId 로 캐시 문서 이름을 만들었다.
+       studentId 를 매번 아무 값으로 바꾸면 캐시가 항상 빗나가 Gemini 가 무한히 호출됐고,
+       남의 이름으로 브리핑을 만들어 넣는 것도 가능했다. 이제 서버가 호출자 본인으로 정한다. */
+    const caller = await getCallerProfile(request);
+    let studentId = caller.id;
+    let studentName = caller.name || '학생';
+
+    // 학부모는 '연결된 자녀'의 브리핑만 볼 수 있다.
+    const requestedId = String(request.data?.studentId || '').trim();
+    if (caller.role === 'parent' && requestedId && requestedId !== caller.id) {
+        const kids = Array.isArray(caller.linkedChildrenIds) ? caller.linkedChildrenIds : [];
+        if (!kids.includes(requestedId)) {
+            throw new HttpsError("permission-denied", "연결된 자녀의 브리핑만 볼 수 있습니다.");
+        }
+        studentId = requestedId;
+        const kidSnap = await usersCol().doc(requestedId).get();
+        studentName = kidSnap.exists ? (kidSnap.data().name || '학생') : '학생';
+    }
 
     const db = admin.firestore();
     
@@ -563,6 +644,10 @@ exports.generateMorningBriefing = onCall({ timeoutSeconds: 60, memory: "512MiB" 
     if (docSnap.exists) {
         return { success: true, briefing: docSnap.data().message, cached: true };
     }
+
+    // 캐시가 비었을 때만 AI를 부른다. 하루 5회를 넘기면 더 이상 돈을 쓰지 않는다.
+    await consumeQuota(`brief_${studentId}`, 5, 24 * 60 * 60 * 1000,
+        "오늘의 브리핑은 이미 생성되었습니다. 잠시 후 다시 확인해주세요.");
 
     try {
         const genAI = new GoogleGenerativeAI(getGeminiKey());
@@ -677,6 +762,18 @@ exports.requestSignupCode = onCall({ timeoutSeconds: 30 }, async (request) => {
         throw new HttpsError("invalid-argument", "유효한 휴대폰 번호가 아닙니다.");
     }
 
+    /* 💰 [비용 보호] 이 함수는 로그인 없이 부를 수 있다(가입 전이므로 어쩔 수 없다).
+       아래 '번호별' 제한만 있었을 때는 번호를 계속 바꾸면 그대로 뚫려서,
+       학원 법인폰이 임의 번호로 문자를 쏘는 스팸 발신기가 될 수 있었다.
+       그래서 '보내는 쪽(IP)'과 '학원 전체 하루 총량'을 함께 막는다. */
+    const rawIp = String(
+        request.rawRequest?.headers?.['x-forwarded-for'] || request.rawRequest?.ip || 'unknown'
+    ).split(',')[0].trim();
+    await consumeQuota(`sms_ip_${sha256(rawIp).slice(0, 24)}`, 10, 60 * 60 * 1000,
+        "인증 요청이 너무 많습니다. 1시간 후 다시 시도해주세요.");
+    await consumeQuota('sms_signup_global', 200, 24 * 60 * 60 * 1000,
+        "오늘 인증문자 발송 한도에 도달했습니다. 학원으로 문의해주세요.");
+
     const db = admin.firestore();
     const ref = db.doc(`${CODES_PATH}/${phone}`);
     const existing = await ref.get();
@@ -758,8 +855,15 @@ exports.registerUser = onCall({ timeoutSeconds: 60 }, async (request) => {
 
     if (!userId || !password || !name) throw new HttpsError("invalid-argument", "필수 정보가 누락되었습니다.");
     if (String(password).length < 6) throw new HttpsError("invalid-argument", "비밀번호는 6자리 이상이어야 합니다.");
-    if (!['student', 'parent', 'ta', 'admin_assistant', 'lecturer'].includes(role)) {
-        throw new HttpsError("invalid-argument", "가입 유형이 올바르지 않습니다.");
+    /* 🔒 [보안 패치 — 가장 중요한 한 줄]
+       예전에는 가입 화면에서 '강사'나 '행정조교'를 고르면 서버가 그대로 믿고 교직원 역할을
+       부여했다. 승인 대기(status:'pending') 검사는 브라우저 화면에만 있어서, 개발자도구로
+       로그인 함수를 직접 부르면 그냥 통과했다. 즉 휴대폰 번호 하나만 있으면 누구나
+       교직원 권한을 얻어 전 원생 개인정보와 급여·계좌를 읽고 원장 비밀번호까지 바꿀 수 있었다.
+       교직원 계정은 이제 데스크가 adminCreateUser(직원 관리 메뉴)로만 만든다. */
+    if (!['student', 'parent'].includes(role)) {
+        throw new HttpsError("permission-denied",
+            "학생·학부모만 직접 가입할 수 있습니다. 교직원 계정은 학원 데스크에서 발급해 드립니다.");
     }
     if (RESERVED_USER_IDS.includes(safeId)) {
         throw new HttpsError("permission-denied", "사용할 수 없는 아이디입니다. 다른 아이디를 입력해주세요.");
@@ -1102,8 +1206,13 @@ exports.syncUserClaims = onDocumentWritten(
 
         if (!after) return null; // 삭제는 onUserDeleted가 계정을 통째로 지운다
 
-        // 역할이나 인증 연결이 바뀔 때만 처리 (lastLogin 갱신 등으로는 동작하지 않게)
-        if (before && before.role === after.role && before.authUid === after.authUid) return null;
+        /* 역할·인증연결·승인상태가 바뀔 때만 처리 (lastLogin 갱신 등으로는 동작하지 않게).
+           ⚠️ status 비교를 빠뜨리면, 데스크가 '승인'을 눌러 status만 바꿨을 때 토큰이
+              갱신되지 않아 승인해도 계속 막히는 문제가 생긴다. */
+        if (before
+            && before.role === after.role
+            && before.authUid === after.authUid
+            && before.status === after.status) return null;
 
         const uid = await resolveAuthUid(userId, after);
         if (!uid) {
@@ -1112,7 +1221,16 @@ exports.syncUserClaims = onDocumentWritten(
         }
 
         try {
-            await admin.auth().setCustomUserClaims(uid, { role: after.role || 'none' });
+            /* 토큰에 세 가지를 담는다. 보안 규칙이 문서를 한 번도 읽지 않고 판정하기 위해서다.
+               - role     : 역할
+               - did      : 이 사람의 users 문서 ID. 과거 계정은 문서 ID와 로그인 아이디가
+                            다를 수 있어서, '이게 내 예약인가' 같은 판정에 반드시 필요하다.
+               - approved : 가입 승인 여부. 승인 대기 계정은 규칙에서 권한을 주지 않는다. */
+            await admin.auth().setCustomUserClaims(uid, {
+                role: after.role || 'none',
+                did: userId,
+                approved: String(after.status || 'active') !== 'pending'
+            });
         } catch (e) {
             console.error(`[syncUserClaims] 실패: ${userId}`, e);
         }
@@ -1156,7 +1274,12 @@ exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, a
 
             if (!uid) { failed.push(describe('인증 계정 없음')); return; }
             try {
-                await admin.auth().setCustomUserClaims(uid, { role: data.role || 'none' });
+                // syncUserClaims 와 반드시 같은 모양이어야 한다 (role / did / approved)
+                await admin.auth().setCustomUserClaims(uid, {
+                    role: data.role || 'none',
+                    did: d.id,
+                    approved: String(data.status || 'active') !== 'pending'
+                });
                 done++;
             } catch (e) {
                 failed.push(describe(`토큰 부여 실패: ${e.message}`));

@@ -247,12 +247,15 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-1.5 ml-1">가입 유형</label>
                 <select className="w-full border rounded-xl p-3 bg-gray-50 font-bold" value={form.role} onChange={e => setForm({...form, role: e.target.value})}>
+                    {/* 교직원(강사·조교) 계정은 직접 가입할 수 없습니다.
+                        예전에는 여기서 '강사'를 고르면 서버가 그대로 믿고 교직원 권한을 줬습니다.
+                        교직원 계정은 데스크가 [직원 관리]에서 발급합니다. */}
                     <option value="student">학생</option>
                     <option value="parent">학부모</option>
-                    <option value="ta">수업조교</option>
-                    <option value="admin_assistant">행정조교</option>
-                    <option value="lecturer">강사</option>
                 </select>
+                <p className="text-xs text-gray-500 mt-1.5 ml-1">
+                    강사·조교 계정은 학원 데스크에서 발급해 드립니다.
+                </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
                 <div>
