@@ -629,7 +629,15 @@ const AppLayout = ({ currentUser, handleLogout }) => {
         </header>
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 w-full bg-gray-50">
-            <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6 flex flex-col items-stretch">
+            {/* ⚠️ 예전에는 여기에 flex flex-col items-stretch 가 붙어 있었습니다.
+                그런데 각 화면의 최상위 요소는 거의 모두 'max-w-*xl mx-auto' 형태입니다.
+                CSS 규칙상 flex 항목의 좌우 margin 이 auto 이면 stretch(늘리기)가 꺼지고,
+                항목이 '내용 크기'대로 커집니다. 그래서 내용이 넓은 화면(재무 대시보드,
+                환경설정 등)은 최상위 컨테이너 자체가 화면보다 넓어졌고,
+                main 의 overflow-x-hidden 에 잘려 오른쪽이 안 보였습니다.
+                (진단 결과: 화면 384px인데 컨테이너가 671px)
+                평범한 블록으로 두면 자식은 부모 폭을 넘지 않습니다. */}
+            <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6">
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />

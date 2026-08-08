@@ -595,8 +595,8 @@ const FinancialDashboard = ({ currentUser }) => {
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-20 animate-in fade-in">
 
-      <div className="flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white p-6 rounded-2xl shadow-lg gap-4">
-        <div>
+      <div className="flex flex-col md:flex-row justify-between md:items-center bg-gray-900 text-white p-4 sm:p-6 rounded-2xl shadow-lg gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2"><Activity className="text-yellow-400"/> AI 재무 진단 시스템</h1>
           <p className="text-xs text-gray-400">통장 입출금 기반으로 학원의 진짜 현금 흐름을 분석합니다.</p>
         </div>

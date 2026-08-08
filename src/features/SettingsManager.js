@@ -798,8 +798,8 @@ const SettingsManager = ({ currentUser }) => {
         <div className="max-w-5xl mx-auto space-y-6 pb-20 animate-in fade-in">
             <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'info' })} />
             
-            <div className="bg-gradient-to-r from-gray-800 to-gray-900 text-white p-6 md:p-8 rounded-3xl shadow-lg flex justify-between items-center">
-                <div>
+            <div className="bg-gradient-to-r from-gray-800 to-gray-900 text-white p-5 sm:p-6 md:p-8 rounded-3xl shadow-lg flex justify-between items-center">
+                <div className="min-w-0">
                     <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-2"><Settings size={28}/> 학원 환경설정</h1>
                     <p className="opacity-90 text-sm md:text-base">이곳에서 등록한 학원 인프라 정보는 전체 시스템의 기준 데이터(SSOT)로 활용됩니다.</p>
                 </div>
