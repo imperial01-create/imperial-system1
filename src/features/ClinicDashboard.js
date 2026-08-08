@@ -1567,8 +1567,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             <textarea className="w-full border-2 border-emerald-200 bg-emerald-50 rounded-xl p-4 h-20 text-base outline-none focus:ring-2 focus:ring-emerald-400" placeholder="다음 클리닉 전까지 해와야 할 미션을 명확하게 적어주세요." value={feedbackData.nextAction} onChange={e=>setFeedbackData({...feedbackData, nextAction:e.target.value})}/>
         </div>
 
-        <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{ 
-            const ids = selectedSession.originalIds || [selectedSession.id];
+        <Button className="w-full py-4 text-lg font-black shadow-lg" onClick={async()=>{
+          /* ⚠️ 예전에는 이 버튼에 오류 처리가 없었다. 저장이 실패하면 아무 일도 일어나지 않아
+             '눌러도 반응이 없다'로만 보였고, 무엇이 잘못됐는지 알 방법이 없었다.
+             돈이나 기록이 걸린 버튼은 반드시 실패를 화면에 알려야 한다. */
+          try {
+            if (!selectedSession) { notify('세션 정보가 없습니다. 창을 닫고 다시 시도해주세요.', 'error'); return; }
+            const ids = (selectedSession.originalIds || [selectedSession.id]).filter(Boolean);
+            if (ids.length === 0) { notify('저장할 클리닉을 찾지 못했습니다.', 'error'); return; }
             const batch = writeBatch(db);
             ids.forEach(id => {
                 /* 예약 문서에는 '작성됨' 표시만 남긴다. 이 값은 목록 필터에 필요하고 민감하지 않다.
@@ -1595,8 +1601,12 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 ids.forEach(id => { next[id] = { ...(next[id] || {}), status: 'completed', feedbackStatus: 'submitted' }; });
                 return next;
             });
-            setModalState({type:null}); 
-            notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.'); 
+            setModalState({type:null});
+            notify('리포트 작성이 완료되어 데스크로 검수 요청되었습니다.');
+          } catch (e) {
+            console.error('[클리닉] 피드백 저장 실패:', e);
+            notify(`저장 실패: ${e?.code || ''} ${e?.message || '알 수 없는 오류'}`.trim(), 'error');
+          }
         }}>저장 및 검수 요청하기</Button>
       </Modal>
       

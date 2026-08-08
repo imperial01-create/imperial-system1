@@ -174,6 +174,27 @@ const run = async () => {
         await assertSucceeds(getDocs(query(collection(db, `${BASE}/clinic_feedbacks`), where('date', '>=', '2026-08-01'), where('date', '<=', '2026-08-31'))));
     });
 
+    // 실제 저장 버튼이 하는 것과 똑같은 배치: 예약 update + 피드백 set 을 한 번에
+    await check('조교(ta)가 피드백 저장 배치를 커밋할 수 있다', async () => {
+        const db = as('ta1', { email: 'ta1@imperial.com', role: 'ta', did: 'ta1', approved: true });
+        const b = writeBatch(db);
+        ['mine1'].forEach((id) => {
+            b.update(doc(db, `${BASE}/sessions/${id}`), { status: 'completed', feedbackStatus: 'submitted' });
+            b.set(doc(db, `${BASE}/clinic_feedbacks/${id}`), {
+                sessionId: id, studentId: 'stu1', taId: 'ta1', date: '2026-08-10',
+                rating: 5, tags: '', clinicDetails: '오늘 잘했습니다', nextAction: '워크북 3장',
+            }, { merge: true });
+        });
+        await assertSucceeds(b.commit());
+    });
+    await check('강사(lecturer)도 같은 배치를 커밋할 수 있다', async () => {
+        const db = as('teacher1', { email: 'teacher1@imperial.com', role: 'lecturer', did: 'teacher1', approved: true });
+        const b = writeBatch(db);
+        b.update(doc(db, `${BASE}/sessions/others1`), { status: 'completed', feedbackStatus: 'submitted' });
+        b.set(doc(db, `${BASE}/clinic_feedbacks/others1`), { sessionId: 'others1', studentId: 'stu2', clinicDetails: 'x' }, { merge: true });
+        await assertSucceeds(b.commit());
+    });
+
     console.log('\n[7] 급여·게이트웨이·비로그인');
     await check('남의 급여는 못 본다', () =>
         assertFails(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/payrolls/teacher1_2026-07`))));
