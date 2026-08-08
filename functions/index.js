@@ -1363,6 +1363,15 @@ exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, a
 // ============================================================================
 const STAFF_DIR_PATH = `artifacts/${APP_ID}/public/data/staff_directory`;
 
+/* 문자 게이트웨이(법인폰 앱)가 쓰는 학생 명부.
+   앱은 '상담 내용을 어느 학생에게 붙일지' 고르는 목록만 있으면 되고,
+   실제로 쓰는 값은 이름·학교·학년 셋뿐이다(MainActivity 의 Student 모델).
+   그런데 지금까지는 users 컬렉션 전체를 읽고 있었다. 그 문서에는
+   출결PIN·계좌번호·월급·전화번호까지 들어 있어서, 법인폰이나 그 계정이
+   털리면 학원 전체 개인정보가 함께 나간다.
+   그래서 필요한 세 값만 담은 사본을 서버가 유지하고, 게이트웨이는 이것만 읽는다. */
+const STUDENT_DIR_PATH = `artifacts/${APP_ID}/public/data/student_directory`;
+
 exports.syncStaffDirectory = onDocumentWritten(
     `artifacts/${APP_ID}/public/data/users/{userId}`,
     async (event) => {
@@ -1398,6 +1407,71 @@ exports.syncStaffDirectory = onDocumentWritten(
 );
 
 /** 기존 교직원을 명부에 한 번에 채워 넣는다. (도입 시 1회 실행) */
+/** 학생 명부 사본 유지 (문자 게이트웨이 전용). 이름·학교·학년만 담는다. */
+exports.syncStudentDirectory = onDocumentWritten(
+    `artifacts/${APP_ID}/public/data/users/{userId}`,
+    async (event) => {
+        const userId = event.params.userId;
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+        const ref = admin.firestore().doc(`${STUDENT_DIR_PATH}/${userId}`);
+
+        // 승인 대기 중이거나 학생이 아니거나 삭제됨 → 명부에서 제거
+        const isListable = (u) => u && u.role === 'student' && String(u.status || 'active') !== 'pending';
+
+        if (!isListable(after)) {
+            if (isListable(before)) await ref.delete().catch(() => {});
+            return null;
+        }
+
+        // 마지막 로그인 갱신 등으로도 트리거되므로 실제 변경이 있을 때만 쓴다
+        if (before &&
+            before.name === after.name &&
+            (before.schoolName || '') === (after.schoolName || '') &&
+            (before.grade || '') === (after.grade || '') &&
+            before.role === after.role &&
+            before.status === after.status) {
+            return null;
+        }
+
+        await ref.set({
+            id: userId,
+            name: after.name || '',
+            schoolName: after.schoolName || '',
+            grade: after.grade || ''
+        });
+        return null;
+    }
+);
+
+exports.backfillStudentDirectory = onCall({ timeoutSeconds: 300 }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+
+    const snap = await usersCol().get();
+    const db = admin.firestore();
+    let count = 0;
+
+    // 학생 수가 많을 수 있으므로 배치를 400건 단위로 끊는다 (한 배치 상한 500)
+    let batch = db.batch();
+    let pending = 0;
+    for (const d of snap.docs) {
+        const u = d.data();
+        if (u.role !== 'student' || String(u.status || 'active') === 'pending') continue;
+        batch.set(db.doc(`${STUDENT_DIR_PATH}/${d.id}`), {
+            id: d.id,
+            name: u.name || '',
+            schoolName: u.schoolName || '',
+            grade: u.grade || ''
+        });
+        count++;
+        pending++;
+        if (pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    }
+    if (pending > 0) await batch.commit();
+
+    return { count };
+});
+
 exports.backfillStaffDirectory = onCall({ timeoutSeconds: 120 }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
 

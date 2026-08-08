@@ -70,6 +70,7 @@ const SettingsManager = ({ currentUser }) => {
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
+    const [studentDirProcessing, setStudentDirProcessing] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
     const [claimsResult, setClaimsResult] = useState(null);
     // 문자 게이트웨이 계정 발급 — 비밀번호는 화면에만 잠시 존재하고 어디에도 저장하지 않는다
@@ -351,6 +352,22 @@ const SettingsManager = ({ currentUser }) => {
        내려받았습니다(전 원생 연락처와 교직원 계좌번호까지 함께 노출).
        이제는 이름/역할/과목만 담긴 명부를 따로 두고 그것만 읽습니다.
        앞으로 추가되는 교직원은 서버가 자동 반영하므로, 이 버튼은 기존 인원을 한 번 채울 때만 씁니다. */
+    /* 문자 게이트웨이(법인폰 앱)가 상담 대상을 고를 때 쓰는 학생 명부를 채운다.
+       앱이 users 컬렉션 전체를 읽던 것을 대체하기 위한 최소 사본이다. */
+    const handleSyncStudentDirectory = async () => {
+        if (!window.confirm("문자 게이트웨이 앱이 쓸 학생 명부(이름·학교·학년)를 채웁니다.\n\n안전한 작업이며 여러 번 눌러도 문제없습니다. 진행할까요?")) return;
+        setStudentDirProcessing(true);
+        try {
+            const backfill = httpsCallable(functions, 'backfillStudentDirectory');
+            const res = await backfill({});
+            alert(`✅ 학생 명부 동기화 완료!\n\n반영된 인원: ${res?.data?.count ?? 0}명\n\n이제 법인폰 앱을 새 버전으로 교체하시면 됩니다.`);
+        } catch (err) {
+            alert("동기화 중 오류가 발생했습니다: " + (err.message || ''));
+        } finally {
+            setStudentDirProcessing(false);
+        }
+    };
+
     const handleSyncStaffDirectory = async () => {
         if (!window.confirm("현재 등록된 교직원(관리자·행정조교·강사·수업조교)을 학생/학부모용 명부에 반영합니다.\n\n안전한 작업이며 여러 번 눌러도 문제없습니다. 진행할까요?")) return;
         setStaffDirProcessing(true);
@@ -1427,6 +1444,30 @@ const SettingsManager = ({ currentUser }) => {
                             className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
                         >
                             {staffDirProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '교직원 명부 채우기 실행'}
+                        </Button>
+                    </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-emerald-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-emerald-800 border-b border-emerald-100 pb-4 flex items-center gap-2">
+                            <Users className="text-emerald-600"/> 학생 명부 동기화 (문자 앱 전용)
+                        </h2>
+
+                        <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><ShieldCheck size={18}/> 왜 필요한가요?</p>
+                            <p>• 법인폰 문자 앱은 상담 대상을 고르려고 <strong>전체 사용자 목록</strong>을 내려받고 있었습니다.</p>
+                            <p>• 앱이 실제로 쓰는 값은 <strong>이름·학교·학년</strong> 셋뿐인데, 그 과정에 <strong>출결PIN·계좌번호·월급·연락처</strong>까지 함께 전달됐습니다.</p>
+                            <p>• 이제 세 값만 담은 별도 명부를 사용합니다. 폰을 분실해도 나가는 정보가 최소화됩니다.</p>
+                            <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">
+                                ※ <strong>법인폰 앱을 새 버전으로 교체하기 전에</strong> 먼저 실행해 주세요. 이후 등록되는 학생은 자동 반영됩니다.
+                            </p>
+                        </div>
+
+                        <Button
+                            onClick={handleSyncStudentDirectory}
+                            disabled={studentDirProcessing}
+                            className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {studentDirProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '학생 명부 채우기 실행'}
                         </Button>
                     </div>
 

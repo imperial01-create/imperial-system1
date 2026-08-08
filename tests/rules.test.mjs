@@ -74,6 +74,7 @@ const seed = async () => {
         await setDoc(doc(db, `${BASE}/sessions/mine1`), { date: '2026-08-10', startTime: '15:00', endTime: '16:00', taId: 'ta1', status: 'pending', studentId: 'stu1', clinicDetails: '' });
         await setDoc(doc(db, `${BASE}/sessions/others1`), { date: '2026-08-10', startTime: '16:00', endTime: '17:00', taId: 'ta1', status: 'pending', studentId: 'stu2', clinicDetails: '강사 피드백 원문' });
 
+        await setDoc(doc(db, `${BASE}/student_directory/stu1`), { id: 'stu1', name: '학생일', schoolName: '목동중', grade: '2학년' });
         await setDoc(doc(db, `${BASE}/attendance_logs/a1`), { studentId: 'stu2', status: 'absent', reason: '병결' });
         await setDoc(doc(db, `${BASE}/payrolls/teacher1_2026-07`), { userId: 'teacher1', netSalary: 2800000 });
     });
@@ -155,10 +156,21 @@ const run = async () => {
         assertFails(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/payrolls/teacher1_2026-07`))));
     await check('본인 급여는 볼 수 있다', () =>
         assertSucceeds(getDoc(doc(as('teacher1', { email: 'teacher1@imperial.com', role: 'lecturer', did: 'teacher1', approved: true }), `${BASE}/payrolls/teacher1_2026-07`))));
-    await check('폐기된 게이트웨이 계정(admin)은 사용자 목록을 못 본다', () =>
-        assertFails(getDocs(collection(as('oldgw', { email: 'admin@imperial.com', role: 'gateway', approved: true }), `${BASE}/users`))));
-    await check('새 게이트웨이 계정(smsgw)은 사용자 목록을 볼 수 있다', () =>
-        assertSucceeds(getDocs(collection(as('gw', { email: 'smsgw@imperial.com', role: 'gateway', approved: true }), `${BASE}/users`))));
+    const gw = () => as('gw', { email: 'smsgw@imperial.com', role: 'gateway', approved: true });
+    await check('폐기된 게이트웨이 계정(admin)은 아무것도 못 본다', () =>
+        assertFails(getDocs(collection(as('oldgw', { email: 'admin@imperial.com', role: 'gateway', approved: true }), `${BASE}/student_directory`))));
+    await check('게이트웨이는 이제 users 를 읽을 수 없다 (출결PIN·계좌·급여 차단)', () =>
+        assertFails(getDocs(collection(gw(), `${BASE}/users`))));
+    await check('게이트웨이는 학생 문서 단건도 읽을 수 없다', () =>
+        assertFails(getDoc(doc(gw(), `${BASE}/users/stu1`))));
+    await check('게이트웨이는 학생 명부(이름·학교·학년)는 읽을 수 있다', () =>
+        assertSucceeds(getDocs(collection(gw(), `${BASE}/student_directory`))));
+    await check('게이트웨이는 상담 원본을 등록할 수 있다', () =>
+        assertSucceeds(setDoc(doc(gw(), `${BASE}/raw_call_logs/log1`), { studentId: 'stu1', studentName: '학생일', rawText: '통화 요약', source: 's25_integrated_app', status: 'pending_ai_parsing' })));
+    await check('학생은 학생 명부를 읽을 수 없다', () =>
+        assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/student_directory`))));
+    await check('학생 명부는 아무도 쓸 수 없다 (서버 전용)', () =>
+        assertFails(setDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/student_directory/stu1`), { name: '위조' })));
     await check('비로그인은 사용자 문서를 못 본다', () =>
         assertFails(getDoc(doc(guest(), `${BASE}/users/stu1`))));
     await check('비로그인도 학교 목록은 볼 수 있다 (가입 화면용)', () =>

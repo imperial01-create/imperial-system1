@@ -169,11 +169,14 @@ service cloud.firestore {
           return isMe(docId) || (isAuth() && resource != null && resource.data.get('authUid', '') == uid());
         }
 
-        // 단건 조회: 본인 / 내 자녀 / 교직원 / 게이트웨이만
-        allow get:    if isMyUserDoc() || isStaff(appId) || isGateway() || isParentOf(appId, docId);
-        // 목록 조회(대량 유출 경로): 교직원과 게이트웨이만.
-        // 학생/학부모는 담당 강사 이름이 필요할 때 staff_directory를 읽는다.
-        allow list:   if isStaff(appId) || isGateway();
+        /* 단건 조회: 본인 / 내 자녀 / 교직원만
+           목록 조회(대량 유출 경로): 교직원만.
+           학생/학부모는 담당 강사 이름이 필요할 때 staff_directory 를 읽는다.
+           문자 게이트웨이(법인폰 앱)는 student_directory 를 읽는다.
+           예전에는 게이트웨이도 여기를 읽었는데, 앱이 실제로 쓰는 값은
+           이름·학교·학년 셋뿐인데도 출결PIN·계좌번호·월급까지 함께 노출됐다. */
+        allow get:    if isMyUserDoc() || isStaff(appId) || isParentOf(appId, docId);
+        allow list:   if isStaff(appId);
         allow create: if isDesk(appId);
         /* 본인 수정은 '고쳐도 안전한 필드'만 허용한다.
            예전에는 role 과 status 두 개만 잠갔는데, 그 사이로 아래가 전부 새어 나갔다.
@@ -199,6 +202,14 @@ service cloud.firestore {
       // ---------------------------------------------------------------
       match /staff_directory/{docId} {
         allow read:  if isAuth();
+        allow write: if false;
+      }
+
+      /* 학생 명부 — 문자 게이트웨이(법인폰 앱)가 상담 대상을 고를 때만 쓰는 최소 사본.
+         이름·학교·학년만 들어 있고, 서버(syncStudentDirectory)만 갱신한다.
+         이것 덕분에 게이트웨이 계정에서 users 읽기 권한을 뗄 수 있었다. */
+      match /student_directory/{docId} {
+        allow read:  if isStaff(appId) || isGateway();
         allow write: if false;
       }
 
