@@ -35,6 +35,9 @@ const geminiApiKey = defineString('GEMINI_API_KEY');
 const telegramBotToken = defineString('TELEGRAM_BOT_TOKEN', { default: '' });
 const telegramChatId = defineString('TELEGRAM_CHAT_ID', { default: '' });
 
+// 공공데이터포털(한국천문연구원 특일 정보) 인증키. 공휴일을 서버가 받아온다.
+const dataGoKrKey = defineString('DATA_GO_KR_KEY', { default: '' });
+
 // 온톨로지 원본 저장소(비공개) 접근용. 토큰은 서버에만 존재한다.
 const githubToken = defineString('REACT_APP_GITHUB_TOKEN', { default: '' });
 const githubOwner = defineString('REACT_APP_GITHUB_REPO_OWNER', { default: '' });
@@ -1524,6 +1527,109 @@ exports.syncStudentDirectory = onDocumentWritten(
    '강사가 특정 학생에 대해 쓴 코멘트'를 같은 반 친구가 브라우저로 읽을 수 있다.
    본문을 옮긴 뒤 예약 문서에서는 지운다. '작성됨' 표시(feedbackStatus)는 남겨둔다 —
    목록 필터에 필요하고 민감하지 않다. */
+// ============================================================================
+// [학원 달력] 공휴일 가져오기
+//
+// 한국 공휴일은 계산만으로 알 수 없다.
+//   - 설날·추석·부처님오신날은 음력이라 매년 날짜가 다르다
+//   - 대체공휴일 규칙이 있다 (예: 2026-03-02 대체공휴일(삼일절))
+//   - 임시공휴일이 생긴다 (예: 2026-06-03 전국동시지방선거)
+// 그래서 하드코딩하지 않고 한국천문연구원 특일 정보를 받아 저장한다.
+//
+// 문서 ID를 holiday_YYYYMMDD 로 고정해 여러 번 실행해도 중복이 쌓이지 않는다.
+// 원장이 손으로 고친 항목(source: 'manual')은 덮어쓰지 않는다.
+// ============================================================================
+const CALENDAR_PATH = `artifacts/${APP_ID}/public/data/academy_calendar`;
+
+const fetchHolidaysOfYear = async (year) => {
+    const raw = dataGoKrKey.value().trim();
+    if (!raw) throw new HttpsError("failed-precondition", "공휴일 인증키가 설정되지 않았습니다. (DATA_GO_KR_KEY)");
+
+    // data.go.kr 은 Encoding/Decoding 두 형태의 키를 준다.
+    // '%' 가 들어 있으면 이미 URL 인코딩된 값이므로 다시 인코딩하면 안 된다.
+    const key = raw.includes('%') ? raw : encodeURIComponent(raw);
+    const url = 'https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo'
+        + `?serviceKey=${key}&solYear=${year}&_type=json&numOfRows=100`;
+
+    const res = await fetch(url);
+    const text = await res.text();
+    if (!text.trim().startsWith('{')) {
+        // 인증키 오류 등은 XML 로 돌아온다
+        const reason = (text.match(/<returnAuthMsg>(.*?)<\/returnAuthMsg>/) || [])[1]
+            || (text.match(/<errMsg>(.*?)<\/errMsg>/) || [])[1] || '알 수 없는 응답';
+        throw new HttpsError("failed-precondition", `공휴일 조회 실패(${year}): ${reason}`);
+    }
+
+    const json = JSON.parse(text);
+    const header = json?.response?.header;
+    if (header && header.resultCode !== '00') {
+        throw new HttpsError("failed-precondition", `공휴일 조회 실패(${year}): ${header.resultMsg || header.resultCode}`);
+    }
+
+    let items = json?.response?.body?.items?.item || [];
+    if (!Array.isArray(items)) items = [items];
+    return items
+        .filter((it) => it && it.locdate)
+        .map((it) => {
+            const s = String(it.locdate);
+            return {
+                date: `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`,
+                name: String(it.dateName || '공휴일').trim(),
+                isHoliday: String(it.isHoliday || 'Y') === 'Y'
+            };
+        });
+};
+
+exports.syncPublicHolidays = onCall({ timeoutSeconds: 120 }, async (request) => {
+    await assertDesk(request);
+
+    const thisYear = new Date().getFullYear();
+    const years = Array.isArray(request.data?.years) && request.data.years.length
+        ? request.data.years.map(Number).filter((y) => y >= 2000 && y <= 2100)
+        : [thisYear, thisYear + 1]; // 12월에 내년 일정을 짜야 하므로 내년까지 받아둔다
+
+    const db = admin.firestore();
+    let added = 0;
+    let updated = 0;
+    let keptManual = 0;
+    const collected = [];
+
+    for (const y of years) {
+        // eslint-disable-next-line no-await-in-loop
+        const list = await fetchHolidaysOfYear(y);
+        collected.push(...list);
+    }
+
+    let batch = db.batch();
+    let pending = 0;
+    for (const h of collected) {
+        if (!h.isHoliday) continue;
+        const ref = db.doc(`${CALENDAR_PATH}/holiday_${h.date.replace(/-/g, '')}`);
+        // eslint-disable-next-line no-await-in-loop
+        const snap = await ref.get();
+
+        // 원장이 직접 손댄 항목은 건드리지 않는다
+        if (snap.exists && snap.data().source === 'manual') { keptManual++; continue; }
+
+        batch.set(ref, {
+            type: 'holiday',
+            title: h.name,
+            startDate: h.date,
+            endDate: h.date,
+            isClosed: true,
+            source: 'system',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        if (snap.exists) updated++; else added++;
+        pending++;
+        if (pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    }
+    if (pending > 0) await batch.commit();
+
+    return { years, total: collected.length, added, updated, keptManual };
+});
+
 exports.migrateClinicFeedbacks = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
 

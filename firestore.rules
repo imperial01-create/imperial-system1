@@ -249,6 +249,16 @@ service cloud.firestore {
       match /consultations/{docId}   { allow read, write: if isStaff(appId); }
       match /consult_history/{docId} { allow read, write: if isStaff(appId); }
       match /academic_calendars/{docId} { allow read: if isAuth(); allow write: if isStaff(appId); }
+
+      /* 학원 달력 — 공휴일 / 휴원일 / 학원 행사.
+         "이 날 학원이 운영하는가"를 시스템이 알 수 있게 하는 유일한 곳이다.
+         클리닉 예약·강의 생성·상담 예약이 모두 이 값을 보고 판단하므로
+         모든 로그인 사용자가 읽을 수 있어야 한다. (개인정보는 담지 않는다)
+         쓰기는 데스크만. 공휴일은 서버(syncPublicHolidays)가 채운다. */
+      match /academy_calendar/{docId} {
+        allow read:  if isAuth();
+        allow write: if isDesk(appId);
+      }
       // 학생 실명이 들어간 내부 업무 지시. 읽는 화면(ClinicTaskManager)은 교직원 전용이다.
       match /clinic_tasks/{docId} {
         allow get:  if isAuth();

@@ -31,6 +31,8 @@ export const DataProvider = ({ children, currentUser }) => {
     const [classes, setClasses] = useState([]);
     const [enrollments, setEnrollments] = useState([]);
     const [masterData, setMasterData] = useState({ classrooms: [], subjects: [], seasons: [] });
+    // 학원 달력: 공휴일 / 휴원일 / 학원 행사. 모든 화면이 같은 값을 보게 한다.
+    const [academyCalendar, setAcademyCalendar] = useState([]);
     const [englishStats, setEnglishStats] = useState([]);
     const [loadingData, setLoadingData] = useState(true);
 
@@ -67,6 +69,13 @@ export const DataProvider = ({ children, currentUser }) => {
                 });
             }
         }, onErr('settings/master_data')));
+
+        /* 학원 달력 — 로그인한 모두가 읽는다.
+           "이 날 학원이 운영하는가"를 클리닉·강의·상담이 모두 이 값으로 판단한다.
+           연 100건 남짓이라 전체 구독해도 부담이 없고, 개인정보는 담기지 않는다. */
+        unsubs.push(onSnapshot(collection(db, `${BASE}/academy_calendar`), (snapshot) => {
+            setAcademyCalendar(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+        }, onErr('academy_calendar')));
 
         if (isStaff) {
             // ── 교직원: 업무상 전체 데이터가 필요합니다 ────────────────────
@@ -134,7 +143,7 @@ export const DataProvider = ({ children, currentUser }) => {
        useData()에서 currentUser를 꺼내 쓰고 있었지만 Provider가 넘겨주지 않아
        항상 undefined였습니다. (예: 상담 등록 시 담당자가 비어 있던 원인) */
     return (
-        <DataContext.Provider value={{ currentUser, users, classes, enrollments, masterData, englishStats, loadingData }}>
+        <DataContext.Provider value={{ currentUser, users, classes, enrollments, masterData, englishStats, academyCalendar, loadingData }}>
             {children}
         </DataContext.Provider>
     );

@@ -195,7 +195,21 @@ const run = async () => {
         await assertSucceeds(b.commit());
     });
 
-    console.log('\n[7] 급여·게이트웨이·비로그인');
+    console.log('\n[7] 학원 달력');
+    await check('학생·학부모도 학원 달력을 읽을 수 있다 (휴원일 판단에 필요)', async () => {
+        await assertSucceeds(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/academy_calendar`)));
+        await assertSucceeds(getDocs(collection(as('mom2', parentToken('mom2')), `${BASE}/academy_calendar`)));
+    });
+    await check('학생은 달력을 고칠 수 없다', () =>
+        assertFails(setDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/academy_calendar/holiday_20260101`), { type: 'holiday', title: '가짜' })));
+    await check('강사(교직원)도 달력을 고칠 수 없다 (데스크 전용)', () =>
+        assertFails(setDoc(doc(as('teacher1', { email: 'teacher1@imperial.com', role: 'lecturer', did: 'teacher1', approved: true }), `${BASE}/academy_calendar/x`), { type: 'closure', title: '임의 휴원' })));
+    await check('데스크는 휴원일을 등록할 수 있다', () =>
+        assertSucceeds(setDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/academy_calendar/closure_1`), { type: 'closure', title: '여름 휴원', startDate: '2026-08-01', endDate: '2026-08-03', isClosed: true, source: 'manual' })));
+    await check('비로그인은 달력을 읽을 수 없다', () =>
+        assertFails(getDocs(collection(guest(), `${BASE}/academy_calendar`))));
+
+    console.log('\n[8] 급여·게이트웨이·비로그인');
     await check('남의 급여는 못 본다', () =>
         assertFails(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/payrolls/teacher1_2026-07`))));
     await check('본인 급여는 볼 수 있다', () =>

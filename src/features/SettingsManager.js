@@ -90,9 +90,7 @@ const SettingsManager = ({ currentUser }) => {
     const [newClassroomName, setNewClassroomName] = useState('');
     const [newClassroomCapacity, setNewClassroomCapacity] = useState('');
     
-    // 🚀 [CTO 패치] 시즌 생성 폼 상태 (연도와 타입 분리)
     const currentYear = new Date().getFullYear();
-    const [newSeason, setNewSeason] = useState({ year: currentYear, type: '윈터시즌', startDate: '', endDate: '' });
     
     const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
 
@@ -200,41 +198,6 @@ const SettingsManager = ({ currentUser }) => {
         });
     };
 
-    // 🚀 [CTO 패치] 드롭다운 기반 시즌 추가 핸들러
-    const addSeason = () => {
-        if (!newSeason.year || !newSeason.type || !newSeason.startDate || !newSeason.endDate) {
-            return alert("시즌 연도, 종류, 시작일, 종료일을 모두 선택/입력해주세요.");
-        }
-        if (newSeason.startDate > newSeason.endDate) {
-            return alert("시작일은 종료일보다 이전이어야 합니다.");
-        }
-        
-        // 연도와 하드코딩된 시즌 타입을 결합하여 이름 생성 (예: "2026 윈터시즌")
-        const combinedName = `${newSeason.year} ${newSeason.type}`;
-
-        // 중복 방지
-        if ((settings.seasons || []).some(s => s.name === combinedName)) {
-            return alert(`이미 [${combinedName}] 시즌이 존재합니다.`);
-        }
-
-        const seasonId = `season_${Date.now()}`;
-        setSettings(prev => ({
-            ...prev,
-            seasons: [...(prev.seasons || []), { id: seasonId, name: combinedName, startDate: newSeason.startDate, endDate: newSeason.endDate }]
-        }));
-        
-        // 폼 초기화 (연도와 타입은 유지, 날짜만 리셋)
-        setNewSeason(prev => ({ ...prev, startDate: '', endDate: '' }));
-    };
-
-    const removeSeason = (index) => {
-        if (!window.confirm("이 시즌을 삭제하시겠습니까?\n(이미 이 시즌으로 개설된 강의들은 '과거 데이터'로 분류될 수 있습니다.)")) return;
-        setSettings(prev => {
-            const arr = [...(prev.seasons || [])];
-            arr.splice(index, 1);
-            return { ...prev, seasons: arr };
-        });
-    };
 
     const toggleDepartment = (deptId) => {
         setActiveDepartments(prev => 
@@ -858,77 +821,20 @@ const SettingsManager = ({ currentUser }) => {
             {activeTab === 'master' && (
                 <div className="space-y-6 animate-in fade-in">
                     
-                    {/* 🚀 학사 일정 및 시즌 마스터 관리 */}
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6">
-                        <div className="border-b pb-4">
-                            <h2 className="text-xl font-black text-indigo-900 flex items-center gap-2 mb-2">
-                                <CalendarDays className="text-indigo-600"/> 학사 일정 및 글로벌 시즌 관리
-                            </h2>
-                            <p className="text-sm text-gray-600 leading-relaxed">
-                                학원의 1년 커리큘럼(시즌)을 자유롭게 등록하세요. 설정된 기간에 맞춰 <strong>강사/데스크의 시간표 시스템이 해당 시즌으로 완벽하게 자동 전환(Auto-Routing)</strong>됩니다.
-                            </p>
-                        </div>
-                        
-                        <div className="flex flex-col xl:flex-row gap-2 bg-indigo-50 p-3 rounded-xl border border-indigo-100 shadow-inner">
-                            {/* 🚀 [CTO 패치] 연도 입력 */}
-                            <div className="flex items-center gap-2 shrink-0">
-                                <input 
-                                    type="number" 
-                                    className="w-24 border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white focus:border-indigo-500 text-center" 
-                                    value={newSeason.year} 
-                                    onChange={e => setNewSeason({...newSeason, year: e.target.value})} 
-                                    placeholder="연도" 
-                                />
-                                <span className="font-black text-indigo-900">년</span>
-                            </div>
-
-                            {/* 🚀 [CTO 패치] 하드코딩된 시즌 드롭다운 */}
-                            <select 
-                                className="flex-1 border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white text-indigo-900 focus:border-indigo-500 min-w-[150px]"
-                                value={newSeason.type}
-                                onChange={e => setNewSeason({...newSeason, type: e.target.value})}
-                            >
-                                <option value="윈터시즌">❄️ 윈터시즌</option>
-                                <option value="1학기 중간고사">🌸 1학기 중간고사</option>
-                                <option value="1학기 기말고사">🌿 1학기 기말고사</option>
-                                <option value="서머시즌">☀️ 서머시즌</option>
-                                <option value="2학기 중간고사">🍁 2학기 중간고사</option>
-                                <option value="2학기 기말고사">⛄ 2학기 기말고사</option>
-                            </select>
-
-                            {/* 날짜 선택 */}
-                            <div className="flex items-center gap-2 w-full xl:w-auto">
-                                <input 
-                                    type="date" 
-                                    className="flex-1 xl:w-auto border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white text-gray-700 focus:border-indigo-500" 
-                                    value={newSeason.startDate} 
-                                    onChange={e => setNewSeason({...newSeason, startDate: e.target.value})} 
-                                />
-                                <span className="text-indigo-400 font-black">~</span>
-                                <input 
-                                    type="date" 
-                                    className="flex-1 xl:w-auto border-2 border-indigo-200 p-2.5 rounded-lg outline-none font-bold text-sm bg-white text-gray-700 focus:border-indigo-500" 
-                                    value={newSeason.endDate} 
-                                    onChange={e => setNewSeason({...newSeason, endDate: e.target.value})} 
-                                />
-                                <Button onClick={addSeason} className="bg-indigo-600 hover:bg-indigo-700 border-0 h-[42px] px-4 shadow-md shrink-0"><Plus size={18}/></Button>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar p-1">
-                            {(!settings.seasons || settings.seasons.length === 0) && <div className="text-sm text-gray-400 font-bold text-center py-6 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">등록된 시즌 데이터가 없습니다. 상단에서 시즌을 추가해 주세요.</div>}
-                            {/* ⚠️ 렌더링 중에 원본 배열을 직접 정렬하면 상태가 훼손되므로 복사본을 정렬합니다 */}
-                            {[...(settings.seasons || [])].sort((a, b) => String(a?.startDate || '').localeCompare(String(b?.startDate || ''))).map((season, idx) => (
-                                <div key={season.id} className="bg-white border-2 border-gray-100 p-3 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-sm hover:border-indigo-200 transition-colors">
-                                    <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3">
-                                        <span className="font-black text-indigo-900 text-base">{season.name}</span>
-                                        <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded-md border border-gray-200 flex items-center gap-1 w-fit">
-                                            <CalendarDays size={12}/> {season.startDate} ~ {season.endDate}
-                                        </span>
-                                    </div>
-                                    <button onClick={() => removeSeason(settings.seasons.findIndex(s => s.id === season.id))} className="text-gray-400 hover:bg-rose-100 hover:text-rose-500 p-2 rounded-lg transition-colors flex justify-center w-full md:w-auto"><Trash2 size={16}/></button>
-                                </div>
-                            ))}
+                    {/* 시즌 편집기는 [학사일정 마스터] 메뉴로 옮겼습니다.
+                        같은 데이터를 두 화면에서 편집하면 서로 덮어쓸 수 있어 편집기는 한 곳에만 둡니다.
+                        (저장 위치는 그대로 settings/master_data 의 seasons 입니다) */}
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200">
+                        <h2 className="text-xl font-black text-indigo-900 flex items-center gap-2 mb-3">
+                            <CalendarDays className="text-indigo-600"/> 학사 일정 및 글로벌 시즌 관리
+                        </h2>
+                        <p className="text-sm text-gray-600 leading-relaxed mb-4">
+                            시즌 등록·수정은 <strong className="text-indigo-700">[학사일정 마스터] 메뉴</strong>로 옮겼습니다.
+                            공휴일·휴원일·학교 시험 일정과 <strong>같은 달력에서 나란히 보며</strong> 정할 수 있습니다.
+                        </p>
+                        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-sm text-indigo-900 leading-relaxed">
+                            저장되는 위치는 예전과 같습니다. 강의·출결·리포트·급여 화면은 아무것도 달라지지 않습니다.
+                            <span className="block mt-1 font-bold">현재 등록된 시즌: {(settings.seasons || []).length}개</span>
                         </div>
                     </div>
 
