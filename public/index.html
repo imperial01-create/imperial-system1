@@ -32,22 +32,29 @@
       .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       button { min-height: 48px; touch-action: manipulation; }
 
-      /* --- [로딩 화면 스타일] --- */
+      /* --- [로딩 화면 스타일] ---
+         ⚠️ 예전에는 아래 flex 가운데정렬을 #root 에 직접 걸었습니다.
+            그런데 이 규칙은 React 가 앱을 그린 뒤에도 계속 살아 있습니다.
+            align-items:center 는 자식을 '화면 폭에 맞춰 늘리지 않고 내용 크기로' 두기
+            때문에, 내용이 화면보다 조금이라도 넓어지면 그대로 삐져나가고
+            overflow-hidden 에 잘립니다. 모바일에서 여러 메뉴의 오른쪽이 잘려 보이던
+            원인이 이것이었습니다.
+            가운데정렬은 로딩 화면 자신에게만 주고, #root 는 평범한 전체폭 블록으로 둡니다. */
       #root {
         min-height: 100vh;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
+        width: 100%;
+        max-width: 100%;
       }
 
       .loading-container {
+        min-height: 100vh;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
         text-align: center;
         padding: 20px;
+        margin: 0 auto;
         max-width: 80%;
       }
 
