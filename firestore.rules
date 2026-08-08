@@ -41,14 +41,27 @@ service cloud.firestore {
       return /databases/$(database)/documents/artifacts/$(appId)/public/data/users/$(id);
     }
 
+    /* 문서에서 역할을 읽되, 가입 승인 전(status == 'pending')이면 권한을 주지 않는다.
+       status 필드가 아예 없는 과거 계정은 'active'로 간주한다(기존 사용자 잠김 방지). */
+    function roleFromDoc(d) {
+      return d.get('status', 'active') == 'pending' ? 'none' : d.get('role', 'none').lower();
+    }
+
     // 사용자 문서에서 role 조회 (문서/필드가 없어도 안전하게 'none' 반환)
     function docRole(appId) {
       return exists(userPath(appId, emailId()))
-        ? get(userPath(appId, emailId())).data.get('role', 'none').lower()
+        ? roleFromDoc(get(userPath(appId, emailId())).data)
         : (exists(userPath(appId, uid()))
-            ? get(userPath(appId, uid())).data.get('role', 'none').lower()
+            ? roleFromDoc(get(userPath(appId, uid())).data)
             : 'none');
     }
+
+    /* 가입 승인 여부. 로그인 토큰(Custom Claims)의 approved 값을 본다.
+       ⚠️ 기본값이 'true'인 것은 의도적이다.
+          기존 사용자의 토큰에는 아직 이 값이 없다. 기본을 false로 두면 전원이 잠긴다.
+          새로 만들어지는 계정은 서버(syncUserClaims)가 값을 명시적으로 넣으므로
+          승인 대기 계정은 정확히 차단된다. */
+    function approved() { return isAuth() && request.auth.token.get('approved', true) == true; }
 
     /* 역할 판정.
        ⚠️ 성능이 아니라 '정상 동작'이 걸린 부분이다.
@@ -60,7 +73,7 @@ service cloud.firestore {
        아래 규칙들은 role()을 '한 번만' 호출하도록 작성해야 한다. */
     function role(appId) {
       return (isAuth() && request.auth.token.role != null)
-        ? request.auth.token.role.lower()
+        ? (approved() ? request.auth.token.role.lower() : 'none')
         : docRole(appId);
     }
 
@@ -90,7 +103,18 @@ service cloud.firestore {
     // 교직원 = 관리자 + 행정조교 + 강사 + 수업조교 (학생/학부모 절대 포함 안 됨)
     function isStaff(appId)  { return isOwner() || roleIn(appId, STAFF()); }
 
-    function isMe(id) { return isAuth() && (id == emailId() || id == uid()); }
+    /* '이게 나인가' 판정.
+       did 는 로그인 토큰에 담긴 내 users 문서 ID다. 과거 계정은 문서 ID가 로그인 아이디와
+       달라서 emailId()/uid() 비교만으로는 본인이 아닌 것으로 판정돼 자기 성적조차
+       못 보는 경우가 있었다. did 비교를 더하면 그 계정들이 정확히 본인으로 잡힌다.
+       (문서를 읽지 않으므로 요금도 조회 한도도 늘지 않는다.)
+
+       ⚠️ did 의 기본값을 빈 문자열로 두면 안 된다. 토큰에 did 가 없는 사용자에게
+          isMe('') 가 참이 되어, studentId 가 비어 있는 문서를 아무나 쓸 수 있게 된다.
+          (grades / lecture_completions / test_sessions 가 이 함수를 그렇게 쓴다) */
+    function isMe(id) {
+      return isAuth() && (id == emailId() || id == uid() || id == request.auth.token.get('did', 'NO_DID'));
+    }
 
     function myChildren(appId) {
       return exists(userPath(appId, emailId()))
@@ -143,11 +167,20 @@ service cloud.firestore {
         // 학생/학부모는 담당 강사 이름이 필요할 때 staff_directory를 읽는다.
         allow list:   if isStaff(appId) || isGateway();
         allow create: if isDesk(appId);
-        // 본인 수정은 허용하되 role/status 변경은 데스크만 가능 (권한 자가상승 차단)
+        /* 본인 수정은 '고쳐도 안전한 필드'만 허용한다.
+           예전에는 role 과 status 두 개만 잠갔는데, 그 사이로 아래가 전부 새어 나갔다.
+             - linkedChildrenIds : 학부모가 전교생을 '내 자녀'로 등록해
+                                   모든 원생의 성적·상담·연락처를 열람
+             - monthlySalary / hourlyRate / bankName / accountNumber
+                                 : 교직원이 자기 급여를 올리고 이체 계좌를 바꿈
+             - userId / authUid  : 남의 계정에 내 역할 토큰을 덮어씌워 권한을 빼앗음
+             - attendancePin     : 출결 PIN 변경
+           그래서 '허용 목록'으로 뒤집는다. 목록에 없는 필드는 데스크만 바꿀 수 있다.
+           (클라이언트가 본인 문서를 쓰는 코드는 현재 한 곳도 없다 — 전수 확인함) */
         allow update: if isDesk(appId)
                       || (isMyUserDoc()
-                          && request.resource.data.get('role', '')   == resource.data.get('role', '')
-                          && request.resource.data.get('status', '') == resource.data.get('status', ''));
+                          && request.resource.data.diff(resource.data).affectedKeys()
+                               .hasOnly(['name', 'lastLogin', 'updatedAt', 'profileImage', 'memo']));
         allow delete: if isAdmin(appId);
       }
 
