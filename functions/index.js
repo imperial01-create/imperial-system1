@@ -1542,7 +1542,8 @@ exports.syncStudentDirectory = onDocumentWritten(
 const CALENDAR_PATH = `artifacts/${APP_ID}/public/data/academy_calendar`;
 
 const fetchHolidaysOfYear = async (year) => {
-    const raw = dataGoKrKey.value().trim();
+    const raw = String(dataGoKrKey.value() || '').trim();
+    console.log(`[syncPublicHolidays] ${year}년 조회 시작 (키 길이 ${raw.length})`);
     if (!raw) throw new HttpsError("failed-precondition", "공휴일 인증키가 설정되지 않았습니다. (DATA_GO_KR_KEY)");
 
     // data.go.kr 은 Encoding/Decoding 두 형태의 키를 준다.
@@ -1582,7 +1583,18 @@ const fetchHolidaysOfYear = async (year) => {
 
 exports.syncPublicHolidays = onCall({ timeoutSeconds: 120 }, async (request) => {
     await assertDesk(request);
+    try {
+        return await runHolidaySync(request);
+    } catch (e) {
+        /* HttpsError 가 아닌 예외는 클라이언트에 그냥 'INTERNAL' 로만 전달되어
+           무엇이 잘못됐는지 알 수 없다. 원인을 로그와 화면에 함께 남긴다. */
+        if (e instanceof HttpsError) throw e;
+        console.error('[syncPublicHolidays] 실패:', e && e.stack ? e.stack : e);
+        throw new HttpsError('internal', `공휴일 동기화 실패: ${e && e.message ? e.message : String(e)}`);
+    }
+});
 
+const runHolidaySync = async (request) => {
     const thisYear = new Date().getFullYear();
     const years = Array.isArray(request.data?.years) && request.data.years.length
         ? request.data.years.map(Number).filter((y) => y >= 2000 && y <= 2100)
@@ -1632,7 +1644,7 @@ exports.syncPublicHolidays = onCall({ timeoutSeconds: 120 }, async (request) => 
     if (pending > 0) await batch.commit();
 
     return { years, total: collected.length, added, updated, keptManual };
-});
+};
 
 exports.migrateClinicFeedbacks = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
