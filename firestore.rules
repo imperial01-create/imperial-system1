@@ -345,7 +345,10 @@ service cloud.firestore {
         allow update: if roleIn(appId, STAFF())
                       || (isAuth()
                           && request.resource.data.diff(resource.data).affectedKeys()
-                               .hasOnly(['status', 'studentId', 'studentName', 'studentPhone',
+                               /* studentPhone 은 일부러 뺐다. 예약 문서는 로그인한 누구나 읽을 수 있어서
+                                  번호를 저장하면 다른 학생이 전부 가져갈 수 있다.
+                                  문자 발송은 users 에서 번호를 조회하므로 저장할 필요가 없다. */
+                               .hasOnly(['status', 'studentId', 'studentName',
                                          'students', 'topic', 'questionRange', 'source'])
                           && isMe(request.resource.data.get('studentId', ''))
                           && (resource.data.get('studentId', '') == ''

@@ -71,6 +71,7 @@ const SettingsManager = ({ currentUser }) => {
     const [migrationProcessing, setMigrationProcessing] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [studentDirProcessing, setStudentDirProcessing] = useState(false);
+    const [phonePurgeProcessing, setPhonePurgeProcessing] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
     const [claimsResult, setClaimsResult] = useState(null);
     // 문자 게이트웨이 계정 발급 — 비밀번호는 화면에만 잠시 존재하고 어디에도 저장하지 않는다
@@ -365,6 +366,27 @@ const SettingsManager = ({ currentUser }) => {
             alert("동기화 중 오류가 발생했습니다: " + (err.message || ''));
         } finally {
             setStudentDirProcessing(false);
+        }
+    };
+
+    /* 과거 예약 문서에 남아 있는 전화번호를 걷어낸다.
+       예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽을 수 있어서,
+       여기에 남은 번호는 다른 학생이 브라우저로 그대로 가져갈 수 있다. */
+    const handlePurgeSessionPhones = async () => {
+        if (!window.confirm(
+            "지난 클리닉 예약 기록에 남아 있는 학생 전화번호를 모두 지웁니다.\n\n" +
+            "• 문자 발송은 영향받지 않습니다 (번호를 직원 정보에서 조회합니다).\n" +
+            "• 되돌릴 수 없습니다.\n\n계속할까요?"
+        )) return;
+        setPhonePurgeProcessing(true);
+        try {
+            const fn = httpsCallable(functions, 'purgeSessionPhones');
+            const res = await fn({});
+            alert(`✅ 정리 완료!\n\n검사한 예약: ${res?.data?.scanned ?? 0}건\n전화번호를 지운 예약: ${res?.data?.cleaned ?? 0}건`);
+        } catch (err) {
+            alert("정리 중 오류가 발생했습니다: " + (err.message || ''));
+        } finally {
+            setPhonePurgeProcessing(false);
         }
     };
 
@@ -1470,6 +1492,29 @@ const SettingsManager = ({ currentUser }) => {
                             {studentDirProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '학생 명부 채우기 실행'}
                         </Button>
                     </div>
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
+                            <ShieldCheck className="text-amber-600"/> 지난 클리닉 예약의 전화번호 정리
+                        </h2>
+
+                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 왜 필요한가요?</p>
+                            <p>• 클리닉 예약 화면은 <strong>그날 전체 시간표</strong>를 봐야 해서, 예약 기록은 로그인한 누구나 읽을 수 있습니다.</p>
+                            <p>• 그동안 예약 기록에 <strong>학생 전화번호</strong>가 함께 저장되어, 다른 학생도 가져갈 수 있는 상태였습니다.</p>
+                            <p>• 앞으로는 저장하지 않도록 고쳤고, 이 버튼은 <strong>과거 기록</strong>을 청소합니다.</p>
+                            <p className="text-amber-700 font-bold mt-2 pt-2 border-t border-amber-200">※ 문자 발송은 영향받지 않습니다. 번호는 직원 정보에서 조회합니다.</p>
+                        </div>
+
+                        <Button
+                            onClick={handlePurgeSessionPhones}
+                            disabled={phonePurgeProcessing}
+                            className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {phonePurgeProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '지난 예약 전화번호 지우기'}
+                        </Button>
+                    </div>
+
 
                 </div>
             )}

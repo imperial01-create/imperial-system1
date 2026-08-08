@@ -142,12 +142,16 @@ const run = async () => {
     await check('여러 시간대 동시 신청이 된다 (조회 한도 재발 방지)', async () => {
         const db = as('stu1', studentToken('stu1'));
         const b = writeBatch(db);
+        // 실제 예약 코드(submitStudentApplication)가 보내는 것과 같은 payload여야 의미가 있다.
+        // 전화번호는 더 이상 저장하지 않는다.
         ['open1', 'mine1'].forEach((id) => b.update(doc(db, `${BASE}/sessions/${id}`), {
-            status: 'pending', studentId: 'stu1', studentName: '학생일', studentPhone: '01033334444',
+            status: 'pending', studentId: 'stu1', studentName: '학생일',
             students: [{ id: 'stu1', name: '학생일' }], topic: '수학', questionRange: '1~10', source: 'app',
         }));
         await assertSucceeds(b.commit());
     });
+    await check('학생이 예약 문서에 전화번호를 저장할 수 없다', () =>
+        assertFails(updateDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/sessions/open1`), { status: 'pending', studentId: 'stu1', studentName: '학생일', studentPhone: '01033334444' })));
     await check('교직원은 피드백을 쓸 수 있다', () =>
         assertSucceeds(updateDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/sessions/mine1`), { clinicDetails: '오늘 잘했습니다' })));
 

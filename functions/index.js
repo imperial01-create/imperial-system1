@@ -1444,6 +1444,47 @@ exports.syncStudentDirectory = onDocumentWritten(
     }
 );
 
+/* 이미 저장된 예약 문서에서 전화번호를 걷어낸다.
+   예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽을 수 있어서, 여기에 남은
+   번호는 다른 학생이 브라우저로 그대로 가져갈 수 있다. 앞으로는 저장하지 않지만
+   과거 문서에는 남아 있으므로 한 번 정리해야 한다.
+   문자 발송 경로는 모두 users 에서 번호를 먼저 조회하므로 기능에는 영향이 없다. */
+exports.purgeSessionPhones = onCall({ timeoutSeconds: 540, memory: "512MiB" }, async (request) => {
+    await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
+
+    const db = admin.firestore();
+    const col = db.collection(`artifacts/${APP_ID}/public/data/sessions`);
+    const snap = await col.get();
+
+    let cleaned = 0;
+    let batch = db.batch();
+    let pending = 0;
+
+    for (const d of snap.docs) {
+        const s = d.data();
+        const hadPhoneField = Object.prototype.hasOwnProperty.call(s, 'studentPhone') && s.studentPhone;
+        const students = Array.isArray(s.students) ? s.students : null;
+        const hadPhoneInList = students && students.some((st) => st && st.phone);
+        if (!hadPhoneField && !hadPhoneInList) continue;
+
+        const patch = {};
+        if (hadPhoneField) patch.studentPhone = admin.firestore.FieldValue.delete();
+        if (hadPhoneInList) {
+            patch.students = students.map((st) => {
+                const { phone, ...rest } = st || {};
+                return rest;
+            });
+        }
+        batch.update(d.ref, patch);
+        cleaned++;
+        pending++;
+        if (pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+    }
+    if (pending > 0) await batch.commit();
+
+    return { scanned: snap.size, cleaned };
+});
+
 exports.backfillStudentDirectory = onCall({ timeoutSeconds: 300 }, async (request) => {
     await assertRole(request, ['admin'], "관리자만 실행할 수 있습니다.");
 

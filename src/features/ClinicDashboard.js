@@ -222,7 +222,7 @@ const AdminStudentMultiSelect = ({ users, classes, selectedStudents, onAdd, onRe
                                         key={s.id} 
                                         type="button"
                                         disabled={isAlreadyAdded}
-                                        onClick={() => { onAdd({ id: s.id, name: s.name, phone: s.phone || '' }); setSearch(''); setIsOpen(false); }}
+                                        onClick={() => { onAdd({ id: s.id, name: s.name }); setSearch(''); setIsOpen(false); }}
                                         className={`w-full text-left px-3 py-2.5 text-xs font-bold rounded-lg transition-colors flex justify-between items-center ${isAlreadyAdded ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : (isClass ? 'hover:bg-purple-50 text-purple-900 border-b border-gray-50' : 'hover:bg-indigo-50 text-gray-700 border-b border-gray-50')}`}
                                     >
                                         <span>{s.name} {!isClass && <span className="text-gray-400 font-normal">({s.schoolName || '학교미상'})</span>}</span>
@@ -903,7 +903,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); 
-            const initialStudents = Array.isArray(payload.students) ? payload.students : (payload.studentName ? [{ id: payload.studentId || '', name: payload.studentName, phone: payload.studentPhone || '' }] : []);
+            const initialStudents = Array.isArray(payload.students) ? payload.students : (payload.studentName ? [{ id: payload.studentId || '', name: payload.studentName }] : []);
             setAdminEditData({ students: initialStudents, topic: payload.topic||'', questionRange: payload.questionRange||'' }); 
             setModalState({ type: 'admin_edit' });
         } else if (action === 'approve_schedule_change') { 
@@ -989,10 +989,14 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
           
           studentSelectedSlots.forEach(id => {
               const ref = doc(db, 'artifacts', APP_ID, 'public', 'data', 'sessions', id);
-              const studentPayload = [{ id: currentUser?.id, name: currentUser?.name, phone: currentUser?.phone || '' }];
-              const updateData = { 
-                  status: 'pending', studentId: currentUser?.id || 'unknown_student', studentName: currentUser?.name || '알수없음', studentPhone: currentUser?.phone || '', 
-                  students: studentPayload, topic: formattedTopic, questionRange: formattedRange, source: 'app' 
+              /* 🔒 [개인정보] 예약 문서에 전화번호를 저장하지 않는다.
+                 예약 화면은 그날 전체 슬롯을 봐야 해서 sessions 는 로그인한 누구나 읽을 수 있다.
+                 여기에 번호를 넣어두면 다른 학생이 브라우저로 전부 가져갈 수 있다.
+                 번호가 필요한 곳(문자 발송)은 이미 users 에서 조회하므로 없어도 된다. */
+              const studentPayload = [{ id: currentUser?.id, name: currentUser?.name }];
+              const updateData = {
+                  status: 'pending', studentId: currentUser?.id || 'unknown_student', studentName: currentUser?.name || '알수없음',
+                  students: studentPayload, topic: formattedTopic, questionRange: formattedRange, source: 'app'
               };
               batch.update(ref, updateData); updates[id] = { id, ...updateData }; 
           });
@@ -1179,10 +1183,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                         <div className="space-y-3">{pendingBookings.map(s => {
                             const stList = Array.isArray(s.students) ? s.students : [];
                             const displayStudentName = stList.length > 0 ? stList.map(st=>st.name).join(', ') : s.studentName;
+                            /* 연락처는 예약 문서에 저장하지 않는다(다른 학생에게 노출되므로).
+                               데스크 화면에서만 users 에서 찾아 보여준다. */
+                            const contactPhone = (users.find(u => u.id === s.studentId) || {}).phone || '';
                             return (
                             <div key={s.id} className="border border-green-100 bg-green-50/30 p-4 rounded-xl flex justify-between items-center shadow-sm">
                                 <div className="flex-1 pr-3">
-                                    <div className="font-bold text-gray-900 text-lg">{displayStudentName} <span className="font-normal text-sm text-gray-500">({s.studentPhone || '연락처 연동됨'})</span></div>
+                                    <div className="font-bold text-gray-900 text-lg">{displayStudentName} <span className="font-normal text-sm text-gray-500">({contactPhone || '연락처 연동됨'})</span></div>
                                     <div className="text-sm font-bold text-gray-600 mt-1">{formatDateKo(s.date)} <span className="text-blue-600">{formatAmPm(s.startTime)} - {formatAmPm(s.endTime)}</span> ({s.taName})</div>
                                     
                                     <div className="text-sm text-gray-600 mt-2 p-2 bg-white rounded-lg border border-green-100">
@@ -1571,7 +1578,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 const stList = Array.isArray(selectedSession.students) ? selectedSession.students : [];
                 const targetStudents = stList.length > 0 
                     ? stList 
-                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
+                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName }] : []);
 
                 let textSentCount = 0;
 
@@ -1634,7 +1641,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                 const stList = Array.isArray(selectedSession.students) ? selectedSession.students : [];
                 const targetStudents = stList.length > 0 
                     ? stList 
-                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName, phone: selectedSession.studentPhone || '' }] : []);
+                    : (selectedSession.studentName ? [{ id: selectedSession.studentId || '', name: selectedSession.studentName }] : []);
 
                 let textSentCount = 0;
 
