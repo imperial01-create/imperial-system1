@@ -1063,7 +1063,12 @@ export const AdminLectureManager = () => {
                         </div>
                     </div>
 
-                    <div className="flex-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col min-h-0 overflow-hidden relative">
+                    {/* ⚠️ 모바일에서 이 칸의 높이가 0이 되어 강사를 골라도 아무것도 안 보였다.
+                        세로로 쌓이는 모바일(flex-col)에서는 부모 높이가 정해지지 않아
+                        flex-1 + min-h-0 이 0으로 접힌다. 게다가 내용이 absolute 라
+                        칸을 밀어 열어 줄 것도 없다.
+                        → 모바일에서만 최소 높이를 준다. 가로 배치가 되는 lg 이상은 기존대로 둔다. */}
+                    <div className="flex-1 bg-white border border-gray-200 rounded-2xl shadow-sm flex flex-col min-h-[420px] lg:min-h-0 overflow-hidden relative">
                         {!selectedLecturerId ? (
                             <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-4">
                                 <Users size={48} className="opacity-20" />
