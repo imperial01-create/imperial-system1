@@ -1616,7 +1616,11 @@ exports.syncPublicHolidays = onCall({ timeoutSeconds: 120 }, async (request) => 
             title: h.name,
             startDate: h.date,
             endDate: h.date,
-            isClosed: true,
+            /* ⚠️ 공휴일이라고 자동으로 휴원 처리하지 않는다.
+               학원은 공휴일에도 조교가 나와 업무를 보거나 필요한 학생 클리닉을 진행한다.
+               달력에 '빨간날'로 알려주기만 하고, 실제 휴원 여부는 학원이 직접 지정한다.
+               (달력 목록에서 '정상 운영 ↔ 학원 쉼' 을 눌러 바꾼다) */
+            isClosed: false,
             source: 'system',
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });

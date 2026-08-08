@@ -14,6 +14,7 @@ import { db, functions } from '../firebase';
 import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
+import { isClosedDay, getDayInfo } from '../utils/academyCalendar';
 
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -584,7 +585,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 });
 
 const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
-    const { users = [], classes = [], masterData = {}, enrollments = [], loadingData } = useData();
+    const { users = [], classes = [], masterData = {}, enrollments = [], academyCalendar = [], loadingData } = useData();
 
     const isAdminView = currentUser.role === 'admin' || (currentUser.role === 'admin_assistant' && mode === 'clinic');
     const isMyScheduleView = currentUser.role === 'ta' || (currentUser.role === 'admin_assistant' && mode === 'work_schedule');
@@ -865,6 +866,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
         } else if (action === 'add_request') {
             const h = parseInt((payload.time || '00:00').split(':')[0]);
             if (h < 8 || h >= 22) return notify('운영 시간(08:00~22:00) 외 신청 불가', 'error');
+            // 휴원일이어도 막지 않는다. 실수로 누르는 것만 한 번 확인한다.
+            if (isClosedDay(selectedDateStr, academyCalendar)) {
+                const info = getDayInfo(selectedDateStr, { calendar: academyCalendar });
+                const why = info.closures[0]?.title || info.holidayName || '휴원일';
+                if (!window.confirm(`${selectedDateStr} 은(는) 「${why}」 로 지정된 휴원일입니다.
+그래도 근무를 신청할까요?`)) return;
+            }
             const newSession = {
                 taId: currentUser.id, taName: currentUser.name, taSubject: currentUser.subject || '', workerRole: currentUser.role,
                 date: selectedDateStr, startTime: payload.time, endTime: `${String(h+1).padStart(2,'0')}:00`, 
@@ -1015,9 +1023,13 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const handleSaveDefaultSchedule = async () => {
       if (!selectedTaIdForSchedule || !batchDateRange.start || !batchDateRange.end) return notify('조교와 날짜를 선택하세요', 'error');
       const targetTa = users.find(u => u.id === selectedTaIdForSchedule);
-      const batch = writeBatch(db); let count = 0;
+      const batch = writeBatch(db); let count = 0; const skipped = [];
       for (let d = new Date(batchDateRange.start); d <= new Date(batchDateRange.end); d.setDate(d.getDate() + 1)) {
         const dStr = formatDate(d); const dayName = DAYS[d.getDay()]; const sched = defaultSchedule[dayName];
+        /* 🗓️ 휴원일은 정기 스케줄에서 빼둔다.
+           '자동으로 쭉 까는 것'만 제외한다. 개별 슬롯은 막지 않는다 —
+           휴원일이어도 조교가 나와 업무를 보거나 필요한 학생 클리닉을 할 수 있기 때문이다. */
+        if (isClosedDay(dStr, academyCalendar)) { skipped.push(dStr); continue; }
         if (sched && sched.active) {
           const sH = parseInt((sched.start||'00:00').split(':')[0]), eH = parseInt((sched.end||'00:00').split(':')[0]);
           for (let h = sH; h < eH; h++) {
@@ -1034,7 +1046,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
           }
         }
       }
-      await batch.commit(); notify(`${count}개의 스케줄이 일괄 생성되었습니다!`); fetchSessions(true); 
+      await batch.commit();
+      const skipMsg = skipped.length ? ` (휴원일 ${skipped.length}일 제외)` : '';
+      notify(`${count}개의 스케줄이 일괄 생성되었습니다!${skipMsg}`);
+      fetchSessions(true); 
     };
 
     const submitStudentApplication = async () => {

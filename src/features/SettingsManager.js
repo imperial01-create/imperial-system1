@@ -820,23 +820,6 @@ const SettingsManager = ({ currentUser }) => {
             {/* 탭 1. 기본 인프라 관리 */}
             {activeTab === 'master' && (
                 <div className="space-y-6 animate-in fade-in">
-                    
-                    {/* 시즌 편집기는 [학사일정 마스터] 메뉴로 옮겼습니다.
-                        같은 데이터를 두 화면에서 편집하면 서로 덮어쓸 수 있어 편집기는 한 곳에만 둡니다.
-                        (저장 위치는 그대로 settings/master_data 의 seasons 입니다) */}
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200">
-                        <h2 className="text-xl font-black text-indigo-900 flex items-center gap-2 mb-3">
-                            <CalendarDays className="text-indigo-600"/> 학사 일정 및 글로벌 시즌 관리
-                        </h2>
-                        <p className="text-sm text-gray-600 leading-relaxed mb-4">
-                            시즌 등록·수정은 <strong className="text-indigo-700">[학사일정 마스터] 메뉴</strong>로 옮겼습니다.
-                            공휴일·휴원일·학교 시험 일정과 <strong>같은 달력에서 나란히 보며</strong> 정할 수 있습니다.
-                        </p>
-                        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-sm text-indigo-900 leading-relaxed">
-                            저장되는 위치는 예전과 같습니다. 강의·출결·리포트·급여 화면은 아무것도 달라지지 않습니다.
-                            <span className="block mt-1 font-bold">현재 등록된 시즌: {(settings.seasons || []).length}개</span>
-                        </div>
-                    </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         

@@ -309,9 +309,14 @@ export default function AcademicCalendarManager() {
                     </Card>
 
                     <Card className="p-6 rounded-3xl border border-slate-200">
-                        <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+                        <h3 className="text-lg font-black text-slate-800 mb-2 flex items-center gap-2">
                             <Clock size={18} className="text-indigo-500" /> 앞으로의 일정 <span className="text-sm font-bold text-slate-400">{futureEntries.length}건</span>
                         </h3>
+                        <p className="text-xs text-slate-500 font-bold mb-4 leading-relaxed">
+                            공휴일은 달력에 <span className="text-red-500">빨간날</span>로 표시만 되고 <strong>기본값은 정상 운영</strong>입니다.
+                            실제로 쉬는 날은 <span className="bg-slate-700 text-white px-1.5 py-0.5 rounded text-[10px]">학원 쉼</span> 으로 직접 지정해 주세요.
+                            지정한 날만 클리닉 정기 스케줄 일괄 생성에서 빠집니다. (개별 슬롯은 막지 않습니다)
+                        </p>
                         {futureEntries.length === 0 ? (
                             <div className="text-center py-10 text-slate-400 font-bold border-2 border-dashed border-slate-200 rounded-2xl">
                                 등록된 일정이 없습니다. 먼저 <strong>공휴일 가져오기</strong>를 실행해 보세요.
