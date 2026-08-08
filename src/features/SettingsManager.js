@@ -1433,6 +1433,29 @@ const SettingsManager = ({ currentUser }) => {
                                     </div>
                                 </div>
 
+                                {claimsResult.repaired > 0 && (
+                                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-900">
+                                        <p className="font-black mb-1">🔧 어긋나 있던 계정 {claimsResult.repaired}건을 복구했습니다.</p>
+                                        <p className="opacity-90 leading-relaxed">
+                                            로그인 아이디와 사용자 문서가 서로 다르게 저장돼 있어 역할이 인식되지 않던 계정입니다.
+                                            해당 사용자는 <strong>로그아웃 후 다시 로그인</strong>하면 정상 동작합니다.
+                                        </p>
+                                    </div>
+                                )}
+
+                                {claimsResult.orphanCount > 0 && (
+                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-900">
+                                        <p className="font-black mb-1">짝이 되는 사용자 정보가 없는 인증 계정 {claimsResult.orphanCount}건</p>
+                                        <p className="opacity-90 mb-2 leading-relaxed">
+                                            로그인 계정만 남고 사용자 정보가 삭제된 것들입니다. 키오스크·시험용 계정이면 그대로 두셔도 되고,
+                                            쓰지 않는 계정이면 Firebase 콘솔에서 삭제하시는 편이 안전합니다.
+                                        </p>
+                                        <div className="font-mono text-xs bg-white border border-amber-200 rounded-lg p-2 space-y-0.5 max-h-32 overflow-y-auto">
+                                            {claimsResult.orphans?.map((o, i) => <div key={i}>{o.email}{o.reason ? ` — ${o.reason}` : ''}</div>)}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {claimsResult.failedCount > 0 && (
                                     <div className="border border-slate-200 rounded-xl overflow-hidden">
                                         <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 text-sm font-black text-slate-700">

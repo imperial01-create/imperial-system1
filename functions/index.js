@@ -1240,17 +1240,27 @@ exports.resolveOntologySource = onCall({ timeoutSeconds: 30 }, async (request) =
 // 토큰은 authUid 기준이라 문서 ID가 달라도 정확하다.
 // ============================================================================
 
-/** 사용자 문서로부터 실제 Firebase Auth uid를 알아낸다. */
+/** 사용자 문서로부터 실제 Firebase Auth uid를 알아낸다.
+ *  과거 계정은 문서 ID·userId·이메일이 서로 다를 수 있어 여러 후보를 차례로 시도한다. */
 const resolveAuthUid = async (docId, data) => {
     const stored = data?.authUid;
     if (stored && stored !== 'legacy_verified_account') return stored;
-    const email = `${toSafeId(data?.userId || docId)}@imperial.com`;
-    try {
-        const rec = await admin.auth().getUserByEmail(email);
-        return rec.uid;
-    } catch (e) {
-        return null;
+
+    // toSafeId(userId) → toSafeId(문서ID) → 문서ID 원문 순으로 이메일을 만들어 찾는다
+    const candidates = [...new Set([
+        toSafeId(data?.userId || docId),
+        toSafeId(docId),
+        String(docId).toLowerCase()
+    ].filter(Boolean))];
+
+    for (const id of candidates) {
+        try {
+            // eslint-disable-next-line no-await-in-loop
+            const rec = await admin.auth().getUserByEmail(`${id}@imperial.com`);
+            return rec.uid;
+        } catch (e) { /* 다음 후보 시도 */ }
     }
+    return null;
 };
 
 exports.syncUserClaims = onDocumentWritten(
@@ -1343,13 +1353,73 @@ exports.backfillUserClaims = onCall({ timeoutSeconds: 540, memory: "512MiB" }, a
         }));
     }
 
+    /* 2차: 인증 계정 쪽에서 거꾸로 훑는다.
+       1차는 '사용자 문서 → 인증 계정' 방향이라, 문서 ID·userId·이메일이 서로 어긋난
+       과거 계정은 끝내 못 찾는 경우가 있다. 실제로 토큰이 하나도 없는 계정이 남았고,
+       그런 계정은 규칙이 문서를 조회해도 ID가 안 맞아 역할이 'none' 으로 떨어진다.
+       그 결과 교직원인데도 사용자·수강·피드백 접근이 전부 거부된다. */
+    const byAuthUid = new Map();
+    const byDocId = new Map();
+    const bySafeUserId = new Map();
+    docs.forEach((d) => {
+        const u = d.data();
+        if (u.authUid) byAuthUid.set(u.authUid, d);
+        byDocId.set(String(d.id).toLowerCase(), d);
+        if (u.userId) bySafeUserId.set(toSafeId(u.userId), d);
+    });
+
+    const orphans = [];
+    let repaired = 0;
+    let pageToken;
+    do {
+        // eslint-disable-next-line no-await-in-loop
+        const page = await admin.auth().listUsers(1000, pageToken);
+        pageToken = page.pageToken;
+
+        for (const rec of page.users) {
+            const hasClaim = rec.customClaims && rec.customClaims.role;
+            if (hasClaim) continue;
+
+            const emailId = String(rec.email || '').split('@')[0].toLowerCase();
+            const match = byAuthUid.get(rec.uid) || byDocId.get(emailId) || bySafeUserId.get(emailId);
+
+            if (!match) {
+                orphans.push({ email: rec.email || rec.uid, uid: rec.uid });
+                continue;
+            }
+
+            const u = match.data();
+            try {
+                // eslint-disable-next-line no-await-in-loop
+                await admin.auth().setCustomUserClaims(rec.uid, {
+                    role: u.role || 'none',
+                    did: match.id,
+                    approved: String(u.status || 'active') !== 'pending'
+                });
+                // 다음부터는 문서에서 바로 찾도록 연결을 기록해 둔다
+                // eslint-disable-next-line no-await-in-loop
+                if (!u.authUid || u.authUid === 'legacy_verified_account') {
+                    await match.ref.update({ authUid: rec.uid });
+                }
+                repaired++;
+                done++;
+            } catch (e) {
+                orphans.push({ email: rec.email || rec.uid, uid: rec.uid, reason: e.message });
+            }
+        }
+    } while (pageToken);
+
     return {
         total: docs.length,
         done,
+        repaired,
         failedCount: failed.length,
         failed,
         selfHealCount: failed.filter(f => f.canSelfHeal).length,
-        needsActionCount: failed.filter(f => !f.canSelfHeal).length
+        needsActionCount: failed.filter(f => !f.canSelfHeal).length,
+        // 인증 계정은 있는데 짝이 되는 사용자 문서가 없는 것들 (키오스크·시험 계정 등일 수 있다)
+        orphanCount: orphans.length,
+        orphans
     };
 });
 
