@@ -507,7 +507,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
           </div>
         </div>
         <div className="grid grid-cols-7 text-center text-sm font-bold text-gray-400 mb-2">{DAYS.map(d=><div key={d} className="py-1">{d}</div>)}</div>
-        <div className="grid grid-cols-7 gap-1.5">
+        <div className="grid grid-cols-7 gap-2 sm:gap-1.5">
           {getDaysInMonth(currentDate).map((d,i)=>{
             if(!d) return <div key={i} className="aspect-square"/>;
             const dStr = formatDate(d);
@@ -535,16 +535,18 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             const dayInfo = getDayInfo(dStr, { calendar: academyCalendar });
 
-            /* ⚠️ 테두리(ring)는 칸 '바깥쪽'에 그려진다. 칸 사이 간격이 6px 뿐인 좁은 화면에서는
-               클리닉이 있는 날마다 생기는 테두리가 옆 칸을 침범해 겹쳐 보인다.
-               선택된 칸의 scale-105 까지 겹치면 더 심해진다.
-               → ring-inset 으로 테두리를 칸 안쪽에 그리고, 확대 효과는 뺀다. */
+            /* ⚠️ 좁은 화면에서 칸끼리 겹쳐 보이던 원인은 셋이었다.
+               (1) 테두리(ring)는 칸 '바깥쪽'에 그려진다 → ring-inset 으로 안쪽에 그린다
+               (2) 선택된 칸의 scale-105 확대 → 제거
+               (3) 그림자(shadow)는 ring-inset 으로도 막을 수 없고 항상 칸 밖으로 번진다 → 제거
+               여기에 모서리가 둥근 사각형은 간격이 좁으면 붙어 보이므로
+               모바일에서만 칸 간격을 8px 로 넓혔다. */
             let dayClass = 'text-gray-700 hover:bg-gray-100';
             if (dayInfo.isClosed) dayClass = 'bg-slate-200 hover:bg-slate-300';
             if ((isStudent || isParent) && !isAllowedDate) {
                 dayClass = 'opacity-30 cursor-not-allowed bg-gray-50';
             } else if (isSel) {
-                dayClass = 'bg-blue-600 text-white shadow-md ring-2 ring-inset ring-blue-300';
+                dayClass = 'bg-blue-600 text-white ring-2 ring-inset ring-blue-300';
             } else if (isToday) {
                 dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-inset ring-indigo-400';
             } else if (hasEvent) {
