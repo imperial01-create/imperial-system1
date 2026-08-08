@@ -72,6 +72,9 @@ const SettingsManager = ({ currentUser }) => {
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
     const [claimsResult, setClaimsResult] = useState(null);
+    // 문자 게이트웨이 계정 발급 — 비밀번호는 화면에만 잠시 존재하고 어디에도 저장하지 않는다
+    const [gatewayProcessing, setGatewayProcessing] = useState(false);
+    const [gatewayCred, setGatewayCred] = useState(null);
 
     const [activeTab, setActiveTab] = useState('master');
     const [toast, setToast] = useState({ message: '', type: 'info' });
@@ -282,6 +285,31 @@ const SettingsManager = ({ currentUser }) => {
          - 인증 계정은 사용자가 처음 로그인할 때 서버(legacyLoginBridge)가 자동으로 만들어 주고,
            그 즉시 평문 비밀번호를 삭제합니다. 별도 스크립트가 필요 없습니다.
        따라서 이 버튼은 이제 '중복 문서 정리'만 수행합니다. */
+    /* 문자 게이트웨이(법인폰 앱) 전용 계정을 발급한다.
+       비밀번호는 서버가 만들어 이 응답으로만 내려준다. 화면을 닫으면 사라지며
+       Firestore·로그·소스코드 어디에도 남지 않는다. 그래서 '한 번만 보인다'. */
+    const handleProvisionGateway = async () => {
+        if (currentUser?.role !== 'admin') return;
+        if (!window.confirm(
+            "문자 게이트웨이 전용 계정(smsgw)의 비밀번호를 새로 발급합니다.\n\n" +
+            "• 새 비밀번호는 이 화면에 딱 한 번만 표시됩니다.\n" +
+            "• 법인폰 앱에 새 비밀번호를 넣기 전까지는 기존 계정(admin)으로 문자가 계속 나갑니다.\n" +
+            "• 이미 smsgw 계정이 있다면 비밀번호가 교체되며, 그 폰은 재입력이 필요합니다.\n\n" +
+            "계속할까요?"
+        )) return;
+
+        setGatewayProcessing(true);
+        try {
+            const fn = httpsCallable(functions, 'provisionSmsGateway');
+            const res = await fn({});
+            setGatewayCred(res.data);
+        } catch (e) {
+            showToast('게이트웨이 계정 발급 실패: ' + (e.message || '서버 오류'), 'error');
+        } finally {
+            setGatewayProcessing(false);
+        }
+    };
+
     const handleAuthSyncAndDedupe = async () => {
         if (!window.confirm("⚠️ [최고 관리자 전용]\n같은 아이디로 중복 생성된 사용자 문서를 정리합니다.\n\n* 인증 계정이 연결된 문서를 우선 남기고 나머지를 삭제합니다.\n* 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
 
@@ -1042,7 +1070,68 @@ const SettingsManager = ({ currentUser }) => {
             {/* 탭 3. 시스템 고급 도구 */}
             {activeTab === 'system' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in">
-                    
+
+                    {/* 문자 게이트웨이 계정 — 원장(admin) 계정에서만 보입니다 */}
+                    {currentUser?.role === 'admin' && (
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-300 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
+                            <ShieldCheck className="text-amber-600"/> 문자 게이트웨이 전용 계정 발급
+                        </h2>
+
+                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 왜 필요한가요?</p>
+                            <p>• 법인폰 문자 앱이 쓰던 <strong>admin</strong> 계정의 비밀번호가 예전 소스코드에 그대로 적혀 있었고, 저장소가 공개라 <strong>과거 기록에서 꺼낼 수 있는 값</strong>이 되었습니다.</p>
+                            <p>• 전용 계정 <strong>smsgw</strong> 로 옮기면 그 값은 아무 쓸모가 없어집니다.</p>
+                            <p className="text-amber-700 font-bold mt-2 pt-2 border-t border-amber-200">
+                                ※ 지금은 두 계정이 모두 동작하므로 <strong>문자가 멈추지 않습니다.</strong> 법인폰 교체를 마친 뒤 옛 계정을 폐기합니다.
+                            </p>
+                        </div>
+
+                        {gatewayCred ? (
+                            <div className="bg-slate-900 text-slate-100 p-5 rounded-2xl space-y-3">
+                                <p className="font-black text-amber-300 flex items-center gap-1.5">
+                                    <AlertTriangle size={16}/> 이 비밀번호는 지금 이 화면에서만 볼 수 있습니다
+                                </p>
+                                <p className="text-xs text-slate-400">
+                                    서버에도 저장되지 않습니다. 법인폰 앱에 입력하기 전에는 이 창을 닫지 마세요.
+                                </p>
+                                <div className="space-y-2">
+                                    <div>
+                                        <div className="text-[11px] text-slate-400 font-bold mb-1">아이디(이메일)</div>
+                                        <div className="font-mono text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">{gatewayCred.email}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[11px] text-slate-400 font-bold mb-1">비밀번호</div>
+                                        <div className="font-mono text-sm bg-slate-800 rounded-lg px-3 py-2 break-all">{gatewayCred.password}</div>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                                    <Button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(`${gatewayCred.email}\n${gatewayCred.password}`)
+                                                .then(() => showToast('복사했습니다. 법인폰 앱에 붙여넣으세요.'))
+                                                .catch(() => showToast('복사 실패 — 화면의 값을 직접 입력해주세요.', 'error'));
+                                        }}
+                                        className="bg-amber-500 hover:bg-amber-600 border-0 text-white font-bold"
+                                    >아이디·비밀번호 복사</Button>
+                                    <Button
+                                        variant="secondary"
+                                        onClick={() => { if (window.confirm('닫으면 이 비밀번호를 다시 볼 수 없습니다. 법인폰에 입력을 마치셨나요?')) setGatewayCred(null); }}
+                                    >입력 완료 — 닫기</Button>
+                                </div>
+                            </div>
+                        ) : (
+                            <Button
+                                onClick={handleProvisionGateway}
+                                disabled={gatewayProcessing}
+                                className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
+                            >
+                                {gatewayProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '전용 계정 발급 / 비밀번호 재발급'}
+                            </Button>
+                        )}
+                    </div>
+                    )}
+
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-rose-200 space-y-6">
                         <h2 className="text-xl font-black text-rose-800 border-b border-rose-100 pb-4 flex items-center gap-2">
                             <ShieldAlert className="text-rose-600"/> 계정 보안 최적화 스크립트

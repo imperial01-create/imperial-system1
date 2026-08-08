@@ -86,8 +86,15 @@ service cloud.firestore {
     // 원장님 계정 비상 통로 (uid는 위조 불가하므로 안전한 안전장치)
     function isOwner() { return isAuth() && uid() == 'PZYN2Ui7mGUGRgQiByvjRutzzPE3'; }
 
-    // SMS 게이트웨이 전용 서비스 계정 (안드로이드 앱). 관리자 아님.
-    function isGateway() { return isAuth() && emailId() == 'admin'; }
+    /* SMS 게이트웨이 전용 서비스 계정 (법인폰의 안드로이드 앱). 관리자 아님.
+
+       [이전 작업 중]
+       기존 계정 'admin' 의 비밀번호가 웹 저장소 소스코드에도 똑같이 적혀 있었고,
+       저장소가 공개라 과거 커밋에서 그대로 꺼낼 수 있는 값이 되었다.
+       그래서 'smsgw' 전용 계정으로 옮기는 중이며, 앱 교체가 끝날 때까지만
+       두 계정을 모두 인정한다. 교체 확인 후 'admin' 을 목록에서 제거한다.
+       (그래야 문자 발송이 한 번도 멈추지 않는다) */
+    function isGateway() { return isAuth() && emailId() in ['admin', 'smsgw']; }
 
     /* 아래 판정 함수들은 모두 role()을 '한 번만' 호출한다.
        예전처럼 isDesk = isAdmin || isAsst 식으로 겹쳐 부르면 문서 조회가

@@ -61,8 +61,13 @@ const DESK_ROLES = ['admin', 'admin_assistant'];
 // 다른 사람이 선점하면 권한 상승으로 이어지는 예약 아이디
 const RESERVED_USER_IDS = [
     'admin', 'master', 'owner', 'director', 'root', 'system',
-    'imperialsys01', 'superuser', 'manager'
+    'imperialsys01', 'superuser', 'manager',
+    // 문자 게이트웨이 전용 계정. 남이 선점하면 학원 문자 발송함을 가져간다.
+    'smsgw', 'gateway', 'sms'
 ];
+
+// 문자 게이트웨이(안드로이드 앱) 전용 계정의 로그인 아이디
+const GATEWAY_ID = 'smsgw';
 
 const toSafeId = (raw) =>
     encodeURIComponent(String(raw || '')).replace(/[^a-zA-Z0-9]/g, 'x').toLowerCase();
@@ -1071,6 +1076,57 @@ exports.adminCreateUser = onCall({ timeoutSeconds: 60 }, async (request) => {
     });
 
     return { success: true, id: safeId, authUid };
+});
+
+// ============================================================================
+// 🔒 [기능 16] 문자 게이트웨이 전용 계정 발급
+//
+// [배경] 법인폰의 문자 발송 앱은 admin@imperial.com 계정으로 로그인했고,
+//        그 비밀번호가 웹 저장소 소스코드에도 똑같이 적혀 있었다.
+//        저장소가 공개라서 과거 커밋에서 그대로 꺼낼 수 있는 값이 되었다.
+//        게다가 아이디가 'admin' 이라 진짜 관리자 계정처럼 보여 혼란스럽다.
+//
+// [해결] 'smsgw@imperial.com' 전용 계정으로 옮긴다.
+//        비밀번호는 서버가 만들어 호출한 관리자 화면에 '한 번만' 돌려준다.
+//        Firestore 에도, 로그에도, 소스코드에도 남기지 않는다.
+//
+// 이 계정에는 교직원 역할을 주지 않는다. 권한은 오직 보안 규칙의 isGateway()가
+// 허용하는 범위(문자 발송함 읽기·수정, 통화기록 등록, 학생 조회)뿐이다.
+// ============================================================================
+exports.provisionSmsGateway = onCall({ timeoutSeconds: 60 }, async (request) => {
+    await assertRole(request, ['admin'], "원장(관리자) 계정만 실행할 수 있습니다.");
+
+    const email = `${GATEWAY_ID}@imperial.com`;
+    // base64url 32자 — 사람이 외울 필요가 없으므로 길고 무작위여도 된다
+    const password = crypto.randomBytes(24).toString('base64url');
+
+    let uid;
+    let created = false;
+    try {
+        const rec = await admin.auth().getUserByEmail(email);
+        uid = rec.uid;
+        await admin.auth().updateUser(uid, { password });
+    } catch (e) {
+        if (e.code === 'auth/user-not-found') {
+            const rec = await admin.auth().createUser({ email, password, emailVerified: true });
+            uid = rec.uid;
+            created = true;
+        } else {
+            throw new HttpsError("internal", `게이트웨이 계정 처리 실패: ${e.message}`);
+        }
+    }
+
+    /* 역할 클레임을 'gateway' 로 못박는다.
+       어떤 역할 목록(STAFF/MEMBERS)에도 없는 값이라 교직원 권한이 생기지 않고,
+       보안 규칙이 이 계정 때문에 users 문서를 조회하는 일도 없앤다. */
+    try {
+        await admin.auth().setCustomUserClaims(uid, { role: 'gateway', approved: true });
+    } catch (e) {
+        console.error('[provisionSmsGateway] 클레임 설정 실패', e);
+    }
+
+    // 비밀번호는 이 응답이 유일한 전달 경로다. 서버는 저장하지 않는다.
+    return { email, password, created };
 });
 
 // ============================================================================
