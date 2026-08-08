@@ -17,6 +17,7 @@ import {
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { getDayInfo } from '../utils/academyCalendar';
 import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
 
@@ -83,6 +84,8 @@ const getSimHeight = (start, end) => {
 };
 
 const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
+    // 공휴일·휴원일 표시. 호출부를 늘리지 않으려고 여기서 직접 읽는다.
+    const { academyCalendar = [] } = useData() || {};
     const [currentDate, setCurrentDate] = useState(new Date());
     const getDays = (d) => {
         const y = d.getFullYear(), m = d.getMonth();
@@ -115,18 +118,29 @@ const LectureCalendar = ({ selectedDate, onDateChange, lectures }) => {
                 </div>
             </div>
             <div className="grid grid-cols-7 text-center text-xs md:text-sm font-bold text-gray-400 mb-2">{DAYS.map(d => <div key={d}>{d}</div>)}</div>
-            <div className="grid grid-cols-7 gap-1 md:gap-2">
+            <div className="grid grid-cols-7 gap-2">
                 {getDays(currentDate).map((d, i) => {
                     if (!d) return <div key={i} />;
                     const dStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
                     const hasLecture = (lectures || []).some(l => l.date === dStr);
                     const isSelected = dStr === selectedDate;
+                    const dayInfo = getDayInfo(dStr, { calendar: academyCalendar });
+                    /* 공휴일 색은 날짜 숫자에 직접 준다. 칸 전체 클래스로 주면
+                       선택·오늘 표시에 덮여 사라진다(클리닉 달력에서 실제로 겪은 문제).
+                       그리고 shadow/scale 은 칸 밖으로 번져 좁은 화면에서 이웃과 겹친다. */
+                    const numberClass = isSelected ? ''
+                        : (dayInfo.holidayName ? 'text-red-500 font-bold'
+                            : (isToday(d) ? 'text-blue-600 font-bold' : ''));
                     return (
-                        <button key={i} onClick={() => onDateChange(dStr)} 
-                            className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all 
-                            ${isSelected ? 'bg-blue-600 text-white font-bold shadow-md scale-105' : 'hover:bg-gray-50 text-gray-700'} 
-                            ${isToday(d) && !isSelected ? 'text-blue-600 font-bold bg-blue-50' : ''}`}>
-                            <span className="text-sm md:text-base">{d.getDate()}</span>
+                        <button key={i} onClick={() => onDateChange(dStr)}
+                            className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all
+                            ${isSelected ? 'bg-blue-600 text-white font-bold ring-2 ring-inset ring-blue-300' : 'hover:bg-gray-50 text-gray-700'}
+                            ${!isSelected && dayInfo.isClosed ? 'bg-slate-200' : ''}
+                            ${isToday(d) && !isSelected && !dayInfo.isClosed ? 'bg-blue-50' : ''}`}
+                            title={dayInfo.closures[0]?.title || dayInfo.holidayName || ''}>
+                            <span className={`text-sm md:text-base ${numberClass}`}>{d.getDate()}</span>
+                            {/* 휴원 배지는 자리가 있는 넓은 화면에서만 */}
+                            {dayInfo.isClosed && <span className={`hidden sm:block absolute top-1 left-1 text-[9px] font-black px-1 rounded leading-none py-0.5 ${isSelected ? 'bg-white/30 text-white' : 'bg-slate-700 text-white'}`}>휴원</span>}
                             {hasLecture && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? 'bg-white' : 'bg-green-500'}`} />}
                         </button>
                     );
