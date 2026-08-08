@@ -36,9 +36,11 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test --env=jsdom",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "test:rules": "node tests/run-rules-tests.mjs"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
     "postcss": "^8.5.25",
     "react-scripts": "latest",
     "tailwindcss": "^3.4.19",

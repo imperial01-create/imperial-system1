@@ -37,3 +37,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# 에뮬레이터 산출물
+firestore-debug.log
+firebase-debug.log
