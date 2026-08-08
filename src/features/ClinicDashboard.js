@@ -535,21 +535,27 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
 
             const dayInfo = getDayInfo(dStr, { calendar: academyCalendar });
 
-            /* 좁은 화면에서는 칸이 40px 남짓이라 배지를 여러 개 얹으면 겹친다.
-               그래서 정보를 '색'으로 옮긴다 — 공휴일은 빨간 글씨, 휴원일은 회색 배경.
-               글씨 배지는 자리가 있는 넓은 화면(sm 이상)에서만 보여준다. */
+            /* ⚠️ 테두리(ring)는 칸 '바깥쪽'에 그려진다. 칸 사이 간격이 6px 뿐인 좁은 화면에서는
+               클리닉이 있는 날마다 생기는 테두리가 옆 칸을 침범해 겹쳐 보인다.
+               선택된 칸의 scale-105 까지 겹치면 더 심해진다.
+               → ring-inset 으로 테두리를 칸 안쪽에 그리고, 확대 효과는 뺀다. */
             let dayClass = 'text-gray-700 hover:bg-gray-100';
-            if (dayInfo.holidayName) dayClass = 'text-red-500 hover:bg-red-50';
-            if (dayInfo.isClosed) dayClass = 'bg-slate-200 text-slate-500 hover:bg-slate-300';
+            if (dayInfo.isClosed) dayClass = 'bg-slate-200 hover:bg-slate-300';
             if ((isStudent || isParent) && !isAllowedDate) {
-                dayClass = 'opacity-30 cursor-not-allowed bg-gray-50'; 
+                dayClass = 'opacity-30 cursor-not-allowed bg-gray-50';
             } else if (isSel) {
-                dayClass = 'bg-blue-600 text-white shadow-md scale-105 ring-2 ring-blue-200';
+                dayClass = 'bg-blue-600 text-white shadow-md ring-2 ring-inset ring-blue-300';
             } else if (isToday) {
-                dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-indigo-400 shadow-sm'; 
+                dayClass = 'bg-indigo-100 text-indigo-800 font-black ring-2 ring-inset ring-indigo-400';
             } else if (hasEvent) {
-                dayClass = 'ring-1 ring-blue-200 hover:bg-blue-50 text-gray-800';
+                dayClass = 'ring-1 ring-inset ring-blue-200 hover:bg-blue-50';
             }
+
+            /* 공휴일 색은 날짜 숫자에 직접 준다.
+               예전에는 dayClass 로 줬는데, 클리닉이 있는 날(hasEvent)이면 그 값이
+               덮여서 빨간색이 통째로 사라졌다. 실제로 달력에서 공휴일이 안 보였다. */
+            const numberClass = (isSel || isToday) ? ''
+                : (dayInfo.holidayName ? 'text-red-500 font-bold' : (dayInfo.isClosed ? 'text-slate-500' : 'text-gray-700'));
 
             return (
               <button 
@@ -558,7 +564,7 @@ const CalendarView = React.memo(({ isInteractive, sessions, currentUser, current
                 className={`aspect-square rounded-xl flex flex-col items-center justify-center relative transition-all duration-200 min-h-[50px] ${dayClass}`}
                 disabled={(isStudent || isParent) && !isAllowedDate}
               >
-                <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''}`}>{d.getDate()}</span>
+                <span className={`text-base md:text-lg ${isSel || isToday ? 'font-bold' : ''} ${numberClass}`}>{d.getDate()}</span>
                 {/* 휴원일은 표시만 한다. 예약이나 슬롯 생성을 막지는 않는다 —
                     휴원일이어도 조교가 나와 필요한 클리닉을 진행할 수 있기 때문이다.
                     모바일에서는 배경색만으로 알리고, 글씨 배지는 sm 이상에서만 띄운다. */}
