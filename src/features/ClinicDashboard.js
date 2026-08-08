@@ -948,11 +948,16 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             });
         } else if (action === 'write_feedback') {
             setSelectedSession(payload); 
+            /* ⚠️ tags 만 빈 문자열로 고정돼 있었다.
+               저장은 정상적으로 되지만 다시 열 때 불러오지 않아 항상 비어 보였고,
+               그 상태로 한 번 더 저장하면 기존 태그가 지워졌다.
+               (rating·clinicDetails·nextAction 은 처음부터 불러오고 있었다) */
             setFeedbackData({
-                rating: payload.rating || 5, tags: '',
+                rating: payload.rating || 5,
+                tags: payload.tags || '',
                 clinicDetails: payload.clinicDetails || payload.clinicContent || '',
                 nextAction: payload.nextAction || payload.improvement || ''
-            }); 
+            });
             setModalState({ type: 'feedback' });
         } else if (action === 'admin_edit') {
             setSelectedSession(payload); 
