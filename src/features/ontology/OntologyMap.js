@@ -836,7 +836,11 @@ export default function OntologyMap() {
         throw new Error('지식 맵 서버 주소(REACT_APP_API_URL)가 설정되지 않았습니다. 배포 환경변수를 확인해주세요.');
       }
 
-      const endpoint = `${API_BASE_URL.replace(/\/$/, '')}/build.json`;
+      // Worker 가 build.json 을 오래 캐시해 데이터 갱신이 화면에 안 오던 문제:
+      // 캐시 키에 10분 버킷을 넣어 "최대 10분 낡음"을 보장한다.
+      // (매 요청 우회하면 2.7MB 를 방문마다 다시 받으므로 버킷으로 절충)
+      const cacheBucket = Math.floor(Date.now() / 600000);
+      const endpoint = `${API_BASE_URL.replace(/\/$/, '')}/build.json?v=${cacheBucket}`;
       const res = await fetch(endpoint);
       if (!res.ok) {
         throw new Error(`지식 맵 서버가 응답하지 않습니다. (HTTP ${res.status} ${res.statusText || ''})`.trim());
