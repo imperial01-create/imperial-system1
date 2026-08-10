@@ -27,9 +27,11 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
+// ⚠️ lucide 의 Map 아이콘을 그대로 import 하면 자바스크립트 내장 Map 을 가린다.
+// 현황판이 new Map() 을 쓰는 순간 "not a constructor" 로 죽는다 — 반드시 별칭으로.
 import {
   Search, Target, AlertCircle, Loader2, BookOpen, Key,
-  AlertTriangle, CheckCircle2, ChevronRight, ChevronDown, Map, Github, Edit3,
+  AlertTriangle, CheckCircle2, ChevronRight, ChevronDown, Map as MapIcon, Github, Edit3,
   Tag, Wrench, ArrowUpRight, RefreshCw, ListTree, FileText,
   LayoutDashboard, Zap, Clock, GitBranch, Lightbulb, Ban, Stethoscope
 } from 'lucide-react';
@@ -164,7 +166,8 @@ const nodeTypes = { concept: ConceptNode };
 // v2 노드에는 대기 문구가 금지(검증기 규칙 11)라 이 정제를 거치지 않는다.
 const DRAFT_MARK = /\[[^\]]*단계에서\s*(?:작성|입력|기록)\s*예정\]/g;
 const DRAFT_PREVIEW = /^[\s\S]*?예정\.?\s*\(\s*예고\s*:\s*([\s\S]+?)\s*\)\s*$/;
-const DRAFT_ONLY = /예정\.?$/;
+// "…업데이트됩니다" 도 대기 문구다 (실전 적용 섹션 껍데기 482건의 형태) — 스모크 테스트가 잡아냄
+const DRAFT_ONLY = /(?:예정|업데이트됩니다)\.?$/;
 const DRAFT_FIELDS = ['title', 'situation', 'symptom', 'content', 'action', 'diagnosis_message'];
 
 const cleanDraftText = (value) => {
@@ -694,7 +697,7 @@ const OntologyDashboard = ({ allNodes, allEdges }) => {
 
       {/* 헤드라인 지표 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatTile icon={Map} label="개념 노드" value={stats.total.toLocaleString()} sub={`계획 ${plannedTotal.toLocaleString()}개 중 ${Math.round(stats.total / plannedTotal * 100)}%`} />
+        <StatTile icon={MapIcon} label="개념 노드" value={stats.total.toLocaleString()} sub={`계획 ${plannedTotal.toLocaleString()}개 중 ${Math.round(stats.total / plannedTotal * 100)}%`} />
         <StatTile icon={GitBranch} label="연결(간선)" value={stats.edgeTotal.toLocaleString()} sub={`중복(조상 재지정) ${stats.redundant.toLocaleString()}개`} />
         <StatTile icon={ListTree} label="최장 학습 경로" value={`${stats.longestPath}단계`} sub="선수관계를 따라 가장 긴 사슬" />
         <StatTile icon={Zap} label="v2 이관" value={`${stats.v2Count.toLocaleString()}개`} sub={stats.v2Count === 0 ? 'v1 노드만 있음 (이관 전)' : `v1 ${v1Count.toLocaleString()}개 남음`} />
@@ -1031,13 +1034,13 @@ export default function OntologyMap() {
         {view === 'map' && (
           <div className="lg:hidden flex-1 flex gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
             <TabButton id="tree" icon={Search} label="탐색" />
-            <TabButton id="map" icon={Map} label="연결도" />
+            <TabButton id="map" icon={MapIcon} label="연결도" />
             <TabButton id="wiki" icon={FileText} label="상세" />
           </div>
         )}
         {canEditSource && (
           <div className={`flex gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm ${view === 'map' ? 'ml-auto' : ''}`}>
-            <ViewButton id="map" icon={Map} label="지식맵" />
+            <ViewButton id="map" icon={MapIcon} label="지식맵" />
             <ViewButton id="dash" icon={LayoutDashboard} label="현황판" />
           </div>
         )}
@@ -1053,7 +1056,7 @@ export default function OntologyMap() {
             <aside className={`${mobileTab === 'tree' ? 'flex' : 'hidden'} lg:flex w-full lg:w-[320px] shrink-0 bg-white lg:border-r border-slate-200 flex-col min-h-0`}>
               <div className="p-4 border-b border-slate-100 bg-slate-50/60 shrink-0">
                 <h2 className="text-base font-black text-slate-800 flex items-center gap-2 mb-3">
-                  <Map size={18} className="text-indigo-600" /> 수학 지식 내비게이터
+                  <MapIcon size={18} className="text-indigo-600" /> 수학 지식 내비게이터
                 </h2>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
@@ -1121,7 +1124,7 @@ export default function OntologyMap() {
             <main className={`${mobileTab === 'map' ? 'flex' : 'hidden'} lg:flex flex-1 min-w-0 min-h-0 relative bg-[#f8fafc] flex-col`}>
               {!selectedNodeId ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 p-6 text-center">
-                  <Map size={56} className="mb-4 text-slate-200" />
+                  <MapIcon size={56} className="mb-4 text-slate-200" />
                   <h3 className="text-lg md:text-xl font-black text-slate-400 break-keep">
                     왼쪽에서 개념을 선택하면<br />연결 관계가 표시됩니다
                   </h3>
