@@ -13,6 +13,7 @@ import { useData } from '../contexts/DataContext';
 import { getDynamicSubjectLabel } from '../utils/subjectMapper';
 import { fetchBySchool } from '../utils/schoolQuery';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import ExamDiagnosticRecords from './ExamDiagnosticRecords';
 import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
 
@@ -46,6 +47,9 @@ export default function ExamDiagnosticInput({ currentUser }) {
     students: Array.isArray(users) ? users.filter(u => u && u.role === 'student') : []
   }), [classes, users]);
   
+  // 채점 입력 화면인가, 저장된 기록을 보는 화면인가
+  const [mode, setMode] = useState('input');
+
   // 🚀 평가 대분류 탭 스테이트: 'concept'(개념/단원) | 'school'(학교내신) | 'mock'(모의고사)
   const [testCategory, setTestCategory] = useState('concept');
 
@@ -483,6 +487,34 @@ export default function ExamDiagnosticInput({ currentUser }) {
         </p>
       </div>
 
+      {/* 채점 입력 / 저장된 기록 전환 */}
+      <div className="flex rounded-2xl bg-white border border-slate-200 p-1.5 shadow-sm">
+        {[
+          { id: 'input', label: '채점 입력', icon: CheckSquare },
+          { id: 'records', label: '저장된 기록 · 수정', icon: FileText }
+        ].map(m => {
+          const Icon = m.icon;
+          const isActive = mode === m.id;
+          return (
+            <button
+              key={m.id} type="button"
+              /* 화면만 바꿉니다. 입력 중이던 채점은 그대로 남아 있다가 돌아오면 이어서 할 수 있습니다.
+                 예전에는 '지워집니다' 라고 물었는데 실제로는 아무것도 지우지 않았습니다. */
+              onClick={() => setMode(m.id)}
+              className={`flex-1 py-3 px-4 rounded-xl font-extrabold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+                isActive ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === 'records' && <ExamDiagnosticRecords currentUser={currentUser} />}
+
+      {mode === 'input' && (<>
+
       {/* 🚀 3대 평가 대분류 탭 선택기 */}
       <div className="flex rounded-2xl bg-slate-200/80 p-1.5 shadow-inner">
         {[
@@ -860,9 +892,13 @@ export default function ExamDiagnosticInput({ currentUser }) {
             저장된 기록은 아직 학생·학부모 화면에 나타나지 않습니다. 성적 화면 복구 작업이 끝나면 함께 공개됩니다.
             <button type="button" onClick={() => { setLastSaved(null); setSuccessMsg(null); }}
               className="ml-2 text-indigo-600 hover:text-indigo-800 underline">닫기</button>
+            <button type="button" onClick={() => setMode('records')}
+              className="ml-2 text-indigo-600 hover:text-indigo-800 underline">저장된 기록에서 확인·수정</button>
           </div>
         </div>
       )}
+
+      </>)}
     </div>
   );
 }

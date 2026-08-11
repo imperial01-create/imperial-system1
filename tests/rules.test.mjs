@@ -26,7 +26,8 @@ import {
     assertFails,
 } from '@firebase/rules-unit-testing';
 import {
-    doc, getDoc, setDoc, updateDoc, collection, getDocs, query, where, writeBatch,
+    doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, query, where, writeBatch,
+    orderBy, limit,
 } from 'firebase/firestore';
 
 const APP_ID = 'imperial-clinic-v1';
@@ -269,6 +270,54 @@ const run = async () => {
         assertSucceeds(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics/d1`))));
     await check('학생은 남의 진단 결과를 읽을 수 없다', () =>
         assertFails(getDoc(doc(as('stu2', studentToken('stu2')), `${BASE}/student_exam_diagnostics/d1`))));
+
+    // ── 진단 기록 수정·삭제 (기록 관리 화면) ─────────────────
+    const lecturerToken = (did) => ({ ...staffToken(did), role: 'lecturer' });
+    const taToken = (did) => ({ ...staffToken(did), role: 'ta' });
+    const asstToken = (did) => ({ ...staffToken(did), role: 'admin_assistant' });
+    const diagDoc = (who, id) => doc(who, `${BASE}/student_exam_diagnostics/${id}`);
+
+    await check('교직원은 기록 목록을 최신순으로 조회할 수 있다', () =>
+        assertSucceeds(getDocs(query(
+            collection(as('admin1', staffToken('admin1')), `${BASE}/student_exam_diagnostics`),
+            orderBy('createdAt', 'desc'), limit(50)))));
+    await check('학생은 기록 전체를 긁을 수 없다', () =>
+        assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics`))));
+
+    await check('교직원은 저장된 점수를 고칠 수 있다', () =>
+        assertSucceeds(updateDoc(diagDoc(as('admin1', staffToken('admin1')), 'd1'), { score: 70 })));
+    await check('조교도 점수를 고칠 수 있다', () =>
+        assertSucceeds(updateDoc(diagDoc(as('ta1', taToken('ta1')), 'd1'), { score: 60 })));
+    await check('고칠 때도 만점(80)을 넘으면 거부된다', () =>
+        assertFails(updateDoc(diagDoc(as('admin1', staffToken('admin1')), 'd1'), { score: 81 })));
+    await check('옛 기록을 고치며 만점을 함께 넣으면 통과한다', () =>
+        assertSucceeds(updateDoc(diagDoc(as('admin1', staffToken('admin1')), 'd6'), { score: 64, maxScore: 80, schemaVersion: 2 })));
+    await check('학생은 자기 점수를 고칠 수 없다', () =>
+        assertFails(updateDoc(diagDoc(as('stu1', studentToken('stu1')), 'd1'), { score: 100 })));
+
+    await check('조교는 기록을 지울 수 없다', () =>
+        assertFails(deleteDoc(diagDoc(as('ta1', taToken('ta1')), 'd9'))));
+    await check('데스크는 기록을 지울 수 없다', () =>
+        assertFails(deleteDoc(diagDoc(as('desk1', asstToken('desk1')), 'd9'))));
+    await check('학생은 기록을 지울 수 없다', () =>
+        assertFails(deleteDoc(diagDoc(as('stu1', studentToken('stu1')), 'd1'))));
+    await check('강사는 기록을 지울 수 있다', () =>
+        assertSucceeds(deleteDoc(diagDoc(as('lec1', lecturerToken('lec1')), 'd9'))));
+    await check('원장은 기록을 지울 수 있다', () =>
+        assertSucceeds(deleteDoc(diagDoc(as('admin1', staffToken('admin1')), 'd2'))));
+
+    // 전체 삭제는 개념테스트 지표(concept_stats)까지 함께 비운다.
+    const statDoc = (who, id) => doc(who, `${BASE}/concept_stats/${id}`);
+    await check('교직원은 개념테스트 지표를 쓸 수 있다', () =>
+        assertSucceeds(setDoc(statDoc(as('admin1', staffToken('admin1')), 'stu1'), { subjectStats: { 수학: { latestScore: 64 } } })));
+    await check('지표를 subjectStats 없이 쓸 수 없다', () =>
+        assertFails(setDoc(statDoc(as('admin1', staffToken('admin1')), 'stu2'), { foo: 1 })));
+    await check('강사는 지표를 지울 수 없다', () =>
+        assertFails(deleteDoc(statDoc(as('lec1', lecturerToken('lec1')), 'stu1'))));
+    await check('조교는 지표를 지울 수 없다', () =>
+        assertFails(deleteDoc(statDoc(as('ta1', taToken('ta1')), 'stu1'))));
+    await check('원장은 지표를 지울 수 있다 (전체 삭제에 필요)', () =>
+        assertSucceeds(deleteDoc(statDoc(as('admin1', staffToken('admin1')), 'stu1'))));
 
     await env.cleanup();
 

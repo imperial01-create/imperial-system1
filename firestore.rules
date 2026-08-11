@@ -424,6 +424,9 @@ service cloud.firestore {
       match /concept_stats/{studentId} {
         allow read:  if isStaff(appId) || isMineOrChild(appId, studentId);
         allow write: if isStaff(appId) && request.resource.data.subjectStats is map;
+        /* 삭제는 위 write 조건으로는 통과할 수 없다. 지울 때는 request.resource 가 없어서
+           subjectStats 검사 자체가 실패하기 때문이다. 기록 전체 삭제에 필요하므로 원장에게만 연다. */
+        allow delete: if isAdmin(appId);
       }
 
       // ---------------------------------------------------------------
