@@ -319,6 +319,22 @@ const run = async () => {
     await check('원장은 지표를 지울 수 있다 (전체 삭제에 필요)', () =>
         assertSucceeds(deleteDoc(statDoc(as('admin1', staffToken('admin1')), 'stu1'))));
 
+    /* 학생·학부모 화면('나의 시험 결과')이 실제로 쓰는 조회 방식.
+       이름이 아니라 studentId 로 좁힌다. 색인이 필요 없도록 orderBy 는 걸지 않는다. */
+    const myDiags = (who, sid) => getDocs(query(
+        collection(who, `${BASE}/student_exam_diagnostics`), where('studentId', '==', sid)));
+
+    await check('학생은 studentId 로 자기 성적 목록을 조회할 수 있다', () =>
+        assertSucceeds(myDiags(as('stu1', studentToken('stu1')), 'stu1')));
+    await check('학생이 남의 studentId 로 조회하면 막힌다', () =>
+        assertFails(myDiags(as('stu1', studentToken('stu1')), 'stu2')));
+    await check('학부모는 자녀 studentId 로 조회할 수 있다', () =>
+        assertSucceeds(myDiags(as('mom2', parentToken('mom2')), 'stu1')));
+    await check('학부모가 자녀가 아닌 학생으로 조회하면 막힌다', () =>
+        assertFails(myDiags(as('mom2', parentToken('mom2')), 'other')));
+    await check('학생이 조건 없이 전체를 긁으면 막힌다', () =>
+        assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics`))));
+
     await env.cleanup();
 
     const failed = results.filter((r) => !r.ok);

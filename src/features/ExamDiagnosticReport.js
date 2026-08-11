@@ -1,104 +1,151 @@
-/* [서비스 가치] 학생과 학부모가 확인하는 스마트 진단 & 성장 리포트 뷰어
-   (🚀 CTO 패치: 리포트 상단 타이틀에 '다이내믹 번역기'를 적용하여 깔끔한 세부 과목 노출) */
+/* 학생·학부모가 보는 상세 진단 리포트
+
+   [무엇이 고쳐졌나]
+   1. 시험 마스터(integrated_exams)가 반드시 있다고 가정했습니다.
+      개념테스트·모의고사는 마스터가 없어서 화면이 통째로 오류였고,
+      게다가 오류 원문(자바스크립트 메시지)이 학부모에게 그대로 노출됐습니다.
+   2. 점수를 100점 만점으로 가정했습니다. 이제 만점(maxScore)을 함께 씁니다.
+   3. 오답 분석이 마스터의 questions 에만 의존했습니다.
+      이제 기록 자신이 가진 responses(문항별 정오·배점)를 먼저 씁니다.
+*/
+
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useNavigate } from 'react-router-dom';
 import { Target, TrendingUp, AlertTriangle, BookOpen, Award, ArrowLeft } from 'lucide-react';
-import { getDynamicSubjectLabel } from '../utils/subjectMapper'; // 🚀 번역기 로드
+import { getDynamicSubjectLabel } from '../utils/subjectMapper';
+import { APP_ID } from '../constants';
+
+const DIAG_PATH = `artifacts/${APP_ID}/public/data/student_exam_diagnostics`;
+const EXAM_PATH = `artifacts/${APP_ID}/public/data/integrated_exams`;
+
+const maxOf = (rec) => {
+  const m = Number(rec?.maxScore);
+  return Number.isFinite(m) && m > 0 ? m : 100;
+};
+
+/** 등급컷은 학교 내신 마스터가 있을 때만. 없으면 아예 표시하지 않습니다. */
+const predictGrade = (diag, exam) => {
+  const cuts = exam?.gradeCuts;
+  if (!cuts) return null;
+  const score = Number(diag.score || 0);
+  for (const key of ['1등급', '2등급', '3등급']) {
+    const cut = Number(cuts[key]);
+    if (Number.isFinite(cut) && score >= cut) return key;
+  }
+  return '4등급 이하';
+};
+
+/* 오답 문항 목록.
+   기록에 responses 가 있으면 그것이 정본입니다 — 배점까지 들어 있습니다.
+   옛 기록은 wrongQuestionNumbers 밖에 없어서 마스터의 문항 정보에 기댑니다. */
+const buildWrongList = (diag, exam) => {
+  const findInfo = (numStr) => {
+    const qs = Array.isArray(exam?.questions) ? exam.questions : [];
+    let q = qs.find(x => String(x.number ?? x.qNum) === numStr);
+    if (!q) q = qs.find(x => String(x.number ?? x.qNum).replace(/[^0-9]/g, '') === numStr);
+    return q || null;
+  };
+
+  const rows = [];
+  if (Array.isArray(diag.responses) && diag.responses.length > 0) {
+    diag.responses.forEach(r => {
+      if (r.verdict !== 'wrong') return;
+      const numStr = String(r.no);
+      const info = findInfo(numStr);
+      rows.push({
+        number: numStr,
+        sort: Number(String(numStr).replace(/[^0-9]/g, '')) || 0,
+        points: Number(r.points),
+        concept: info?.concept || info?.unit || null,
+        difficulty: info?.difficulty || info?.diff || (info?.idiTotal ? `IDI ${info.idiTotal}` : null)
+      });
+    });
+  } else if (Array.isArray(diag.wrongQuestionNumbers)) {
+    diag.wrongQuestionNumbers.forEach(n => {
+      const numStr = String(n).trim();
+      const info = findInfo(numStr);
+      rows.push({
+        number: info ? String(info.number ?? info.qNum) : numStr,
+        sort: Number(numStr.replace(/[^0-9]/g, '')) || 0,
+        points: Number(info?.score) || null,
+        concept: info?.concept || info?.unit || null,
+        difficulty: info?.difficulty || info?.diff || null
+      });
+    });
+  }
+
+  rows.sort((a, b) => a.sort - b.sort);
+  return rows;
+};
 
 export default function ExamDiagnosticReport({ diagnosticId }) {
-  const [data, setData] = useState({ diagnostic: null, exam: null });
-  const [analysis, setAnalysis] = useState({ predictedGrade: '-', wrongQuestionsInfo: [] });
+  const [diag, setDiag] = useState(null);
+  const [exam, setExam] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchReportData = async () => {
-      if (!diagnosticId) return;
+    let alive = true;
+
+    const run = async () => {
+      if (!diagnosticId) { setLoading(false); return; }
       try {
-        const diagRef = doc(db, 'artifacts/imperial-clinic-v1/public/data/student_exam_diagnostics', diagnosticId);
-        const diagSnap = await getDoc(diagRef);
-        if (!diagSnap.exists()) throw new Error('진단 결과를 찾을 수 없습니다.');
-        const diagData = diagSnap.data();
+        const snap = await getDoc(doc(db, DIAG_PATH, diagnosticId));
+        if (!snap.exists()) throw new Error('NOT_FOUND');
+        const d = snap.data();
+        if (!alive) return;
+        setDiag(d);
 
-        const examRef = doc(db, 'artifacts/imperial-clinic-v1/public/data/integrated_exams', diagData.examDocId);
-        const examSnap = await getDoc(examRef);
-        if (!examSnap.exists()) throw new Error('시험 마스터 데이터를 찾을 수 없습니다.');
-        const examData = examSnap.data();
-
-        setData({ diagnostic: diagData, exam: examData });
-        calculateAnalysis(diagData, examData);
+        /* 마스터는 학교 내신에만 있습니다. 없는 것이 오류가 아닙니다.
+           예전에는 여기서 던진 예외가 화면 전체를 덮었습니다. */
+        if (d.examDocId) {
+          try {
+            const es = await getDoc(doc(db, EXAM_PATH, d.examDocId));
+            if (alive && es.exists()) setExam(es.data());
+          } catch (e) {
+            console.warn('[진단 리포트] 시험 마스터 조회 실패:', e?.code);
+          }
+        }
       } catch (err) {
-        setError(err.message);
+        console.error('[진단 리포트] 조회 실패:', err);
+        if (!alive) return;
+        setError(
+          err.message === 'NOT_FOUND' ? '진단 결과를 찾을 수 없습니다.'
+            : err?.code === 'permission-denied' ? '이 리포트를 볼 권한이 없습니다.'
+            : '리포트를 불러오지 못했습니다.'
+        );
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     };
-    fetchReportData();
+
+    run();
+    return () => { alive = false; };
   }, [diagnosticId]);
-
-  const calculateAnalysis = (diag, exam) => {
-    let predicted = '4등급'; 
-    if (exam.gradeCuts) {
-      const studentScore = Number(diag.score || 0);
-      const cut1 = Number(exam.gradeCuts["1등급"] || 100);
-      const cut2 = Number(exam.gradeCuts["2등급"] || 100);
-      const cut3 = Number(exam.gradeCuts["3등급"] || 100);
-
-      if (studentScore >= cut1) {
-        predicted = '1등급';
-      } else if (studentScore >= cut2) {
-        predicted = '2등급';
-      } else if (studentScore >= cut3) {
-        predicted = '3등급';
-      }
-    }
-
-    const wrongQs = [];
-    if (exam.questions && diag.wrongQuestionNumbers) {
-      diag.wrongQuestionNumbers.forEach(num => {
-        const targetNumStr = String(num).trim(); 
-        
-        let qInfo = exam.questions.find(q => String(q.number || q.qNum) === targetNumStr);
-        if (!qInfo) {
-          qInfo = exam.questions.find(q => String(q.number || q.qNum).replace(/[^0-9]/g, '') === targetNumStr);
-        }
-
-        if (qInfo) {
-          wrongQs.push({
-            originalNumber: qInfo.number || qInfo.qNum, 
-            sortNumber: Number(targetNumStr), 
-            concept: qInfo.concept || qInfo.unit || '개념 정보 없음',
-            difficulty: qInfo.difficulty || qInfo.diff || (qInfo.idiTotal ? `IDI ${qInfo.idiTotal}` : '-') 
-          });
-        } else {
-          wrongQs.push({ 
-            originalNumber: targetNumStr, sortNumber: Number(targetNumStr), 
-            concept: '문항 정보 매핑 불가', difficulty: '-' 
-          });
-        }
-      });
-    }
-
-    wrongQs.sort((a, b) => a.sortNumber - b.sortNumber);
-    setAnalysis({ predictedGrade: predicted, wrongQuestionsInfo: wrongQs });
-  };
 
   if (loading) return <div className="p-10 text-center text-gray-500 animate-pulse">리포트를 생성 중입니다...</div>;
   if (error) return <div className="p-10 text-center text-red-500 font-bold">{error}</div>;
-  if (!data.diagnostic || !data.exam) return null;
+  if (!diag) return null;
 
-  // 🚀 시공간 번역기를 통해 타이틀용 예쁜 이름 생성
-  const { year, schoolName, grade, semester, termType, term, subject, standardCode, schoolType } = data.exam;
-  const prettySubject = getDynamicSubjectLabel(standardCode, schoolType, year, grade, subject);
-  const reportTitle = `[${year}] ${schoolName} ${grade} ${semester} ${termType || term || '고사'} ${prettySubject}`;
+  const max = maxOf(diag);
+  const grade = predictGrade(diag, exam);
+  const wrongList = buildWrongList(diag, exam);
+
+  /* 제목: 내신은 마스터로 예쁘게 만들고, 나머지는 저장된 제목을 씁니다. */
+  let reportTitle = diag.examTitle || '진단 평가';
+  if (exam) {
+    const { year, schoolName, grade: g, semester, termType, term, subject, standardCode, schoolType } = exam;
+    const pretty = getDynamicSubjectLabel(standardCode, schoolType, year, g, subject);
+    reportTitle = `[${year}] ${schoolName} ${g} ${semester} ${termType || term || '고사'} ${pretty}`;
+  }
 
   return (
     <div className="max-w-3xl mx-auto p-4 md:p-8 bg-slate-50 min-h-screen">
-      <button 
-        onClick={() => navigate('/my-exams')} 
+      <button
+        onClick={() => navigate('/my-exams')}
         className="mb-6 flex items-center gap-2 text-indigo-700 hover:text-indigo-900 font-bold bg-indigo-100 hover:bg-indigo-200 px-4 py-2 rounded-xl transition-all w-fit"
       >
         <ArrowLeft size={20} /> 나의 시험 결과 목록으로 가기
@@ -106,8 +153,7 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
 
       <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
         <div className="bg-indigo-900 p-6 text-white text-center">
-          <h1 className="text-2xl md:text-3xl font-extrabold mb-2 tracking-tight">스마트 진단 & 성장 리포트</h1>
-          {/* 🚀 다이내믹 번역기 타이틀 출력 */}
+          <h1 className="text-2xl md:text-3xl font-extrabold mb-2 tracking-tight">스마트 진단 &amp; 성장 리포트</h1>
           <p className="text-indigo-200">{reportTitle}</p>
         </div>
 
@@ -115,45 +161,56 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
           <div className="flex flex-col md:flex-row justify-between items-center bg-indigo-50 p-6 rounded-xl border border-indigo-100">
             <div className="text-center md:text-left mb-4 md:mb-0">
               <p className="text-gray-500 text-sm font-semibold mb-1">IMPERIAL STUDENT</p>
-              <p className="text-2xl font-bold text-gray-900">{data.diagnostic.studentName} 학생</p>
+              <p className="text-2xl font-bold text-gray-900">{diag.studentName} 학생</p>
             </div>
             <div className="flex gap-6 text-center">
               <div>
                 <p className="text-gray-500 text-sm mb-1">획득 점수</p>
-                <p className="text-3xl font-black text-indigo-700">{data.diagnostic.score}<span className="text-lg text-gray-500 font-normal"> 점</span></p>
+                <p className="text-3xl font-black text-indigo-700">
+                  {diag.score}<span className="text-lg text-gray-500 font-normal"> / {max}점</span>
+                </p>
               </div>
-              <div className="w-px bg-gray-300"></div>
-              <div>
-                <p className="text-gray-500 text-sm mb-1">예상 등급</p>
-                <p className="text-3xl font-black text-red-500">{analysis.predictedGrade}</p>
-              </div>
+              {grade && (
+                <>
+                  <div className="w-px bg-gray-300" />
+                  <div>
+                    <p className="text-gray-500 text-sm mb-1">예상 등급</p>
+                    <p className="text-3xl font-black text-red-500">{grade}</p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="bg-white">
-            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3 border-b pb-2">
-              <Target className="text-indigo-600" size={24} /> 학원 공식 총평
-            </h3>
-            <p className="text-gray-700 leading-relaxed bg-gray-50 p-4 rounded-lg text-sm">
-              {data.exam.review || "등록된 총평이 없습니다."}
-            </p>
-          </div>
+          {exam?.review && (
+            <div className="bg-white">
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3 border-b pb-2">
+                <Target className="text-indigo-600" size={24} /> 학원 공식 총평
+              </h3>
+              <p className="text-gray-700 leading-relaxed bg-gray-50 p-4 rounded-lg text-sm">{exam.review}</p>
+            </div>
+          )}
 
           <div>
             <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3 border-b pb-2">
               <AlertTriangle className="text-orange-500" size={24} /> 오답 문항 분석
             </h3>
-            {analysis.wrongQuestionsInfo.length > 0 ? (
+            {wrongList.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {analysis.wrongQuestionsInfo.map((q, idx) => (
-                  <div key={idx} className="flex flex-col p-3 bg-orange-50 rounded-lg border border-orange-100">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-black text-orange-700">{q.originalNumber}번 문항</span>
-                      <span className="text-xs font-bold px-2 py-0.5 bg-white text-gray-600 rounded shadow-sm border border-gray-200">
-                        난이도: {q.difficulty}
+                {wrongList.map((q, idx) => (
+                  <div key={`${q.number}-${idx}`} className="flex flex-col p-3 bg-orange-50 rounded-lg border border-orange-100">
+                    <div className="flex justify-between items-center mb-1 gap-2">
+                      <span className="font-black text-orange-700">
+                        {q.number}번 문항
+                        {Number.isFinite(q.points) && <span className="text-xs font-bold text-orange-500 ml-1">({q.points}점)</span>}
                       </span>
+                      {q.difficulty && (
+                        <span className="text-xs font-bold px-2 py-0.5 bg-white text-gray-600 rounded shadow-sm border border-gray-200 shrink-0">
+                          난이도: {q.difficulty}
+                        </span>
+                      )}
                     </div>
-                    <span className="text-sm text-gray-700 font-medium">{q.concept}</span>
+                    {q.concept && <span className="text-sm text-gray-700 font-medium">{q.concept}</span>}
                   </div>
                 ))}
               </div>
@@ -171,19 +228,22 @@ export default function ExamDiagnosticReport({ diagnosticId }) {
                 <BookOpen className="text-blue-500 mt-1 flex-shrink-0" size={20} />
                 <div>
                   <p className="font-semibold text-gray-800 mb-1">학습 분석</p>
-                  <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{data.diagnostic.instructorComment}</p>
+                  <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">
+                    {diag.instructorComment || '작성된 코멘트가 없습니다.'}
+                  </p>
                 </div>
               </div>
               <div className="flex items-start gap-3 mt-4">
                 <Award className="text-blue-500 mt-1 flex-shrink-0" size={20} />
                 <div>
                   <p className="font-semibold text-gray-800 mb-1">성장 플랜</p>
-                  <p className="text-gray-700 text-sm leading-relaxed font-bold text-blue-700 whitespace-pre-wrap">{data.diagnostic.growthPlan}</p>
+                  <p className="text-gray-700 text-sm leading-relaxed font-bold text-blue-700 whitespace-pre-wrap">
+                    {diag.growthPlan || '등록된 플랜이 없습니다.'}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
-
         </div>
       </div>
     </div>
