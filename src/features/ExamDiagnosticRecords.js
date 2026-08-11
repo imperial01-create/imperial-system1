@@ -34,6 +34,19 @@ const WIPE_PHRASE = '전체 삭제';
 const CATEGORY_LABEL = { school: '학교 내신', concept: '개념 테스트', mock: '모의고사' };
 const VALID_CATEGORY = ['school', 'concept', 'mock'];
 
+/* 왜 틀렸는가. 채점할 때는 시간이 없어 비워 두고, 나중에 답안을 보며 채웁니다.
+
+   이 구분이 중요한 이유가 있습니다. 지금은 '시간이 없어 못 푼 것' 과 '틀린 것' 이
+   똑같이 wrong 으로 남습니다. 그런데 시험지 뒷번호는 대개 어려운 문항이라,
+   시간에 쫓긴 학생이 자동으로 '고난도 취약' 으로 진단됩니다. */
+const ERROR_TYPES = [
+  { id: 'calc', label: '계산 실수' },
+  { id: 'condition', label: '조건 누락' },
+  { id: 'concept', label: '개념 모름' },
+  { id: 'time', label: '시간 부족' },
+  { id: 'blank', label: '미시도' }
+];
+
 const maxOf = (rec) => {
   const m = Number(rec?.maxScore);
   return Number.isFinite(m) && m > 0 ? m : null;
@@ -234,9 +247,12 @@ export default function ExamDiagnosticRecords({ currentUser }) {
   const toggleResponse = (idx) => {
     setEditing(prev => {
       if (!prev?.draft?.responses) return prev;
-      const next = prev.draft.responses.map((r, i) =>
-        i === idx ? { ...r, verdict: r.verdict === 'wrong' ? 'correct' : 'wrong' } : r
-      );
+      const next = prev.draft.responses.map((r, i) => {
+        if (i !== idx) return r;
+        const nowCorrect = r.verdict === 'wrong';
+        // 정답으로 되돌리면 오답 원인도 함께 지웁니다. 남겨 두면 앞뒤가 안 맞습니다.
+        return { ...r, verdict: nowCorrect ? 'correct' : 'wrong', errorType: nowCorrect ? null : (r.errorType || null) };
+      });
       editorDirty.current = true;
       const earned = next.reduce((s, r) => s + (r.verdict === 'wrong' ? 0 : Number(r.points) || 0), 0);
       return { ...prev, draft: { ...prev.draft, responses: next, score: String(Math.round(earned * 10) / 10) } };
@@ -633,6 +649,38 @@ export default function ExamDiagnosticRecords({ currentUser }) {
                       );
                     })}
                   </div>
+
+                  {/* 오답마다 '왜 틀렸는가' 를 남깁니다. 비워 두어도 저장됩니다. */}
+                  {editing.draft.responses.some(r => r.verdict === 'wrong') && (
+                    <div className="mt-4">
+                      <p className="text-xs font-extrabold text-slate-500 uppercase mb-2">
+                        오답 원인 <span className="normal-case font-bold text-slate-400">— 선택 사항. 나중에 채워도 됩니다</span>
+                      </p>
+                      <div className="space-y-2">
+                        {editing.draft.responses.map((r, idx) => {
+                          if (r.verdict !== 'wrong') return null;
+                          return (
+                            <div key={`err-${r.no}-${idx}`} className="flex items-center gap-3">
+                              <span className="w-16 shrink-0 text-sm font-black text-rose-700">{r.no}번</span>
+                              <select
+                                className="flex-1 border border-slate-300 p-2 rounded-lg bg-slate-50 text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                                value={r.errorType || ''}
+                                onChange={e => setEditing(prev => {
+                                  editorDirty.current = true;
+                                  const next = prev.draft.responses.map((x, i) =>
+                                    i === idx ? { ...x, errorType: e.target.value || null } : x);
+                                  return { ...prev, draft: { ...prev.draft, responses: next } };
+                                })}
+                              >
+                                <option value="">— 미분류 —</option>
+                                {ERROR_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-900 leading-relaxed">

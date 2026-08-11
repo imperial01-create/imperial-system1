@@ -24,6 +24,17 @@ const YEARS = Array.from({ length: CURRENT_YEAR - 2000 + 1 }, (_, i) => String(C
 
 const SCHOOL_TYPE_LABEL = { high: '고등학교', middle: '중학교', elementary: '초등학교' };
 
+/* 채점한 문항 구성의 지문(指紋).
+   시험 마스터의 문항이 채점 이후에 바뀌면, 저장된 responses 를 마스터와
+   순번으로 맞대어 볼 수 없게 됩니다. 그때를 알아채려고 남깁니다.
+   암호용이 아니라 '달라졌는가' 만 보면 되므로 짧은 해시로 충분합니다. */
+const signQuestions = (questions) => {
+  const src = questions.map(q => `${q.displayNumber}:${q.points}`).join('|');
+  let h = 5381;
+  for (let i = 0; i < src.length; i += 1) h = ((h * 33) ^ src.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+
 
 /* 개념 테스트용 루브릭. 점수가 원점수(만점이 100 이 아닐 수 있음)이므로
    백분율로 환산한 뒤 판정합니다. */
@@ -248,7 +259,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
             key: String(idx),
             displayNumber: label !== undefined ? String(label) : String(idx + 1),
             points: hasPoint ? raw : fallbackPoint,
-            pointFromExam: hasPoint
+            pointFromExam: hasPoint,
+            /* 채점 시점의 단원명을 함께 들고 갑니다. 시험 마스터를 나중에 고치면
+               과거 채점 기록이 어느 단원이었는지 되살릴 방법이 없습니다. */
+            unit: String(q.unit || '').trim()
           };
         });
       }
@@ -256,7 +270,9 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
     const count = Math.max(1, Math.min(100, Number(customTestMeta.totalQuestions) || 10));
     return Array.from({ length: count }, (_, i) => ({
-      key: String(i), displayNumber: String(i + 1), points: fallbackPoint, pointFromExam: false
+      key: String(i), displayNumber: String(i + 1), points: fallbackPoint, pointFromExam: false,
+      // 개념테스트·모의고사는 문항별 단원이 없어 평가 전체의 범위명을 씁니다.
+      unit: customTestMeta.unitName.trim()
     }));
   }, [testCategory, searchedExams, selectedExamId, customTestMeta.totalQuestions, customTestMeta.questionScore]);
 
@@ -358,7 +374,16 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
     const batch = writeBatch(db);
     const timestamp = serverTimestamp();
-    const examTitle = testCategory === 'school' 
+
+    /* 이 한 번의 채점을 묶는 값들. 나중에 계산해 낼 수 없는 것들이라
+       반드시 저장 시점에 담아야 합니다.
+       batchId : 같은 회차에 채점된 학생들을 묶는다(반 평균·문항별 정답률의 단위)
+       classId : 그때 어느 반으로 채점했는가. 학생이 반을 옮기면 되살릴 수 없다 */
+    const batchId = doc(collection(db, `artifacts/${APP_ID}/public/data/student_exam_diagnostics`)).id;
+    const gradedClass = availableClasses.find(c => c.id === selectedClassId);
+    const questionSignature = signQuestions(examQuestions);
+
+    const examTitle = testCategory === 'school'
       ? (searchedExams.find(e => e.id === selectedExamId)?.schoolName || '학교내신') + ' 내신 진단'
       : `[${testCategory === 'concept' ? '개념테스트' : '모의고사'}] ${customTestMeta.title.trim()}`;
 
@@ -391,14 +416,35 @@ export default function ExamDiagnosticInput({ currentUser }) {
           subject: customTestMeta.subject,
           studentId: sId,
           studentName: sInfo?.name || '알수없음',
+
+          /* 채점 회차·반. 나중에 되살릴 수 없어서 지금 담습니다. */
+          batchId,
+          classId: selectedClassId || null,
+          className: gradedClass?.name || null,
+          season: gradedClass?.season || null,
+          gradedBy: currentUser?.id || 'unknown',
+
           score: numScore,
           maxScore: maxScore,
-          /* 문항별 기록. 지금은 정오만 담지만, 나중에 개념 태그(conceptIds)나
-             오류 유형(errorType)을 더해도 기존 기록은 그대로 동작합니다. */
+
+          /* 문항 구성. questionSignature 가 시험 마스터의 현재 문항과 다르면
+             채점 이후 마스터가 수정된 것이므로 순번 대조를 믿으면 안 됩니다. */
+          questionCount: examQuestions.length,
+          questionSignature,
+
+          /* 문항별 기록.
+             qIndex 는 시험 마스터 questions[] 와 맞대는 유일하게 안전한 열쇠입니다.
+             문항 번호는 겹치거나 나중에 바뀔 수 있습니다.
+             errorType 은 지금 비워 두지만, 자리를 만들어 두지 않으면
+             이미 쌓인 기록에는 영영 채워 넣을 수 없습니다.
+             (계산실수 / 조건누락 / 개념모름 / 시간부족 / 미시도) */
           responses: examQuestions.map(q => ({
             no: q.displayNumber,
+            qIndex: Number(q.key),
             points: q.points,
-            verdict: wrongSet.has(q.key) ? 'wrong' : 'correct'
+            unitRaw: q.unit || null,
+            verdict: wrongSet.has(q.key) ? 'wrong' : 'correct',
+            errorType: null
           })),
           // 화면에서는 순번으로 다루지만, 저장은 시험지의 실제 문항 번호로 합니다.
           wrongQuestionNumbers: examQuestions.filter(q => wrongSet.has(q.key)).map(q => q.displayNumber),

@@ -335,6 +335,34 @@ const run = async () => {
     await check('학생이 조건 없이 전체를 긁으면 막힌다', () =>
         assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics`))));
 
+    /* 동결한 저장 형식(v2) 전체가 규칙을 통과하는지.
+       필드를 늘렸을 때 규칙이 막지 않는지 확인하는 것이 목적이다. */
+    const frozenPayload = {
+        schemaVersion: 2, testCategory: 'school',
+        examDocId: '2026_목동고_2학년_1학기_중간고사_수학',
+        examTitle: '목동고 내신 진단', unitName: '학교 내신 기출', subject: '수학',
+        studentId: 'stu1', studentName: '학생일',
+        batchId: 'batch_abc', classId: 'c1', className: '고2 심화', season: 'summer2026',
+        gradedBy: 'ta1', score: 64, maxScore: 80,
+        questionCount: 2, questionSignature: 'nkkv6i',
+        responses: [
+            { no: '1', qIndex: 0, points: 4, unitRaw: '이차함수', verdict: 'correct', errorType: null },
+            { no: '2', qIndex: 1, points: 4, unitRaw: '이차함수', verdict: 'wrong', errorType: 'calc' }
+        ],
+        wrongQuestionNumbers: ['2'], instructorComment: '', growthPlan: '', instructorId: 'ta1'
+    };
+    await check('동결한 저장 형식 전체가 규칙을 통과한다', () =>
+        assertSucceeds(setDoc(diagDoc(as('ta1', taToken('ta1')), 'frozen1'), frozenPayload)));
+    await check('오답 원인만 나중에 채워 넣을 수 있다', () =>
+        assertSucceeds(updateDoc(diagDoc(as('ta1', taToken('ta1')), 'frozen1'), {
+            responses: [
+                { no: '1', qIndex: 0, points: 4, unitRaw: '이차함수', verdict: 'correct', errorType: null },
+                { no: '2', qIndex: 1, points: 4, unitRaw: '이차함수', verdict: 'wrong', errorType: 'time' }
+            ]
+        })));
+    await check('학생은 오답 원인을 고칠 수 없다', () =>
+        assertFails(updateDoc(diagDoc(as('stu1', studentToken('stu1')), 'frozen1'), { responses: [] })));
+
     await env.cleanup();
 
     const failed = results.filter((r) => !r.ok);
