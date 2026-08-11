@@ -43,6 +43,17 @@ const VOCA_RUBRICS = [
   { min: 951, max: 1000, target: '수능 출제자급', desc: '어휘 평가 시스템이 측정할 수 있는 최고점수이자 완벽한 언어 능력자로서의 최종 마스터 단계.' }
 ];
 
+/* 아직 잴 수 없는 상태. 등급이 아니라 '판정 안 함' 이다.
+   여기에 D등급 같은 실제 등급을 쓰면, 데이터가 없는 것이 '나쁨' 으로 읽힌다. */
+const TIER_UNMEASURED = {
+  name: '진단 대기',
+  minScore: -1,
+  color: 'text-slate-400',
+  border: 'border-slate-200',
+  shadow: 'shadow-sm',
+  bg: 'bg-gradient-to-br from-slate-50 to-white'
+};
+
 const TIERS = [
   { name: 'S등급 (최상위)', minScore: 90, color: 'text-cyan-600', border: 'border-cyan-600', shadow: 'shadow-[0_0_20px_rgba(8,145,178,0.2)]', bg: 'bg-gradient-to-br from-cyan-50 to-white' },
   { name: 'A등급 (상위)', minScore: 80, color: 'text-emerald-600', border: 'border-emerald-600', shadow: 'shadow-[0_0_20px_rgba(5,150,105,0.2)]', bg: 'bg-gradient-to-br from-emerald-50 to-white' },
@@ -102,9 +113,10 @@ const RadarChart = ({ stats, isDummy = false }) => {
   const center = size / 2;
   const radius = (size / 2) - 40;
   
+  // val 은 0~100 척도. 라벨 배치에는 115 처럼 100 을 넘는 값을 일부러 넘기므로 여기서 자르지 않습니다.
   const getPoint = (val, idx, total) => {
     const angle = (Math.PI * 2 * idx) / total - Math.PI / 2;
-    const r = (val / 100) * radius;
+    const r = ((Number(val) || 0) / 100) * radius;
     return `${center + r * Math.cos(angle)},${center + r * Math.sin(angle)}`;
   };
 
@@ -113,37 +125,66 @@ const RadarChart = ({ stats, isDummy = false }) => {
     return <polygon key={level} points={points} fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="1" />;
   });
 
-  const dataPoints = stats.map((s, i) => getPoint(s.chartValue !== undefined ? s.chartValue : s.value, i, stats.length)).join(' ');
+  /* 못 잰 축을 0 으로 찍으면 도형이 그쪽으로 움푹 들어가, 보는 사람은
+     '그 역량이 바닥' 으로 읽습니다. 실제로는 아직 재지 않았을 뿐입니다.
+     그래서 잰 축만 이어 도형을 만들고, 못 잰 축은 회색 점선으로 남깁니다. */
+  const isMeasured = (s) => (isDummy ? true : s.measured !== false);
+  /* 척도 밖의 값이 들어와도 도형이 밖으로 튀지 않게 자릅니다.
+     예: 상담 온보딩에서 CAT 을 1000점이 아닌 100점 만점으로 입력하면 값이 크게 어긋납니다. */
+  const valueOf = (s) => Math.max(0, Math.min(100, Number(s.chartValue !== undefined ? s.chartValue : s.value) || 0));
+
+  const measuredIdx = stats.map((s, i) => (isMeasured(s) ? i : -1)).filter(i => i >= 0);
+  const allMeasured = measuredIdx.length === stats.length;
+  const partial = measuredIdx.length > 0 && !allMeasured;
+  /* 도형은 전부 측정됐을 때만 그립니다.
+     일부만 이어 붙이면 그 변이 '안 잰 축' 위를 가로질러, 그 축에 값이 있는 것처럼 보입니다.
+     일부만 측정된 동안에는 중심에서 뻗는 막대와 점으로만 표시합니다. */
+  const dataPoints = allMeasured ? measuredIdx.map(i => getPoint(valueOf(stats[i]), i, stats.length)).join(' ') : '';
 
   return (
-    <div className="relative w-full max-w-sm mx-auto aspect-square flex items-center justify-center">
+    <div className="relative w-full max-w-sm mx-auto aspect-square flex flex-col items-center justify-center">
       <svg width={size} height={size} className="overflow-visible filter drop-shadow-[0_0_10px_rgba(59,130,246,0.2)]">
         {webLines}
-        {stats.map((_, i) => {
-           const [x, y] = getPoint(100, i, stats.length).split(',');
-           return <line key={i} x1={center} y1={center} x2={x} y2={y} stroke="rgba(0,0,0,0.05)" strokeWidth="1" />
-        })}
-        <polygon points={dataPoints} fill="rgba(59,130,246,0.3)" stroke="#3b82f6" strokeWidth="2" strokeLinejoin="round" />
         {stats.map((s, i) => {
-          const [x, y] = getPoint(s.chartValue !== undefined ? s.chartValue : s.value, i, stats.length).split(',');
+           const [x, y] = getPoint(100, i, stats.length).split(',');
+           return <line key={i} x1={center} y1={center} x2={x} y2={y}
+                        stroke={isMeasured(s) ? 'rgba(0,0,0,0.05)' : 'rgba(0,0,0,0.12)'}
+                        strokeDasharray={isMeasured(s) ? undefined : '3 3'} strokeWidth="1" />
+        })}
+        {allMeasured && measuredIdx.length >= 3 && (
+          <polygon points={dataPoints} fill="rgba(59,130,246,0.3)" stroke="#3b82f6" strokeWidth="2" strokeLinejoin="round" />
+        )}
+        {/* 일부만 측정된 동안에는 중심에서 그 축 방향으로만 막대를 그립니다. */}
+        {!allMeasured && stats.map((s, i) => {
+          if (!isMeasured(s)) return null;
+          const [x, y] = getPoint(valueOf(s), i, stats.length).split(',');
+          return <line key={`stem-${i}`} x1={center} y1={center} x2={x} y2={y} stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" />
+        })}
+        {stats.map((s, i) => {
+          if (!isMeasured(s)) return null;
+          const [x, y] = getPoint(valueOf(s), i, stats.length).split(',');
           return <circle key={i} cx={x} cy={y} r="4" fill="#fff" stroke="#2563eb" strokeWidth="2" />
         })}
         {!isDummy && stats.map((s, i) => {
           const [x, y] = getPoint(115, i, stats.length).split(',');
           return (
-            <text key={i} x={x} y={y} fill="#64748b" fontSize="12" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">
+            <text key={i} x={x} y={y} fill={isMeasured(s) ? '#64748b' : '#cbd5e1'} fontSize="12" fontWeight="bold" textAnchor="middle" dominantBaseline="middle">
               {s.name}
             </text>
           )
         })}
       </svg>
+      {!isDummy && partial && (
+        <p className="text-[11px] font-bold text-slate-400 mt-2 text-center">
+          점선 축({stats.length - measuredIdx.length}개)은 아직 측정하지 않았습니다.
+        </p>
+      )}
     </div>
   );
 };
 
 const AcademyUniverse = ({ currentUser }) => {
   const { users, classes, enrollments } = useData();
-  const [localEnglishStats, setLocalEnglishStats] = useState([]);
   const [conceptStats, setConceptStats] = useState({}); // 🚀 [CTO 패치] 단원별 개념 이해도 DB 실시간 구독
 
   // 역할 검증
@@ -151,14 +192,13 @@ const AcademyUniverse = ({ currentUser }) => {
   const isParent = currentUser?.role === 'parent';
 
   // 🚀 글로벌 영어 스탯 동기화
-  useEffect(() => {
-      const statsRef = collection(db, `artifacts/${APP_ID}/public/data/english_stats`);
-      const unsubscribe = onSnapshot(statsRef, (snapshot) => {
-          const statsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          setLocalEnglishStats(statsData);
-      });
-      return () => unsubscribe();
-  }, []);
+  /* 영어 스탯은 활성 학생 문서 하나만 봅니다. (구독은 activeStudentId 가 정해진 뒤 아래에서)
+
+     예전에는 english_stats 컬렉션 전체를 list 했습니다. 규칙은 '내 것 또는 내 자녀 것'만
+     읽게 열려 있는데, 조건 없는 목록 조회는 남의 문서가 섞일 수 있으므로 통째로 거부됩니다.
+     게다가 onSnapshot 에 오류 콜백이 없어 조용히 실패했고, 학생·학부모 화면에서는
+     영어 데이터가 아예 오지 않았습니다.
+     예전에는 그 빈 값을 지어낸 숫자가 덮어써서 이 실패가 드러나지 않았습니다. */
 
   const linkedChildren = useMemo(() => {
       if (!isParent) return [];
@@ -206,8 +246,20 @@ const AcademyUniverse = ({ currentUser }) => {
     return () => unsub();
   }, [activeStudentId]);
 
-  const studentEnglishStat = localEnglishStats.find(s => s.id === activeStudentId) || {};
-  const catScore = studentEnglishStat?.catScore || 0;
+  const [studentEnglishStat, setStudentEnglishStat] = useState({});
+  useEffect(() => {
+    if (!activeStudentId) { setStudentEnglishStat({}); return; }
+    const ref = doc(db, `artifacts/${APP_ID}/public/data/english_stats`, activeStudentId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setStudentEnglishStat(snap.exists() ? snap.data() : {}),
+      // 권한 실패가 '데이터 없음' 으로 위장되지 않도록 반드시 남깁니다.
+      (err) => { console.error('[유니버스] english_stats 구독 실패:', err?.code, err?.message); setStudentEnglishStat({}); }
+    );
+    return () => unsub();
+  }, [activeStudentId]);
+
+  const catScore = Number(studentEnglishStat?.catScore) || 0;
   const hasCatScore = catScore > 0;
   
   const currentVocaRubric = useMemo(() => {
@@ -217,7 +269,6 @@ const AcademyUniverse = ({ currentUser }) => {
       return null;
   }, [catScore, hasCatScore]);
 
-  const [grades, setGrades] = useState([]);
   const [selectedSubject, setSelectedSubject] = useState(null);
 
   const handleSearchStudent = () => {
@@ -238,64 +289,55 @@ const AcademyUniverse = ({ currentUser }) => {
       return myEnrollments.map(e => (classes || []).find(c => c.id === e.classId)).filter(Boolean);
   }, [activeStudentId, enrollments, classes]);
 
-  useEffect(() => {
-    if (!activeStudentId) return;
-    const q = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'grades'), where('studentId', '==', activeStudentId));
-    const unsub = onSnapshot(q, (snapshot) => {
-        setGrades(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => a.createdAt?.seconds - b.createdAt?.seconds));
-    });
-    return () => unsub();
-  }, [activeStudentId]);
+  /* grades 구독을 제거했습니다. 이 화면은 그 값을 한 곳에서도 쓰지 않으면서
+     학생을 고를 때마다 문서를 계속 읽고 있었습니다.
+     성적을 이 화면에 다시 넣게 되면 그때 실제로 쓰는 코드와 함께 되살립니다. */
 
-  const generateMockStats = (subjectName) => {
-    let latestScore = 0; let prevScore = 0;
-    const subjectGrades = [];
-    grades.forEach(g => {
-        const found = g.subjects?.find(s => s.name.includes(subjectName));
-        if (found) subjectGrades.push(Number(found.score || 0));
-    });
+  /* 과목별 세부 역량.
 
-    if (subjectGrades.length > 0) {
-        latestScore = subjectGrades[subjectGrades.length - 1];
-        if (subjectGrades.length > 1) prevScore = subjectGrades[subjectGrades.length - 2];
-    } else {
-        if (subjectName !== '영어' && !conceptStats[subjectName]) return null;
-    }
+     예전에는 실측값이 없을 때 `seed = latestScore || 70` 으로 숫자를 지어냈습니다.
+     그래서 20점을 받은 학생의 화면이 '종합 70 · B등급(우수) · 예상 3등급' 으로 나왔고,
+     점수를 입력할수록 실제와 반대 방향으로 좋아 보였습니다.
 
+     이제 잰 것만 숫자로 내놓고, 못 잰 것은 measured: false 로 둡니다.
+     화면은 그 자리에 '미측정' 이라고 글자로 씁니다. 0 이나 회색으로 두면
+     사람이 그것을 '나쁨' 또는 '문제 없음' 으로 읽습니다. */
+  const buildSubjectStats = (subjectName) => {
     const meta = SUBJECT_META[subjectName];
-    return meta.stats.map((s, i) => {
-        if (subjectName === '영어') {
-            let realValue = 0; let chartValue = 0; let dynamicDesc = s.desc; 
-            if (s.id === 'voca') {
-                realValue = catScore; chartValue = Math.round(realValue / 10); 
-                if (hasCatScore && currentVocaRubric) {
-                    dynamicDesc = `🎯 [타겟 학년: ${currentVocaRubric.target}] ${currentVocaRubric.desc}`;
-                } else if (!hasCatScore) {
-                    dynamicDesc = "CAT 초기 진단 점수가 아직 입력되지 않았습니다. 학원에 문의해주세요.";
-                }
-            } else {
-                realValue = studentEnglishStat?.radarChart?.[s.id] || 0;
-                if (realValue === 0) {
-                    const seed = latestScore || 65;
-                    const pseudoRandom = (seed * (i + 7)) % 15;
-                    realValue = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
-                }
-                chartValue = realValue;
-            }
-            return { ...s, value: Math.round(realValue), chartValue: Math.round(chartValue), diff: 0, isVoca: s.id === 'voca', desc: dynamicDesc };
-        }
+    if (!meta) return null;
 
-        // 🚀 수학/과학/국어 과목: '개념이해' 항목은 단원별 시험 평균 점수를 실제 매핑
-        if (s.id === 'concept' && conceptStats[subjectName]?.average > 0) {
-            const realAvg = conceptStats[subjectName].average;
-            return { ...s, value: realAvg, chartValue: realAvg, diff: 0, desc: `총 ${conceptStats[subjectName].totalUnits}개 단원 서술형 개념 평가 종합 평균 지수` };
-        }
+    return meta.stats.map((s) => {
+      const blank = { ...s, value: null, chartValue: 0, measured: false, diff: 0 };
 
-        const seed = latestScore || 70;
-        const pseudoRandom = (seed * (i + 7)) % 20; 
-        const val = Math.min(100, Math.max(0, seed - pseudoRandom + 5));
-        const diff = val - Math.min(100, Math.max(0, prevScore - ((prevScore * (i+3)) % 15)));
-        return { ...s, value: Math.round(val), chartValue: Math.round(val), diff: Math.round(diff) };
+      if (subjectName === '영어') {
+        if (s.id === 'voca') {
+          if (!hasCatScore) {
+            return { ...blank, isVoca: true, desc: 'CAT 초기 진단 점수가 아직 입력되지 않았습니다. 학원에 문의해주세요.' };
+          }
+          return {
+            ...s, value: catScore, chartValue: Math.round(catScore / 10), measured: true, diff: 0, isVoca: true,
+            desc: currentVocaRubric ? `🎯 [타겟 학년: ${currentVocaRubric.target}] ${currentVocaRubric.desc}` : s.desc
+          };
+        }
+        // 어휘 외 영역은 radarChart 에 실측이 들어왔을 때만 씁니다.
+        const measured = Number(studentEnglishStat?.radarChart?.[s.id]);
+        if (!Number.isFinite(measured) || measured <= 0) return blank;
+        return { ...s, value: Math.round(measured), chartValue: Math.round(measured), measured: true, diff: 0 };
+      }
+
+      /* 수학·과학·국어: 지금 실측이 들어오는 항목은 '개념이해' 하나뿐입니다.
+         나머지 항목은 이 값을 만들어 낼 데이터가 아직 시스템에 없습니다. */
+      if (s.id === 'concept') {
+        const avg = Number(conceptStats[subjectName]?.average);
+        if (!Number.isFinite(avg) || avg <= 0) return blank;
+        const unitCount = Number(conceptStats[subjectName]?.totalUnits) || 0;
+        return {
+          ...s, value: Math.round(avg), chartValue: Math.round(avg), measured: true, diff: 0,
+          desc: `총 ${unitCount}개 단원 개념 평가 종합 평균`
+        };
+      }
+
+      return blank;
     });
   };
 
@@ -305,30 +347,49 @@ const AcademyUniverse = ({ currentUser }) => {
         const enrolledClassesInSubject = myActiveClasses.filter(c => getSubjectFromClass(c) === sub);
         const isUnlocked = enrolledClassesInSubject.length > 0 || conceptStats[sub]?.totalUnits > 0 || sub === '영어';
         
-        let stats = null; let avg = 0;
-        let tier = TIERS[TIERS.length - 1]; let hasGradeData = false;
-
-        if (isUnlocked) {
-            const rawStats = generateMockStats(sub);
-            if (rawStats) {
-                stats = rawStats;
-                const normalizedSum = stats.reduce((acc, cur) => acc + (cur.isVoca ? Math.round(cur.value / 10) : cur.value), 0);
-                avg = Math.round(normalizedSum / stats.length);
-                tier = TIERS.find(t => avg >= t.minScore) || TIERS[TIERS.length - 1];
-                hasGradeData = true;
-            } else {
-                stats = SUBJECT_META[sub].stats.map(s => ({ ...s, value: 0, chartValue: 0, diff: 0 }));
-            }
-            result[sub] = { 
-                isUnlocked, stats, avg, tier, meta: SUBJECT_META[sub], 
-                enrolledClasses: enrolledClassesInSubject, hasGradeData 
+        /* 잠긴 과목도 화면이 기대하는 모양을 온전히 갖춰야 합니다.
+           예전에는 meta 만 넣어서, 상세 화면을 열어 둔 채 수강이 끊기면
+           currData.tier.color 에서 예외가 나 화면이 통째로 백지가 됐습니다. */
+        if (!isUnlocked) {
+            result[sub] = {
+                isUnlocked: false, meta: SUBJECT_META[sub],
+                stats: [], avg: null, measuredCount: 0,
+                totalCount: SUBJECT_META[sub].stats.length,
+                tier: TIER_UNMEASURED, enrolledClasses: [], hasGradeData: false, gradeReady: false
             };
-        } else {
-            result[sub] = { isUnlocked: false, meta: SUBJECT_META[sub] };
+            return;
         }
+
+        const stats = buildSubjectStats(sub) || [];
+        const measured = stats.filter(s => s.measured);
+
+        /* 종합 지수는 '잰 것들' 만으로 냅니다. 못 잰 항목을 0 으로 넣어 평균하면
+           측정할수록 점수가 떨어지는 이상한 지표가 됩니다.
+           하나도 못 쟀으면 종합 지수 자체를 내지 않습니다. */
+        const avg = measured.length > 0
+            ? Math.round(measured.reduce((acc, cur) => acc + (cur.isVoca ? Math.round(cur.value / 10) : cur.value), 0) / measured.length)
+            : null;
+
+        /* 등급을 붙이려면 절반 이상을 실제로 재야 합니다.
+           어휘 점수 하나로 '영어 A등급 · 예상 2등급' 을 단정하는 것은
+           이번에 없앤 '지어낸 70점' 과 같은 종류의 거짓말입니다. */
+        const gradeReady = measured.length >= Math.ceil(stats.length / 2);
+
+        result[sub] = {
+            isUnlocked,
+            stats,
+            avg,
+            measuredCount: measured.length,
+            totalCount: stats.length,
+            gradeReady,
+            tier: (avg === null || !gradeReady) ? TIER_UNMEASURED : (TIERS.find(t => avg >= t.minScore) || TIERS[TIERS.length - 1]),
+            meta: SUBJECT_META[sub],
+            enrolledClasses: enrolledClassesInSubject,
+            hasGradeData: measured.length > 0
+        };
     });
     return result;
-  }, [grades, myActiveClasses, localEnglishStats, generateMockStats, conceptStats]);
+  }, [myActiveClasses, studentEnglishStat, buildSubjectStats, conceptStats]);
 
   if (isParent && linkedChildren.length === 0) {
       return (
@@ -440,9 +501,22 @@ const AcademyUniverse = ({ currentUser }) => {
                             <div className="relative z-10">
                                 <p className="text-xs font-black text-slate-400 mb-1">{data.meta.title}</p>
                                 <h3 className="text-2xl font-black text-slate-800 mb-3">{subName}</h3>
-                                <p className="text-sm font-black text-slate-600 bg-slate-50 px-4 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center justify-center gap-1.5">
-                                    종합 지수 <span className="text-blue-600 text-base">{data.avg}</span>
-                                </p>
+                                {data.gradeReady ? (
+                                    <p className="text-sm font-black text-slate-600 bg-slate-50 px-4 py-1.5 rounded-full border border-slate-100 shadow-sm flex items-center justify-center gap-1.5">
+                                        종합 지수 <span className="text-blue-600 text-base">{data.avg}</span>
+                                        <span className="text-[11px] font-bold text-slate-400">({data.measuredCount}/{data.totalCount} 항목)</span>
+                                    </p>
+                                ) : data.hasGradeData ? (
+                                    <p className="text-xs font-bold text-slate-500 bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100 leading-relaxed">
+                                        {data.totalCount}개 역량 중 {data.measuredCount}개 측정<br/>
+                                        <span className="text-[11px] text-slate-400">종합 지수는 절반 이상 측정 후 표시됩니다</span>
+                                    </p>
+                                ) : (
+                                    <p className="text-xs font-bold text-slate-400 bg-slate-50 px-4 py-2 rounded-2xl border border-slate-100 leading-relaxed">
+                                        아직 진단 기록이 없습니다<br/>
+                                        <span className="text-[11px]">시험 결과가 입력되면 표시됩니다</span>
+                                    </p>
+                                )}
                             </div>
                         </div>
                     );
@@ -454,7 +528,8 @@ const AcademyUniverse = ({ currentUser }) => {
 
   const currData = subjectData[selectedSubject];
   const Icon = currData.meta.icon;
-  const currentSubjectConceptData = conceptStats[selectedSubject] || { units: [], average: 0 };
+  // average 를 0 으로 채우지 않습니다. 0 은 '0점을 받았다' 는 뜻이 되어 버립니다.
+  const currentSubjectConceptData = conceptStats[selectedSubject] || { units: [], average: null };
   
   const calcExpectedGrade = (score) => {
       if(score >= 90) return 1; if(score >= 80) return 2; if(score >= 70) return 3;
@@ -481,16 +556,38 @@ const AcademyUniverse = ({ currentUser }) => {
               <div className="relative z-10 text-center md:text-left flex-1">
                   <Badge variant="outline" className={`bg-slate-50 border-slate-200 text-slate-500 mb-3 font-bold px-3 py-1`}>{currData.meta.title}</Badge>
                   <h1 className="text-3xl sm:text-4xl font-black text-slate-800 mb-3 tracking-tight">{studentInfo?.name} 학생의 {selectedSubject} 정밀 분석</h1>
-                  <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep mt-4">
-                      데이터 분석 결과, {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며 현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간에 위치하고 있습니다. 부족한 세부 역량을 파악하고 전략을 수립하세요.
-                  </p>
+                  {currData.gradeReady ? (
+                      <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep mt-4">
+                          {selectedSubject} 종합 성취 지수는 <span className="text-blue-600 font-black text-lg">{currData.avg}</span>점이며
+                          현재 <span className={currData.tier.color + " font-black text-lg"}>{currData.tier.name}</span> 구간입니다.
+                          <span className="block text-sm text-slate-400 font-bold mt-1">
+                              세부 역량 {currData.totalCount}개 중 {currData.measuredCount}개를 측정한 결과입니다.
+                          </span>
+                      </p>
+                  ) : currData.hasGradeData ? (
+                      <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep mt-4">
+                          지금까지 {selectedSubject} 세부 역량 {currData.totalCount}개 중 <span className="font-black text-slate-800">{currData.measuredCount}개</span>를 측정했습니다.
+                          <span className="block text-sm text-slate-400 font-bold mt-1">
+                              절반 이상을 측정해야 종합 지수와 등급을 냅니다. 몇 개만으로 등급을 단정하지 않습니다.
+                          </span>
+                      </p>
+                  ) : (
+                      <p className="text-slate-600 font-medium text-base leading-relaxed max-w-2xl break-keep mt-4">
+                          아직 {selectedSubject} 진단 기록이 없어 성취 지수를 낼 수 없습니다.
+                          <span className="block text-sm text-slate-400 font-bold mt-1">
+                              시험 결과가 입력되면 이 자리에 실제 측정값이 표시됩니다. 지금은 추정값을 보여드리지 않습니다.
+                          </span>
+                      </p>
+                  )}
               </div>
 
-              <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 relative z-10 shrink-0 text-center min-w-[200px]">
-                  <div className="text-slate-500 font-bold text-sm mb-2 flex items-center justify-center gap-2"><Award size={16}/> 모의고사 예상 등급</div>
-                  <div className="text-5xl font-black text-slate-800 mb-1">{calcExpectedGrade(currData.avg)}<span className="text-2xl text-slate-400 font-bold ml-1">등급</span></div>
-                  <div className="text-xs font-bold text-slate-400 mt-2">최근 누적 데이터 환산치</div>
-              </div>
+              {currData.gradeReady && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 relative z-10 shrink-0 text-center min-w-[200px]">
+                      <div className="text-slate-500 font-bold text-sm mb-2 flex items-center justify-center gap-2"><Award size={16}/> 모의고사 예상 등급</div>
+                      <div className="text-5xl font-black text-slate-800 mb-1">{calcExpectedGrade(currData.avg)}<span className="text-2xl text-slate-400 font-bold ml-1">등급</span></div>
+                      <div className="text-xs font-bold text-slate-400 mt-2">측정된 {currData.measuredCount}개 항목 환산치</div>
+                  </div>
+              )}
           </div>
 
           {/* 🚀 [CTO 패치] 단원별 개념 이해도 정밀 시각화 영역 (조회 전용 - DB 데이터 실시간 표시) */}
@@ -503,9 +600,14 @@ const AcademyUniverse = ({ currentUser }) => {
                   </h3>
                   <p className="text-sm font-bold text-slate-400 mt-1">서술형 백지 테스트 및 증명 평가 점수를 종합하여 해당 과목의 개념 기초 체력을 정량화합니다.</p>
                 </div>
+                {/* 값이 없을 때 0 을 찍으면, 바로 아래 '점수가 없습니다' 와 한 화면에서 모순됩니다. */}
                 <div className="bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-2xl flex items-center gap-2">
                   <span className="text-xs font-bold text-indigo-600">개념 이해 종합 평균:</span>
-                  <span className="text-xl font-black text-indigo-900">{currentSubjectConceptData.average || 0}점</span>
+                  {Number.isFinite(Number(currentSubjectConceptData.average)) ? (
+                    <span className="text-xl font-black text-indigo-900">{Math.round(Number(currentSubjectConceptData.average))}점</span>
+                  ) : (
+                    <span className="text-sm font-black text-indigo-400">미측정</span>
+                  )}
                 </div>
               </div>
 
@@ -559,7 +661,19 @@ const AcademyUniverse = ({ currentUser }) => {
                   <Card className="bg-white border-slate-200 rounded-[40px] p-8 flex flex-col items-center justify-center shadow-sm h-[500px]">
                       <h3 className="text-xl font-black text-slate-800 mb-8 w-full text-left flex items-center gap-2"><Target className="text-blue-500"/> {selectedSubject === '영어' ? '5대 핵심 역량 스캐너' : '6대 세부 역량 스캐너'}</h3>
                       <div className="w-full flex-1 flex items-center justify-center">
-                          <RadarChart stats={currData.stats} />
+                          {/* 한 항목도 못 쟀으면 도형을 그리지 않습니다.
+                              전부 0 인 오각형은 '모든 역량이 바닥' 이라는 뜻으로 읽힙니다. */}
+                          {currData.hasGradeData ? (
+                              <RadarChart stats={currData.stats} />
+                          ) : (
+                              <div className="text-center px-6">
+                                  <Target className="mx-auto mb-3 text-slate-200" size={56} />
+                                  <p className="font-black text-slate-500 mb-1">아직 측정된 역량이 없습니다</p>
+                                  <p className="text-sm font-bold text-slate-400 leading-relaxed">
+                                      시험 진단 결과가 입력되면<br />여기에 실제 측정값으로 그려집니다.
+                                  </p>
+                              </div>
+                          )}
                       </div>
                   </Card>
 
@@ -576,7 +690,7 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </p>
                               </div>
                               <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
-                                  📊 문법 노드 매핑 준비 완료
+                                  📊 문법 영역 진단은 준비 중입니다
                               </div>
                           </Card>
 
@@ -591,7 +705,7 @@ const AcademyUniverse = ({ currentUser }) => {
                                   </p>
                               </div>
                               <div className="bg-slate-50 border border-dashed border-slate-200 p-2 rounded-xl text-center text-[11px] font-black text-slate-400">
-                                  🟩 격자 그리드 매핑 준비 완료
+                                  🟩 독해 영역 진단은 준비 중입니다
                               </div>
                           </Card>
                       </div>
@@ -606,20 +720,25 @@ const AcademyUniverse = ({ currentUser }) => {
                                   <div className="w-full sm:w-32 flex flex-col items-center justify-center border-b sm:border-b-0 sm:border-r border-slate-100 pb-3 sm:pb-0 shrink-0">
                                       <span className="text-sm font-black text-slate-500 mb-1 text-center">{stat.name}</span>
                                       <div className="flex items-baseline justify-center gap-1">
-                                          <span className="text-2xl font-black text-slate-800">
-                                              {stat.isVoca && !hasCatScore ? '진단 대기' : stat.value}
+                                          <span className={`font-black ${stat.measured ? 'text-2xl text-slate-800' : 'text-sm text-slate-400'}`}>
+                                              {stat.measured ? stat.value : '미측정'}
                                           </span>
-                                          {stat.isVoca && hasCatScore && (
+                                          {stat.measured && stat.isVoca && (
                                               <span className="text-[10px] font-bold text-slate-400">/ 1000</span>
                                           )}
                                       </div>
                                   </div>
-                                  
+
                                   <div className="flex-1 w-full">
                                       <p className="text-[13px] font-bold text-slate-600 leading-relaxed mb-3 break-keep">{stat.desc}</p>
-                                      <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                                          <div className={`h-full rounded-full transition-all duration-1000 ${stat.isVoca && !hasCatScore ? 'bg-slate-200' : stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.isVoca && !hasCatScore ? 0 : stat.chartValue}%` }}></div>
-                                      </div>
+                                      {/* 못 잰 항목에 막대를 그리지 않습니다. 0% 막대는 '못한다' 로 읽힙니다. */}
+                                      {stat.measured ? (
+                                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                                              <div className={`h-full rounded-full transition-all duration-1000 ${stat.chartValue >= 80 ? 'bg-blue-500' : stat.chartValue >= 60 ? 'bg-blue-300' : 'bg-slate-300'}`} style={{ width: `${stat.chartValue}%` }}></div>
+                                          </div>
+                                      ) : (
+                                          <div className="w-full h-2 rounded-full border border-dashed border-slate-200" />
+                                      )}
                                   </div>
                               </div>
 
@@ -642,16 +761,24 @@ const AcademyUniverse = ({ currentUser }) => {
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
                                                   <span>🧠 뜻 이해도 (다의어/파생어 깊이 측정)</span>
-                                                  <span className="text-emerald-600">{studentEnglishStat.vocaComprehension || 0}%</span>
+                                                  {Number(studentEnglishStat.vocaComprehension) > 0
+                                                      ? <span className="text-emerald-600">{studentEnglishStat.vocaComprehension}%</span>
+                                                      : <span className="text-slate-400">미측정</span>}
                                               </div>
-                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaComprehension || 0}%` }}></div></div>
+                                              {Number(studentEnglishStat.vocaComprehension) > 0
+                                                  ? <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaComprehension}%` }}></div></div>
+                                                  : <div className="w-full h-1.5 rounded-full border border-dashed border-slate-200" />}
                                           </div>
                                           <div>
                                               <div className="flex justify-between text-[11px] font-bold text-slate-600 mb-1">
                                                   <span>🔋 장기 기억력 (기억 유지력 자동 환산)</span>
-                                                  <span className="text-indigo-600">{studentEnglishStat.vocaRetention || 0}%</span>
+                                                  {Number(studentEnglishStat.vocaRetention) > 0
+                                                      ? <span className="text-indigo-600">{studentEnglishStat.vocaRetention}%</span>
+                                                      : <span className="text-slate-400">미측정</span>}
                                               </div>
-                                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaRetention || 0}%` }}></div></div>
+                                              {Number(studentEnglishStat.vocaRetention) > 0
+                                                  ? <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${studentEnglishStat.vocaRetention}%` }}></div></div>
+                                                  : <div className="w-full h-1.5 rounded-full border border-dashed border-slate-200" />}
                                           </div>
                                       </div>
                                   </div>
