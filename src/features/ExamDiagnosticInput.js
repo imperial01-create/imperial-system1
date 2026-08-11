@@ -1,18 +1,27 @@
 /* [서비스 가치] 강사가 내신, 개념 테스트, 모의고사를 한 화면에서 일괄 입력하고, 
    입력 즉시 학부모가 열람하는 '아카데미 유니버스'에 실시간($O(1)$)으로 동기화하여 상담 전환을 유도합니다. */
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { 
-  collection, getDocs, doc, writeBatch, serverTimestamp, query, where 
+import {
+  collection, getDocs, getDoc, doc, writeBatch, serverTimestamp, query, where
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { 
-  Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckSquare, 
-  Loader, Sparkles, BookOpen, Award, Layers, Zap, Check, ChevronRight 
+import {
+  Save, AlertCircle, CheckCircle, Search, Users, FileText, Target, CheckSquare,
+  Loader, Sparkles, BookOpen, Award, Layers, Zap, Check, ChevronRight
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { getDynamicSubjectLabel } from '../utils/subjectMapper';
 import { fetchBySchool } from '../utils/schoolQuery';
+import SmartSchoolSelect from '../components/SmartSchoolSelect';
+import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
+
+/* 기출 아카이브(ExamArchive.js:28)와 같은 범위를 씁니다.
+   예전에는 최근 5년만 고를 수 있어서 그 이전 기출을 아예 찾을 수 없었습니다. */
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = Array.from({ length: CURRENT_YEAR - 2000 + 1 }, (_, i) => String(CURRENT_YEAR - i));
+
+const SCHOOL_TYPE_LABEL = { high: '고등학교', middle: '중학교', elementary: '초등학교' };
 
 
 /* 개념 테스트용 루브릭. 점수가 원점수(만점이 100 이 아닐 수 있음)이므로
@@ -29,7 +38,7 @@ const getRubricGrade = (score, maxScore) => {
 };
 
 export default function ExamDiagnosticInput({ currentUser }) {
-  const { classes, users, enrollments, loadingData } = useData();
+  const { classes, users, enrollments, masterData, loadingData } = useData();
 
   // [DRY 원칙 & 안전한 메모리 캐싱] 데이터 전처리 (undefined 방지)
   const data = useMemo(() => ({
@@ -37,15 +46,23 @@ export default function ExamDiagnosticInput({ currentUser }) {
     students: Array.isArray(users) ? users.filter(u => u && u.role === 'student') : []
   }), [classes, users]);
   
-  const currentYear = new Date().getFullYear();
-
   // 🚀 평가 대분류 탭 스테이트: 'concept'(개념/단원) | 'school'(학교내신) | 'mock'(모의고사)
   const [testCategory, setTestCategory] = useState('concept');
 
-  // 1. 학교 내신용 필터 스테이트
+  /* 1. 학교 내신용 필터.
+     연도 기본값을 '전체'로 둡니다. 예전에는 올해로 고정돼 있어서
+     지난 기출을 찾으려면 매번 연도를 먼저 바꿔야 했습니다. */
   const [filters, setFilters] = useState({
-    schoolName: '', year: String(currentYear), gradeSem: '', term: ''
+    schoolType: 'high', schoolName: '', year: '', gradeSem: '', term: ''
   });
+
+  // 학교 마스터 목록. 다른 화면과 같은 드롭다운(SmartSchoolSelect)을 쓰기 위해 필요합니다.
+  const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
+  useEffect(() => {
+    getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'schools'))
+      .then(snap => { if (snap.exists()) setSchoolsData(snap.data()); })
+      .catch(e => console.error('학교 목록 로드 실패', e));
+  }, []);
   const [searchedExams, setSearchedExams] = useState([]);
   const [loadingExams, setLoadingExams] = useState(false);
   const [selectedExamId, setSelectedExamId] = useState('');
@@ -98,9 +115,15 @@ export default function ExamDiagnosticInput({ currentUser }) {
       /* \uc608\uc804\uc5d0\ub294 \uc811\ub450\uc0ac \ubc94\uc704 \uac80\uc0c9\uc774\ub77c '\uc601\uc77c\uace0'\ub85c\ub294 '\uc11c\uc6b8\uc601\uc77c\uace0\ub4f1\ud559\uad50'\ub97c \ubabb \ucc3e\uace0,
          \uc774\ub984 \uc911\uac04\uc5d0 \uacf5\ubc31\uc774 \uc788\uc73c\uba74 \ub193\ucce4\uc2b5\ub2c8\ub2e4. \ub2e4\ub978 \ud654\uba74\uacfc \uac19\uc740 \uaddc\uce59\uc73c\ub85c \ud1b5\uc77c\ud569\ub2c8\ub2e4. */
       const examsRef = collection(db, `artifacts/${APP_ID}/public/data/integrated_exams`);
-      let results = await fetchBySchool(examsRef, filters.schoolName);
+      // schoolsData 를 넘기면 정본 표기까지 후보에 넣어 표기가 달라도 찾습니다.
+      let results = await fetchBySchool(examsRef, filters.schoolName, { schoolsData });
 
-      if (filters.year) results = results.filter(e => e.year === filters.year);
+      /* 초·중·고 구분. 옛 자료는 schoolType 이 비어 있는데, 그것까지 걸러내면
+         찾을 수 있던 시험이 사라집니다. 값이 있는 자료에만 적용합니다. */
+      const typeKor = SCHOOL_TYPE_LABEL[filters.schoolType];
+      if (typeKor) results = results.filter(e => !e.schoolType || e.schoolType === typeKor);
+
+      if (filters.year) results = results.filter(e => String(e.year) === String(filters.year));
       if (filters.gradeSem) {
         const [gStr, sStr] = filters.gradeSem.split('-');
         results = results.filter(e => e.grade === `${gStr}학년` && e.semester === `${sStr}학기`);
@@ -119,13 +142,47 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }
   };
 
-  // 권한별 접근 가능한 반 목록 필터링
+  /* 시즌. 반은 시즌마다 새로 만들어지므로, 지난 시즌 반까지 모두 보이면
+     같은 이름의 반이 여러 개 나열되어 잘못 고르기 쉽습니다.
+     강의 관리(LectureManager.js:602)와 같은 규칙을 씁니다. */
+  const dynamicSeasons = useMemo(() => {
+    const custom = [...(masterData?.seasons || [])]
+      .sort((a, b) => String(a?.startDate || '').localeCompare(String(b?.startDate || '')));
+    return [
+      { id: 'all', name: '전체 시즌' },
+      { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
+      ...custom
+    ];
+  }, [masterData]);
+
+  const { selectedSeasonId: selectedSeason, setSelectedSeasonId: setSelectedSeason } =
+    useSeasonAutoSelect(masterData?.seasons, loadingData, 'all');
+
+  // 권한별 접근 가능한 반 목록
   const availableClasses = useMemo(() => {
     return data.classes.filter(c => {
-      if (currentUser?.role === 'admin') return true;
-      return c.lecturerId === currentUser?.id || c.instructorId === currentUser?.id || c.teacherId === currentUser?.id;
+      if (selectedSeason === 'legacy') { if (c.season) return false; }
+      else if (selectedSeason !== 'all' && c.season !== selectedSeason) return false;
+
+      // 아직 승인 전이거나 반려된 반은 채점 대상이 아닙니다.
+      if (c.status === 'proposed' || c.status === 'rejected') return false;
+
+      /* 강사는 자기 반만, 나머지 교직원(원장·데스크·조교)은 전부 봅니다.
+         조교는 담당 반 정보가 따로 없어 반을 특정할 수 없습니다. */
+      if (currentUser?.role === 'lecturer') {
+        return c.lecturerId === currentUser?.id || c.instructorId === currentUser?.id || c.teacherId === currentUser?.id;
+      }
+      return true;
     });
-  }, [data.classes, currentUser]);
+  }, [data.classes, currentUser, selectedSeason]);
+
+  // 시즌을 바꿔 목록에서 사라진 반이 선택된 채로 남지 않게 합니다.
+  useEffect(() => {
+    if (selectedClassId && !availableClasses.some(c => c.id === selectedClassId)) {
+      setSelectedClassId('');
+      setSelectedStudentIds([]);
+    }
+  }, [availableClasses, selectedClassId]);
 
   /* 선택된 반의 학생 목록.
 
@@ -162,12 +219,20 @@ export default function ExamDiagnosticInput({ currentUser }) {
         return questions.map((q, idx) => {
           /* 내신연구소는 배점을 선택 입력으로 두어 빈 문자열이 들어옵니다(SchoolStrategy.js:1254).
              Number('') 은 0 이라 예전 검사(!== null)를 통과해 감점이 0 이 됐고,
-             오답을 아무리 눌러도 100 점으로 저장됐습니다. */
+             오답을 아무리 눌러도 100 점으로 저장됐습니다.
+
+             '비어 있음'과 '0점'은 다릅니다. 전원 정답 처리된 문항은 배점이 진짜 0 이므로,
+             숫자로 바꾸기 전에 빈 값인지를 먼저 봅니다. */
+          const isBlank = q.score === undefined || q.score === null || String(q.score).trim() === '';
           const raw = Number(q.score);
-          const hasPoint = Number.isFinite(raw) && raw > 0;
+          const hasPoint = !isBlank && Number.isFinite(raw) && raw >= 0;
           // 문항 번호 필드는 화면마다 number / qNum 두 이름을 씁니다.
           const label = [q.number, q.qNum].find(v => v !== undefined && v !== null && v !== '');
           return {
+            /* 화면 번호가 아니라 순번으로 문항을 구별합니다.
+               번호가 겹치는 자료(오타이거나, 번호 없는 문항이 idx+1 로 채워져 충돌)에서
+               한 문항을 누르면 같은 번호의 다른 문항까지 함께 깎이기 때문입니다. */
+            key: String(idx),
             displayNumber: label !== undefined ? String(label) : String(idx + 1),
             points: hasPoint ? raw : fallbackPoint,
             pointFromExam: hasPoint
@@ -178,7 +243,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
     const count = Math.max(1, Math.min(100, Number(customTestMeta.totalQuestions) || 10));
     return Array.from({ length: count }, (_, i) => ({
-      displayNumber: String(i + 1), points: fallbackPoint, pointFromExam: false
+      key: String(i), displayNumber: String(i + 1), points: fallbackPoint, pointFromExam: false
     }));
   }, [testCategory, searchedExams, selectedExamId, customTestMeta.totalQuestions, customTestMeta.questionScore]);
 
@@ -186,15 +251,23 @@ export default function ExamDiagnosticInput({ currentUser }) {
     () => Math.round(examQuestions.reduce((sum, q) => sum + q.points, 0) * 10) / 10,
     [examQuestions]
   );
-  // 배점을 시험에서 읽지 못해 기본값으로 채운 문항 수. 강사에게 알려 줍니다.
+  // 배점을 시험에서 읽지 못해 기본값으로 채운 문항 수. 0 이면 기본 배점 칸을 숨깁니다.
   const filledPointCount = useMemo(
     () => (testCategory === 'school' ? examQuestions.filter(q => !q.pointFromExam).length : 0),
     [testCategory, examQuestions]
   );
 
+  /* 고른 내신 시험에 문항 자료가 아예 없는 경우.
+     이때는 문항 수도 배점도 알 수 없으므로 강사가 직접 정해야 합니다. */
+  const schoolExamHasQuestions = useMemo(() => {
+    if (testCategory !== 'school' || !selectedExamId) return true;
+    const exam = searchedExams.find(e => e.id === selectedExamId);
+    return Array.isArray(exam?.questions) && exam.questions.length > 0;
+  }, [testCategory, selectedExamId, searchedExams]);
+
   const scoreOf = useCallback((wrongList) => {
     const wrong = new Set(wrongList || []);
-    const lost = examQuestions.reduce((sum, q) => sum + (wrong.has(q.displayNumber) ? q.points : 0), 0);
+    const lost = examQuestions.reduce((sum, q) => sum + (wrong.has(q.key) ? q.points : 0), 0);
     return Math.max(0, Math.round((maxScore - lost) * 10) / 10);
   }, [examQuestions, maxScore]);
 
@@ -202,7 +275,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
      예전에는 점수를 클릭할 때만 계산해서, 배점을 나중에 고치면 옛 점수가 그대로 저장됐고
      사라진 문항 번호도 남아 있었습니다. */
   useEffect(() => {
-    const valid = new Set(examQuestions.map(q => q.displayNumber));
+    const valid = new Set(examQuestions.map(q => q.key));
     setInputsByStudent(prev => {
       let changed = false;
       const next = {};
@@ -231,17 +304,14 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }));
   }, [maxScore]);
 
-  const toggleWrongQuestion = (sId, qNumStr) => {
+  const toggleWrongQuestion = (sId, qKey) => {
     setInputsByStudent(prev => {
       const current = prev[sId] || { wrongQuestions: [], comment: '', plan: '' };
-      const isWrong = (current.wrongQuestions || []).includes(qNumStr);
+      const isWrong = (current.wrongQuestions || []).includes(qKey);
+      // 시험지에 실린 순서대로 정렬합니다(키가 곧 순번).
       const newWrongs = isWrong
-        ? current.wrongQuestions.filter(n => n !== qNumStr)
-        : [...(current.wrongQuestions || []), qNumStr].sort((a, b) => {
-            const numA = parseInt(String(a).replace(/[^0-9]/g, ''), 10) || 0;
-            const numB = parseInt(String(b).replace(/[^0-9]/g, ''), 10) || 0;
-            return numA - numB;
-          });
+        ? current.wrongQuestions.filter(n => n !== qKey)
+        : [...(current.wrongQuestions || []), qKey].sort((a, b) => Number(a) - Number(b));
 
       // 문항을 다시 만지면 자동 계산으로 되돌립니다.
       return { ...prev, [sId]: { ...current, wrongQuestions: newWrongs, score: scoreOf(newWrongs), manualScore: false } };
@@ -263,6 +333,11 @@ export default function ExamDiagnosticInput({ currentUser }) {
       return alert("평가 제목과 단원/범위명을 모두 입력해주세요.");
     }
     if (selectedStudentIds.length === 0) return alert("최소 1명 이상의 학생을 선택해주세요.");
+    /* 모든 문항의 배점이 0 이면 만점이 0 이 됩니다. 저장 규칙이 만점을 0 보다 크게 요구하므로
+       여기서 막지 않으면 권한 오류처럼 보이는 메시지가 뜹니다. */
+    if (!(maxScore > 0)) {
+      return alert("이 시험은 만점이 0점입니다. 문항 배점을 확인해주세요.");
+    }
 
     setIsSubmitting(true);
     setErrorMsg(null);
@@ -310,9 +385,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
           responses: examQuestions.map(q => ({
             no: q.displayNumber,
             points: q.points,
-            verdict: wrongSet.has(q.displayNumber) ? 'wrong' : 'correct'
+            verdict: wrongSet.has(q.key) ? 'wrong' : 'correct'
           })),
-          wrongQuestionNumbers: input.wrongQuestions || [],
+          // 화면에서는 순번으로 다루지만, 저장은 시험지의 실제 문항 번호로 합니다.
+          wrongQuestionNumbers: examQuestions.filter(q => wrongSet.has(q.key)).map(q => q.displayNumber),
           instructorComment: input.comment || '',
           growthPlan: input.plan || '',
           instructorId: currentUser?.id || 'unknown',
@@ -430,22 +506,37 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
         {testCategory === 'school' ? (
           <div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <input 
-                type="text" placeholder="학교명 타이핑 (예: 목동고)"
-                className="border border-slate-300 p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 w-full font-bold"
-                value={filters.schoolName} onChange={e => setFilters({...filters, schoolName: e.target.value})}
-                onKeyDown={e => e.key === 'Enter' && handleSearchExams()}
-              />
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+              <select
+                className="border border-slate-300 p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                value={filters.schoolType}
+                onChange={e => setFilters({ ...filters, schoolType: e.target.value, schoolName: '', gradeSem: '' })}
+              >
+                <option value="high">고등학교</option>
+                <option value="middle">중학교</option>
+                <option value="elementary">초등학교</option>
+              </select>
+
+              {/* 다른 화면과 같은 학교 드롭다운. 직접 타이핑하면 표기가 갈려 검색이 0건이 됩니다. */}
+              <div className="col-span-1">
+                <SmartSchoolSelect
+                  schoolType={filters.schoolType}
+                  schoolsData={schoolsData}
+                  value={filters.schoolName}
+                  onChange={(val) => setFilters({ ...filters, schoolName: val })}
+                />
+              </div>
+
               <select className="border border-slate-300 p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 font-bold" value={filters.year} onChange={e => setFilters({...filters, year: e.target.value})}>
                 <option value="">연도 전체</option>
-                {[...Array(5)].map((_, i) => <option key={i} value={String(currentYear - i)}>{currentYear - i}년</option>)}
+                {YEARS.map(y => <option key={y} value={y}>{y}년</option>)}
               </select>
               <select className="border border-slate-300 p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 font-bold" value={filters.gradeSem} onChange={e => setFilters({...filters, gradeSem: e.target.value})}>
                 <option value="">학년/학기 전체</option>
-                <option value="1-1">1학년 1학기</option><option value="1-2">1학년 2학기</option>
-                <option value="2-1">2학년 1학기</option><option value="2-2">2학년 2학기</option>
-                <option value="3-1">3학년 1학기</option><option value="3-2">3학년 2학기</option>
+                {Array.from({ length: filters.schoolType === 'elementary' ? 6 : 3 }, (_, i) => i + 1)
+                  .flatMap(g => [1, 2].map(s => (
+                    <option key={`${g}-${s}`} value={`${g}-${s}`}>{g}학년 {s}학기</option>
+                  )))}
               </select>
               <select className="border border-slate-300 p-3 rounded-xl bg-slate-50 outline-none focus:ring-2 focus:ring-indigo-500 font-bold" value={filters.term} onChange={e => setFilters({...filters, term: e.target.value})}>
                 <option value="">시험 종류 전체</option>
@@ -467,27 +558,59 @@ export default function ExamDiagnosticInput({ currentUser }) {
               </select>
             )}
 
+            {/* 배점이 시험에 모두 등록돼 있으면 기본 배점 칸을 띄우지 않습니다.
+                쓰이지도 않는 값을 보여 주면 강사가 그걸 고치면 점수가 바뀐다고 오해합니다. */}
             {selectedExamId && (
               <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-                <div className="md:col-span-2 p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-700">
-                  총 <strong className="text-indigo-700">{examQuestions.length}문항</strong> ·
-                  만점 <strong className="text-indigo-700">{maxScore}점</strong>
-                  {filledPointCount > 0 && (
-                    <span className="block mt-1 text-xs font-bold text-amber-700">
-                      ⚠ 이 시험은 {filledPointCount}개 문항의 배점이 비어 있어 아래 기본 배점을 적용했습니다.
+                <div className={`p-3.5 border rounded-xl text-sm font-bold ${
+                  !schoolExamHasQuestions ? 'md:col-span-1 bg-amber-50 border-amber-200 text-amber-900'
+                    : filledPointCount > 0 ? 'md:col-span-2 bg-amber-50 border-amber-200 text-amber-900'
+                    : 'md:col-span-3 bg-emerald-50 border-emerald-200 text-emerald-900'
+                }`}>
+                  총 <strong>{examQuestions.length}문항</strong> · 만점 <strong>{maxScore}점</strong>
+                  {!schoolExamHasQuestions ? (
+                    <span className="block mt-1 text-xs font-bold">
+                      ⚠ 이 시험에는 문항 자료가 등록되어 있지 않습니다.
+                      아래에서 문항 수와 배점을 직접 정해 주세요.
+                      (내신연구소에서 문항을 등록하면 실제 배점이 자동으로 반영됩니다.)
+                    </span>
+                  ) : filledPointCount > 0 ? (
+                    <span className="block mt-1 text-xs font-bold">
+                      ⚠ {examQuestions.length}개 중 {filledPointCount}개 문항의 배점이 비어 있어 기본 배점을 적용했습니다.
                       실제 배점과 다르면 내신연구소에서 문항 배점을 채워 주세요.
+                    </span>
+                  ) : (
+                    <span className="block mt-1 text-xs font-bold">
+                      ✓ 모든 문항의 배점이 시험 자료에 등록되어 있습니다. 그대로 채점합니다.
                     </span>
                   )}
                 </div>
-                <div>
-                  <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">기본 배점 (배점이 빈 문항용)</label>
-                  <input
-                    type="number" min="1" max="100"
-                    className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-500 text-center"
-                    value={customTestMeta.questionScore}
-                    onChange={e => setCustomTestMeta({ ...customTestMeta, questionScore: e.target.value })}
-                  />
-                </div>
+
+                {!schoolExamHasQuestions && (
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">총 문항 수</label>
+                    <input
+                      type="number" min="1" max="100"
+                      className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-500 text-center"
+                      value={customTestMeta.totalQuestions}
+                      onChange={e => setCustomTestMeta({ ...customTestMeta, totalQuestions: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                {filledPointCount > 0 && (
+                  <div>
+                    <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">
+                      {schoolExamHasQuestions ? '기본 배점 (배점이 빈 문항용)' : '문항당 배점'}
+                    </label>
+                    <input
+                      type="number" min="1" max="100"
+                      className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-500 text-center"
+                      value={customTestMeta.questionScore}
+                      onChange={e => setCustomTestMeta({ ...customTestMeta, questionScore: e.target.value })}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -544,7 +667,18 @@ export default function ExamDiagnosticInput({ currentUser }) {
           <Users className="text-indigo-600" size={20} /> 2단계: 대상 반 및 수강생 체크
         </h2>
         <div className="mb-4">
-          <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">담당 반 선택 (자동 매핑됨)</label>
+          <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">시즌</label>
+          <select
+            className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer mb-4"
+            value={selectedSeason}
+            onChange={e => { if (confirmDiscardInputs('시즌을 변경')) { setSelectedSeason(e.target.value); setInputsByStudent({}); } }}
+          >
+            {dynamicSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+
+          <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">
+            담당 반 선택 <span className="normal-case font-bold text-slate-400">— {availableClasses.length}개 반</span>
+          </label>
           <select className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer" value={selectedClassId} onChange={e => {
             if (!confirmDiscardInputs('반을 변경')) return;
             setSelectedClassId(e.target.value); setSelectedStudentIds([]); setInputsByStudent({});
@@ -624,12 +758,12 @@ export default function ExamDiagnosticInput({ currentUser }) {
                     <CheckSquare className="w-4 h-4 text-indigo-600"/> 🎯 학생이 틀린 번호를 원클릭으로 선택하세요 (배점에 따라 점수가 자동 감점됩니다)
                   </p>
                   <div className="flex flex-wrap gap-2 p-3 bg-slate-50/50 rounded-2xl border border-slate-100">
-                    {examQuestions.map((q, idx) => {
-                      const isWrong = (input.wrongQuestions || []).includes(q.displayNumber);
+                    {examQuestions.map((q) => {
+                      const isWrong = (input.wrongQuestions || []).includes(q.key);
                       return (
                         <button
-                          key={`q-${idx}-${q.displayNumber}`} type="button"
-                          onClick={(e) => { e.preventDefault(); toggleWrongQuestion(sId, q.displayNumber); }}
+                          key={q.key} type="button"
+                          onClick={(e) => { e.preventDefault(); toggleWrongQuestion(sId, q.key); }}
                           className={`px-3 min-w-[3.25rem] h-12 rounded-xl font-black text-sm transition-colors duration-150 cursor-pointer border flex flex-col items-center justify-center leading-tight ${
                             isWrong
                               ? 'bg-rose-600 text-white border-rose-700 shadow-md'
