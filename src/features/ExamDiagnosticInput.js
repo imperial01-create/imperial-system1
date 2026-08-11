@@ -1,6 +1,6 @@
 /* [서비스 가치] 강사가 내신, 개념 테스트, 모의고사를 한 화면에서 일괄 입력하고, 
    입력 즉시 학부모가 열람하는 '아카데미 유니버스'에 실시간($O(1)$)으로 동기화하여 상담 전환을 유도합니다. */
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   collection, getDocs, getDoc, doc, writeBatch, serverTimestamp, query, where
 } from 'firebase/firestore';
@@ -13,7 +13,7 @@ import { useData } from '../contexts/DataContext';
 import { getDynamicSubjectLabel } from '../utils/subjectMapper';
 import { fetchBySchool } from '../utils/schoolQuery';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
-import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
+import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
 
 /* 기출 아카이브(ExamArchive.js:28)와 같은 범위를 씁니다.
@@ -80,6 +80,12 @@ export default function ExamDiagnosticInput({ currentUser }) {
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
 
+  /* 저장이 끝나면 3단계가 통째로 사라집니다. 성공 메시지는 화면 맨 위에 뜨는데
+     저장 버튼은 맨 아래에 있어서, 저장한 사람 눈에는 아무 일도 안 일어난 것처럼 보였습니다.
+     무엇이 저장됐는지를 버튼이 있던 자리에 그대로 남깁니다. */
+  const [lastSaved, setLastSaved] = useState(null);
+  const resultRef = useRef(null);
+
   /* 탭이나 반을 바꾸면 입력 중이던 채점 결과가 지워집니다.
      예전에는 확인 없이 지워져서, 잘못 누르면 30명분이 한 번에 사라졌습니다. */
   const confirmDiscardInputs = (action) => {
@@ -145,24 +151,20 @@ export default function ExamDiagnosticInput({ currentUser }) {
   /* 시즌. 반은 시즌마다 새로 만들어지므로, 지난 시즌 반까지 모두 보이면
      같은 이름의 반이 여러 개 나열되어 잘못 고르기 쉽습니다.
      강의 관리(LectureManager.js:602)와 같은 규칙을 씁니다. */
-  const dynamicSeasons = useMemo(() => {
-    const custom = [...(masterData?.seasons || [])]
-      .sort((a, b) => String(a?.startDate || '').localeCompare(String(b?.startDate || '')));
-    return [
-      { id: 'all', name: '전체 시즌' },
-      { id: 'legacy', name: '📦 시즌 미지정 (과거 데이터)' },
-      ...custom
-    ];
+  /* 시즌은 고르지 않습니다. 채점은 늘 지금 진행 중인 시즌의 반을 대상으로 하므로
+     오늘 날짜에 해당하는 시즌을 자동으로 적용합니다.
+     오늘이 어느 시즌에도 없으면 가장 가까운 시즌을 고르고, 시즌이 없으면 전체를 봅니다. */
+  const activeSeason = useMemo(() => {
+    const list = Array.isArray(masterData?.seasons) ? masterData.seasons : [];
+    const id = pickSeasonForToday(list, 'all');
+    return { id, name: list.find(s => s.id === id)?.name || '전체 시즌' };
   }, [masterData]);
-
-  const { selectedSeasonId: selectedSeason, setSelectedSeasonId: setSelectedSeason } =
-    useSeasonAutoSelect(masterData?.seasons, loadingData, 'all');
 
   // 권한별 접근 가능한 반 목록
   const availableClasses = useMemo(() => {
+    const seasonId = activeSeason.id;
     return data.classes.filter(c => {
-      if (selectedSeason === 'legacy') { if (c.season) return false; }
-      else if (selectedSeason !== 'all' && c.season !== selectedSeason) return false;
+      if (seasonId !== 'all' && c.season !== seasonId) return false;
 
       // 아직 승인 전이거나 반려된 반은 채점 대상이 아닙니다.
       if (c.status === 'proposed' || c.status === 'rejected') return false;
@@ -174,9 +176,16 @@ export default function ExamDiagnosticInput({ currentUser }) {
       }
       return true;
     });
-  }, [data.classes, currentUser, selectedSeason]);
+  }, [data.classes, currentUser, activeSeason]);
 
-  // 시즌을 바꿔 목록에서 사라진 반이 선택된 채로 남지 않게 합니다.
+  // 저장 직후 결과가 눈에 들어오도록 그 자리로 옮겨 줍니다.
+  useEffect(() => {
+    if (lastSaved && resultRef.current) {
+      resultRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [lastSaved]);
+
+  // 시즌 데이터가 늦게 와서 목록에서 사라진 반이 선택된 채로 남지 않게 합니다.
   useEffect(() => {
     if (selectedClassId && !availableClasses.some(c => c.id === selectedClassId)) {
       setSelectedClassId('');
@@ -408,7 +417,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 latestMaxScore: maxScore,
                 latestGrade: getRubricGrade(numScore, maxScore),
                 lastUpdatedUnit: customTestMeta.unitName.trim(),
-                recentVulnerabilities: (input.wrongQuestions || []).map(q => `[${customTestMeta.unitName.trim()}] ${q}번 오답`)
+                // 화면에서 다루는 값은 순번이므로, 실제 문항 번호로 바꿔서 남깁니다.
+                recentVulnerabilities: examQuestions
+                  .filter(q => wrongSet.has(q.key))
+                  .map(q => `[${customTestMeta.unitName.trim()}] ${q.displayNumber}번 오답`)
               }
             },
             updatedAt: timestamp
@@ -418,6 +430,19 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
       // 30명의 진단 데이터와 유니버스 동기화를 단 1번의 네트워크 요청으로 일괄 커밋 ($0 과금 방어)
       await batch.commit();
+
+      // 상태를 비우기 전에 무엇을 저장했는지 붙잡아 둡니다.
+      setLastSaved({
+        examTitle,
+        maxScore,
+        savedAt: new Date().toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        rows: selectedStudentIds.map(sId => ({
+          id: sId,
+          name: data.students.find(s => s.id === sId)?.name || '학생',
+          score: Number(inputsByStudent[sId]?.score),
+          wrongCount: (inputsByStudent[sId]?.wrongQuestions || []).length
+        }))
+      });
 
       setSuccessMsg(`🎉 [전송 완료] ${selectedStudentIds.length}명 학생의 리포트가 생성되었으며${testCategory === 'concept' ? " '아카데미 유니버스'에 실시간 동기화되었습니다!" : " 저장되었습니다."}`);
       setSelectedStudentIds([]);
@@ -667,17 +692,10 @@ export default function ExamDiagnosticInput({ currentUser }) {
           <Users className="text-indigo-600" size={20} /> 2단계: 대상 반 및 수강생 체크
         </h2>
         <div className="mb-4">
-          <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">시즌</label>
-          <select
-            className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer mb-4"
-            value={selectedSeason}
-            onChange={e => { if (confirmDiscardInputs('시즌을 변경')) { setSelectedSeason(e.target.value); setInputsByStudent({}); } }}
-          >
-            {dynamicSeasons.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-
           <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">
-            담당 반 선택 <span className="normal-case font-bold text-slate-400">— {availableClasses.length}개 반</span>
+            담당 반 선택
+            <span className="normal-case font-bold text-indigo-600 ml-1">— {activeSeason.name}</span>
+            <span className="normal-case font-bold text-slate-400 ml-1">{availableClasses.length}개 반</span>
           </label>
           <select className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer" value={selectedClassId} onChange={e => {
             if (!confirmDiscardInputs('반을 변경')) return;
@@ -808,6 +826,41 @@ export default function ExamDiagnosticInput({ currentUser }) {
             {isSubmitting ? <Loader className="animate-spin w-6 h-6"/> : <Save className="w-6 h-6" />} 
             <span>{isSubmitting ? '유니버스 실시간 동기화 중...' : `선택한 ${selectedStudentIds.length}명 학생 진단 리포트 및 유니버스 일괄 배포`}</span>
           </button>
+        </div>
+      )}
+
+      {/* 저장 결과. 3단계가 사라진 자리에 남아, 무엇이 저장됐는지 눈으로 확인시킵니다. */}
+      {lastSaved && selectedStudentIds.length === 0 && (
+        <div ref={resultRef} className="bg-white rounded-3xl shadow-sm border-2 border-emerald-300 overflow-hidden">
+          <div className="bg-emerald-50 px-6 py-4 border-b border-emerald-200 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 font-black text-emerald-900">
+              <CheckCircle className="w-5 h-5 text-emerald-600" />
+              저장 완료 — {lastSaved.rows.length}명
+            </div>
+            <span className="text-xs font-bold text-emerald-700">{lastSaved.savedAt}</span>
+          </div>
+
+          <div className="px-6 py-3 text-sm font-bold text-slate-700 border-b border-slate-100">
+            {lastSaved.examTitle} <span className="text-slate-400">· 만점 {lastSaved.maxScore}점</span>
+          </div>
+
+          <ul className="divide-y divide-slate-100">
+            {lastSaved.rows.map(r => (
+              <li key={r.id} className="px-6 py-2.5 flex items-center justify-between text-sm">
+                <span className="font-black text-slate-800">{r.name}</span>
+                <span className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-slate-500">오답 {r.wrongCount}개</span>
+                  <span className="font-black text-indigo-700">{r.score}<span className="text-slate-400 font-bold"> / {lastSaved.maxScore}</span></span>
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="px-6 py-3 bg-slate-50 text-xs font-bold text-slate-500 leading-relaxed border-t border-slate-100">
+            저장된 기록은 아직 학생·학부모 화면에 나타나지 않습니다. 성적 화면 복구 작업이 끝나면 함께 공개됩니다.
+            <button type="button" onClick={() => { setLastSaved(null); setSuccessMsg(null); }}
+              className="ml-2 text-indigo-600 hover:text-indigo-800 underline">닫기</button>
+          </div>
         </div>
       )}
     </div>
