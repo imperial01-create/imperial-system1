@@ -234,6 +234,42 @@ const run = async () => {
     await check('비로그인도 학교 목록은 볼 수 있다 (가입 화면용)', () =>
         assertSucceeds(getDoc(doc(guest(), `${BASE}/settings/schools`))));
 
+    // ── 시험 진단(원점수) ────────────────────────────────────
+    // 점수는 원점수다. 만점이 100 이 아닌 시험이 있으므로 상한은 maxScore 다.
+    const diag = (over) => ({
+        testCategory: 'concept', studentId: 'stu1', studentName: '학생일',
+        score: 64, maxScore: 80, ...over,
+    });
+    const putDiag = (who, id, over) =>
+        setDoc(doc(who, `${BASE}/student_exam_diagnostics/${id}`), diag(over));
+
+    await check('만점 80점 시험에 64점을 저장할 수 있다', () =>
+        assertSucceeds(putDiag(as('admin1', staffToken('admin1')), 'd1')));
+    await check('만점 120점 시험에 110점을 저장할 수 있다 (예전엔 100점 상한에 막혔다)', () =>
+        assertSucceeds(putDiag(as('admin1', staffToken('admin1')), 'd2', { score: 110, maxScore: 120 })));
+    await check('만점을 넘는 점수는 거부된다', () =>
+        assertFails(putDiag(as('admin1', staffToken('admin1')), 'd3', { score: 81, maxScore: 80 })));
+    await check('음수 점수는 거부된다', () =>
+        assertFails(putDiag(as('admin1', staffToken('admin1')), 'd4', { score: -1 })));
+    await check('점수가 문자열이면 거부된다', () =>
+        assertFails(putDiag(as('admin1', staffToken('admin1')), 'd5', { score: '64' })));
+    await check('maxScore 가 없는 옛 형식은 100 을 만점으로 본다 (100점 통과)', () =>
+        assertSucceeds(setDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/student_exam_diagnostics/d6`),
+            { testCategory: 'school', studentId: 'stu1', studentName: '학생일', score: 100 })));
+    await check('maxScore 가 없는데 100점을 넘으면 거부된다', () =>
+        assertFails(setDoc(doc(as('admin1', staffToken('admin1')), `${BASE}/student_exam_diagnostics/d7`),
+            { testCategory: 'school', studentId: 'stu1', studentName: '학생일', score: 101 })));
+    await check('만점을 1000점 넘게 부풀릴 수 없다', () =>
+        assertFails(putDiag(as('admin1', staffToken('admin1')), 'd8', { score: 5000, maxScore: 5000 })));
+    await check('조교(ta)도 채점 결과를 저장할 수 있다', () =>
+        assertSucceeds(putDiag(as('ta1', { ...staffToken('ta1'), role: 'ta' }), 'd9')));
+    await check('학생은 자기 점수를 위조할 수 없다', () =>
+        assertFails(putDiag(as('stu1', studentToken('stu1')), 'd10')));
+    await check('학생은 자기 진단 결과를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics/d1`))));
+    await check('학생은 남의 진단 결과를 읽을 수 없다', () =>
+        assertFails(getDoc(doc(as('stu2', studentToken('stu2')), `${BASE}/student_exam_diagnostics/d1`))));
+
     await env.cleanup();
 
     const failed = results.filter((r) => !r.ok);

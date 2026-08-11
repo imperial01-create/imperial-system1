@@ -402,10 +402,15 @@ service cloud.firestore {
 
       match /student_exam_diagnostics/{docId} {
         allow read: if isStaff(appId) || (isAuth() && isMineOrChild(appId, resource.data.get('studentId', '')));
+        /* 점수는 원점수다. 만점이 100 이 아닌 시험(20문항 x 4점 = 80점)이 있으므로
+           상한을 maxScore 로 본다. maxScore 가 없는 옛 기록은 100 을 만점으로 본다. */
         allow create, update: if isStaff(appId)
                               && request.resource.data.score is number
                               && request.resource.data.score >= 0
-                              && request.resource.data.score <= 100
+                              && request.resource.data.get('maxScore', 100) is number
+                              && request.resource.data.get('maxScore', 100) > 0
+                              && request.resource.data.get('maxScore', 100) <= 1000
+                              && request.resource.data.score <= request.resource.data.get('maxScore', 100)
                               && request.resource.data.testCategory in ['school', 'concept', 'mock'];
         allow delete: if isAdmin(appId) || isLecturer(appId);
       }
