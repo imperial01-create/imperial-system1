@@ -15,6 +15,7 @@ import { fetchBySchool } from '../utils/schoolQuery';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import ExamDiagnosticRecords from './ExamDiagnosticRecords';
 import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
+import { isSubjectCompatible, subjectFamilyLabel } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 /* 기출 아카이브(ExamArchive.js:28)와 같은 범위를 씁니다.
@@ -193,6 +194,25 @@ export default function ExamDiagnosticInput({ currentUser }) {
     });
   }, [data.classes, currentUser, activeSeason]);
 
+  // 고른 내신 시험의 과목. 반 목록을 이 과목으로 좁히는 데 씁니다.
+  const selectedExamSubject = useMemo(() => {
+    if (testCategory !== 'school' || !selectedExamId) return null;
+    return searchedExams.find(e => e.id === selectedExamId)?.subject || null;
+  }, [testCategory, selectedExamId, searchedExams]);
+
+  /* 시험을 고르면 그 과목의 반만 보여줍니다.
+     과목을 판정할 수 없는 반은 거르지 않습니다 — 필요한 반이 조용히 사라지는 것이
+     잘못 섞여 보이는 것보다 나쁩니다. 그래도 놓칠 때를 대비해 전체 보기를 둡니다. */
+  const [showAllClasses, setShowAllClasses] = useState(false);
+  const subjectMatchedClasses = useMemo(() => {
+    if (!selectedExamSubject || showAllClasses) return availableClasses;
+    return availableClasses.filter(c => isSubjectCompatible(selectedExamSubject, c.subject));
+  }, [availableClasses, selectedExamSubject, showAllClasses]);
+
+  const hiddenBySubject = availableClasses.length - subjectMatchedClasses.length;
+  // 화면에는 '대수' 가 아니라 '수학' 으로 보여줍니다. 실제 판정 기준이 계열이기 때문입니다.
+  const examFamilyLabel = subjectFamilyLabel(selectedExamSubject);
+
   // 저장 직후 결과가 눈에 들어오도록 그 자리로 옮겨 줍니다.
   useEffect(() => {
     if (lastSaved && resultRef.current) {
@@ -200,13 +220,13 @@ export default function ExamDiagnosticInput({ currentUser }) {
     }
   }, [lastSaved]);
 
-  // 시즌 데이터가 늦게 와서 목록에서 사라진 반이 선택된 채로 남지 않게 합니다.
+  // 목록에서 사라진 반(시즌 변경·과목 불일치)이 선택된 채로 남지 않게 합니다.
   useEffect(() => {
-    if (selectedClassId && !availableClasses.some(c => c.id === selectedClassId)) {
+    if (selectedClassId && !subjectMatchedClasses.some(c => c.id === selectedClassId)) {
       setSelectedClassId('');
       setSelectedStudentIds([]);
     }
-  }, [availableClasses, selectedClassId]);
+  }, [subjectMatchedClasses, selectedClassId]);
 
   /* 선택된 반의 학생 목록.
 
@@ -773,14 +793,34 @@ export default function ExamDiagnosticInput({ currentUser }) {
           <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">
             담당 반 선택
             <span className="normal-case font-bold text-indigo-600 ml-1">— {activeSeason.name}</span>
-            <span className="normal-case font-bold text-slate-400 ml-1">{availableClasses.length}개 반</span>
+            {examFamilyLabel && !showAllClasses && (
+              <span className="normal-case font-bold text-indigo-600 ml-1">· {examFamilyLabel}</span>
+            )}
+            <span className="normal-case font-bold text-slate-400 ml-1">{subjectMatchedClasses.length}개 반</span>
           </label>
+
+          {/* 과목으로 걸러 낸 반이 있으면 그 사실을 알리고 되돌릴 길을 둡니다. */}
+          {examFamilyLabel && (hiddenBySubject > 0 || showAllClasses) && (
+            <p className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+              {showAllClasses
+                ? <span>과목과 상관없이 모든 반을 보고 있습니다.</span>
+                : <span><strong className="text-slate-700">{examFamilyLabel}</strong> 반이 아닌 {hiddenBySubject}개를 숨겼습니다.</span>}
+              <button
+                type="button" onClick={() => setShowAllClasses(v => !v)}
+                className="text-indigo-600 hover:text-indigo-800 underline font-black"
+              >
+                {showAllClasses ? '이 과목 반만 보기' : '모든 반 보기'}
+              </button>
+            </p>
+          )}
           <select className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-slate-800 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer" value={selectedClassId} onChange={e => {
             if (!confirmDiscardInputs('반을 변경')) return;
             setSelectedClassId(e.target.value); setSelectedStudentIds([]); setInputsByStudent({});
           }}>
             <option value="">반을 선택하세요</option>
-            {availableClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {subjectMatchedClasses.map(c => (
+              <option key={c.id} value={c.id}>{c.name}{c.subject ? ` — ${c.subject}` : ''}</option>
+            ))}
           </select>
         </div>
 
