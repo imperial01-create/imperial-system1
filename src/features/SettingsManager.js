@@ -2,13 +2,11 @@
    (🚀 CTO 패치: 시즌 네이밍 룰(Naming Convention) 표준화. 시즌 이름을 자유 입력 방식에서 
    '연도 + 하드코딩된 드롭다운(윈터/중간/기말/서머)' 방식으로 강제하여 데이터 파편화를 원천 차단했습니다.) */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch, deleteField } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp, deleteDoc, getDocsFromServer, collection, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
-import { toMainSubject } from '../utils/subjectMatch';
-import { STANDARD_CODES, MID_CODE_BY_SUBJECT } from '../utils/subjectMapper';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -69,13 +67,8 @@ const SettingsManager = ({ currentUser }) => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [savingSchools, setSavingSchools] = useState(false);
-    const [systemProcessing, setSystemProcessing] = useState(false);
-    const [migrationProcessing, setMigrationProcessing] = useState(false);
-    const [midMigrating, setMidMigrating] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [studentDirProcessing, setStudentDirProcessing] = useState(false);
-    const [phonePurgeProcessing, setPhonePurgeProcessing] = useState(false);
-    const [feedbackMigrating, setFeedbackMigrating] = useState(false);
     const [claimsProcessing, setClaimsProcessing] = useState(false);
     const [claimsResult, setClaimsResult] = useState(null);
     // 문자 게이트웨이 계정 발급 — 비밀번호는 화면에만 잠시 존재하고 어디에도 저장하지 않는다
@@ -289,41 +282,6 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
-    const handleAuthSyncAndDedupe = async () => {
-        if (!window.confirm("⚠️ [최고 관리자 전용]\n같은 아이디로 중복 생성된 사용자 문서를 정리합니다.\n\n* 인증 계정이 연결된 문서를 우선 남기고 나머지를 삭제합니다.\n* 롤백이 불가능하므로 신중하게 실행하십시오.")) return;
-
-        setSystemProcessing(true);
-        try {
-            let dedupeCount = 0;
-            const seenIds = new Set();
-            const duplicatesToDelete = [];
-
-            const sortedUsers = [...users].sort((a, b) => {
-                if (a.authUid && !b.authUid) return -1;
-                if (!a.authUid && b.authUid) return 1;
-                if (a.id === a.id.toLowerCase() && b.id !== b.id.toLowerCase()) return -1;
-                if (a.id !== a.id.toLowerCase() && b.id === b.id.toLowerCase()) return 1;
-                return 0;
-            });
-
-            for (const u of sortedUsers) {
-                const canonicalId = (u.userId || u.id).toLowerCase();
-                if (seenIds.has(canonicalId)) duplicatesToDelete.push(u);
-                else seenIds.add(canonicalId);
-            }
-
-            for (const dupe of duplicatesToDelete) {
-                await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'users', dupe.id));
-                dedupeCount++;
-            }
-
-            alert(`✅ 중복 문서 정리 완료!\n\n* 제거된 중복 계정 문서: ${dedupeCount}건\n\n인증 계정 연동은 각 사용자가 다음 로그인 시 자동으로 처리됩니다.`);
-        } catch (err) {
-            alert("작업 중 오류가 발생했습니다: " + err.message);
-        } finally {
-            setSystemProcessing(false);
-        }
-    };
 
     /* 🔒 교직원 명부(staff_directory) 채우기
        학생/학부모 화면은 '담당 강사 이름'만 필요한데, 예전에는 그걸 위해 전체 사용자 목록을
@@ -346,47 +304,6 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
-    /* 과거 예약 문서에 남아 있는 전화번호를 걷어낸다.
-       예약(sessions)은 예약 화면 특성상 로그인한 누구나 읽을 수 있어서,
-       여기에 남은 번호는 다른 학생이 브라우저로 그대로 가져갈 수 있다. */
-    /* 예약 문서 안에 남아 있는 강사 피드백 본문을 별도 컬렉션으로 옮긴다.
-       예약은 로그인한 누구나 읽으므로, 거기 남은 피드백은 다른 학생도 볼 수 있다. */
-    const handleMigrateFeedbacks = async () => {
-        if (!window.confirm(
-            '지난 클리닉 예약에 저장된 강사 피드백을 별도 보관함으로 옮깁니다.\n\n'
-            + '• 옮긴 뒤에는 교직원과 본인(학부모 포함)만 볼 수 있습니다.\n'
-            + '• 화면 표시는 지금과 똑같습니다.\n'
-            + '• 되돌릴 수 없습니다.\n\n계속할까요?'
-        )) return;
-        setFeedbackMigrating(true);
-        try {
-            const fn = httpsCallable(functions, 'migrateClinicFeedbacks');
-            const res = await fn({});
-            alert(`✅ 이전 완료!\n\n검사한 예약: ${res?.data?.scanned ?? 0}건\n옮긴 피드백: ${res?.data?.moved ?? 0}건`);
-        } catch (err) {
-            alert("이전 중 오류가 발생했습니다: " + (err.message || ''));
-        } finally {
-            setFeedbackMigrating(false);
-        }
-    };
-
-    const handlePurgeSessionPhones = async () => {
-        if (!window.confirm(
-            "지난 클리닉 예약 기록에 남아 있는 학생 전화번호를 모두 지웁니다.\n\n" +
-            "• 문자 발송은 영향받지 않습니다 (번호를 직원 정보에서 조회합니다).\n" +
-            "• 되돌릴 수 없습니다.\n\n계속할까요?"
-        )) return;
-        setPhonePurgeProcessing(true);
-        try {
-            const fn = httpsCallable(functions, 'purgeSessionPhones');
-            const res = await fn({});
-            alert(`✅ 정리 완료!\n\n검사한 예약: ${res?.data?.scanned ?? 0}건\n전화번호를 지운 예약: ${res?.data?.cleaned ?? 0}건`);
-        } catch (err) {
-            alert("정리 중 오류가 발생했습니다: " + (err.message || ''));
-        } finally {
-            setPhonePurgeProcessing(false);
-        }
-    };
 
     const handleSyncStaffDirectory = async () => {
         if (!window.confirm("현재 등록된 교직원(관리자·행정조교·강사·수업조교)을 학생/학부모용 명부에 반영합니다.\n\n안전한 작업이며 여러 번 눌러도 문제없습니다. 진행할까요?")) return;
@@ -567,43 +484,6 @@ const SettingsManager = ({ currentUser }) => {
         }
     };
 
-    const handleRollbackSchoolNames = async () => {
-        if (!window.confirm('학교명을 통합 이전의 원래 표기로 되돌립니다.\n\n진행할까요?')) return;
-        setSchoolFixProcessing(true);
-        let restored = 0;
-        try {
-            for (const t of SCHOOL_FIX_TARGETS) {
-                if (!t.writable) continue;
-                const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', t.id));
-                const FIELDS = t.id === 'users' ? ['schoolName', 'school', 'childSchool'] : ['schoolName', 'school'];
-                const targets = snap.docs.filter(d => FIELDS.some(f => d.data()[`${f}Original`] !== undefined));
-
-                for (let i = 0; i < targets.length; i += SCHOOL_FIX_CHUNK) {
-                    const slice = targets.slice(i, i + SCHOOL_FIX_CHUNK);
-                    const batch = writeBatch(db);
-                    slice.forEach(d => {
-                        const v = d.data();
-                        const patch = {};
-                        FIELDS.forEach(f => {
-                            if (v[`${f}Original`] !== undefined) {
-                                patch[f] = v[`${f}Original`];
-                                patch[`${f}Original`] = deleteField();
-                            }
-                        });
-                        batch.update(d.ref, patch);
-                    });
-                    await batch.commit();
-                    restored += slice.length;
-                }
-            }
-            alert(`되돌리기 완료: ${restored}건`);
-            setSchoolScan(null);
-        } catch (e) {
-            alert('되돌리기 중 오류가 발생했습니다: ' + e.message);
-        } finally {
-            setSchoolFixProcessing(false);
-        }
-    };
 
     /* ─────────────────────────────────────────────────────────────────────
        중복 기출·내신 자료 병합
@@ -765,118 +645,6 @@ const SettingsManager = ({ currentUser }) => {
         return out;
     }, [schools]);
 
-    /* 중등 시험의 표준 코드를 과목별로 나눕니다.
-
-       예전에는 중학교 시험이 과목과 무관하게 MIDDLE_ALL 하나였습니다.
-       문서마다 자기 subject 로 과목을 판정해 알맞은 코드를 붙입니다.
-       (처음에는 '전부 수학' 을 전제로 만들었는데 국어가 섞여 있었습니다.
-        전제를 두지 않고 문서마다 판정하는 편이 다음에도 쓸 수 있습니다.)
-
-       판정할 수 없는 문서는 건드리지 않고 목록으로 보여 줍니다 —
-       조용히 엉뚱한 과목으로 바꾸는 것보다 남겨 두고 사람이 보는 편이 낫습니다. */
-    const handleMigrateMiddleCodes = async () => {
-        setMidMigrating(true);
-        try {
-            const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams'));
-            const targets = snap.docs.filter(d => (d.data().standardCode || '') === 'MIDDLE_ALL');
-
-            if (targets.length === 0) {
-                alert('✅ 스캔 완료\n\n옛 형식(중등 교과 공통)으로 남은 중등 시험이 없습니다.');
-                return;
-            }
-
-            // 문서마다 자기 과목으로 판정합니다.
-            const plan = new Map();      // 코드 → 문서 목록
-            const unknown = [];
-            targets.forEach(d => {
-                const main = toMainSubject(d.data().subject);
-                const code = main && MID_CODE_BY_SUBJECT[main];
-                if (!code) { unknown.push(d); return; }
-                if (!plan.has(code)) plan.set(code, []);
-                plan.get(code).push(d);
-            });
-
-            const labelOf = (code) => (STANDARD_CODES.find(c => c.code === code)?.label || code);
-            const lines = [...plan.entries()].map(([code, docs]) => `· ${docs.length}건 → ${labelOf(code)}`);
-            const willChange = [...plan.values()].reduce((n, v) => n + v.length, 0);
-
-            if (willChange === 0) {
-                alert(`스캔한 ${targets.length}건 모두 과목을 알아낼 수 없어 바꿀 것이 없습니다.\n\n` +
-                      unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n'));
-                return;
-            }
-
-            const unknownNote = unknown.length > 0
-                ? `\n\n건드리지 않는 문서 ${unknown.length}건 (과목을 알 수 없음):\n` +
-                  unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n') +
-                  (unknown.length > 8 ? `\n· 외 ${unknown.length - 8}건` : '')
-                : '';
-
-            if (!window.confirm(
-                `옛 형식으로 남은 중등 시험 ${targets.length}건을 과목별로 나눕니다.\n\n${lines.join('\n')}${unknownNote}\n\n계속할까요?`
-            )) return;
-
-            // Firestore 일괄 쓰기 상한은 500건입니다. 여유를 둡니다.
-            const all = [...plan.entries()].flatMap(([code, docs]) => docs.map(d => ({ ref: d.ref, code })));
-            let done = 0;
-            for (let i = 0; i < all.length; i += 400) {
-                const slice = all.slice(i, i + 400);
-                const batch = writeBatch(db);
-                slice.forEach(({ ref, code }) => batch.update(ref, { standardCode: code, updatedAt: serverTimestamp() }));
-                await batch.commit();
-                done += slice.length;
-            }
-
-            alert(`✅ 변환 완료 — ${done}건\n\n${lines.join('\n')}` +
-                  (unknown.length > 0 ? `\n\n그대로 둔 문서: ${unknown.length}건` : '') +
-                  '\n\n이제 중등도 과목별로 나뉘어 관리됩니다.');
-        } catch (err) {
-            console.error('[중등 코드 변환] 실패:', err);
-            alert('변환 중 오류가 발생했습니다: ' + err.message + '\n\n일부만 바뀌었을 수 있습니다. 다시 실행하면 남은 것부터 이어서 처리합니다.');
-        } finally {
-            setMidMigrating(false);
-        }
-    };
-
-    const handleDataMigration = async () => {
-        if (!window.confirm("⚠️ [데이터 마이그레이션]\n\n과거에 생성되어 '과목(subject)' 정보가 누락된 클래스(반) 데이터를 스캔합니다. 스캔 후 클래스 이름을 바탕으로 자동으로 과목을 할당합니다.\n\n이 작업은 아카데미 유니버스 등 최신 기능과의 정상적인 연동을 위해 반드시 필요합니다. 계속하시겠습니까?")) return;
-        
-        setMigrationProcessing(true);
-        try {
-            const classesSnap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
-            let updateCount = 0;
-            const batch = writeBatch(db);
-
-            classesSnap.forEach(docSnap => {
-                const cls = docSnap.data();
-                if (!cls.subject) {
-                    let inferredSubject = '';
-                    const name = cls.name || '';
-
-                    if (name.includes('국어') || name.includes('문학') || name.includes('독서') || name.includes('언매') || name.includes('화작') || name.includes('논술')) inferredSubject = '국어';
-                    else if (name.includes('수학') || name.includes('수1') || name.includes('수2') || name.includes('미적') || name.includes('기하') || name.includes('확통') || name.includes('수리')) inferredSubject = '수학';
-                    else if (name.includes('영어') || name.includes('영문') || name.includes('English') || name.includes('문법')) inferredSubject = '영어';
-                    else if (name.includes('과학') || name.includes('물리') || name.includes('화학') || name.includes('생명') || name.includes('지구') || name.includes('통과')) inferredSubject = '과학';
-
-                    if (inferredSubject) {
-                        batch.update(docSnap.ref, { subject: inferredSubject, updatedAt: serverTimestamp() });
-                        updateCount++;
-                    }
-                }
-            });
-
-            if (updateCount > 0) {
-                await batch.commit();
-                alert(`✅ 데이터 마이그레이션 완료!\n총 ${updateCount}개의 과거 클래스에 과목 정보가 성공적으로 자동 할당되었습니다.\n이제 아카데미 유니버스가 정상 작동합니다.`);
-            } else {
-                alert(`✅ 스캔 완료!\n과목 정보가 누락된 클래스가 없습니다. 모든 데이터가 최신 포맷으로 유지되고 있습니다.`);
-            }
-        } catch (err) {
-            alert("마이그레이션 중 오류가 발생했습니다: " + err.message);
-        } finally {
-            setMigrationProcessing(false);
-        }
-    };
 
     if (loading || loadingData) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
@@ -1174,66 +942,7 @@ const SettingsManager = ({ currentUser }) => {
                     </div>
                     )}
 
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-rose-200 space-y-6">
-                        <h2 className="text-xl font-black text-rose-800 border-b border-rose-100 pb-4 flex items-center gap-2">
-                            <ShieldAlert className="text-rose-600"/> 계정 보안 최적화 스크립트
-                        </h2>
-                        
-                        <div className="bg-rose-50 text-rose-900 p-5 rounded-2xl border border-rose-200 space-y-2 text-sm">
-                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 주의사항</p>
-                            <p>• 시스템에 남아있는 모든 직군의 <strong>'중복 계정 찌꺼기'</strong>를 삭제합니다.</p>
-                            <p>• 인증소에서 오류가 난 <strong>'회색 방패 계정'</strong>을 강제 동기화합니다.</p>
-                            <p className="text-rose-600 font-bold mt-2 pt-2 border-t border-rose-200">※ 현재 시스템 사용자가 없는 시간에 작동을 권장합니다.</p>
-                        </div>
 
-                        <Button 
-                            onClick={handleAuthSyncAndDedupe} 
-                            disabled={systemProcessing} 
-                            className="w-full bg-rose-600 hover:bg-rose-700 font-bold py-4 text-lg shadow-md border-0"
-                        >
-                            {systemProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '계정 최적화 실행'}
-                        </Button>
-                    </div>
-
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6">
-                        <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">
-                            <Database className="text-indigo-600"/> 데이터 마이그레이션 툴
-                        </h2>
-                        
-                        <div className="bg-indigo-50 text-indigo-900 p-5 rounded-2xl border border-indigo-200 space-y-2 text-sm">
-                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><Database size={18}/> 레거시 데이터 변환</p>
-                            <p>• 신규 기능(아카데미 유니버스 등) 도입 전 생성된 <strong>과거 클래스 데이터</strong>를 스캔합니다.</p>
-                            <p>• '과목(Subject)' 정보가 비어있는 반의 이름을 AI 엔진이 분석하여 <strong>정규 과목으로 자동 편입</strong>시킵니다.</p>
-                            <p className="text-indigo-600 font-bold mt-2 pt-2 border-t border-indigo-200">※ 에러 없이 언제든 반복해서 실행할 수 있는 안전한 스크립트입니다.</p>
-                        </div>
-
-                        <Button
-                            onClick={handleDataMigration}
-                            disabled={migrationProcessing}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 font-bold py-4 text-lg shadow-md border-0"
-                        >
-                            {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '과목 자동 할당 스크립트 실행'}
-                        </Button>
-
-                        <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
-                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><BookOpen size={18}/> 중등 시험 과목 분리</p>
-                            <p>• 예전에는 중학교 시험이 과목과 상관없이 <strong>'중등 교과 공통'</strong> 하나로 저장됐습니다.</p>
-                            <p>• 문서마다 <strong>자기 과목대로</strong> 중등 수학 / 중등 영어 / 중등 국어 … 로 나눕니다.</p>
-                            <p>• 앞으로 등록하는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다.</p>
-                            <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">
-                                ※ 바꾸기 전에 <strong>과목별 건수를 먼저 보여 드립니다.</strong> 과목을 알 수 없는 문서는
-                                건드리지 않고 목록으로 알려 줍니다. 반복 실행해도 안전합니다.
-                            </p>
-                        </div>
-
-                        <Button
-                            onClick={handleMigrateMiddleCodes}
-                            disabled={midMigrating}
-                            className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
-                        >
-                            {midMigrating ? <Loader className="animate-spin mx-auto" size={24}/> : '중등 시험 → 중등 수학으로 변환'}
-                        </Button>
-                    </div>
 
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6 md:col-span-2">
                         <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">
@@ -1274,10 +983,6 @@ const SettingsManager = ({ currentUser }) => {
                             <Button onClick={handleApplySchoolNames} disabled={schoolFixProcessing || !schoolScan}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3 px-5 border-0 disabled:opacity-40">
                                 2) 통합 실행
-                            </Button>
-                            <Button onClick={handleRollbackSchoolNames} disabled={schoolFixProcessing}
-                                className="ml-auto bg-white border-2 border-gray-300 text-gray-500 font-bold py-3 px-5 hover:bg-gray-50">
-                                되돌리기
                             </Button>
                         </div>
 
@@ -1538,49 +1243,7 @@ const SettingsManager = ({ currentUser }) => {
                         </Button>
                     </div>
 
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-200 space-y-6 md:col-span-2">
-                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
-                            <ShieldCheck className="text-amber-600"/> 지난 클리닉 예약의 전화번호 정리
-                        </h2>
 
-                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
-                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 왜 필요한가요?</p>
-                            <p>• 클리닉 예약 화면은 <strong>그날 전체 시간표</strong>를 봐야 해서, 예약 기록은 로그인한 누구나 읽을 수 있습니다.</p>
-                            <p>• 그동안 예약 기록에 <strong>학생 전화번호</strong>가 함께 저장되어, 다른 학생도 가져갈 수 있는 상태였습니다.</p>
-                            <p>• 앞으로는 저장하지 않도록 고쳤고, 이 버튼은 <strong>과거 기록</strong>을 청소합니다.</p>
-                            <p className="text-amber-700 font-bold mt-2 pt-2 border-t border-amber-200">※ 문자 발송은 영향받지 않습니다. 번호는 직원 정보에서 조회합니다.</p>
-                        </div>
-
-                        <Button
-                            onClick={handlePurgeSessionPhones}
-                            disabled={phonePurgeProcessing}
-                            className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
-                        >
-                            {phonePurgeProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '지난 예약 전화번호 지우기'}
-                        </Button>
-                    </div>
-
-                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-amber-200 space-y-6 md:col-span-2">
-                        <h2 className="text-xl font-black text-amber-800 border-b border-amber-100 pb-4 flex items-center gap-2">
-                            <ShieldCheck className="text-amber-600"/> 강사 피드백 보관함 분리
-                        </h2>
-
-                        <div className="bg-amber-50 text-amber-900 p-5 rounded-2xl border border-amber-200 space-y-2 text-sm">
-                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><AlertTriangle size={18}/> 왜 필요한가요?</p>
-                            <p>• 강사가 학생에 대해 쓴 <strong>진행 내용·다음 과제</strong>가 예약 기록 안에 함께 저장되어 있었습니다.</p>
-                            <p>• 예약 기록은 예약 화면 특성상 <strong>로그인한 누구나</strong> 읽을 수 있어서, 같은 반 친구도 가져갈 수 있었습니다. (화면에서는 감춰져 있었지만 데이터는 나갔습니다)</p>
-                            <p>• 옮긴 뒤에는 <strong>교직원과 본인·학부모만</strong> 볼 수 있습니다. 화면 표시는 지금과 똑같습니다.</p>
-                            <p className="text-amber-700 font-bold mt-2 pt-2 border-t border-amber-200">※ 이 버튼을 먼저 실행한 뒤에 확인해 주세요.</p>
-                        </div>
-
-                        <Button
-                            onClick={handleMigrateFeedbacks}
-                            disabled={feedbackMigrating}
-                            className="w-full bg-amber-600 hover:bg-amber-700 font-bold py-4 text-lg shadow-md border-0"
-                        >
-                            {feedbackMigrating ? <Loader className="animate-spin mx-auto" size={24}/> : '피드백 보관함으로 옮기기'}
-                        </Button>
-                    </div>
 
 
                 </div>
