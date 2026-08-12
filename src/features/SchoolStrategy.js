@@ -64,7 +64,7 @@ export default function SchoolStrategy({ currentUser }) {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [tempActiveTerm, setTempActiveTerm] = useState("1학기 중간고사");
 
-  const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+  const [activeDepartments, setActiveDepartments] = useState(['수학']);
 
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
   const [migrationTargets, setMigrationTargets] = useState([]);
@@ -109,7 +109,7 @@ export default function SchoolStrategy({ currentUser }) {
               if (docSnap.exists()) setSchoolsData(docSnap.data());
 
               const deptSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'departments'));
-              if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
+              if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['수학']);
 
               const stratSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'school_strategy'));
               if (stratSnap.exists() && stratSnap.data().activeTerm) {

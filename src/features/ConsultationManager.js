@@ -13,6 +13,7 @@ import { collection, query, onSnapshot, doc, setDoc, getDoc, serverTimestamp, ad
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { useData } from '../contexts/DataContext';
+import { activeMainSubjects, MAIN_SUBJECTS } from '../utils/subjectMatch';
 import { getDayInfo } from '../utils/academyCalendar';
 import { Modal, Button, Badge, Card, Toast } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
@@ -29,8 +30,19 @@ const TIME_SLOTS = Array.from({ length: 19 }, (_, i) => {
     return `${String(hour).padStart(2, '0')}:${min}`;
 });
 
+
+/* 과목별 탭 색과 아이콘. 목록에 없는 과목은 default 를 씁니다. */
+const SUBJECT_TAB_STYLE = {
+    '국어': { on: 'bg-orange-500', icon: BookOpen },
+    '수학': { on: 'bg-emerald-500', icon: Calculator },
+    '영어': { on: 'bg-indigo-500', icon: Languages },
+    '과학': { on: 'bg-purple-500', icon: FlaskConical },
+    '사회': { on: 'bg-rose-500', icon: BookOpen },
+    default: { on: 'bg-slate-500', icon: BookOpen }
+};
+
 export default function ConsultationManager({ isKiosk = false }) {
-    const { currentUser, users = [], academyCalendar = [], loadingData } = useData() || {};
+    const { currentUser, users = [], academyCalendar = [], activeDepartments = [], loadingData } = useData() || {};
     const [mainTab, setMainTab] = useState('schedule');
     const isMounted = useRef(true);
 
@@ -227,6 +239,13 @@ export default function ConsultationManager({ isKiosk = false }) {
     const [toast, setToast] = useState({ message: '', type: 'info' });
     const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
     const [onboardTab, setOnboardTab] = useState('basic');
+
+    /* 상담에서 고를 수 있는 과목은 학원이 가르치는 과목을 그대로 따릅니다.
+       예전에는 국어·수학·영어·과학 넷이 코드에 박혀 있어 사회 상담을 받을 수 없었습니다. */
+    const academySubjects = useMemo(() => {
+        const list = activeMainSubjects(activeDepartments);
+        return list.length > 0 ? list : MAIN_SUBJECTS;
+    }, [activeDepartments]);
 
     const [leadForm, setLeadForm] = useState({
         name: '', phone: '', schoolName: '', schoolType: '중등', gradeLevel: '2',
@@ -510,10 +529,16 @@ export default function ConsultationManager({ isKiosk = false }) {
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                         <div className="md:col-span-1 flex flex-col gap-2 bg-white p-3 rounded-2xl border shadow-sm h-fit">
                             <button onClick={() => setOnboardTab('basic')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === 'basic' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}>👤 1. 기본 인적사항</button>
-                            {leadForm.checkedSubjects["국어"] && <button onClick={() => setOnboardTab('국어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === '국어' ? 'bg-orange-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><BookOpen size={14}/> 국어 체크리스트</button>}
-                            {leadForm.checkedSubjects["수학"] && <button onClick={() => setOnboardTab('수학')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === '수학' ? 'bg-emerald-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><Calculator size={14}/> 수학 체크리스트</button>}
-                            {leadForm.checkedSubjects["영어"] && <button onClick={() => setOnboardTab('영어')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === '영어' ? 'bg-indigo-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><Languages size={14}/> 영어 체크리스트</button>}
-                            {leadForm.checkedSubjects["과학"] && <button onClick={() => setOnboardTab('과학')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === '과학' ? 'bg-purple-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-50'}`}><FlaskConical size={14}/> 과학 체크리스트</button>}
+                            {academySubjects.filter(sub => leadForm.checkedSubjects[sub]).map(sub => {
+                                const st = SUBJECT_TAB_STYLE[sub] || SUBJECT_TAB_STYLE.default;
+                                const TabIcon = st.icon;
+                                return (
+                                    <button key={sub} onClick={() => setOnboardTab(sub)}
+                                        className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 transition-all ${onboardTab === sub ? `${st.on} text-white shadow-md` : 'text-gray-600 hover:bg-gray-50'}`}>
+                                        <TabIcon size={14}/> {sub} 체크리스트
+                                    </button>
+                                );
+                            })}
                             <button onClick={() => setOnboardTab('final')} className={`p-3 rounded-xl font-black text-xs text-left flex items-center gap-2 border border-dashed transition-all mt-4 ${onboardTab === 'final' ? 'bg-gray-900 text-white shadow-md border-transparent' : 'text-gray-700 hover:bg-gray-50 border-gray-300'}`}><UserPlus size={14}/> 3. 원클릭 학생 전환</button>
                         </div>
 
@@ -578,7 +603,7 @@ export default function ConsultationManager({ isKiosk = false }) {
                                     <div className="pt-4 border-t border-gray-100">
                                         <label className="block text-xs font-black text-blue-900 mb-3">📍 오늘 상담을 희망하는 과목을 모두 체크하세요</label>
                                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                            {["국어", "수학", "영어", "과학"].map(sub => (
+                                            {academySubjects.map(sub => (
                                                 <label key={sub} className={`flex items-center justify-center gap-2 p-4 border rounded-xl font-black text-sm cursor-pointer transition-all active:scale-95 ${leadForm.checkedSubjects[sub] ? 'bg-blue-50 border-blue-500 text-blue-800 shadow-sm' : 'bg-white hover:bg-gray-50 text-gray-500 border-gray-200'}`}>
                                                     <input type="checkbox" className="accent-blue-600 h-4 w-4" checked={leadForm.checkedSubjects[sub]} onChange={() => handleSubjectCheck(sub)}/>
                                                     {sub}

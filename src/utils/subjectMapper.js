@@ -57,54 +57,71 @@ export const STANDARD_CODES = [
     { code: 'SCI_MID', label: '중등 과학' },
     { code: 'SOC_MID', label: '중등 사회·역사' },
 
-    // --- 초등 ---
-    { code: 'ELEM_ALL', label: '초등 교과 공통' },
+    // --- 초등 (과목별) ---
+    { code: 'MATH_ELEM', label: '초등 수학' },
+    { code: 'ENG_ELEM', label: '초등 영어' },
+    { code: 'KOR_ELEM', label: '초등 국어' },
+    { code: 'SCI_ELEM', label: '초등 과학' },
+    { code: 'SOC_ELEM', label: '초등 사회' },
 
-    /* 옛 중등 자료용. 새로 만들어지지는 않습니다.
-       마이그레이션을 돌리기 전의 문서가 이 값을 갖고 있습니다. */
-    { code: 'MIDDLE_ALL', label: '중등 교과 공통 (구 형식)' }
+    /* 옛 자료용. 새로 만들어지지 않습니다.
+       과목별로 나누기 전에 등록된 문서가 이 값을 갖고 있습니다. */
+    { code: 'MIDDLE_ALL', label: '중등 교과 공통 (구 형식)' },
+    { code: 'ELEM_ALL', label: '초등 교과 공통 (구 형식)' }
 ];
 
-/** 중등 과목별 표준 코드. 대과목 이름으로 찾습니다. */
+/** 학교급별 과목 표준 코드. 대과목 이름으로 찾습니다. */
 export const MID_CODE_BY_SUBJECT = {
     '수학': 'MATH_MID', '영어': 'ENG_MID', '국어': 'KOR_MID',
     '과학': 'SCI_MID', '사회': 'SOC_MID'
+};
+export const ELEM_CODE_BY_SUBJECT = {
+    '수학': 'MATH_ELEM', '영어': 'ENG_ELEM', '국어': 'KOR_ELEM',
+    '과학': 'SCI_ELEM', '사회': 'SOC_ELEM'
 };
 
 // 3. 부서별/교육과정별 실제 화면에 노출될 텍스트 (국어/영어/과학 축소)
 const SUBJECT_LISTS = {
     HIGH_2015: {
-        DEPT_KOR: ['국어'],
-        DEPT_ENG: ['영어'],
-        DEPT_MATH: ['수학(상)', '수학(하)', '수학 I', '수학 II', '미적분', '확률과 통계', '기하'],
-        DEPT_SOC: ['통합사회', '한국사', '생활과 윤리', '윤리와 사상', '한국지리', '세계지리', '동아시아사', '세계사', '정치와 법', '경제', '사회·문화'],
-        DEPT_SCI: ['통합과학', '물리학', '화학', '생명과학', '지구과학']
+        '국어': ['국어'],
+        '영어': ['영어'],
+        '수학': ['수학(상)', '수학(하)', '수학 I', '수학 II', '미적분', '확률과 통계', '기하'],
+        '사회': ['통합사회', '한국사', '생활과 윤리', '윤리와 사상', '한국지리', '세계지리', '동아시아사', '세계사', '정치와 법', '경제', '사회·문화'],
+        '과학': ['통합과학', '물리학', '화학', '생명과학', '지구과학']
     },
     HIGH_2022: {
-        DEPT_KOR: ['국어'],
-        DEPT_ENG: ['영어'],
-        DEPT_MATH: ['공통수학1', '공통수학2', '대수', '미적분 I', '미적분 II', '확률과 통계', '기하'],
-        DEPT_SOC: ['통합사회1', '통합사회2', '한국사1', '한국사2', '세계시민과 지리', '세계사', '사회와 문화', '현대사회와 법', '경제'],
-        DEPT_SCI: ['통합과학1', '통합과학2', '물리학', '화학', '생명과학', '지구과학']
+        '국어': ['국어'],
+        '영어': ['영어'],
+        '수학': ['공통수학1', '공통수학2', '대수', '미적분 I', '미적분 II', '확률과 통계', '기하'],
+        '사회': ['통합사회1', '통합사회2', '한국사1', '한국사2', '세계시민과 지리', '세계사', '사회와 문화', '현대사회와 법', '경제'],
+        '과학': ['통합과학1', '통합과학2', '물리학', '화학', '생명과학', '지구과학']
     }
 };
 
 /**
  * 활성화된 부서(activeDepartments)와 시공간을 기반으로 드롭다운용 과목 리스트를 반환
  */
-export const getAvailableSubjects = (schoolType, yearStr, gradeStr, activeDepartments = ['DEPT_MATH']) => {
+export const getAvailableSubjects = (schoolType, yearStr, gradeStr, activeDepartments = ['수학']) => {
     if (!yearStr || !gradeStr || !schoolType) return [];
     const year = parseInt(yearStr, 10);
     const grade = parseInt(String(gradeStr).replace(/[^0-9]/g, ''), 10) || 1;
 
-    if (schoolType === '초등학교') return ['초등 국어', '초등 영어', '초등 수학', '초등 사회', '초등 과학'];
+    /* 학원이 가르치는 과목만 보여 줍니다.
+       activeMainSubjects 가 옛 ID 형식('DEPT_MATH')과 새 형식('수학')을 모두 받습니다. */
+    const teaching = activeMainSubjects(activeDepartments);
+    const teaches = (s) => teaching.length === 0 || teaching.includes(s);
+
+    if (schoolType === '초등학교') {
+        return ['국어', '영어', '수학', '사회', '과학']
+            .filter(teaches).map(s => `초등 ${s}`);
+    }
     if (schoolType === '중학교') {
         let ms = [];
-        if (activeDepartments.includes('DEPT_KOR')) ms.push('국어');
-        if (activeDepartments.includes('DEPT_ENG')) ms.push('영어');
-        if (activeDepartments.includes('DEPT_MATH')) ms.push(`수학 ${grade}-1`, `수학 ${grade}-2`);
-        if (activeDepartments.includes('DEPT_SOC')) ms.push(`사회 ${grade}-1`, `역사 ${grade}-1`);
-        if (activeDepartments.includes('DEPT_SCI')) ms.push(`과학 ${grade}-1`, `과학 ${grade}-2`);
+        if (teaches('국어')) ms.push('국어');
+        if (teaches('영어')) ms.push('영어');
+        if (teaches('수학')) ms.push(`수학 ${grade}-1`, `수학 ${grade}-2`);
+        if (teaches('사회')) ms.push(`사회 ${grade}-1`, `역사 ${grade}-1`);
+        if (teaches('과학')) ms.push(`과학 ${grade}-1`, `과학 ${grade}-2`);
         return ms;
     }
 
@@ -116,9 +133,10 @@ export const getAvailableSubjects = (schoolType, yearStr, gradeStr, activeDepart
         
         const targetList = is2022 ? SUBJECT_LISTS.HIGH_2022 : SUBJECT_LISTS.HIGH_2015;
         
+        const wanted = teaching.length > 0 ? teaching : MAIN_SUBJECTS_ORDER;
         let result = [];
-        activeDepartments.forEach(dept => {
-            if (targetList[dept]) result = [...result, ...targetList[dept]];
+        wanted.forEach(sub => {
+            if (targetList[sub]) result = [...result, ...targetList[sub]];
         });
         return result;
     }
@@ -136,7 +154,12 @@ export const getStandardSubjectCode = (schoolType, subjectName) => {
     cleanSubj = cleanSubj.replace(/\(문과\)|\(이과\)|\(가형\)|\(나형\)|\(A형\)|\(B형\)|\(인문\)|\(자연\)/gi, '');
     cleanSubj = cleanSubj.replace(/문과|이과|가형|나형|A형|B형|인문|자연/gi, '');
 
-    if (schoolType === '초등학교') return 'ELEM_ALL';
+    /* 초등도 중등과 같은 방식으로 과목을 나눕니다.
+       판정할 수 없으면 옛 값으로 두어 엉뚱한 과목이 되지 않게 합니다. */
+    if (schoolType === '초등학교') {
+        const main = toMainSubject(subjectName);
+        return (main && ELEM_CODE_BY_SUBJECT[main]) || 'ELEM_ALL';
+    }
     /* 중등도 과목을 나눕니다. 과목 판정은 subjectMatch 한 곳에서만 합니다.
        알아낼 수 없으면 옛 값(MIDDLE_ALL)으로 두어 조용히 엉뚱한 과목이 되지 않게 합니다. */
     if (schoolType === '중학교') {
@@ -232,7 +255,12 @@ export const getDynamicSubjectLabel = (code, schoolType, yearStr, gradeStr, orig
          };
          if (mapMiddle[code]) return mapMiddle[code];
     } else if (typeK === '초등학교') {
-         if (code === 'ELEM_ALL') return '초등 교과 공통';
+         const mapElem = {
+             'MATH_ELEM': '수학', 'ENG_ELEM': '영어', 'KOR_ELEM': '국어',
+             'SCI_ELEM': '과학', 'SOC_ELEM': '사회',
+             'ELEM_ALL': '초등 교과 공통'   // 나누기 전 문서용
+         };
+         if (mapElem[code]) return mapElem[code];
     }
 
     return originalSubject || '미지정';

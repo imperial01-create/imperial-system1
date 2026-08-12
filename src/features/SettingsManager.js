@@ -7,6 +7,8 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
+import { toMainSubject, activeMainSubjects, MAIN_SUBJECTS } from '../utils/subjectMatch';
+import { STANDARD_CODES, MID_CODE_BY_SUBJECT, ELEM_CODE_BY_SUBJECT } from '../utils/subjectMapper';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -38,27 +40,23 @@ const SCHOOL_CAT_STYLES = {
     rose:    { head: 'bg-rose-50 border-rose-100',       title: 'text-rose-800' }
 };
 
+/* 학원이 가르치는 과목.
+
+   예전에는 'DEPT_MATH' 같은 ID 로 저장했는데, 부서와 대과목이 1:1 이라
+   ID 가 더 담는 정보가 없었습니다. 같은 개념을 두 표기로 갖고 있던 셈입니다.
+   이제 대과목 이름 하나만 씁니다 — 반·강사 과목과 같은 값입니다.
+   아래 subjects 는 그 과목의 시험이 어떤 세부 과목으로 나뉘는지 보여 주는 안내입니다. */
 const DEPT_INFO = [
-    {
-        id: 'DEPT_KOR', label: '국어과', color: 'rose',
-        subjects: ['국어 (모든 국어 과목 통합)'] 
-    },
-    { 
-        id: 'DEPT_ENG', label: '영어과', color: 'orange',
-        subjects: ['영어 (모든 영어 과목 통합)'] 
-    },
-    { 
-        id: 'DEPT_MATH', label: '수학과', color: 'blue',
-        subjects: ['공통수학(1·2)', '대수(수학 I)', '미적분 I(수학 II)', '미적분 II(미적분)', '확률과 통계', '기하'] 
-    },
-    { 
-        id: 'DEPT_SCI', label: '과학과', color: 'emerald',
-        subjects: ['통합과학', '물리학 (I·II통합)', '화학 (I·II통합)', '생명과학 (I·II통합)', '지구과학 (I·II통합)'] 
-    },
-    { 
-        id: 'DEPT_SOC', label: '사회과', color: 'purple',
-        subjects: ['통합사회(1·2)', '한국사', '생활과윤리', '한국지리', '세계사', '정치와법', '사회문화', '경제'] 
-    }
+    { id: '국어', label: '국어', color: 'rose',
+      subjects: ['국어 (모든 국어 과목 통합)'] },
+    { id: '영어', label: '영어', color: 'orange',
+      subjects: ['영어 (모든 영어 과목 통합)'] },
+    { id: '수학', label: '수학', color: 'blue',
+      subjects: ['공통수학1·2', '대수(수학 I)', '미적분 I(수학 II)', '미적분 II', '확률과 통계', '기하'] },
+    { id: '과학', label: '과학', color: 'emerald',
+      subjects: ['통합과학', '물리학', '화학', '생명과학', '지구과학'] },
+    { id: '사회', label: '사회', color: 'purple',
+      subjects: ['통합사회', '한국사', '생활과윤리', '한국지리', '세계사', '정치와법', '사회문화', '경제'] }
 ];
 
 const SettingsManager = ({ currentUser }) => {
@@ -88,9 +86,10 @@ const SettingsManager = ({ currentUser }) => {
     
     const currentYear = new Date().getFullYear();
     
-    const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+    const [activeDepartments, setActiveDepartments] = useState(['수학']);
     // 불러오기에 실패했는가. 실패한 채로 저장하면 기존 값을 빈 값으로 덮어씁니다.
     const [loadFailed, setLoadFailed] = useState(false);
+    const [legacySplitting, setLegacySplitting] = useState(false);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [newSchool, setNewSchool] = useState({ type: 'high', name: '' });
@@ -126,7 +125,9 @@ const SettingsManager = ({ currentUser }) => {
                 }
 
                 if (deptSnap.exists()) {
-                    setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
+                    // 옛 형식('DEPT_MATH')으로 저장돼 있어도 대과목으로 옮겨 읽습니다.
+                    const saved = activeMainSubjects(deptSnap.data().active);
+                    setActiveDepartments(saved.length > 0 ? saved : ['수학']);
                 }
             } catch (error) {
                 console.error("환경설정 로딩 실패:", error);
@@ -527,6 +528,75 @@ const SettingsManager = ({ currentUser }) => {
         if (v.internalMemo) s += 2;
         if (v.trendData?.length) s += 2;
         return s;
+    };
+
+    /* 옛 형식(중등·초등 교과 공통) 표준 코드를 과목별로 나눕니다.
+
+       예전에는 중·초등 시험이 과목과 무관하게 코드 하나였습니다.
+       문서마다 자기 subject 로 과목을 판정해 알맞은 코드를 붙입니다.
+       판정할 수 없는 문서는 건드리지 않고 목록으로 보여 줍니다 —
+       조용히 엉뚱한 과목으로 바꾸는 것보다 남겨 두고 사람이 보는 편이 낫습니다. */
+    const handleSplitLegacyCodes = async () => {
+        setLegacySplitting(true);
+        try {
+            const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams'));
+            const LEGACY = { MIDDLE_ALL: MID_CODE_BY_SUBJECT, ELEM_ALL: ELEM_CODE_BY_SUBJECT };
+            const targets = snap.docs.filter(d => LEGACY[d.data().standardCode || '']);
+
+            if (targets.length === 0) {
+                alert('✅ 스캔 완료\n\n옛 형식으로 남은 중등·초등 시험이 없습니다.');
+                return;
+            }
+
+            const plan = new Map();
+            const unknown = [];
+            targets.forEach(d => {
+                const table = LEGACY[d.data().standardCode];
+                const main = toMainSubject(d.data().subject);
+                const code = main && table[main];
+                if (!code) { unknown.push(d); return; }
+                if (!plan.has(code)) plan.set(code, []);
+                plan.get(code).push(d);
+            });
+
+            const labelOf = (code) => (STANDARD_CODES.find(c => c.code === code)?.label || code);
+            const lines = [...plan.entries()].map(([code, docs]) => `· ${docs.length}건 → ${labelOf(code)}`);
+            const willChange = [...plan.values()].reduce((n, v) => n + v.length, 0);
+
+            if (willChange === 0) {
+                alert(`스캔한 ${targets.length}건 모두 과목을 알아낼 수 없어 바꿀 것이 없습니다.\n\n` +
+                      unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n'));
+                return;
+            }
+
+            const unknownNote = unknown.length > 0
+                ? `\n\n건드리지 않는 문서 ${unknown.length}건 (과목을 알 수 없음):\n` +
+                  unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n') +
+                  (unknown.length > 8 ? `\n· 외 ${unknown.length - 8}건` : '')
+                : '';
+
+            if (!window.confirm(
+                `옛 형식으로 남은 시험 ${targets.length}건을 과목별로 나눕니다.\n\n${lines.join('\n')}${unknownNote}\n\n계속할까요?`
+            )) return;
+
+            const all = [...plan.entries()].flatMap(([code, docs]) => docs.map(d => ({ ref: d.ref, code })));
+            let done = 0;
+            for (let i = 0; i < all.length; i += 400) {
+                const slice = all.slice(i, i + 400);
+                const batch = writeBatch(db);
+                slice.forEach(({ ref, code }) => batch.update(ref, { standardCode: code, updatedAt: serverTimestamp() }));
+                await batch.commit();
+                done += slice.length;
+            }
+
+            alert(`✅ 변환 완료 — ${done}건\n\n${lines.join('\n')}` +
+                  (unknown.length > 0 ? `\n\n그대로 둔 문서: ${unknown.length}건` : ''));
+        } catch (err) {
+            console.error('[옛 표준 코드 정리] 실패:', err);
+            alert('변환 중 오류가 발생했습니다: ' + err.message + '\n\n다시 실행하면 남은 것부터 이어서 처리합니다.');
+        } finally {
+            setLegacySplitting(false);
+        }
     };
 
     const handleScanDuplicateExams = async () => {
@@ -943,6 +1013,30 @@ const SettingsManager = ({ currentUser }) => {
                     )}
 
 
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-emerald-200 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-emerald-800 border-b border-emerald-100 pb-4 flex items-center gap-2">
+                            <BookOpen className="text-emerald-600"/> 중등·초등 시험 과목 분리
+                        </h2>
+
+                        <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
+                            <p>• 예전에는 중·초등 시험이 과목과 상관없이 <strong>'교과 공통'</strong> 코드 하나로 저장됐습니다.</p>
+                            <p>• 문서마다 <strong>자기 과목대로</strong> 중등 수학 / 초등 영어 … 로 나눕니다.</p>
+                            <p>• 앞으로 등록하는 시험은 과목에 맞는 코드가 자동으로 붙습니다.</p>
+                            <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">
+                                ※ 바꾸기 전에 <strong>과목별 건수를 먼저 보여 드립니다.</strong> 과목을 알 수 없는 문서는
+                                건드리지 않고 알려 줍니다. 반복 실행해도 안전합니다.
+                            </p>
+                        </div>
+
+                        <Button
+                            onClick={handleSplitLegacyCodes}
+                            disabled={legacySplitting}
+                            className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {legacySplitting ? <Loader className="animate-spin mx-auto" size={24}/> : '옛 형식 시험을 과목별로 나누기'}
+                        </Button>
+                    </div>
 
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-indigo-200 space-y-6 md:col-span-2">
                         <h2 className="text-xl font-black text-indigo-800 border-b border-indigo-100 pb-4 flex items-center gap-2">

@@ -45,7 +45,7 @@ const ExamArchive = ({ currentUser }) => {
     const [showEditExamModal, setShowEditExamModal] = useState(false);
     
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
-    const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+    const [activeDepartments, setActiveDepartments] = useState(['수학']);
 
     const [addSchoolType, setAddSchoolType] = useState('high');
     const [isAddCustom, setIsAddCustom] = useState(false);
@@ -72,7 +72,7 @@ const ExamArchive = ({ currentUser }) => {
 
                 const [schoolSnap, deptSnap] = await Promise.all([getDoc(docRef), getDoc(deptRef)]);
                 if (schoolSnap.exists()) setSchoolsData(schoolSnap.data());
-                if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['DEPT_MATH']);
+                if (deptSnap.exists()) setActiveDepartments(deptSnap.data().active || ['수학']);
             } catch (e) { console.error("환경설정 로드 실패", e); }
         };
         fetchSettings();

@@ -20,9 +20,12 @@
 /** 학원의 대과목. 반 과목(classes.subject)에 저장되는 값은 이 다섯 중 하나입니다. */
 export const MAIN_SUBJECTS = ['수학', '과학', '국어', '영어', '사회'];
 
-/* 환경설정의 부서(대과목) 토글과 짝을 이룹니다.
-   settings/departments 의 active 배열이 이 키를 담습니다. */
-export const DEPT_TO_SUBJECT = {
+/* 예전에는 학원이 가르치는 과목을 'DEPT_MATH' 같은 ID 로 저장했습니다.
+   그런데 부서와 대과목은 1:1 이고 ID 가 더 담는 정보가 없었습니다.
+   같은 개념을 두 표기로 갖고 있던 셈이라 대과목 이름 하나로 통일했습니다.
+
+   이 표는 옛 형식으로 저장된 문서를 읽기 위해 남깁니다. 새로 쓰지 않습니다. */
+const LEGACY_DEPT_ID = {
   DEPT_MATH: '수학',
   DEPT_SCI: '과학',
   DEPT_KOR: '국어',
@@ -30,18 +33,23 @@ export const DEPT_TO_SUBJECT = {
   DEPT_SOC: '사회'
 };
 
+/** 학원이 가르치는 과목 목록. 옛 ID 형식과 새 대과목 형식을 모두 받습니다. */
+export const activeMainSubjects = (active) => {
+  const list = Array.isArray(active) ? active : [];
+  const named = new Set(list.map(v => LEGACY_DEPT_ID[v] || v));
+  return MAIN_SUBJECTS.filter(s => named.has(s));
+};
+
 /**
- * 켜져 있는 부서에 해당하는 대과목 목록.
- * 반 과목 드롭다운은 이 값을 씁니다 — 그래야 부서 토글이 실제로 의미를 갖습니다.
+ * 반·강사 과목 드롭다운에 보여줄 목록.
  *
- * @param activeDepartments settings/departments 의 active 배열
- * @param keep 목록에 없어도 반드시 남길 값(지금 그 반에 저장돼 있는 과목).
- *             부서를 끈 뒤 그 반을 수정하다 과목이 지워지는 것을 막습니다.
+ * @param active settings/departments 의 active 배열
+ * @param keep 목록에 없어도 반드시 남길 값(지금 저장돼 있는 과목).
+ *             과목을 끈 뒤 그 반을 수정하다 값이 지워지는 것을 막습니다.
  */
-export const subjectsForDepartments = (activeDepartments, keep = null) => {
-  const active = Array.isArray(activeDepartments) ? activeDepartments : [];
-  const list = MAIN_SUBJECTS.filter(s => active.some(d => DEPT_TO_SUBJECT[d] === s));
-  const base = list.length > 0 ? list : MAIN_SUBJECTS;   // 부서를 하나도 안 켰으면 전부 보여줍니다.
+export const subjectsForDepartments = (active, keep = null) => {
+  const list = activeMainSubjects(active);
+  const base = list.length > 0 ? list : MAIN_SUBJECTS;   // 하나도 안 켰으면 전부 보여줍니다.
   if (keep && !base.includes(keep)) return [...base, keep];
   return base;
 };
