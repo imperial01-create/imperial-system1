@@ -21,7 +21,7 @@ import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
 import SmartSchoolSelect from './components/SmartSchoolSelect';
 import { toStorableSchoolName } from './utils/schoolName';
-import { toMainSubject } from './utils/subjectMatch';
+import { toMainSubject, MAIN_SUBJECTS } from './utils/subjectMatch';
 import { APP_ID } from './constants';
 
 // 컴포넌트 Lazy 로딩
@@ -337,11 +337,12 @@ const SignUpForm = ({ onCancel, setLoginErrorModal }) => {
                     <label className="block text-xs font-bold text-gray-500 mb-1.5 ml-1">담당 과목</label>
                     <select required className="w-full border-2 border-gray-200 focus:border-blue-400 outline-none p-3 rounded-xl bg-white font-bold transition-colors" value={form.subject} onChange={e => setForm({...form, subject: e.target.value})}>
                         <option value="" disabled hidden>과목을 선택해주세요</option>
-                        <option value="영어">영어 (English)</option>
-                        <option value="수학">수학 (Math)</option>
-                        <option value="국어">국어 (Korean)</option>
-                        <option value="과학">과학 (Science)</option>
-                        <option value="기타">기타 (Others)</option>
+                        {/* 회원 관리·반 과목과 같은 어휘를 씁니다.
+                            예전에는 여기만 '기타' 가 있어서, 그걸 고른 강사는 어느 과목으로도
+                            판정되지 않는 상태로 남았습니다. 사회는 아예 없었습니다.
+                            가입 화면은 로그인 전이라 부서 설정을 읽을 수 없으므로 다섯 개를 모두 보여주고,
+                            실제 확정은 회원 관리에서 합니다. */}
+                        {MAIN_SUBJECTS.map(sub => <option key={sub} value={sub}>{sub}</option>)}
                     </select>
                 </div>
             )}
@@ -419,9 +420,6 @@ const Dashboard = ({ currentUser }) => {
         
         return dynamicGroups.map(group => {
             const authorizedItems = group.items.filter(item => {
-                if (item.path === '/voca' && ['lecturer', 'ta'].includes(currentUser.role) && currentUser.subject !== '영어') {
-                    return false;
-                }
                 const hasRole = item.roles.includes(currentUser.role);
                 const passCondition = item.condition ? item.condition(currentUser) : true;
                 return hasRole && passCondition;
