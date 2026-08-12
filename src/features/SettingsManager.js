@@ -7,6 +7,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
+import { toMainSubject } from '../utils/subjectMatch';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -69,6 +70,7 @@ const SettingsManager = ({ currentUser }) => {
     const [savingSchools, setSavingSchools] = useState(false);
     const [systemProcessing, setSystemProcessing] = useState(false);
     const [migrationProcessing, setMigrationProcessing] = useState(false);
+    const [midMigrating, setMidMigrating] = useState(false);
     const [staffDirProcessing, setStaffDirProcessing] = useState(false);
     const [studentDirProcessing, setStudentDirProcessing] = useState(false);
     const [phonePurgeProcessing, setPhonePurgeProcessing] = useState(false);
@@ -762,6 +764,57 @@ const SettingsManager = ({ currentUser }) => {
         return out;
     }, [schools]);
 
+    /* 중등 시험의 표준 코드를 과목별로 나눕니다.
+
+       예전에는 중학교 시험이 과목과 무관하게 MIDDLE_ALL 하나였습니다.
+       지금 쌓여 있는 중등 자료는 **전부 수학**이므로(원장 확인) 분류할 것이 없고,
+       MIDDLE_ALL 을 MATH_MID 로 옮기기만 하면 됩니다.
+       앞으로 등록되는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다. */
+    const handleMigrateMiddleCodes = async () => {
+        setMidMigrating(true);
+        try {
+            const snap = await getDocsFromServer(collection(db, 'artifacts', APP_ID, 'public', 'data', 'integrated_exams'));
+            const targets = snap.docs.filter(d => (d.data().standardCode || '') === 'MIDDLE_ALL');
+
+            if (targets.length === 0) {
+                alert('✅ 스캔 완료\n\n옛 형식(MIDDLE_ALL)으로 남은 중등 시험이 없습니다.');
+                return;
+            }
+
+            // 혹시 수학이 아닌 것이 섞여 있으면 먼저 보여 주고 멈춥니다.
+            const notMath = targets.filter(d => {
+                const main = toMainSubject(d.data().subject);
+                return main && main !== '수학';
+            });
+            if (notMath.length > 0) {
+                const sample = notMath.slice(0, 5).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n');
+                alert(`⚠️ 수학이 아닌 중등 시험이 ${notMath.length}건 섞여 있습니다.\n\n${sample}\n\n` +
+                      '전부 수학이라는 전제가 깨졌으므로 자동 변환을 멈춥니다.\n담당자에게 알려주세요.');
+                return;
+            }
+
+            if (!window.confirm(
+                `중등 시험 ${targets.length}건의 표준 코드를\n'중등 교과 공통(MIDDLE_ALL)' → '중등 수학(MATH_MID)' 으로 바꿉니다.\n\n계속할까요?`
+            )) return;
+
+            // Firestore 일괄 쓰기 상한은 500건입니다. 여유를 둡니다.
+            let done = 0;
+            for (let i = 0; i < targets.length; i += 400) {
+                const slice = targets.slice(i, i + 400);
+                const batch = writeBatch(db);
+                slice.forEach(d => batch.update(d.ref, { standardCode: 'MATH_MID', updatedAt: serverTimestamp() }));
+                await batch.commit();
+                done += slice.length;
+            }
+            alert(`✅ 변환 완료\n\n중등 시험 ${done}건을 '중등 수학'으로 옮겼습니다.\n이제 중등도 과목별로 나뉘어 관리됩니다.`);
+        } catch (err) {
+            console.error('[중등 코드 변환] 실패:', err);
+            alert('변환 중 오류가 발생했습니다: ' + err.message + '\n\n일부만 바뀌었을 수 있습니다. 다시 실행하면 남은 것부터 이어서 처리합니다.');
+        } finally {
+            setMidMigrating(false);
+        }
+    };
+
     const handleDataMigration = async () => {
         if (!window.confirm("⚠️ [데이터 마이그레이션]\n\n과거에 생성되어 '과목(subject)' 정보가 누락된 클래스(반) 데이터를 스캔합니다. 스캔 후 클래스 이름을 바탕으로 자동으로 과목을 할당합니다.\n\n이 작업은 아카데미 유니버스 등 최신 기능과의 정상적인 연동을 위해 반드시 필요합니다. 계속하시겠습니까?")) return;
         
@@ -1137,6 +1190,24 @@ const SettingsManager = ({ currentUser }) => {
                             className="w-full bg-indigo-600 hover:bg-indigo-700 font-bold py-4 text-lg shadow-md border-0"
                         >
                             {migrationProcessing ? <Loader className="animate-spin mx-auto" size={24}/> : '과목 자동 할당 스크립트 실행'}
+                        </Button>
+
+                        <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
+                            <p className="font-bold flex items-center gap-1.5 text-base mb-3"><BookOpen size={18}/> 중등 시험 과목 분리</p>
+                            <p>• 예전에는 중학교 시험이 과목과 상관없이 <strong>'중등 교과 공통'</strong> 하나로 저장됐습니다.</p>
+                            <p>• 지금 쌓인 중등 자료는 전부 수학이므로, <strong>'중등 수학'</strong>으로 한 번에 옮깁니다.</p>
+                            <p>• 앞으로 등록하는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다. (영어 등)</p>
+                            <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">
+                                ※ 수학이 아닌 자료가 섞여 있으면 변환을 멈추고 알려 줍니다. 반복 실행해도 안전합니다.
+                            </p>
+                        </div>
+
+                        <Button
+                            onClick={handleMigrateMiddleCodes}
+                            disabled={midMigrating}
+                            className="w-full bg-emerald-600 hover:bg-emerald-700 font-bold py-4 text-lg shadow-md border-0"
+                        >
+                            {midMigrating ? <Loader className="animate-spin mx-auto" size={24}/> : '중등 시험 → 중등 수학으로 변환'}
                         </Button>
                     </div>
 

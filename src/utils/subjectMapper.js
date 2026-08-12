@@ -47,10 +47,29 @@ export const STANDARD_CODES = [
     { code: 'SCI_BIO', label: '생명과학 (생명1, 2 통합)' },
     { code: 'SCI_EAS', label: '지구과학 (지구1, 2 통합)' },
 
-    // --- 중등/초등 공통 ---
-    { code: 'MIDDLE_ALL', label: '중등 교과 공통' },
-    { code: 'ELEM_ALL', label: '초등 교과 공통' }
+    /* --- 중등 (과목별) ---
+       예전에는 중학교 시험이 학년·과목과 무관하게 MIDDLE_ALL 하나였습니다.
+       그래서 '수학 2-1' 과 '영어' 가 같은 코드였고 과목 필터가 무의미했습니다.
+       학년은 문서에 grade 로 따로 있으므로 코드에는 과목만 담습니다. */
+    { code: 'MATH_MID', label: '중등 수학' },
+    { code: 'ENG_MID', label: '중등 영어' },
+    { code: 'KOR_MID', label: '중등 국어' },
+    { code: 'SCI_MID', label: '중등 과학' },
+    { code: 'SOC_MID', label: '중등 사회·역사' },
+
+    // --- 초등 ---
+    { code: 'ELEM_ALL', label: '초등 교과 공통' },
+
+    /* 옛 중등 자료용. 새로 만들어지지는 않습니다.
+       마이그레이션을 돌리기 전의 문서가 이 값을 갖고 있습니다. */
+    { code: 'MIDDLE_ALL', label: '중등 교과 공통 (구 형식)' }
 ];
+
+/** 중등 과목별 표준 코드. 대과목 이름으로 찾습니다. */
+export const MID_CODE_BY_SUBJECT = {
+    '수학': 'MATH_MID', '영어': 'ENG_MID', '국어': 'KOR_MID',
+    '과학': 'SCI_MID', '사회': 'SOC_MID'
+};
 
 // 3. 부서별/교육과정별 실제 화면에 노출될 텍스트 (국어/영어/과학 축소)
 const SUBJECT_LISTS = {
@@ -118,7 +137,12 @@ export const getStandardSubjectCode = (schoolType, subjectName) => {
     cleanSubj = cleanSubj.replace(/문과|이과|가형|나형|A형|B형|인문|자연/gi, '');
 
     if (schoolType === '초등학교') return 'ELEM_ALL';
-    if (schoolType === '중학교') return 'MIDDLE_ALL';
+    /* 중등도 과목을 나눕니다. 과목 판정은 subjectMatch 한 곳에서만 합니다.
+       알아낼 수 없으면 옛 값(MIDDLE_ALL)으로 두어 조용히 엉뚱한 과목이 되지 않게 합니다. */
+    if (schoolType === '중학교') {
+        const main = toMainSubject(subjectName);
+        return (main && MID_CODE_BY_SUBJECT[main]) || 'MIDDLE_ALL';
+    }
 
     if (schoolType === '고등학교' || !schoolType) { // 과거 데이터 기본 고등부 처리
         // --- 국어과/영어과 ---
@@ -201,8 +225,9 @@ export const getDynamicSubjectLabel = (code, schoolType, yearStr, gradeStr, orig
         if (targetMap[code]) return targetMap[code];
     } else if (typeK === '중학교') {
          const mapMiddle = {
-             'MATH_M1': '수학 1', 'MATH_M2': '수학 2', 'MATH_M3': '수학 3',
-             'SCI_M1': '과학 1', 'SCI_M2': '과학 2', 'SCI_M3': '과학 3',
+             'MATH_MID': '수학', 'ENG_MID': '영어', 'KOR_MID': '국어',
+             'SCI_MID': '과학', 'SOC_MID': '사회·역사',
+             // 마이그레이션 전 문서용
              'MIDDLE_ALL': '중등 교과 공통'
          };
          if (mapMiddle[code]) return mapMiddle[code];
