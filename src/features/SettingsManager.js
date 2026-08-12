@@ -8,6 +8,7 @@ import { db, functions } from '../firebase';
 import { normalizeSchoolName, findCanonicalSchool } from '../utils/schoolName';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { toMainSubject } from '../utils/subjectMatch';
+import { STANDARD_CODES, MID_CODE_BY_SUBJECT } from '../utils/subjectMapper';
 import { 
   Settings, Building, Phone, Hash, DoorOpen, BookOpen, 
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
@@ -767,9 +768,12 @@ const SettingsManager = ({ currentUser }) => {
     /* 중등 시험의 표준 코드를 과목별로 나눕니다.
 
        예전에는 중학교 시험이 과목과 무관하게 MIDDLE_ALL 하나였습니다.
-       지금 쌓여 있는 중등 자료는 **전부 수학**이므로(원장 확인) 분류할 것이 없고,
-       MIDDLE_ALL 을 MATH_MID 로 옮기기만 하면 됩니다.
-       앞으로 등록되는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다. */
+       문서마다 자기 subject 로 과목을 판정해 알맞은 코드를 붙입니다.
+       (처음에는 '전부 수학' 을 전제로 만들었는데 국어가 섞여 있었습니다.
+        전제를 두지 않고 문서마다 판정하는 편이 다음에도 쓸 수 있습니다.)
+
+       판정할 수 없는 문서는 건드리지 않고 목록으로 보여 줍니다 —
+       조용히 엉뚱한 과목으로 바꾸는 것보다 남겨 두고 사람이 보는 편이 낫습니다. */
     const handleMigrateMiddleCodes = async () => {
         setMidMigrating(true);
         try {
@@ -777,36 +781,55 @@ const SettingsManager = ({ currentUser }) => {
             const targets = snap.docs.filter(d => (d.data().standardCode || '') === 'MIDDLE_ALL');
 
             if (targets.length === 0) {
-                alert('✅ 스캔 완료\n\n옛 형식(MIDDLE_ALL)으로 남은 중등 시험이 없습니다.');
+                alert('✅ 스캔 완료\n\n옛 형식(중등 교과 공통)으로 남은 중등 시험이 없습니다.');
                 return;
             }
 
-            // 혹시 수학이 아닌 것이 섞여 있으면 먼저 보여 주고 멈춥니다.
-            const notMath = targets.filter(d => {
+            // 문서마다 자기 과목으로 판정합니다.
+            const plan = new Map();      // 코드 → 문서 목록
+            const unknown = [];
+            targets.forEach(d => {
                 const main = toMainSubject(d.data().subject);
-                return main && main !== '수학';
+                const code = main && MID_CODE_BY_SUBJECT[main];
+                if (!code) { unknown.push(d); return; }
+                if (!plan.has(code)) plan.set(code, []);
+                plan.get(code).push(d);
             });
-            if (notMath.length > 0) {
-                const sample = notMath.slice(0, 5).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n');
-                alert(`⚠️ 수학이 아닌 중등 시험이 ${notMath.length}건 섞여 있습니다.\n\n${sample}\n\n` +
-                      '전부 수학이라는 전제가 깨졌으므로 자동 변환을 멈춥니다.\n담당자에게 알려주세요.');
+
+            const labelOf = (code) => (STANDARD_CODES.find(c => c.code === code)?.label || code);
+            const lines = [...plan.entries()].map(([code, docs]) => `· ${docs.length}건 → ${labelOf(code)}`);
+            const willChange = [...plan.values()].reduce((n, v) => n + v.length, 0);
+
+            if (willChange === 0) {
+                alert(`스캔한 ${targets.length}건 모두 과목을 알아낼 수 없어 바꿀 것이 없습니다.\n\n` +
+                      unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n'));
                 return;
             }
+
+            const unknownNote = unknown.length > 0
+                ? `\n\n건드리지 않는 문서 ${unknown.length}건 (과목을 알 수 없음):\n` +
+                  unknown.slice(0, 8).map(d => `· ${d.data().subject || '(과목 없음)'}`).join('\n') +
+                  (unknown.length > 8 ? `\n· 외 ${unknown.length - 8}건` : '')
+                : '';
 
             if (!window.confirm(
-                `중등 시험 ${targets.length}건의 표준 코드를\n'중등 교과 공통(MIDDLE_ALL)' → '중등 수학(MATH_MID)' 으로 바꿉니다.\n\n계속할까요?`
+                `옛 형식으로 남은 중등 시험 ${targets.length}건을 과목별로 나눕니다.\n\n${lines.join('\n')}${unknownNote}\n\n계속할까요?`
             )) return;
 
             // Firestore 일괄 쓰기 상한은 500건입니다. 여유를 둡니다.
+            const all = [...plan.entries()].flatMap(([code, docs]) => docs.map(d => ({ ref: d.ref, code })));
             let done = 0;
-            for (let i = 0; i < targets.length; i += 400) {
-                const slice = targets.slice(i, i + 400);
+            for (let i = 0; i < all.length; i += 400) {
+                const slice = all.slice(i, i + 400);
                 const batch = writeBatch(db);
-                slice.forEach(d => batch.update(d.ref, { standardCode: 'MATH_MID', updatedAt: serverTimestamp() }));
+                slice.forEach(({ ref, code }) => batch.update(ref, { standardCode: code, updatedAt: serverTimestamp() }));
                 await batch.commit();
                 done += slice.length;
             }
-            alert(`✅ 변환 완료\n\n중등 시험 ${done}건을 '중등 수학'으로 옮겼습니다.\n이제 중등도 과목별로 나뉘어 관리됩니다.`);
+
+            alert(`✅ 변환 완료 — ${done}건\n\n${lines.join('\n')}` +
+                  (unknown.length > 0 ? `\n\n그대로 둔 문서: ${unknown.length}건` : '') +
+                  '\n\n이제 중등도 과목별로 나뉘어 관리됩니다.');
         } catch (err) {
             console.error('[중등 코드 변환] 실패:', err);
             alert('변환 중 오류가 발생했습니다: ' + err.message + '\n\n일부만 바뀌었을 수 있습니다. 다시 실행하면 남은 것부터 이어서 처리합니다.');
@@ -1195,10 +1218,11 @@ const SettingsManager = ({ currentUser }) => {
                         <div className="bg-emerald-50 text-emerald-900 p-5 rounded-2xl border border-emerald-200 space-y-2 text-sm">
                             <p className="font-bold flex items-center gap-1.5 text-base mb-3"><BookOpen size={18}/> 중등 시험 과목 분리</p>
                             <p>• 예전에는 중학교 시험이 과목과 상관없이 <strong>'중등 교과 공통'</strong> 하나로 저장됐습니다.</p>
-                            <p>• 지금 쌓인 중등 자료는 전부 수학이므로, <strong>'중등 수학'</strong>으로 한 번에 옮깁니다.</p>
-                            <p>• 앞으로 등록하는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다. (영어 등)</p>
+                            <p>• 문서마다 <strong>자기 과목대로</strong> 중등 수학 / 중등 영어 / 중등 국어 … 로 나눕니다.</p>
+                            <p>• 앞으로 등록하는 중등 시험은 과목에 맞는 코드가 자동으로 붙습니다.</p>
                             <p className="text-emerald-700 font-bold mt-2 pt-2 border-t border-emerald-200">
-                                ※ 수학이 아닌 자료가 섞여 있으면 변환을 멈추고 알려 줍니다. 반복 실행해도 안전합니다.
+                                ※ 바꾸기 전에 <strong>과목별 건수를 먼저 보여 드립니다.</strong> 과목을 알 수 없는 문서는
+                                건드리지 않고 목록으로 알려 줍니다. 반복 실행해도 안전합니다.
                             </p>
                         </div>
 
