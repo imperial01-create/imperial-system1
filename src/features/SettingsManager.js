@@ -93,6 +93,8 @@ const SettingsManager = ({ currentUser }) => {
     const currentYear = new Date().getFullYear();
     
     const [activeDepartments, setActiveDepartments] = useState(['DEPT_MATH']);
+    // 불러오기에 실패했는가. 실패한 채로 저장하면 기존 값을 빈 값으로 덮어씁니다.
+    const [loadFailed, setLoadFailed] = useState(false);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [newSchool, setNewSchool] = useState({ type: 'high', name: '' });
@@ -133,6 +135,10 @@ const SettingsManager = ({ currentUser }) => {
             } catch (error) {
                 console.error("환경설정 로딩 실패:", error);
                 showToast("환경설정을 불러오는 중 오류가 발생했습니다.", "error");
+                /* 불러오기가 실패하면 화면에는 빈 값이 남습니다. 그 상태로 저장하면
+                   학원명·강의실·과목·시즌이 전부 빈 값으로 덮어써집니다.
+                   특히 과목 목록은 다시 넣을 화면이 없어 반을 만들 수 없게 됩니다. */
+                setLoadFailed(true);
             } finally {
                 setLoading(false);
             }
@@ -141,6 +147,10 @@ const SettingsManager = ({ currentUser }) => {
     }, []);
 
     const handleSaveMaster = async () => {
+        if (loadFailed) {
+            alert('환경설정을 불러오지 못한 상태입니다.\n지금 저장하면 기존 값이 빈 값으로 덮어써집니다.\n\n새로고침 후 다시 시도해주세요.');
+            return;
+        }
         setSaving(true);
         try {
             const batch = writeBatch(db);
@@ -948,7 +958,13 @@ const SettingsManager = ({ currentUser }) => {
                         </div>
                     </div>
 
-                    <Button onClick={handleSaveMaster} disabled={saving} className="w-full bg-blue-600 hover:bg-blue-700 font-bold py-4 text-lg border-0 shadow-lg mt-6">
+                    {loadFailed && (
+                        <div className="mt-6 p-4 bg-rose-50 border-l-4 border-rose-500 rounded-xl text-sm font-bold text-rose-800 leading-relaxed">
+                            환경설정을 불러오지 못했습니다. 지금 저장하면 기존 값이 지워지므로 저장을 막아 두었습니다.<br />
+                            페이지를 새로고침해주세요.
+                        </div>
+                    )}
+                    <Button onClick={handleSaveMaster} disabled={saving || loadFailed} className="w-full bg-blue-600 hover:bg-blue-700 font-bold py-4 text-lg border-0 shadow-lg mt-6">
                         {saving ? <Loader className="animate-spin mx-auto" size={24}/> : <><Save size={20} className="inline mr-2"/> 인프라, 일정 및 부서 통합 저장</>}
                     </Button>
                 </div>

@@ -15,6 +15,7 @@ import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { fetchBySchool } from '../utils/schoolQuery';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper';
+import { toMainSubject } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 const IconChart = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>;
@@ -163,7 +164,18 @@ export default function SchoolStrategy({ currentUser }) {
               const myActiveEnrollments = enrollments.filter(e => targetStudentIds.includes(e.studentId) && e.status === 'active');
               const myActiveClasses = classes.filter(c => myActiveEnrollments.map(e => e.classId).includes(c.id));
 
-              const myStandardCodes = myActiveClasses.map(c => c.standardCode || getStandardSubjectCode('고등학교', c.subject || c.name));
+              /* 학생이 듣는 반의 대과목(수학·과학·국어·영어·사회).
+
+                 예전에는 반 과목을 표준 코드로 옮겨 시험의 standardCode 와 완전 일치를
+                 요구했습니다. 그런데 getStandardSubjectCode('고등학교','수학') 은
+                 'CUSTOM_수학' 을 돌려줍니다 — 수학 매핑이 '대수','수학1' 처럼
+                 세부 과목 이름만 완전 일치로 보기 때문입니다.
+                 그래서 **수학 반 학생에게 수학 리포트가 한 건도 보이지 않았습니다.**
+                 (국어·영어·과학은 부분 일치라 우연히 통과했고, 사회는 수학과 같이 깨졌습니다.)
+                 학교급도 '고등학교' 로 못박혀 있어 중·초등은 아예 대상 밖이었습니다. */
+              const myMainSubjects = [...new Set(
+                myActiveClasses.map(c => toMainSubject(c.subject) || toMainSubject(c.name)).filter(Boolean)
+              )];
 
               const filtered = allDocs.filter(report => {
                   if (report.isDeleted || !report.type) return false;
@@ -178,16 +190,12 @@ export default function SchoolStrategy({ currentUser }) {
                   const isStrategyEmpty = !report.review && (!report.questions || report.questions.length === 0);
                   if (isStrategyEmpty && report.type !== 'trend') return false; 
 
-                  if (report.standardCode && myStandardCodes.length > 0) {
-                      if (!myStandardCodes.includes(report.standardCode)) return false;
-                  } else {
-                      const rSubj = report.subject || '';
-                      if (!rSubj) return true; 
-                      const hasMatchingSubject = myActiveClasses.some(c => {
-                          const cName = c.name || ''; const cSubj = c.subject || '';
-                          return cName.includes(rSubj) || cSubj.includes(rSubj) || rSubj.includes(cSubj) || rSubj.includes(cName);
-                      });
-                      if (!hasMatchingSubject) return false; 
+                  /* 시험 과목을 대과목으로 옮겨 비교합니다.
+                     어느 한쪽이라도 대과목을 알 수 없으면 거르지 않습니다 —
+                     리포트가 조용히 사라지는 것이 조금 섞여 보이는 것보다 나쁩니다. */
+                  const reportMain = toMainSubject(report.subject);
+                  if (reportMain && myMainSubjects.length > 0 && !myMainSubjects.includes(reportMain)) {
+                      return false;
                   }
                   return true;
               });

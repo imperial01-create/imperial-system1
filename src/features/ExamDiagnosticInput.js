@@ -433,7 +433,19 @@ export default function ExamDiagnosticInput({ currentUser }) {
           examDocId: testCategory === 'school' ? (selectedExamId || null) : null,
           examTitle: examTitle,
           unitName: testCategory === 'school' ? '학교 내신 기출' : customTestMeta.unitName.trim(),
-          subject: customTestMeta.subject,
+          /* 내신은 고른 시험의 과목을 씁니다.
+             예전에는 개념테스트용 select 의 값(초깃값 '수학')이 그대로 저장돼,
+             영어 내신을 채점해도 '수학' 으로 남았습니다. 내신 화면에는 과목 선택 칸이
+             없으므로 강사가 알아챌 방법도 없었습니다.
+             subject 는 반 과목과 같은 어휘(대과목)로 맞춰 집계에 쓸 수 있게 하고,
+             시험지의 세부 과목명과 표준 코드는 따로 남깁니다. */
+          subject: testCategory === 'school'
+            ? (toMainSubject(selectedExamSubject) || customTestMeta.subject)
+            : customTestMeta.subject,
+          examSubjectRaw: testCategory === 'school' ? (selectedExamSubject || null) : null,
+          examStandardCode: testCategory === 'school'
+            ? (searchedExams.find(e => e.id === selectedExamId)?.standardCode || null)
+            : null,
           studentId: sId,
           studentName: sInfo?.name || '알수없음',
 
