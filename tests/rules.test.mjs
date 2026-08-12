@@ -335,6 +335,22 @@ const run = async () => {
     await check('학생이 조건 없이 전체를 긁으면 막힌다', () =>
         assertFails(getDocs(collection(as('stu1', studentToken('stu1')), `${BASE}/student_exam_diagnostics`))));
 
+    /* 내신 연구소(SchoolStrategy)는 학생·학부모에게도 자기 학교 리포트를 보여준다.
+       목록 조회가 필요하지만 통째로 긁어 가지는 못하게 개수 상한을 요구한다. */
+    const examsCol = (who) => collection(who, `${BASE}/integrated_exams`);
+    await check('교직원은 시험 마스터를 제한 없이 조회할 수 있다', () =>
+        assertSucceeds(getDocs(examsCol(as('admin1', staffToken('admin1'))))));
+    await check('학생은 개수를 제한하면 시험 마스터를 조회할 수 있다', () =>
+        assertSucceeds(getDocs(query(examsCol(as('stu1', studentToken('stu1'))), limit(300)))));
+    await check('학부모도 개수를 제한하면 조회할 수 있다', () =>
+        assertSucceeds(getDocs(query(examsCol(as('mom2', parentToken('mom2'))), limit(300)))));
+    await check('학생이 상한을 넘겨 조회하면 막힌다', () =>
+        assertFails(getDocs(query(examsCol(as('stu1', studentToken('stu1'))), limit(301)))));
+    await check('학생이 제한 없이 통째로 긁으면 막힌다', () =>
+        assertFails(getDocs(examsCol(as('stu1', studentToken('stu1'))))));
+    await check('비로그인은 개수를 제한해도 막힌다', () =>
+        assertFails(getDocs(query(examsCol(guest()), limit(10)))));
+
     /* 동결한 저장 형식(v2) 전체가 규칙을 통과하는지.
        필드를 늘렸을 때 규칙이 막지 않는지 확인하는 것이 목적이다. */
     const frozenPayload = {

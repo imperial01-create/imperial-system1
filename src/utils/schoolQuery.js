@@ -15,7 +15,7 @@
    과거에 여러 표기로 저장된 문서도 함께 찾아지므로, 데이터 정리 전에도 동작합니다.
 */
 
-import { query, where, getDocs } from 'firebase/firestore';
+import { query, where, getDocs, limit as fsLimit } from 'firebase/firestore';
 import { isSameSchool, buildSchoolQueryVariations } from './schoolName';
 
 /**
@@ -25,10 +25,12 @@ import { isSameSchool, buildSchoolQueryVariations } from './schoolName';
  * @param schoolName  찾을 학교명 (표기가 달라도 됩니다)
  * @param options.schoolsData 학교 마스터 목록 (있으면 정본까지 후보에 포함)
  * @param options.field       비교할 필드명 (기본 'schoolName')
+ * @param options.max         최대 문서 수. 학생·학부모 화면은 반드시 지정해야 합니다 —
+ *                            보안 규칙이 교직원이 아닌 목록 조회에 상한을 요구합니다.
  * @returns 문서 배열. 학교명이 비어 있으면 빈 배열.
  */
 export const fetchBySchool = async (baseQuery, schoolName, options = {}) => {
-  const { schoolsData = null, field = 'schoolName' } = options;
+  const { schoolsData = null, field = 'schoolName', max = null } = options;
 
   const target = String(schoolName || '').trim();
   if (!target) return [];
@@ -37,7 +39,9 @@ export const fetchBySchool = async (baseQuery, schoolName, options = {}) => {
   if (variations.length === 0) return [];
 
   // Firestore in 연산자는 최대 30개 (buildSchoolQueryVariations 에서 이미 잘라둠)
-  const snap = await getDocs(query(baseQuery, where(field, 'in', variations)));
+  const parts = [where(field, 'in', variations)];
+  if (max) parts.push(fsLimit(max));
+  const snap = await getDocs(query(baseQuery, ...parts));
   const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
   // in 쿼리는 '문자열이 정확히 같은 것'만 가져오므로, 여기서 다시 거르는 것은

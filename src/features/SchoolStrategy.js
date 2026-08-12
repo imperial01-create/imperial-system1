@@ -156,7 +156,11 @@ export default function SchoolStrategy({ currentUser }) {
                  그 방식은 '서울여고'와 '서울여중'이 똑같은 '서울여'가 되어
                  중학교 리포트가 고등학생에게 보일 수 있는 위험이 있었습니다.
                  이제 공용 헬퍼가 접미사를 '펼치는' 방식으로 처리합니다. */
-              const allDocs = await fetchBySchool(collection(db, INTEGRATED_COLLECTION), rawUserSchool, { schoolsData });
+              /* max 를 반드시 넘깁니다. 보안 규칙이 교직원이 아닌 목록 조회에
+                 상한을 요구합니다(무제한으로 긁어 가는 것을 막기 위해서입니다). */
+              const allDocs = await fetchBySchool(
+                collection(db, INTEGRATED_COLLECTION), rawUserSchool, { schoolsData, max: 300 }
+              );
 
               const targetTerm = getStudentTargetTerm(activeTerm, user);
               

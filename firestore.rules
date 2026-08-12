@@ -391,11 +391,18 @@ service cloud.firestore {
       // ---------------------------------------------------------------
       // 시험 / 성적
       // ---------------------------------------------------------------
-      /* 시험 마스터(등급컷 등). 학생 화면(StudentExamList)은 진단 결과에 적힌
-         examDocId 로 '단건 조회'만 한다. 목록 조회는 교직원 화면에서만 쓴다. */
+      /* 시험 마스터(등급컷·문항 분석).
+
+         StudentExamList 는 진단 결과에 적힌 examDocId 로 단건 조회만 한다.
+         그런데 내신 연구소(SchoolStrategy)는 학생·학부모에게도 '자기 학교 리포트'를
+         보여주는 화면이라 목록 조회가 필요하다. 이것을 교직원 전용으로 막아 두어
+         학생 화면이 통째로 비어 있었다.
+
+         전부 열지는 않는다. 교직원이 아니면 개수 상한이 있는 조회만 허용한다.
+         한 번에 통째로 긁어 가는 것을 막기 위해서다(문항 분석은 학원의 자산이다). */
       match /integrated_exams/{docId} {
         allow get:   if isAuth();
-        allow list:  if isStaff(appId);
+        allow list:  if isStaff(appId) || (isAuth() && request.query.limit <= 300);
         allow write: if isStaff(appId);
       }
       match /exam_archive/{docId}     { allow read, write: if isStaff(appId); }
