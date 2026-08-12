@@ -15,7 +15,7 @@ import { fetchBySchool } from '../utils/schoolQuery';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import ExamDiagnosticRecords from './ExamDiagnosticRecords';
 import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
-import { isSubjectCompatible, subjectFamilyLabel } from '../utils/subjectMatch';
+import { isSubjectCompatible, toMainSubject } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 /* 기출 아카이브(ExamArchive.js:28)와 같은 범위를 씁니다.
@@ -210,8 +210,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
   }, [availableClasses, selectedExamSubject, showAllClasses]);
 
   const hiddenBySubject = availableClasses.length - subjectMatchedClasses.length;
-  // 화면에는 '대수' 가 아니라 '수학' 으로 보여줍니다. 실제 판정 기준이 계열이기 때문입니다.
-  const examFamilyLabel = subjectFamilyLabel(selectedExamSubject);
+  // 화면에는 '대수' 가 아니라 '수학' 으로 보여줍니다. 반 과목이 대과목이기 때문입니다.
+  const examMainSubject = toMainSubject(selectedExamSubject);
 
   // 저장 직후 결과가 눈에 들어오도록 그 자리로 옮겨 줍니다.
   useEffect(() => {
@@ -793,18 +793,18 @@ export default function ExamDiagnosticInput({ currentUser }) {
           <label className="block text-xs font-extrabold text-slate-500 uppercase mb-2">
             담당 반 선택
             <span className="normal-case font-bold text-indigo-600 ml-1">— {activeSeason.name}</span>
-            {examFamilyLabel && !showAllClasses && (
-              <span className="normal-case font-bold text-indigo-600 ml-1">· {examFamilyLabel}</span>
+            {examMainSubject && !showAllClasses && (
+              <span className="normal-case font-bold text-indigo-600 ml-1">· {examMainSubject}</span>
             )}
             <span className="normal-case font-bold text-slate-400 ml-1">{subjectMatchedClasses.length}개 반</span>
           </label>
 
           {/* 과목으로 걸러 낸 반이 있으면 그 사실을 알리고 되돌릴 길을 둡니다. */}
-          {examFamilyLabel && (hiddenBySubject > 0 || showAllClasses) && (
+          {examMainSubject && (hiddenBySubject > 0 || showAllClasses) && (
             <p className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
               {showAllClasses
                 ? <span>과목과 상관없이 모든 반을 보고 있습니다.</span>
-                : <span><strong className="text-slate-700">{examFamilyLabel}</strong> 반이 아닌 {hiddenBySubject}개를 숨겼습니다.</span>}
+                : <span><strong className="text-slate-700">{examMainSubject}</strong> 반이 아닌 {hiddenBySubject}개를 숨겼습니다.</span>}
               <button
                 type="button" onClick={() => setShowAllClasses(v => !v)}
                 className="text-indigo-600 hover:text-indigo-800 underline font-black"
