@@ -8,6 +8,7 @@ import { Trophy, Play, Lock, Crown, Settings, Flame, Loader, BookOpen, ChevronRi
 import { collection, query, onSnapshot, doc, setDoc, updateDoc, serverTimestamp, addDoc, orderBy, limit, deleteDoc, getDocs, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
+import { toMainSubject } from '../utils/subjectMatch';
 import { Card, Button, Badge } from '../components/UI';
 import { APP_ID } from '../constants';
 
@@ -852,7 +853,8 @@ export default function VocaChallenge({ currentUser }) {
     const isStudent = currentUser.role === 'student';
 
     const englishClasses = useMemo(() => {
-        const baseEnglishClasses = classes.filter(c => c.subject === '영어' || (c.name && c.name.includes('영어')));
+        // 과목 판정은 subjectMatch 한 곳에서만 합니다.
+        const baseEnglishClasses = classes.filter(c => toMainSubject(c.subject) === '영어');
         
         if (['admin', 'admin_assistant'].includes(currentUser.role)) {
             return baseEnglishClasses;

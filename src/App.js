@@ -21,6 +21,7 @@ import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
 import SmartSchoolSelect from './components/SmartSchoolSelect';
 import { toStorableSchoolName } from './utils/schoolName';
+import { toMainSubject } from './utils/subjectMatch';
 import { APP_ID } from './constants';
 
 // 컴포넌트 Lazy 로딩
@@ -96,7 +97,7 @@ const getMenuGroups = (currentUser) => [
             // 🚀 CTO Patch: 상담 전환율을 극대화하는 AI 수학 지식 맵 메뉴 추가 (모든 역할군 오픈)
             { name: "AI 수학 지식 맵", path: "/ontology", icon: Share2, desc: "수학 커리큘럼 선행 및 취약점 시각화", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
-            { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || u?.subject === '영어' },
+            { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || toMainSubject(u?.subject) === '영어' },
             { name: "영단어 챌린지", path: "/voca-challenge", icon: Star, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
             { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "나의 시험 결과", path: "/my-exams", icon: Target, desc: "성적표 및 담당 선생님 리포트", roles: ['student', 'parent'] },

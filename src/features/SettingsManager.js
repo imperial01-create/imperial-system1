@@ -926,7 +926,7 @@ const SettingsManager = ({ currentUser }) => {
                                         <BookOpen className="text-purple-600"/> 학원 운영 부서 (대과목) 활성화
                                     </h2>
                                     <p className="text-sm text-gray-600 leading-relaxed">
-                                        아래 대과목 토글 스위치를 켜면, 해당 부서에 속한 <b className="text-purple-700">모든 세부 과목(표준 코드) 전체가 시스템의 드롭다운에 자동으로 연동</b>됩니다.
+                                        토글을 켜면 <b className="text-purple-700">반 과목과 강사 담당 과목 드롭다운에 그 대과목이 나타나고</b>, 시험 등록 화면에는 해당 부서의 세부 과목(아래 칩)이 뜹니다.<br /><span className="text-gray-500">반은 대과목 단위로만 만듭니다. 세부 과목은 시험 쪽에서만 씁니다.</span>
                                     </p>
                                 </div>
                                 

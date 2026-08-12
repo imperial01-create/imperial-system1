@@ -11,6 +11,7 @@ import {
 import { doc, setDoc, getDoc, getDocs, collection, query, where, limit, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useData } from '../contexts/DataContext';
+import { toMainSubject } from '../utils/subjectMatch';
 import { Modal, Button } from '../components/UI';
 import { generateDailyVocaSet, processVocaTestResult, rollbackVocaTestResult } from '../utils/vocaEngine';
 import { getTierProgress } from '../utils/vocaTier';
@@ -66,7 +67,9 @@ const VocaManager = ({ currentUser }) => {
     const [logErrorMsg, setLogErrorMsg] = useState('');
 
     const availableClasses = useMemo(() => {
-        let filtered = (classes || []).filter(c => c?.subject === '영어' || ((c?.name || '').includes('영어')));
+        // 과목 판정은 subjectMatch 한 곳에서만 합니다. 반 이름에 '영어'가 들어갔는지 보던 방식은
+        // 'ENG 심화'를 놓치고 '영어권 유학 대비 수학'을 잘못 넣었습니다.
+        let filtered = (classes || []).filter(c => toMainSubject(c?.subject) === '영어');
         filtered = filtered.filter(c => c?.status === 'active');
         if (selectedSeasonId === 'legacy') { filtered = filtered.filter(c => !c?.season); } 
         else if (selectedSeasonId) { filtered = filtered.filter(c => c?.season === selectedSeasonId); }

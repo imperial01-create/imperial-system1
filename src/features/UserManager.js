@@ -16,6 +16,7 @@ import { Button, Card, Modal, Toast } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { toStorableSchoolName } from '../utils/schoolName';
 import { useData } from '../contexts/DataContext';
+import { subjectsForDepartments } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 
@@ -31,7 +32,7 @@ const UserManager = ({ currentUser }) => {
     const ALLOWED_TABS = isAssistant ? ['student', 'parent', 'pending'] : ['student', 'parent', 'ta', 'admin_assistant', 'lecturer', 'admin', 'pending'];
     
     // 🚀 [CTO 패치] masterData 추출 (시즌 데이터 확보)
-    const { users, classes, enrollments, masterData, loadingData } = useData();
+    const { users, classes, enrollments, masterData, activeDepartments = [], loadingData } = useData();
     
     // 시즌 ID를 이름으로 변환하는 유틸리티
     const getSeasonName = (seasonId) => {
@@ -654,7 +655,7 @@ const UserManager = ({ currentUser }) => {
                                                     onChange={e => setFormData({...formData, subject: e.target.value})}
                                                 >
                                                     <option value="" disabled>과목을 선택하세요</option>
-                                                    {masterData?.subjects?.map(sub => (
+                                                    {subjectsForDepartments(activeDepartments, formData.subject).map(sub => (
                                                         <option key={sub} value={sub}>{sub}</option>
                                                     ))}
                                                 </select>

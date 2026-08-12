@@ -17,8 +17,34 @@
    필요한 반이 조용히 사라지는 것이 잘못 섞여 보이는 것보다 나쁩니다.
 */
 
-/** 학원의 대과목. 반 과목 드롭다운에 뜨는 값과 같습니다. */
+/** 학원의 대과목. 반 과목(classes.subject)에 저장되는 값은 이 다섯 중 하나입니다. */
 export const MAIN_SUBJECTS = ['수학', '과학', '국어', '영어', '사회'];
+
+/* 환경설정의 부서(대과목) 토글과 짝을 이룹니다.
+   settings/departments 의 active 배열이 이 키를 담습니다. */
+export const DEPT_TO_SUBJECT = {
+  DEPT_MATH: '수학',
+  DEPT_SCI: '과학',
+  DEPT_KOR: '국어',
+  DEPT_ENG: '영어',
+  DEPT_SOC: '사회'
+};
+
+/**
+ * 켜져 있는 부서에 해당하는 대과목 목록.
+ * 반 과목 드롭다운은 이 값을 씁니다 — 그래야 부서 토글이 실제로 의미를 갖습니다.
+ *
+ * @param activeDepartments settings/departments 의 active 배열
+ * @param keep 목록에 없어도 반드시 남길 값(지금 그 반에 저장돼 있는 과목).
+ *             부서를 끈 뒤 그 반을 수정하다 과목이 지워지는 것을 막습니다.
+ */
+export const subjectsForDepartments = (activeDepartments, keep = null) => {
+  const active = Array.isArray(activeDepartments) ? activeDepartments : [];
+  const list = MAIN_SUBJECTS.filter(s => active.some(d => DEPT_TO_SUBJECT[d] === s));
+  const base = list.length > 0 ? list : MAIN_SUBJECTS;   // 부서를 하나도 안 켰으면 전부 보여줍니다.
+  if (keep && !base.includes(keep)) return [...base, keep];
+  return base;
+};
 
 /* 교육과정 이름에서 대과목을 알아내는 단서.
    위에서부터 먼저 걸리는 것을 씁니다. */

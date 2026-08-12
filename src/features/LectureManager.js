@@ -17,37 +17,13 @@ import {
 import { db } from '../firebase';
 import { Button, Card, Modal, Badge } from '../components/UI';
 import { useData } from '../contexts/DataContext';
+import { subjectsForDepartments } from '../utils/subjectMatch';
 import { getDayInfo } from '../utils/academyCalendar';
 import { useSeasonAutoSelect } from '../hooks/useSeasonAutoSelect';
 import { APP_ID } from '../constants';
 
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
-const parseCSV = (str) => {
-    const result = [];
-    let row = [];
-    let inQuotes = false;
-    let val = "";
-    for (let i = 0; i < str.length; i++) {
-        const char = str[i];
-        if (char === '"') {
-            inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-            row.push(val.trim());
-            val = "";
-        } else if (char === '\n' && !inQuotes) {
-            row.push(val.trim());
-            result.push(row);
-            row = [];
-            val = "";
-        } else {
-            if (char !== '\r') val += char;
-        }
-    }
-    row.push(val.trim());
-    if (row.length > 0 && row.some(v => v)) result.push(row);
-    return result;
-};
 
 const cleanClassName = (rawName) => {
     if (!rawName) return '';
@@ -597,7 +573,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
 };
 
 export const AdminLectureManager = () => {
-    const { users = [], classes = [], masterData = {}, loadingData } = useData();
+    const { users = [], classes = [], masterData = {}, activeDepartments = [], loadingData } = useData();
     
     const dynamicSeasons = useMemo(() => {
         const customSeasons = [...(masterData?.seasons || [])].sort((a, b) => String(a?.startDate || "").localeCompare(String(b?.startDate || "")));
@@ -622,9 +598,6 @@ export const AdminLectureManager = () => {
     const [newClass, setNewClass] = useState({ name: '', lecturerId: '', subject: '', schedules: [], season: '', status: 'active' });
     const [isSaving, setIsSaving] = useState(false);
     
-    const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
-    const [csvLecturerFile, setCsvLecturerFile] = useState(null);
-    const [isSyncing, setIsSyncing] = useState(false);
 
     const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
     const [cloneForm, setCloneForm] = useState({ sourceSeason: '', targetSeason: '', prefix: '' });
@@ -837,138 +810,10 @@ export const AdminLectureManager = () => {
         }
     };
 
-    const readCsvFile = (file) => {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = (e) => reject(e);
-            reader.readAsText(file, 'UTF-8');
-        });
-    };
-
-    const handleSyncCsv = async () => {
-        if (!csvLecturerFile) return alert("업로드할 CSV 파일을 선택해주세요.");
-        if (selectedSeason === 'all' || selectedSeason === 'legacy') {
-            return alert("🚨 CSV 덮어쓰기를 진행할 특정 '시즌'을 상단에서 먼저 선택해주세요. 전체 또는 과거 데이터 탭에서는 덮어쓰기가 불가능합니다.");
-        }
-
-        setIsSyncing(true);
-        try {
-            const lecturerRaw = await readCsvFile(csvLecturerFile);
-            const lecturerData = parseCSV(lecturerRaw);
-
-            const parsedClasses = {};
-            let currentTeacherName = '';
-            const DAYS_OF_WEEK = ['월', '화', '수', '목', '금', '토', '일'];
-            
-            lecturerData.forEach((row) => {
-                if (row.length === 0) return;
-                
-                if (row[0] && row[0].startsWith('* 강사명')) {
-                    currentTeacherName = row[0].replace('* 강사명', '').replace(':', '').trim();
-                    return;
-                }
-
-                const timeStr = row[0];
-                if (timeStr && timeStr.includes('~')) {
-                    const timeParts = timeStr.split('~');
-                    const startTime = timeParts[0].trim();
-                    const endTime = timeParts[1].trim();
-
-                    for (let col = 1; col <= 7; col++) {
-                        const cell = row[col];
-                        if (cell) {
-                            const lines = cell.split('\n').map(l => l.trim()).filter(l => l);
-                            if (lines.length >= 2) {
-                                const rawClassName = lines[1];
-                                const rawClassroom = lines[2] || '';
-                                
-                                const className = cleanClassName(rawClassName);
-                                const classroom = getMatchedMasterRoom(rawClassroom, masterData?.classrooms || []);
-                                const day = DAYS_OF_WEEK[col - 1];
-                                
-                                if (className) {
-                                    if (!parsedClasses[className]) {
-                                        parsedClasses[className] = {
-                                            name: className,
-                                            lecturerName: currentTeacherName,
-                                            schedules: []
-                                        };
-                                    }
-                                    
-                                    if (!parsedClasses[className].schedules.some(s => s.dayOfWeek === day && s.startTime === startTime)) {
-                                        parsedClasses[className].schedules.push({
-                                            dayOfWeek: day,
-                                            startTime: startTime,
-                                            endTime: endTime,
-                                            room: classroom
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-
-            const batch = writeBatch(db);
-            let writeCount = 0;
-
-            const existingClassesMap = {};
-            (masterClasses || []).forEach(c => { existingClassesMap[c.name] = c; });
-
-            Object.values(parsedClasses).forEach(newClsData => {
-                const matchedLecturers = lecturers.filter(u => u.name === newClsData.lecturerName);
-                let safeLecturerId = '';
-                
-                if (matchedLecturers.length === 1) {
-                    safeLecturerId = matchedLecturers[0].id;
-                } else if (matchedLecturers.length > 1) {
-                    console.warn(`동명이인 강사 감지됨: ${newClsData.lecturerName}`);
-                }
-
-                const existing = existingClassesMap[newClsData.name];
-                
-                if (existing) {
-                    const classRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'classes', existing.id);
-                    batch.update(classRef, {
-                        lecturerId: safeLecturerId || existing.lecturerId, 
-                        schedules: newClsData.schedules, 
-                        updatedAt: serverTimestamp()
-                    });
-                    writeCount++;
-                } else {
-                    const classRef = doc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'classes'));
-                    batch.set(classRef, {
-                        name: newClsData.name,
-                        lecturerId: safeLecturerId,
-                        schedules: newClsData.schedules,
-                        season: selectedSeason,
-                        status: 'active',
-                        createdAt: serverTimestamp(),
-                        updatedAt: serverTimestamp()
-                    });
-                    writeCount++;
-                }
-            });
-
-            if (writeCount > 0) {
-                await batch.commit();
-                alert(`[${dynamicSeasons.find(s=>s.id===selectedSeason)?.name}] 시간표 완전 동기화가 완료되었습니다! (적용된 반: ${writeCount}개)`);
-            } else {
-                alert("적용할 반 데이터가 없습니다. 파일을 다시 확인해주세요.");
-            }
-            
-            setIsCsvModalOpen(false);
-            setCsvLecturerFile(null);
-
-        } catch (error) {
-            console.error("CSV Sync Error:", error);
-            alert("파일 동기화 중 오류가 발생했습니다.");
-        } finally {
-            setIsSyncing(false);
-        }
-    };
+    /* CSV 시간표 덮어쓰기를 제거했습니다.
+       외부 파일로 반을 대량 생성·수정하면서 과목(subject)을 채우지 않아,
+       과목 없는 반이 만들어지는 유일한 경로였습니다.
+       반 생성 화면의 '과목 필수' 검사도 이 경로만 비껴갔습니다. */
 
     if (loadingData || !isSeasonAutoSet) return <div className="flex justify-center items-center h-full"><Loader className="animate-spin text-blue-600" size={40}/></div>;
 
@@ -1003,9 +848,6 @@ export const AdminLectureManager = () => {
                     <div className="flex gap-2 w-full md:w-auto">
                         <Button variant="outline" onClick={openCloneModal} icon={Copy} className="w-full md:w-auto bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold">
                             시즌 복제
-                        </Button>
-                        <Button variant="outline" onClick={() => setIsCsvModalOpen(true)} icon={Upload} className="w-full md:w-auto bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 font-bold">
-                            시간표 덮어쓰기
                         </Button>
                     </div>
                 </div>
@@ -1336,7 +1178,7 @@ export const AdminLectureManager = () => {
                                 <label className="text-xs font-bold text-blue-600 mb-1.5 block">과목 (아카데미 유니버스 연동 필수)</label>
                                 <select className={`w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none transition-colors ${!newClass.subject ? 'text-red-500 border-red-300 focus:border-red-500' : 'text-gray-700 focus:border-blue-500'}`} value={newClass.subject} onChange={e => setNewClass({...newClass, subject: e.target.value})}>
                                     <option value="">과목을 선택해주세요 (필수)</option>
-                                    {(masterData?.subjects || []).map((sub, idx) => <option key={idx} value={sub}>{sub}</option>)}
+                                    {subjectsForDepartments(activeDepartments, newClass.subject).map(sub => <option key={sub} value={sub}>{sub}</option>)}
                                 </select>
                             </div>
                             <div>
@@ -1455,38 +1297,12 @@ export const AdminLectureManager = () => {
                 </div>
             </Modal>
 
-            <Modal isOpen={isCsvModalOpen} onClose={() => !isSyncing && setIsCsvModalOpen(false)} title="시간표 덮어쓰기 (동기화)">
-                <div className="space-y-6 w-full">
-                    <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-800">
-                        <p className="font-bold mb-2 flex items-center gap-1"><BookOpen size={16}/> 시간표 덮어쓰기 안내</p>
-                        <div className="opacity-90 leading-relaxed space-y-1">
-                            <p>• <b>통통통 &gt; 학사관리 &gt; 반 &gt; 시간/강의실 현황</b> 엑셀(CSV) 파일을 올려주세요.</p>
-                            <p>• 기존 반의 <span className="font-bold text-red-500">시간표만 완벽하게 덮어쓰기</span> 됩니다. (과거 일지 보존)</p>
-                            <p>• 현재 상단에 지정된 <strong>[{dynamicSeasons.find(s=>s.id===selectedSeason)?.name}]</strong> 시즌으로 모든 시간표가 덮어씌워집니다.</p>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="text-sm font-bold text-gray-700 mb-2 block">강사별 현황 (CSV)</label>
-                        <input 
-                            type="file" 
-                            accept=".csv"
-                            onChange={e => setCsvLecturerFile(e.target.files[0])}
-                            className="w-full border p-3 rounded-xl bg-gray-50 cursor-pointer" 
-                        />
-                    </div>
-
-                    <Button className="w-full py-4 text-lg" onClick={handleSyncCsv} disabled={isSyncing}>
-                        {isSyncing ? <Loader className="animate-spin mx-auto"/> : '시간표 완벽 덮어쓰기 실행'}
-                    </Button>
-                </div>
-            </Modal>
         </div>
     );
 };
 
 export const LecturerDashboard = ({ currentUser }) => {
-    const { classes: allClasses = [], users = [], masterData = {}, loadingData } = useData();
+    const { classes: allClasses = [], users = [], masterData = {}, activeDepartments = [], loadingData } = useData();
     
     const dynamicSeasons = useMemo(() => {
         const customSeasons = [...(masterData?.seasons || [])].sort((a, b) => String(a?.startDate || "").localeCompare(String(b?.startDate || "")));
@@ -1667,7 +1483,7 @@ export const LecturerDashboard = ({ currentUser }) => {
                                 <label className="text-xs font-bold text-blue-600 mb-1.5 block">과목</label>
                                 <select className="w-full border-2 border-gray-200 p-3.5 rounded-xl font-bold bg-white outline-none focus:border-blue-500" value={newProposal.subject} onChange={e => setNewProposal({...newProposal, subject: e.target.value})}>
                                     <option value="">과목 선택</option>
-                                    {(masterData?.subjects || []).map((sub, idx) => <option key={idx} value={sub}>{sub}</option>)}
+                                    {subjectsForDepartments(activeDepartments, newProposal.subject).map(sub => <option key={sub} value={sub}>{sub}</option>)}
                                 </select>
                             </div>
                         </div>

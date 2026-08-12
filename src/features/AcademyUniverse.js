@@ -14,6 +14,7 @@ import { db } from '../firebase';
 import { Card, Badge, Button, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { getTierProgress } from '../utils/vocaTier';
+import { toMainSubject } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 
@@ -278,10 +279,10 @@ const AcademyUniverse = ({ currentUser }) => {
       setSearchModalOpen(true);
   };
 
-  const getSubjectFromClass = (cls) => {
-      if (!cls || !cls.subject) return null;
-      return cls.subject; 
-  };
+  /* 반의 대과목. 판정은 subjectMatch 한 곳에서만 합니다.
+     예전에는 cls.subject 를 그대로 돌려줘서, 옛 반에 세부 과목명이 들어 있으면
+     어느 과목 카드에도 붙지 못하고 조용히 사라졌습니다. */
+  const getSubjectFromClass = (cls) => toMainSubject(cls?.subject);
 
   const myActiveClasses = useMemo(() => {
       if (!activeStudentId) return [];
