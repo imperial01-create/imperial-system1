@@ -1,12 +1,12 @@
 /* [서비스 가치] 학원의 핵심 자산인 기출문제를 체계적으로 보관하고 교직원 간 안전하게 공유합니다.
    (🚀 CTO 패치: 기출 아카이브 다이내믹 번역기(수학 상/공통수학1 텍스트 구별) 완벽 적용) */
 import React, { useState, useEffect } from 'react';
-import { 
-  Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader, 
-  FileQuestion, BookOpen, ExternalLink, Plus, ServerCrash, 
-  XCircle, Edit3, Trash2, X 
+import {
+  Search, FileText, CheckCircle, Link as LinkIcon, AlertCircle, Loader,
+  FileQuestion, BookOpen, ExternalLink, Plus, ServerCrash,
+  XCircle, Edit3, Trash2, X, ClipboardList
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc, deleteField } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
@@ -15,14 +15,18 @@ import { reassignExamReferences, countExamReferences } from '../utils/examDocRef
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
 import { APP_ID } from '../constants';
+import ExamWorkBoard from './ExamWorkBoard';
+/* 자료 4칸을 쓰는 규칙은 examFileSlots 한 곳만 씁니다.
+   현황판과 이 화면이 각자 사본을 가지면 반드시 어긋납니다. */
+import {
+    FILE_SLOTS, daysSince, STALE_DAYS,
+    claimSlot, releaseSlot, submitSlotLink, updateSlotLink, publishSlot
+} from '../utils/examFileSlots';
 
 
-const FILE_TYPES = [
-    { key: 'studentWork', label: '학생풀이(원본)', icon: FileQuestion },
-    { key: 'examPaper', label: '시험지', icon: FileText },
-    { key: 'quickAnswer', label: '빠른답지', icon: CheckCircle },
-    { key: 'solution', label: '해설', icon: BookOpen }
-];
+/* 칸의 종류·순서·이름은 examFileSlots 가 정합니다. 여기서는 아이콘만 붙입니다. */
+const SLOT_ICONS = { studentWork: FileQuestion, examPaper: FileText, quickAnswer: CheckCircle, solution: BookOpen };
+const FILE_TYPES = FILE_SLOTS.map(s => ({ ...s, icon: SLOT_ICONS[s.key] }));
 
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
@@ -43,6 +47,7 @@ const ExamArchive = ({ currentUser }) => {
 
     const [showAddModal, setShowAddModal] = useState(false);
     const [showEditExamModal, setShowEditExamModal] = useState(false);
+    const [showWorkBoard, setShowWorkBoard] = useState(false);
     
     const [schoolsData, setSchoolsData] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [activeDepartments, setActiveDepartments] = useState(['수학']);
@@ -301,12 +306,6 @@ const ExamArchive = ({ currentUser }) => {
         } catch (error) { alert("삭제 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
-    /* ⚠️ 자료 4칸(시험지·빠른답지·해설·학생풀이)은 한 시험을 여러 명이 나눠 맡는 구조입니다.
-       예전에는 저장할 때마다 files 전체를 다시 썼는데, 그 files 는 '검색을 눌렀던 시점'의
-       낡은 사본이라 그 사이 다른 조교가 잡은 칸이 통째로 지워졌습니다.
-       이제 'files.해설.status' 처럼 칸 하나만 지정해 씁니다. 다른 칸은 건드리지 않습니다. */
-    const slotPath = (fileKey, field) => `files.${fileKey}${field ? '.' + field : ''}`;
-
     /* 화면 상태도 칸을 새 객체로 복사해 갈아끼웁니다.
        예전 취소 코드는 얕은 복사라 delete 가 원본까지 건드려,
        저장이 실패해도 화면은 취소된 것처럼 보였습니다. */
@@ -321,47 +320,14 @@ const ExamArchive = ({ currentUser }) => {
         }));
     };
 
-    // 서버 타임스탬프와 방금 만든 Date 를 함께 다룹니다.
-    const toDateSafe = (v) => {
-        if (!v) return null;
-        if (typeof v.toDate === 'function') return v.toDate();
-        if (v instanceof Date) return v;
-        if (typeof v.seconds === 'number') return new Date(v.seconds * 1000);
-        return null;
-    };
-    const daysSince = (v) => {
-        const d = toDateSafe(v);
-        return d ? Math.floor((Date.now() - d.getTime()) / 86400000) : null;
-    };
-
     const handleClaimTask = async (exam, fileKey) => {
         const fileLabel = FILE_TYPES.find(f => f.key === fileKey).label;
         if (!window.confirm(`[${fileLabel}] 작업을 시작하시겠습니까?`)) return;
 
         setIsProcessing(true);
-        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
-
         try {
-            await runTransaction(db, async (transaction) => {
-                const examDoc = await transaction.get(examRef);
-                if (!examDoc.exists()) throw new Error("문서를 찾을 수 없습니다.");
-
-                const currentFile = (examDoc.data().files || {})[fileKey] || { status: 'open' };
-                if (currentFile.status !== 'open') throw new Error(`이미 ${currentFile.workerName || '다른 사람'}님이 작업 중이거나 완료된 건입니다.`);
-
-                transaction.update(examRef, {
-                    [slotPath(fileKey, 'status')]: 'working',
-                    [slotPath(fileKey, 'workerId')]: currentUser.id,
-                    [slotPath(fileKey, 'workerName')]: currentUser.name,
-                    // 언제 잡았는지 남겨야 '며칠째 묶여 있는지'를 알 수 있습니다.
-                    [slotPath(fileKey, 'claimedAt')]: serverTimestamp(),
-                    updatedAt: serverTimestamp()
-                });
-            });
-
-            patchLocalSlot(exam.id, fileKey, {
-                status: 'working', workerId: currentUser.id, workerName: currentUser.name, claimedAt: new Date()
-            });
+            const applied = await claimSlot(exam.id, fileKey, currentUser);
+            patchLocalSlot(exam.id, fileKey, applied);
         } catch (error) { alert(error.message); } finally { setIsProcessing(false); }
     };
 
@@ -378,17 +344,9 @@ const ExamArchive = ({ currentUser }) => {
         if (!window.confirm(msg)) return;
 
         setIsProcessing(true);
-        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
-
         try {
-            await updateDoc(examRef, {
-                [slotPath(fileKey, 'status')]: 'open',
-                [slotPath(fileKey, 'workerId')]: deleteField(),
-                [slotPath(fileKey, 'workerName')]: deleteField(),
-                [slotPath(fileKey, 'claimedAt')]: deleteField(),
-                updatedAt: serverTimestamp()
-            });
-            patchLocalSlot(exam.id, fileKey, { status: 'open' }, ['workerId', 'workerName', 'claimedAt']);
+            const { changes, removed } = await releaseSlot(exam.id, fileKey);
+            patchLocalSlot(exam.id, fileKey, changes, removed);
         } catch (error) { alert("취소 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
@@ -397,34 +355,16 @@ const ExamArchive = ({ currentUser }) => {
         if (type !== 'edit_link' && !uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
         
         setIsProcessing(true);
-        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
-
         try {
             if (type === 'edit_link' && !uploadUrl.trim()) {
-                await updateDoc(examRef, {
-                    [slotPath(fileKey, 'status')]: 'open',
-                    [slotPath(fileKey, 'workerId')]: deleteField(),
-                    [slotPath(fileKey, 'workerName')]: deleteField(),
-                    [slotPath(fileKey, 'claimedAt')]: deleteField(),
-                    [slotPath(fileKey, 'url')]: deleteField(),
-                    updatedAt: serverTimestamp()
-                });
-                patchLocalSlot(exam.id, fileKey, { status: 'open' }, ['workerId', 'workerName', 'claimedAt', 'url']);
+                const { changes, removed } = await releaseSlot(exam.id, fileKey, { clearUrl: true });
+                patchLocalSlot(exam.id, fileKey, changes, removed);
                 alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
             } else if (type === 'edit_link') {
-                await updateDoc(examRef, {
-                    [slotPath(fileKey, 'url')]: uploadUrl.trim(),
-                    updatedAt: serverTimestamp()
-                });
-                patchLocalSlot(exam.id, fileKey, { url: uploadUrl.trim() });
+                patchLocalSlot(exam.id, fileKey, await updateSlotLink(exam.id, fileKey, uploadUrl));
                 alert("링크가 성공적으로 수정되었습니다.");
             } else {
-                await updateDoc(examRef, {
-                    [slotPath(fileKey, 'status')]: 'pending',
-                    [slotPath(fileKey, 'url')]: uploadUrl.trim(),
-                    updatedAt: serverTimestamp()
-                });
-                patchLocalSlot(exam.id, fileKey, { status: 'pending', url: uploadUrl.trim() });
+                patchLocalSlot(exam.id, fileKey, await submitSlotLink(exam.id, fileKey, uploadUrl));
                 alert("관리자에게 최종 승인을 요청했습니다.");
             }
 
@@ -436,14 +376,8 @@ const ExamArchive = ({ currentUser }) => {
     const handleApprove = async (exam, fileKey) => {
         if (!isAdmin) return;
         setIsProcessing(true);
-        const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
-
         try {
-            await updateDoc(examRef, {
-                [slotPath(fileKey, 'status')]: 'published',
-                updatedAt: serverTimestamp()
-            });
-            patchLocalSlot(exam.id, fileKey, { status: 'published' });
+            patchLocalSlot(exam.id, fileKey, await publishSlot(exam.id, fileKey));
             alert("승인 완료! 교직원에게 자료가 공개되었습니다.");
         } catch (error) { alert("승인 실패: " + error.message); } finally { setIsProcessing(false); }
     };
@@ -473,7 +407,7 @@ const ExamArchive = ({ currentUser }) => {
                     {fileData.status === 'working' && (() => {
                         const isMine = fileData.workerId === currentUser.id;
                         const stuck = daysSince(fileData.claimedAt);
-                        const isStale = stuck !== null && stuck >= 3;
+                        const isStale = stuck !== null && stuck >= STALE_DAYS;
                         return (
                             <>
                                 <div
@@ -528,6 +462,13 @@ const ExamArchive = ({ currentUser }) => {
                     <span className="text-sm text-gray-500 font-medium mt-1">학원 내부용 세부 자료 현황 관리 (학부모 접근 불가)</span>
                 </div>
                 <div className="flex gap-2">
+                    {/* 강사에게 이 화면은 '찾는 도구'입니다. 자료를 채우는 일은 조교·관리자의 업무이므로
+                        현황판은 그쪽에만 보여 줍니다. (canAddExam 과 같은 범위) */}
+                    {canAddExam && (
+                        <Button onClick={() => setShowWorkBoard(true)} icon={ClipboardList} variant="secondary">
+                            <span className="hidden sm:inline">업무 현황</span><span className="sm:hidden">현황</span>
+                        </Button>
+                    )}
                     {canAddExam && (
                         <Button onClick={() => {
                             const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
@@ -873,6 +814,23 @@ const ExamArchive = ({ currentUser }) => {
                         {isProcessing ? <Loader className="animate-spin mx-auto" /> : modalState.type === 'edit_link' ? '수정 완료' : '승인 요청하기'}
                     </Button>
                 </div>
+            </Modal>
+
+            {/* 현황판에서 작업을 잡거나 승인하면 아래 검색 결과가 낡습니다. 닫을 때 다시 조회합니다. */}
+            <Modal
+                isOpen={showWorkBoard}
+                onClose={() => { setShowWorkBoard(false); if (hasSearched) handleSearch(); }}
+                title="기출 자료 업무 현황"
+                maxWidthClass="max-w-4xl"
+            >
+                {showWorkBoard && (
+                    <ExamWorkBoard
+                        currentUser={currentUser}
+                        isAdmin={isAdmin}
+                        schoolsData={schoolsData}
+                        activeDepartments={activeDepartments}
+                    />
+                )}
             </Modal>
         </div>
     );
