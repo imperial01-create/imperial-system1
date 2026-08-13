@@ -5,15 +5,17 @@
 
 ## 지금 어디까지 왔나 (한눈에)
 
-- **노드 1,086** = concept 794 · skill 159 · pattern 125 · trap 8 / **간선 2,352**
-  (prerequisite 2,179 · applies_to 159 · combines 6 · trap_of 8)
+- **노드 1,157** = concept 843 · skill 172 · pattern 135 · trap 23 / **간선 2,556**
+  (PR #13 커버리지 1라운드 머지 후 실측 — prerequisite 2,313 · applies_to 204 ·
+  combines 6 · trap_of 33)
 - **검증 규칙 16개가 CI 상시 가동** (PR마다 ❌/✅). 결함 대장(baseline) **잔여 1건**뿐
 - **기출 파이프라인 실전 검증 완료**: 2026 07학평 30문항 — **30/30 정답 재현**,
   62개 노드가 verified_by(counterexample) 보유. 전 과정: `tags/verification-log.jsonl`
-- 데이터 레포 PR #1~#11 머지. 앱(imperial-system1)은 v2 렌더링·현황판·캐시 우회 배포됨
-- **머지 대기 브랜치 2개** (2026-08-13): `feature/figure-assets`(그림 자산 층 + 원격 검수
-  페이지 생성기 + 변환기 개선) · `cov/exec-coverage-r1`(커버리지 1라운드 — 신설 71노드,
-  머지 후 노드 1,157 · 간선 2,556 · trap 8→23). 원장이 GitHub 에서 PR 생성·머지
+- 데이터 레포 PR #1~#13 머지 (#12 그림 자산 층, #13 커버리지 1라운드 신설 71노드).
+  앱(imperial-system1)은 v2 렌더링·현황판·캐시 우회 배포됨
+- **머지 대기 1건** (2026-08-13): `feature/review-tools` — 원격 검수 페이지 생성기 +
+  검수 반영(렌더러 화이트리스트·박스 규약) + [N점] 은행 정규화 + 그림 자산 백필 (6커밋.
+  #12 머지 이후 같은 브랜치에 쌓인 잔여분을 새 이름으로 재게시)
 
 ## 새 세션 시작법
 
@@ -73,6 +75,9 @@
 | #8 | 확률과통계 222개 신설 — 마지막 빈 대분류 채움 |
 | #9 | 기출 파이프라인 — problem-bank·tags·규칙 16·ingest 변환기(학평 지원·보기 중복 검출·--update) |
 | #10 | 실행 검증 첫 가동 — 30/30 재현, 전사 오류 6건 검출·정정, verified_by 62노드 |
+| #11 | 첫 Claude 직접 전사 62문항 (06모평·07학평 선택) — 62/62 풀이 대조, 검수대기 진입 |
+| #12 | 그림 자산 층 — tags/assets/ 원본 페이지 PNG(200dpi) + figure_asset 필드 |
+| #13 | 커버리지 1라운드 — 기출 92문항 단계 분해 검증 → 신설 71(기하 코어 34·수I 공백 9·킬러 13·trap 15) + weak 보강 13 |
 
 앱(imperial-system1): v2 키 렌더링 + 교직원 현황판 + Worker 캐시 10분 버킷 우회 + 스모크 테스트 6종
 (`npm test`). 판정 기록: `RECLASSIFY_REVIEW.md`(재분류), 데이터 레포 `scripts/*-decisions.json`.
