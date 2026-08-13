@@ -6,7 +6,7 @@ import {
   FileQuestion, BookOpen, ExternalLink, Plus, ServerCrash, 
   XCircle, Edit3, Trash2, X 
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, updateDoc, setDoc, getDoc, serverTimestamp, deleteDoc, deleteField } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
@@ -133,7 +133,9 @@ const ExamArchive = ({ currentUser }) => {
             );
             setExams(results);
         } catch (error) {
-            setErrorMsg('데이터를 불러오는 중 문제가 발생했습니다.');
+            // 원인을 삼키면 "왜 안 되지"를 코드에서 뒤져야 합니다. 화면과 콘솔 양쪽에 남깁니다.
+            console.error('[기출 아카이브] 검색 실패', error);
+            setErrorMsg(`데이터를 불러오는 중 문제가 발생했습니다. (${error.code || error.message})`);
         } finally {
             setLoading(false);
         }
@@ -299,47 +301,94 @@ const ExamArchive = ({ currentUser }) => {
         } catch (error) { alert("삭제 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
+    /* ⚠️ 자료 4칸(시험지·빠른답지·해설·학생풀이)은 한 시험을 여러 명이 나눠 맡는 구조입니다.
+       예전에는 저장할 때마다 files 전체를 다시 썼는데, 그 files 는 '검색을 눌렀던 시점'의
+       낡은 사본이라 그 사이 다른 조교가 잡은 칸이 통째로 지워졌습니다.
+       이제 'files.해설.status' 처럼 칸 하나만 지정해 씁니다. 다른 칸은 건드리지 않습니다. */
+    const slotPath = (fileKey, field) => `files.${fileKey}${field ? '.' + field : ''}`;
+
+    /* 화면 상태도 칸을 새 객체로 복사해 갈아끼웁니다.
+       예전 취소 코드는 얕은 복사라 delete 가 원본까지 건드려,
+       저장이 실패해도 화면은 취소된 것처럼 보였습니다. */
+    const patchLocalSlot = (examId, fileKey, changes = {}, removeKeys = []) => {
+        setExams(prev => prev.map(e => {
+            if (e.id !== examId) return e;
+            const files = { ...(e.files || {}) };
+            const slot = { ...(files[fileKey] || { status: 'open' }) };
+            removeKeys.forEach(k => delete slot[k]);
+            files[fileKey] = { ...slot, ...changes };
+            return { ...e, files };
+        }));
+    };
+
+    // 서버 타임스탬프와 방금 만든 Date 를 함께 다룹니다.
+    const toDateSafe = (v) => {
+        if (!v) return null;
+        if (typeof v.toDate === 'function') return v.toDate();
+        if (v instanceof Date) return v;
+        if (typeof v.seconds === 'number') return new Date(v.seconds * 1000);
+        return null;
+    };
+    const daysSince = (v) => {
+        const d = toDateSafe(v);
+        return d ? Math.floor((Date.now() - d.getTime()) / 86400000) : null;
+    };
+
     const handleClaimTask = async (exam, fileKey) => {
         const fileLabel = FILE_TYPES.find(f => f.key === fileKey).label;
         if (!window.confirm(`[${fileLabel}] 작업을 시작하시겠습니까?`)) return;
-        
+
         setIsProcessing(true);
         const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
-            let updatedFilesForState = null;
             await runTransaction(db, async (transaction) => {
                 const examDoc = await transaction.get(examRef);
                 if (!examDoc.exists()) throw new Error("문서를 찾을 수 없습니다.");
 
-                const data = examDoc.data();
-                const files = data.files || {};
-                const currentFile = files[fileKey] || { status: 'open' };
-
+                const currentFile = (examDoc.data().files || {})[fileKey] || { status: 'open' };
                 if (currentFile.status !== 'open') throw new Error(`이미 ${currentFile.workerName || '다른 사람'}님이 작업 중이거나 완료된 건입니다.`);
 
-                files[fileKey] = { ...currentFile, status: 'working', workerId: currentUser.id, workerName: currentUser.name };
-                updatedFilesForState = files;
-                transaction.update(examRef, { files: updatedFilesForState, updatedAt: serverTimestamp() });
+                transaction.update(examRef, {
+                    [slotPath(fileKey, 'status')]: 'working',
+                    [slotPath(fileKey, 'workerId')]: currentUser.id,
+                    [slotPath(fileKey, 'workerName')]: currentUser.name,
+                    // 언제 잡았는지 남겨야 '며칠째 묶여 있는지'를 알 수 있습니다.
+                    [slotPath(fileKey, 'claimedAt')]: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                });
             });
 
-            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFilesForState } : e));
+            patchLocalSlot(exam.id, fileKey, {
+                status: 'working', workerId: currentUser.id, workerName: currentUser.name, claimedAt: new Date()
+            });
         } catch (error) { alert(error.message); } finally { setIsProcessing(false); }
     };
 
     const handleCancelTask = async (exam, fileKey) => {
-        if (!window.confirm("작업을 취소하시겠습니까?")) return;
+        const slot = exam.files?.[fileKey] || {};
+        const isMine = slot.workerId === currentUser.id;
+
+        /* 관리자는 남의 작업도 풀 수 있어야 합니다.
+           예전에는 본인만 취소할 수 있어, 조교가 잡아만 두고 그만두면
+           그 칸을 아무도 손댈 수 없게 영구히 잠겼습니다. */
+        const msg = isMine
+            ? "작업을 취소하시겠습니까?"
+            : `${slot.workerName || '다른 사람'}님이 잡아 둔 작업을 해제합니다.\n(관리자 권한) 계속하시겠습니까?`;
+        if (!window.confirm(msg)) return;
+
         setIsProcessing(true);
         const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
-            const updatedFiles = { ...(exam.files || {}) };
-            delete updatedFiles[fileKey].workerId;
-            delete updatedFiles[fileKey].workerName;
-            updatedFiles[fileKey].status = 'open';
-
-            await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
+            await updateDoc(examRef, {
+                [slotPath(fileKey, 'status')]: 'open',
+                [slotPath(fileKey, 'workerId')]: deleteField(),
+                [slotPath(fileKey, 'workerName')]: deleteField(),
+                [slotPath(fileKey, 'claimedAt')]: deleteField(),
+                updatedAt: serverTimestamp()
+            });
+            patchLocalSlot(exam.id, fileKey, { status: 'open' }, ['workerId', 'workerName', 'claimedAt']);
         } catch (error) { alert("취소 실패: " + error.message); } finally { setIsProcessing(false); }
     };
 
@@ -351,28 +400,34 @@ const ExamArchive = ({ currentUser }) => {
         const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
-            const updatedFiles = { ...(exam.files || {}) };
-            
-            if (type === 'edit_link') {
-                if (!uploadUrl.trim()) {
-                    delete updatedFiles[fileKey].workerId;
-                    delete updatedFiles[fileKey].workerName;
-                    delete updatedFiles[fileKey].url;
-                    updatedFiles[fileKey].status = 'open';
-                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                    alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
-                } else {
-                    updatedFiles[fileKey] = { ...updatedFiles[fileKey], url: uploadUrl };
-                    await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-                    alert("링크가 성공적으로 수정되었습니다.");
-                }
+            if (type === 'edit_link' && !uploadUrl.trim()) {
+                await updateDoc(examRef, {
+                    [slotPath(fileKey, 'status')]: 'open',
+                    [slotPath(fileKey, 'workerId')]: deleteField(),
+                    [slotPath(fileKey, 'workerName')]: deleteField(),
+                    [slotPath(fileKey, 'claimedAt')]: deleteField(),
+                    [slotPath(fileKey, 'url')]: deleteField(),
+                    updatedAt: serverTimestamp()
+                });
+                patchLocalSlot(exam.id, fileKey, { status: 'open' }, ['workerId', 'workerName', 'claimedAt', 'url']);
+                alert("링크가 삭제되어 미작업(작업 대기) 상태로 돌아갔습니다.");
+            } else if (type === 'edit_link') {
+                await updateDoc(examRef, {
+                    [slotPath(fileKey, 'url')]: uploadUrl.trim(),
+                    updatedAt: serverTimestamp()
+                });
+                patchLocalSlot(exam.id, fileKey, { url: uploadUrl.trim() });
+                alert("링크가 성공적으로 수정되었습니다.");
             } else {
-                updatedFiles[fileKey] = { ...updatedFiles[fileKey], status: 'pending', url: uploadUrl };
-                await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
+                await updateDoc(examRef, {
+                    [slotPath(fileKey, 'status')]: 'pending',
+                    [slotPath(fileKey, 'url')]: uploadUrl.trim(),
+                    updatedAt: serverTimestamp()
+                });
+                patchLocalSlot(exam.id, fileKey, { status: 'pending', url: uploadUrl.trim() });
                 alert("관리자에게 최종 승인을 요청했습니다.");
             }
 
-            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
             setModalState({ type: null, exam: null, fileKey: null });
             setUploadUrl('');
         } catch (error) { alert("요청 실패: " + error.message); } finally { setIsProcessing(false); }
@@ -384,11 +439,11 @@ const ExamArchive = ({ currentUser }) => {
         const examRef = doc(db, INTEGRATED_COLLECTION, exam.id);
 
         try {
-            const updatedFiles = { ...(exam.files || {}) };
-            updatedFiles[fileKey] = { ...updatedFiles[fileKey], status: 'published' };
-            await updateDoc(examRef, { files: updatedFiles, updatedAt: serverTimestamp() });
-            
-            setExams(prev => prev.map(e => e.id === exam.id ? { ...e, files: updatedFiles } : e));
+            await updateDoc(examRef, {
+                [slotPath(fileKey, 'status')]: 'published',
+                updatedAt: serverTimestamp()
+            });
+            patchLocalSlot(exam.id, fileKey, { status: 'published' });
             alert("승인 완료! 교직원에게 자료가 공개되었습니다.");
         } catch (error) { alert("승인 실패: " + error.message); } finally { setIsProcessing(false); }
     };
@@ -415,17 +470,36 @@ const ExamArchive = ({ currentUser }) => {
                     {fileData.status === 'open' && isWorker && (
                         <Button size="sm" variant="outline" className="w-full text-[11px] py-1 px-0 border-gray-300 text-gray-600 hover:text-blue-600 hover:border-blue-400" onClick={() => handleClaimTask(exam, ft.key)} disabled={isProcessing}>작업하기</Button>
                     )}
-                    {fileData.status === 'working' && (
-                        <>
-                            <div className="bg-yellow-50 text-yellow-700 text-[10px] font-bold py-1 px-2 rounded text-center truncate w-full border border-yellow-200" title={`${fileData.workerName} 작업중`}>{fileData.workerName}</div>
-                            {fileData.workerId === currentUser.id && (
-                                <div className="flex gap-1 w-full">
-                                    <Button size="sm" variant="secondary" className="flex-1 text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => { setUploadUrl(''); setModalState({ type: 'upload_link', exam, fileKey: ft.key }); }}>등록</Button>
-                                    <Button size="sm" variant="outline" className="px-2 py-1 border-gray-300 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => handleCancelTask(exam, ft.key)} title="작업 취소"><XCircle size={14}/></Button>
+                    {fileData.status === 'working' && (() => {
+                        const isMine = fileData.workerId === currentUser.id;
+                        const stuck = daysSince(fileData.claimedAt);
+                        const isStale = stuck !== null && stuck >= 3;
+                        return (
+                            <>
+                                <div
+                                    className={`text-[10px] font-bold py-1 px-2 rounded text-center truncate w-full border ${isStale ? 'bg-red-50 text-red-700 border-red-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200'}`}
+                                    title={`${fileData.workerName} 작업중${stuck !== null ? ` (${stuck}일째)` : ''}`}
+                                >
+                                    {fileData.workerName}{isStale ? ` · ${stuck}일` : ''}
                                 </div>
-                            )}
-                        </>
-                    )}
+                                {(isMine || isAdmin) && (
+                                    <div className="flex gap-1 w-full">
+                                        {isMine && (
+                                            <Button size="sm" variant="secondary" className="flex-1 text-[11px] py-1 px-0 bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" onClick={() => { setUploadUrl(''); setModalState({ type: 'upload_link', exam, fileKey: ft.key }); }}>등록</Button>
+                                        )}
+                                        <Button
+                                            size="sm" variant="outline"
+                                            className={`${isMine ? 'px-2' : 'flex-1 text-[11px]'} py-1 border-gray-300 text-red-500 hover:text-red-700 hover:bg-red-50`}
+                                            onClick={() => handleCancelTask(exam, ft.key)}
+                                            title={isMine ? "작업 취소" : "관리자 권한으로 작업 해제"}
+                                        >
+                                            {isMine ? <XCircle size={14}/> : '해제'}
+                                        </Button>
+                                    </div>
+                                )}
+                            </>
+                        );
+                    })()}
                     {fileData.status === 'pending' && (
                         <>
                             <div className="bg-purple-50 text-purple-700 text-[10px] font-bold py-1 px-2 rounded text-center w-full border border-purple-200">검수 대기</div>

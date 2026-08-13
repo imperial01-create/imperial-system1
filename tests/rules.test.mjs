@@ -351,6 +351,26 @@ const run = async () => {
     await check('비로그인은 개수를 제한해도 막힌다', () =>
         assertFails(getDocs(query(examsCol(guest()), limit(10)))));
 
+    /* 시험을 지우면 그 시험을 본 학생의 등급컷·예측등급까지 사라진다.
+       화면은 관리자·행정조교에게만 삭제 버튼을 보여주므로, 규칙도 같은 범위여야 한다.
+       (버튼을 숨기는 것만으로는 서버에 직접 보내는 요청을 막지 못한다) */
+    const examDoc = (who, id) => doc(who, `${BASE}/integrated_exams/${id}`);
+
+    await check('강사는 시험을 등록·수정할 수 있다', () =>
+        assertSucceeds(setDoc(examDoc(as('teacher1', lecturerToken('teacher1')), 'exam_del_1'), { schoolName: '목동중', year: '2026' })));
+    await check('강사는 시험을 삭제할 수 없다', () =>
+        assertFails(deleteDoc(examDoc(as('teacher1', lecturerToken('teacher1')), 'exam_del_1'))));
+    await check('수업조교는 시험을 삭제할 수 없다', () =>
+        assertFails(deleteDoc(examDoc(as('ta1', taToken('ta1')), 'exam_del_1'))));
+    await check('학생은 시험을 삭제할 수 없다', () =>
+        assertFails(deleteDoc(examDoc(as('stu1', studentToken('stu1')), 'exam_del_1'))));
+    await check('행정조교는 시험을 삭제할 수 있다', () =>
+        assertSucceeds(deleteDoc(examDoc(as('asst1', asstToken('asst1')), 'exam_del_1'))));
+    await check('관리자는 시험을 삭제할 수 있다', async () => {
+        await setDoc(examDoc(as('admin1', staffToken('admin1')), 'exam_del_2'), { schoolName: '목동고', year: '2026' });
+        await assertSucceeds(deleteDoc(examDoc(as('admin1', staffToken('admin1')), 'exam_del_2')));
+    });
+
     /* 동결한 저장 형식(v2) 전체가 규칙을 통과하는지.
        필드를 늘렸을 때 규칙이 막지 않는지 확인하는 것이 목적이다. */
     const frozenPayload = {

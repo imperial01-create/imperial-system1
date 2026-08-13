@@ -403,7 +403,11 @@ service cloud.firestore {
       match /integrated_exams/{docId} {
         allow get:   if isAuth();
         allow list:  if isStaff(appId) || (isAuth() && request.query.limit <= 300);
-        allow write: if isStaff(appId);
+        allow create, update: if isStaff(appId);
+        /* 시험을 지우면 그 시험을 본 학생의 등급컷·예측등급까지 사라집니다.
+           화면은 관리자·행정조교에게만 삭제 버튼을 보여주지만, 버튼을 숨기는 것은
+           잠금장치가 아닙니다. 규칙에서 같은 범위로 막습니다. */
+        allow delete: if isDesk(appId);
       }
       match /exam_archive/{docId}     { allow read, write: if isStaff(appId); }
 
