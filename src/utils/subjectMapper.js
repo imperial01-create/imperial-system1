@@ -3,6 +3,8 @@
   (🚀 과거 데이터(schoolType 누락) 완벽 대응 및 다이내믹 디스플레이 번역기 탑재 버전)
 */
 
+import { toMainSubject, activeMainSubjects, MAIN_SUBJECTS as MAIN_SUBJECTS_ORDER } from './subjectMatch';
+
 // 1. 대분류(부서) 마스터 정의
 export const DEPARTMENTS = [
     { id: 'DEPT_KOR', label: '국어과' },
