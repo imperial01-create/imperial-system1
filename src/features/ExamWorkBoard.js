@@ -30,6 +30,7 @@ import {
     claimSlot, releaseSlot, submitSlotLink, publishSlot, STALE_DAYS
 } from '../utils/examFileSlots';
 import { toMainSubject, activeMainSubjects } from '../utils/subjectMatch';
+import { checkDriveLink } from '../utils/driveLink';
 
 const TYPE_KOR = { elementary: '초등학교', middle: '중학교', high: '고등학교' };
 const TERMS = ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'];
@@ -275,10 +276,16 @@ const ExamWorkBoard = ({ currentUser, isAdmin, schoolsData, activeDepartments, o
                                                         className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs w-44 md:w-56 outline-none focus:border-blue-500"
                                                     />
                                                     <Button size="sm" variant="primary" disabled={busy === key || !(urlDraft[key] || '').trim()}
-                                                            onClick={() => act(key, async () => {
-                                                                await submitSlotLink(exam.id, slotKey, urlDraft[key]);
-                                                                setUrlDraft(d => { const n = { ...d }; delete n[key]; return n; });
-                                                            })}>
+                                                            onClick={() => {
+                                                                // 오타 난 링크가 그대로 공개되면 나중에 강사가 눌렀을 때에야 알게 됩니다.
+                                                                const check = checkDriveLink(urlDraft[key]);
+                                                                if (!check.ok) return alert("링크를 확인해 주세요.\n\n" + check.reason);
+                                                                if (check.warn && !window.confirm(check.warn + "\n\n그래도 등록하시겠습니까?")) return;
+                                                                act(key, async () => {
+                                                                    await submitSlotLink(exam.id, slotKey, urlDraft[key]);
+                                                                    setUrlDraft(d => { const n = { ...d }; delete n[key]; return n; });
+                                                                });
+                                                            }}>
                                                         등록
                                                     </Button>
                                                     <Button size="sm" variant="outline" className="text-red-500 border-gray-300" disabled={busy === key}

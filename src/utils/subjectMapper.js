@@ -146,6 +146,23 @@ export const getAvailableSubjects = (schoolType, yearStr, gradeStr, activeDepart
 };
 
 /**
+ * 중등 과목명은 학기를 이름에 담고 있습니다 ('수학 2-1' = 2학년 1학기).
+ * 한 번에 여러 학기를 등록할 때 이 이름을 학기에 맞춰 주지 않으면
+ * 2학기 시험에 '수학 2-1' 이 붙어 자료가 엉뚱한 곳에 쌓입니다.
+ *
+ * '수학 2-1' + 2학기 → '수학 2-2'
+ * '영어', '미적분 I', '통합과학1' 처럼 학기를 담지 않는 이름은 그대로 둡니다.
+ */
+export const alignSubjectToSemester = (subjectName, semesterNumber) => {
+    const name = String(subjectName || '');
+    const sem = Number(semesterNumber);
+    if (sem !== 1 && sem !== 2) return name;
+
+    const m = name.match(/^(.+?)\s(\d)-(\d)$/);
+    return m ? `${m[1]} ${m[2]}-${sem}` : name;
+};
+
+/**
  * 텍스트(과거 데이터 포함)를 불변하는 표준 코드로 마이그레이션 매핑
  */
 export const getStandardSubjectCode = (schoolType, subjectName) => {

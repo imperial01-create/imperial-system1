@@ -13,7 +13,8 @@ import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { fetchBySchool } from '../utils/schoolQuery';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
-import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES } from '../utils/subjectMapper'; // 🚀 번역기 로드
+import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES, alignSubjectToSemester } from '../utils/subjectMapper'; // 🚀 번역기 로드
+import { checkDriveLink, checkDriveLinks } from '../utils/driveLink';
 import { APP_ID } from '../constants';
 import ExamWorkBoard from './ExamWorkBoard';
 /* 자료 4칸을 쓰는 규칙은 examFileSlots 한 곳만 씁니다.
@@ -27,6 +28,11 @@ import {
 /* 칸의 종류·순서·이름은 examFileSlots 가 정합니다. 여기서는 아이콘만 붙입니다. */
 const SLOT_ICONS = { studentWork: FileQuestion, examPaper: FileText, quickAnswer: CheckCircle, solution: BookOpen };
 const FILE_TYPES = FILE_SLOTS.map(s => ({ ...s, icon: SLOT_ICONS[s.key] }));
+
+/* 같은 학교의 다른 학기를 이어서 넣는 일이 잦습니다.
+   직전 등록값을 남겨 두었다가 다음 등록 때 채워 줍니다. (새로고침해도 남습니다) */
+const ADD_MEMO_KEY = 'imperial.examArchive.lastAdd';
+const TERM_OPTIONS = ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'];
 
 const currentYear = new Date().getFullYear();
 const YEARS = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => String(currentYear - i));
@@ -55,9 +61,10 @@ const ExamArchive = ({ currentUser }) => {
     const [addSchoolType, setAddSchoolType] = useState('high');
     const [isAddCustom, setIsAddCustom] = useState(false);
     const [isAddManualSubject, setIsAddManualSubject] = useState(false); 
+    /* terms 는 배열입니다. 한 학교의 네 시험을 넣으려면 같은 입력을 네 번 반복해야 했습니다. */
     const [newExamForm, setNewExamForm] = useState({
-        schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: '수학', standardCode: '', grade: '1학년', 
-        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
+        schoolName: '', year: String(currentYear), terms: ['1학기 중간고사'], subject: '수학', standardCode: '', grade: '1학년',
+        urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' }
     });
 
     const [editSchoolType, setEditSchoolType] = useState('high');
@@ -146,53 +153,115 @@ const ExamArchive = ({ currentUser }) => {
         }
     };
 
+    const rememberAddDefaults = () => {
+        try {
+            localStorage.setItem(ADD_MEMO_KEY, JSON.stringify({
+                schoolType: addSchoolType, isCustom: isAddCustom, isManual: isAddManualSubject,
+                schoolName: newExamForm.schoolName, year: newExamForm.year,
+                grade: newExamForm.grade, subject: newExamForm.subject,
+                standardCode: newExamForm.standardCode, terms: newExamForm.terms
+            }));
+        } catch (e) { /* 저장 공간이 막혀 있어도 등록 자체는 되어야 합니다 */ }
+    };
+
+    const openAddModal = () => {
+        let memo = null;
+        try { memo = JSON.parse(localStorage.getItem(ADD_MEMO_KEY) || 'null'); } catch (e) { memo = null; }
+
+        const type = memo?.schoolType || 'high';
+        const year = memo?.year || String(currentYear);
+        const grade = memo?.grade || '1학년';
+        const subjs = getAvailableSubjects(getSchoolTypeKorean(type), year, grade, activeDepartments) || [];
+
+        setAddSchoolType(type);
+        setIsAddCustom(!!memo?.isCustom);
+        setIsAddManualSubject(!!memo?.isManual);
+        setNewExamForm({
+            schoolName: memo?.schoolName || '',
+            year, grade,
+            terms: memo?.terms?.length ? memo.terms : ['1학기 중간고사'],
+            subject: memo?.subject || subjs[0] || '',
+            standardCode: memo?.standardCode || '',
+            urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' }
+        });
+        setShowAddModal(true);
+    };
+
     const handleAddSubmitExam = async () => {
         if (!newExamForm.schoolName.trim() || !newExamForm.subject.trim()) return alert("학교명과 과목명을 정확히 입력해주세요.");
+
+        const terms = newExamForm.terms || [];
+        if (terms.length === 0) return alert("학기 및 고사를 하나 이상 선택해주세요.");
+        const isBulk = terms.length > 1;
+
+        /* 링크는 시험 하나에만 붙일 수 있습니다.
+           여러 시험을 한 번에 만들 때는 시험 틀만 만들고, 자료는 [업무 현황 → 구멍 찾기]에서 채웁니다. */
+        if (!isBulk) {
+            const { errors, warns } = checkDriveLinks(
+                FILE_TYPES.map(ft => ({ label: ft.label, url: newExamForm.urls[ft.key] }))
+            );
+            if (errors.length > 0) return alert("링크를 확인해 주세요.\n\n" + errors.join('\n'));
+            if (warns.length > 0 && !window.confirm(warns.join('\n') + "\n\n그래도 등록하시겠습니까?")) return;
+        }
+
         setIsProcessing(true);
-        
+
         try {
-            const [parsedSemester, parsedTerm] = newExamForm.combinedTerm.split(' ');
             const typeKor = getSchoolTypeKorean(addSchoolType);
+            const created = [];
 
-            const finalCode = isAddManualSubject 
-                ? (newExamForm.standardCode || `CUSTOM_${newExamForm.subject.replace(/\s+/g,'').toUpperCase()}`)
-                : getStandardSubjectCode(typeKor, newExamForm.subject);
+            for (const term of terms) {
+                const [parsedSemester, parsedTerm] = term.split(' ');
 
-            const baseData = {
-                schoolType: typeKor,
-                schoolName: newExamForm.schoolName.trim(),
-                year: String(newExamForm.year), 
-                semester: parsedSemester,
-                termType: parsedTerm,
-                subject: newExamForm.subject,
-                standardCode: finalCode,
-                grade: newExamForm.grade,
-                region: '서울',   
-                district: '양천구', 
-            };
+                /* 중등 과목명은 학기를 이름에 담고 있습니다 ('수학 2-1' = 2학년 1학기).
+                   2학기 시험에 '수학 2-1' 이 붙으면 자료가 엉뚱한 곳에 쌓입니다. */
+                const semNum = parsedSemester.startsWith('2') ? 2 : 1;
+                const subject = isAddManualSubject
+                    ? newExamForm.subject
+                    : alignSubjectToSemester(newExamForm.subject, semNum);
 
-            const updatePayload = { createdAt: serverTimestamp(), files: {} };
+                const finalCode = isAddManualSubject
+                    ? (newExamForm.standardCode || `CUSTOM_${subject.replace(/\s+/g, '').toUpperCase()}`)
+                    : getStandardSubjectCode(typeKor, subject);
 
-            FILE_TYPES.forEach(ft => {
-                if (newExamForm.urls[ft.key]?.trim()) {
-                    updatePayload.files[ft.key] = {
-                        status: 'published', url: newExamForm.urls[ft.key].trim(), workerId: currentUser.id, workerName: currentUser.name
-                    };
+                const baseData = {
+                    schoolType: typeKor,
+                    schoolName: newExamForm.schoolName.trim(),
+                    year: String(newExamForm.year),
+                    semester: parsedSemester,
+                    termType: parsedTerm,
+                    subject,
+                    standardCode: finalCode,
+                    grade: newExamForm.grade,
+                    region: '서울',
+                    district: '양천구',
+                };
+
+                const updatePayload = { createdAt: serverTimestamp(), files: {} };
+                if (!isBulk) {
+                    FILE_TYPES.forEach(ft => {
+                        if (newExamForm.urls[ft.key]?.trim()) {
+                            updatePayload.files[ft.key] = {
+                                status: 'published', url: newExamForm.urls[ft.key].trim(), workerId: currentUser.id, workerName: currentUser.name
+                            };
+                        }
+                    });
                 }
-            });
 
-            await upsertExamData(baseData, updatePayload);
-            
-            alert("신규 기출자료가 성공적으로 등록/병합되었습니다.");
+                await upsertExamData(baseData, updatePayload);
+                created.push(`${term} ${subject}`);
+            }
+
+            alert(isBulk
+                ? `${created.length}개 시험을 등록했습니다.\n\n${created.join('\n')}\n\n자료는 [업무 현황 → 구멍 찾기]에서 채우시면 됩니다.`
+                : "신규 기출자료가 성공적으로 등록/병합되었습니다.");
             setShowAddModal(false);
-            
-            const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
-            setNewExamForm({ 
-                schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: defaultSubjs[0]||'', standardCode: '', grade: '1학년',
-                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
-            });
-            setIsAddManualSubject(false);
-            
+
+            /* 같은 학교의 다른 학기를 이어서 넣는 경우가 많습니다.
+               학교·연도·학년·과목은 남기고 링크만 비웁니다. */
+            rememberAddDefaults();
+            setNewExamForm(f => ({ ...f, urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } }));
+
             if (hasSearched) handleSearch();
         } catch (error) {
             alert("등록 실패: " + error.message);
@@ -353,7 +422,14 @@ const ExamArchive = ({ currentUser }) => {
     const handleSubmitLink = async () => {
         const { exam, fileKey, type } = modalState;
         if (type !== 'edit_link' && !uploadUrl.trim()) return alert("구글 드라이브 URL을 입력해주세요.");
-        
+
+        /* 오타 난 링크가 그대로 '공개'되면, 나중에 강사가 눌렀을 때에야 안 열리는 걸 알게 됩니다. */
+        if (uploadUrl.trim()) {
+            const check = checkDriveLink(uploadUrl);
+            if (!check.ok) return alert("링크를 확인해 주세요.\n\n" + check.reason);
+            if (check.warn && !window.confirm(check.warn + "\n\n그래도 등록하시겠습니까?")) return;
+        }
+
         setIsProcessing(true);
         try {
             if (type === 'edit_link' && !uploadUrl.trim()) {
@@ -470,15 +546,7 @@ const ExamArchive = ({ currentUser }) => {
                         </Button>
                     )}
                     {canAddExam && (
-                        <Button onClick={() => {
-                            const defaultSubjs = getAvailableSubjects('고등학교', String(currentYear), '1학년', activeDepartments) || [];
-                            setNewExamForm({ 
-                                schoolName: '', year: String(currentYear), combinedTerm: '1학기 중간고사', subject: defaultSubjs[0]||'', standardCode: '', grade: '1학년', 
-                                urls: { studentWork: '', examPaper: '', quickAnswer: '', solution: '' } 
-                            });
-                            setAddSchoolType('high'); setIsAddCustom(false); setIsAddManualSubject(false);
-                            setShowAddModal(true);
-                        }} icon={Plus} variant="primary">
+                        <Button onClick={openAddModal} icon={Plus} variant="primary">
                             <span className="hidden sm:inline">자료 신규 등록</span><span className="sm:hidden">신규</span>
                         </Button>
                     )}
@@ -637,14 +705,31 @@ const ExamArchive = ({ currentUser }) => {
                             </select>
                         </div>
                         
-                        <div className="col-span-1">
-                            <label className="block text-xs font-bold text-gray-700 mb-1">학기 및 고사</label>
-                            <select className="w-full border-2 p-2.5 rounded-xl bg-white font-bold text-sm outline-none focus:border-blue-400" value={newExamForm.combinedTerm} onChange={e => setNewExamForm({...newExamForm, combinedTerm: e.target.value})}>
-                                <option value="1학기 중간고사">1학기 중간고사</option>
-                                <option value="1학기 기말고사">1학기 기말고사</option>
-                                <option value="2학기 중간고사">2학기 중간고사</option>
-                                <option value="2학기 기말고사">2학기 기말고사</option>
-                            </select>
+                        {/* 여러 개를 고르면 시험 문서를 한 번에 만듭니다.
+                            한 학교의 네 시험을 넣으려고 같은 입력을 네 번 반복하던 일을 없앱니다. */}
+                        <div className="col-span-1 md:col-span-2">
+                            <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                                학기 및 고사 <span className="font-medium text-gray-400">— 여러 개를 고르면 한 번에 만듭니다</span>
+                            </label>
+                            <div className="grid grid-cols-2 gap-1.5">
+                                {TERM_OPTIONS.map(t => {
+                                    const on = (newExamForm.terms || []).includes(t);
+                                    return (
+                                        <button
+                                            key={t} type="button"
+                                            onClick={() => setNewExamForm(f => ({
+                                                ...f,
+                                                terms: on ? f.terms.filter(x => x !== t) : [...(f.terms || []), t]
+                                            }))}
+                                            className={`px-2 py-2 rounded-lg text-xs font-bold border-2 transition-colors ${
+                                                on ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                                            }`}
+                                        >
+                                            {on ? '✓ ' : ''}{t}
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
 
                         {/* 🚀 시공간 엔진 연동 과목 드롭다운 */}
@@ -675,24 +760,47 @@ const ExamArchive = ({ currentUser }) => {
                     </div>
 
                     <hr className="my-4 border-gray-200" />
-                    <h3 className="font-bold text-gray-800">자료 링크 일괄 등록 (선택 사항)</h3>
 
-                    {FILE_TYPES.map(ft => (
-                        <div key={ft.key} className="pt-2">
-                            <label className="block text-xs font-bold text-gray-600 mb-1.5 flex items-center gap-1.5">
-                                <LinkIcon size={14}/> {ft.label} URL
-                            </label>
-                            <input 
-                                className="w-full border p-2.5 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50 text-sm" 
-                                placeholder="링크가 없으면 비워두세요" 
-                                value={newExamForm.urls[ft.key]} 
-                                onChange={e => setNewExamForm({...newExamForm, urls: { ...newExamForm.urls, [ft.key]: e.target.value }})}
-                            />
+                    {(newExamForm.terms || []).length > 1 ? (
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5 text-sm">
+                            <p className="font-bold text-blue-900">시험 {newExamForm.terms.length}개를 한 번에 만듭니다</p>
+                            <p className="text-blue-700 text-xs mt-1 leading-relaxed">
+                                여러 시험을 함께 만들 때는 자료 링크를 붙일 수 없습니다. 시험마다 링크가 다르기 때문입니다.<br />
+                                자료는 <b>[업무 현황 → 구멍 찾기]</b>에서 빈칸을 눌러 채우시면 됩니다.
+                            </p>
                         </div>
-                    ))}
+                    ) : (
+                        <>
+                            <h3 className="font-bold text-gray-800">자료 링크 일괄 등록 (선택 사항)</h3>
+                            {FILE_TYPES.map(ft => {
+                                const check = checkDriveLink(newExamForm.urls[ft.key]);
+                                return (
+                                    <div key={ft.key} className="pt-2">
+                                        <label className="block text-xs font-bold text-gray-600 mb-1.5 flex items-center gap-1.5">
+                                            <LinkIcon size={14}/> {ft.label} URL
+                                        </label>
+                                        <input
+                                            className={`w-full border p-2.5 rounded-xl focus:ring-2 outline-none text-sm ${
+                                                !check.ok ? 'border-red-300 bg-red-50 focus:ring-red-200'
+                                                : check.warn ? 'border-amber-300 bg-amber-50 focus:ring-amber-200'
+                                                : 'bg-gray-50 focus:ring-blue-200'
+                                            }`}
+                                            placeholder="링크가 없으면 비워두세요"
+                                            value={newExamForm.urls[ft.key]}
+                                            onChange={e => setNewExamForm({...newExamForm, urls: { ...newExamForm.urls, [ft.key]: e.target.value }})}
+                                        />
+                                        {!check.ok && <p className="text-[11px] text-red-600 mt-1 font-medium">{check.reason}</p>}
+                                        {check.ok && check.warn && <p className="text-[11px] text-amber-700 mt-1 font-medium">{check.warn}</p>}
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
 
                     <Button className="w-full mt-6 py-4 text-base md:text-lg shadow-md" onClick={handleAddSubmitExam} disabled={isProcessing}>
-                        {isProcessing ? <Loader className="animate-spin mx-auto" /> : '아카이브 생성 및 배포'}
+                        {isProcessing ? <Loader className="animate-spin mx-auto" />
+                            : (newExamForm.terms || []).length > 1 ? `시험 ${newExamForm.terms.length}개 한 번에 만들기`
+                            : '아카이브 생성 및 배포'}
                     </Button>
                 </div>
             </Modal>
@@ -809,6 +917,12 @@ const ExamArchive = ({ currentUser }) => {
                             <LinkIcon size={16}/> {modalState.fileKey && FILE_TYPES.find(f => f.key === modalState.fileKey)?.label} URL
                         </label>
                         <input className="w-full border p-4 rounded-xl focus:ring-2 focus:ring-blue-200 outline-none bg-gray-50 text-base" placeholder="https://drive.google.com/file/d/..." value={uploadUrl} onChange={e => setUploadUrl(e.target.value)}/>
+                        {(() => {
+                            const check = checkDriveLink(uploadUrl);
+                            if (!check.ok) return <p className="text-xs text-red-600 mt-1.5 font-medium">{check.reason}</p>;
+                            if (check.warn) return <p className="text-xs text-amber-700 mt-1.5 font-medium">{check.warn}</p>;
+                            return null;
+                        })()}
                     </div>
                     <Button className="w-full mt-4 py-3 md:py-4 text-base md:text-lg shadow-md" onClick={handleSubmitLink} disabled={isProcessing}>
                         {isProcessing ? <Loader className="animate-spin mx-auto" /> : modalState.type === 'edit_link' ? '수정 완료' : '승인 요청하기'}
