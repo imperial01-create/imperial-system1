@@ -14,7 +14,7 @@ import {
   Plus, Save, Loader, MapPin, ShieldCheck, X, ShieldAlert,
   AlertTriangle, Database, School, Trash2, Star, Search,
   ToggleRight, ToggleLeft, Layers, Users, CalendarDays 
-} from 'lucide-react';
+, Briefcase} from 'lucide-react';
 import { Button, Card, Toast } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
@@ -90,6 +90,11 @@ const SettingsManager = ({ currentUser }) => {
     // 불러오기에 실패했는가. 실패한 채로 저장하면 기존 값을 빈 값으로 덮어씁니다.
     const [loadFailed, setLoadFailed] = useState(false);
     const [legacySplitting, setLegacySplitting] = useState(false);
+    /* 채용 문자에 들어가는 학원 정보. 예전에는 코드에 박혀 있어
+       CRIMS 기관 아이디·검증번호와 담당자 개인 번호가 공개 JS 파일로 새어 나갔습니다. */
+    const [recruit, setRecruit] = useState({ academyName: '', managerName: '', managerPhone: '',
+        address: '', mapUrl: '', crimsOrgId: '', crimsCode: '', orgHeadName: '' });
+    const [savingRecruit, setSavingRecruit] = useState(false);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
     const [newSchool, setNewSchool] = useState({ type: 'high', name: '' });
@@ -123,6 +128,9 @@ const SettingsManager = ({ currentUser }) => {
                         favorites: data.favorites || []
                     });
                 }
+
+                const recruitSnap = await getDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'recruitment'));
+                if (recruitSnap.exists()) setRecruit(prev => ({ ...prev, ...recruitSnap.data() }));
 
                 if (deptSnap.exists()) {
                     // 옛 형식('DEPT_MATH')으로 저장돼 있어도 대과목으로 옮겨 읽습니다.
@@ -210,6 +218,17 @@ const SettingsManager = ({ currentUser }) => {
         setActiveDepartments(prev => 
             prev.includes(deptId) ? prev.filter(id => id !== deptId) : [...prev, deptId]
         );
+    };
+
+    const handleSaveRecruit = async () => {
+        setSavingRecruit(true);
+        try {
+            await setDoc(doc(db, `artifacts/${APP_ID}/public/data/settings`, 'recruitment'),
+                { ...recruit, updatedAt: serverTimestamp() }, { merge: true });
+            showToast('채용 설정을 저장했습니다.', 'success');
+        } catch (e) {
+            showToast('저장 실패: ' + e.message, 'error');
+        } finally { setSavingRecruit(false); }
     };
 
     const handleSaveSchools = async () => {
@@ -1013,6 +1032,85 @@ const SettingsManager = ({ currentUser }) => {
                     )}
 
 
+
+
+                    <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-300 space-y-6 md:col-span-2">
+                        <h2 className="text-xl font-black text-slate-800 border-b border-slate-100 pb-4 flex items-center gap-2">
+                            <Briefcase className="text-slate-700"/> 채용 안내 문자 정보
+                        </h2>
+
+                        <div className="bg-slate-50 text-slate-700 p-5 rounded-2xl border border-slate-200 space-y-2 text-sm">
+                            <p>• 채용 파이프라인이 지원자에게 보내는 문자에 들어가는 값입니다.</p>
+                            <p>• 예전에는 이 값들이 <strong>코드에 박혀 있어 공개 JS 파일로 새어 나갔습니다.</strong> 이제 여기서 관리합니다.</p>
+                            <p className="text-slate-500 font-bold mt-2 pt-2 border-t border-slate-200">
+                                ※ 비어 있는 항목이 있으면 그 문자는 발송이 막히고, 무엇을 채워야 하는지 알려 줍니다.
+                            </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">학원 이름</label>
+                                    <input type="text" placeholder="예: 목동임페리얼학원"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.academyName || ''} onChange={e => setRecruit({ ...recruit, academyName: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">문자 본문 전체에 쓰입니다</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">채용 담당자 이름</label>
+                                    <input type="text" placeholder="채용 담당자 이름"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.managerName || ''} onChange={e => setRecruit({ ...recruit, managerName: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">면접 안내 문자에 나갑니다</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">담당자 연락처</label>
+                                    <input type="text" placeholder="예: 010-0000-0000"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.managerPhone || ''} onChange={e => setRecruit({ ...recruit, managerPhone: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">지원자가 일정 변경을 요청할 번호입니다</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">면접 장소</label>
+                                    <input type="text" placeholder="예: 목동임페리얼학원"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.address || ''} onChange={e => setRecruit({ ...recruit, address: e.target.value })} />
+                                    
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">찾아오는 길 링크</label>
+                                    <input type="text" placeholder="https://..."
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.mapUrl || ''} onChange={e => setRecruit({ ...recruit, mapUrl: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">비워 두면 문자에서 생략됩니다</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">CRIMS 사설기관 아이디</label>
+                                    <input type="text" placeholder="CRIMS에서 발급받은 기관 아이디"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.crimsOrgId || ''} onChange={e => setRecruit({ ...recruit, crimsOrgId: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">합격자 범죄경력조회 안내에 쓰입니다</p>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">CRIMS 검증번호</label>
+                                    <input type="text" placeholder="CRIMS 검증번호"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.crimsCode || ''} onChange={e => setRecruit({ ...recruit, crimsCode: e.target.value })} />
+                                    
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">기관장 이름</label>
+                                    <input type="text" placeholder="사설기관장 이름"
+                                        className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                        value={recruit.orgHeadName || ''} onChange={e => setRecruit({ ...recruit, orgHeadName: e.target.value })} />
+                                    <p className="text-[11px] font-bold text-gray-400 mt-1">조회 동의 화면에서 확인하는 이름입니다</p>
+                                </div>
+                        </div>
+
+                        <Button onClick={handleSaveRecruit} disabled={savingRecruit}
+                            className="w-full bg-slate-800 hover:bg-black font-bold py-4 text-lg border-0 shadow-md">
+                            {savingRecruit ? <Loader className="animate-spin mx-auto" size={24}/> : '채용 문자 정보 저장'}
+                        </Button>
+                    </div>
 
                     <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-emerald-200 space-y-6 md:col-span-2">
                         <h2 className="text-xl font-black text-emerald-800 border-b border-emerald-100 pb-4 flex items-center gap-2">
