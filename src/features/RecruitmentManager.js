@@ -23,7 +23,7 @@ import { useData } from '../contexts/DataContext';
 import { Modal, Button, Badge } from '../components/UI';
 import { APP_ID } from '../constants';
 import {
-  POSITIONS, findPosition, STAGES, stageOf, ACTIONS_BY_STAGE, CAN_REJECT,
+  POSITIONS, SOURCES, findPosition, STAGES, stageOf, ACTIONS_BY_STAGE, CAN_REJECT,
   buildMessage, missingConfigFor, configLabel, cleanPhone
 } from '../utils/recruitment';
 
@@ -52,8 +52,14 @@ export default function RecruitmentManager() {
   const isMounted = useRef(true);
 
   const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', source: '알바몬', position: 'ta' });
+  /* 유입 경로와 포지션에 기본값을 두지 않습니다.
+     예전에는 '알바몬'·'수업조교' 가 미리 박혀 있어서, 그 칸을 건드리지 않으면
+     훈장마을로 온 강사가 알바몬 조교로 기록됐습니다. */
+  const [form, setForm] = useState({ name: '', phone: '', source: '', position: '', resumeRaw: '' });
   const [isSaving, setIsSaving] = useState(false);
+
+  const [search, setSearch] = useState('');
+  const [openResume, setOpenResume] = useState(null);   // 이력서 원문을 펼쳐 볼 지원자
 
   /* 진행 창. 단계 이동과 문자 미리보기를 한 곳에서 처리합니다. */
   const [step, setStep] = useState(null);   // { applicant, action, schedule, message }
@@ -98,6 +104,8 @@ export default function RecruitmentManager() {
     const phone = cleanPhone(form.phone);
     if (!form.name.trim()) return alert('지원자 이름을 입력해주세요.');
     if (!phone) return alert('연락처를 확인해주세요. 숫자 10자리 이상이어야 합니다.');
+    if (!form.source) return alert('어디로 지원했는지 선택해주세요.');
+    if (!form.position) return alert('지원 포지션을 선택해주세요.');
 
     // 같은 번호가 이미 있으면 알려 줍니다. 양쪽 사이트에 지원한 사람이 두 건으로 들어옵니다.
     const dup = applicants.find(a => cleanPhone(a.phone) === phone);
@@ -109,10 +117,14 @@ export default function RecruitmentManager() {
     try {
       await addDoc(collection(db, PATH), {
         name: form.name.trim(), phone, source: form.source, position: form.position,
-        status: 'applied', createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+        /* 지원 내용 원문. 면접 직전에 훈장마을·메일함을 다시 열지 않아도 되게
+           그대로 담아 둡니다. 옮겨 적는 수고에 대한 보상이 여기서 나옵니다. */
+        resumeRaw: form.resumeRaw.trim() || null,
+        status: 'applied', callAttempts: 0,
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp()
       });
       setAddOpen(false);
-      setForm({ name: '', phone: '', source: '알바몬', position: 'ta' });
+      setForm({ name: '', phone: '', source: '', position: '', resumeRaw: '' });
     } catch (e) { alert('등록 실패: ' + e.message); } finally { setIsSaving(false); }
   };
 
@@ -121,9 +133,26 @@ export default function RecruitmentManager() {
     setStep({
       applicant, action,
       schedule: { interviewDate: applicant.interviewDate || '', interviewTime: applicant.interviewTime || '' },
+      memo: applicant.callMemo || '',
       sending: false
     });
   };
+
+  /* 며칠째 같은 자리에 멈춰 있는가. 바쁘면 잊히는 지원자를 화면이 스스로 드러내게 합니다. */
+  const stuckDays = (a) => {
+    const t = a.updatedAt?.toDate?.() || a.createdAt?.toDate?.();
+    if (!t) return 0;
+    return Math.floor((Date.now() - t.getTime()) / 86400000);
+  };
+
+  const visible = useMemo(() => {
+    const q = search.trim();
+    if (!q) return applicants;
+    const digits = q.replace(/[^0-9]/g, '');
+    return applicants.filter(a =>
+      String(a.name || '').includes(q) || (digits && String(a.phone || '').includes(digits))
+    );
+  }, [applicants, search]);
 
   const previewOf = (s) => {
     if (!s?.action?.sms) return '';
@@ -154,6 +183,15 @@ export default function RecruitmentManager() {
         patch.interviewDate = schedule.interviewDate;
         patch.interviewTime = schedule.interviewTime;
       }
+      /* 통화 시도를 남깁니다. 모르는 번호라 안 받는 일이 잦은데 그 사실이
+         어디에도 남지 않아 같은 사람에게 두 번 걸고 있었습니다. */
+      if (action.logCall) {
+        patch.callAttempts = (Number(applicant.callAttempts) || 0) + 1;
+        patch.lastCallAt = serverTimestamp();
+        if (step.memo?.trim()) patch.callMemo = step.memo.trim();
+      }
+      // 접수 확인은 한 번만 보내면 됩니다. 보냈다는 사실을 남겨 버튼을 감춥니다.
+      if (action.markReceived && sendSms) patch.receivedNotifiedAt = serverTimestamp();
       await setDoc(doc(db, PATH, applicant.id), patch, { merge: true });
       setStep(null);
     } catch (e) {
@@ -238,18 +276,26 @@ export default function RecruitmentManager() {
       </div>
 
       <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden min-h-[400px]">
-        <div className="p-4 bg-slate-50 border-b border-slate-200 font-black text-slate-700 flex items-center gap-2">
-          <Users size={18} /> 전체 지원자 {applicants.length}명
+        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div className="font-black text-slate-700 flex items-center gap-2">
+            <Users size={18} /> 지원자 {visible.length}명
+            {search && <span className="text-xs font-bold text-slate-400">(전체 {applicants.length}명)</span>}
+          </div>
+          <input
+            type="text" placeholder="이름 또는 연락처로 찾기"
+            className="border border-slate-300 px-3 py-2 rounded-xl bg-white font-bold text-sm outline-none focus:ring-2 focus:ring-indigo-500 w-full sm:w-64"
+            value={search} onChange={e => setSearch(e.target.value)}
+          />
         </div>
 
-        {applicants.length === 0 ? (
+        {visible.length === 0 ? (
           <div className="text-center py-20 text-slate-400 font-bold flex flex-col items-center">
             <Briefcase size={48} className="opacity-20 mb-4" />
-            현재 진행 중인 채용 건이 없습니다.
+            {search ? '조건에 맞는 지원자가 없습니다.' : '현재 진행 중인 채용 건이 없습니다.'}
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {applicants.map(app => {
+            {visible.map(app => {
               const st = stageOf(app.status);
               const pos = findPosition(app.position);
               const actions = ACTIONS_BY_STAGE[st.id] || [];
@@ -278,9 +324,44 @@ export default function RecruitmentManager() {
                         면접 구성: {pos.interview.join(' · ')}
                       </p>
                     )}
+
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5">
+                      {Number(app.callAttempts) > 0 && (
+                        <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
+                          통화 시도 {app.callAttempts}회
+                        </span>
+                      )}
+                      {/* 결과가 정해지지 않았는데 오래 멈춰 있으면 눈에 띄게 합니다. */}
+                      {!['contracted', 'rejected'].includes(st.id) && stuckDays(app) >= 3 && (
+                        <span className="text-[11px] font-black text-rose-700 bg-rose-50 px-2 py-0.5 rounded">
+                          {stuckDays(app)}일째 이 단계
+                        </span>
+                      )}
+                      {app.resumeRaw && (
+                        <button type="button" onClick={() => setOpenResume(app)}
+                          className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 underline">
+                          지원 내용 보기
+                        </button>
+                      )}
+                    </div>
+                    {app.callMemo && (
+                      <p className="text-[11px] font-bold text-slate-500 mt-1 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                        통화 메모: {app.callMemo}
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap gap-2 shrink-0 items-center">
+                    {/* 접수 확인 문자. 단계를 옮기지 않고 문자만 보냅니다.
+                        지원 직후의 침묵이 '연락 왔었나요' 전화로 돌아오던 것을 줄입니다. */}
+                    {st.id === 'applied' && !app.receivedNotifiedAt && (
+                      <Button onClick={() => openStep(app, {
+                        to: 'applied', label: '접수 확인 문자', sms: 'received', tone: 'amber', markReceived: true
+                      })} variant="outline" className="text-xs py-1.5 px-3 border-slate-300 text-slate-600 hover:bg-slate-50">
+                        <MessageSquare size={14} className="mr-1 inline" /> 접수 확인
+                      </Button>
+                    )}
+
                     {actions.map(a => (
                       <Button key={a.to} onClick={() => openStep(app, a)}
                         className={`${BTN[a.tone] || BTN.blue} text-xs py-1.5 px-3`}>
@@ -341,20 +422,35 @@ export default function RecruitmentManager() {
               <label className="text-xs font-bold text-slate-600 mb-1.5 block">유입 경로</label>
               <select className="w-full border-2 border-slate-200 p-3 rounded-xl font-bold bg-white"
                 value={form.source} onChange={e => setForm({ ...form, source: e.target.value })}>
-                {['알바몬', '알바천국', '지인추천', '기타'].map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="" disabled>선택하세요</option>
+                {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
               <label className="text-xs font-bold text-slate-600 mb-1.5 block">지원 포지션</label>
               <select className="w-full border-2 border-slate-200 p-3 rounded-xl font-bold bg-white"
                 value={form.position} onChange={e => setForm({ ...form, position: e.target.value })}>
+                <option value="" disabled>선택하세요</option>
                 {POSITIONS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
             </div>
           </div>
-          <p className="text-[11px] font-bold text-slate-400 leading-relaxed">
-            {findPosition(form.position).label} 면접 구성: {findPosition(form.position).interview.join(' · ')}
-          </p>
+
+          {form.position && (
+            <p className="text-[11px] font-bold text-slate-400 leading-relaxed">
+              {findPosition(form.position).label} 면접 구성: {findPosition(form.position).interview.join(' · ')}
+            </p>
+          )}
+
+          {/* 지원 내용을 통째로 붙여넣어 두면 면접 전에 사이트를 다시 열지 않아도 됩니다. */}
+          <div>
+            <label className="text-xs font-bold text-slate-600 mb-1.5 block">
+              지원 내용 원문 <span className="font-medium text-slate-400">— 선택. 훈장마을·알바몬·메일 내용을 그대로 붙여넣으세요</span>
+            </label>
+            <textarea rows="4" placeholder="경력, 담당 가능 과목, 희망 근무 시간 등이 적힌 원문을 붙여넣으면 면접 때 여기서 바로 볼 수 있습니다."
+              className="w-full border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-gray-800 text-sm font-medium"
+              value={form.resumeRaw} onChange={e => setForm({ ...form, resumeRaw: e.target.value })} />
+          </div>
           <Button className="w-full py-4 text-lg font-black bg-gray-900 hover:bg-black mt-2" onClick={handleAdd} disabled={isSaving}>
             {isSaving ? <Loader className="animate-spin mx-auto" /> : '서류 접수 등록'}
           </Button>
@@ -380,6 +476,21 @@ export default function RecruitmentManager() {
                     value={step.schedule.interviewTime}
                     onChange={e => setStep(s => ({ ...s, schedule: { ...s.schedule, interviewTime: e.target.value } }))} />
                 </div>
+              </div>
+            )}
+
+            {/* 통화 내용을 몇 줄 남겨 두면 면접 때 같은 질문을 다시 하지 않습니다. */}
+            {step.action.logCall && (
+              <div>
+                <label className="text-xs font-bold text-slate-600 mb-1.5 block">통화 메모 (선택)</label>
+                <textarea rows="2" placeholder="예: 주 3회 가능, 9월부터 출근 희망"
+                  className="w-full border-2 border-slate-200 p-3 rounded-xl outline-none focus:border-gray-800 text-sm font-medium"
+                  value={step.memo} onChange={e => setStep(s => ({ ...s, memo: e.target.value }))} />
+                {Number(step.applicant.callAttempts) > 0 && (
+                  <p className="text-[11px] font-bold text-slate-400 mt-1">
+                    지금까지 {step.applicant.callAttempts}회 시도했습니다.
+                  </p>
+                )}
               </div>
             )}
 
@@ -435,6 +546,21 @@ export default function RecruitmentManager() {
                   : '단계 옮기기'}
               </Button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 지원 내용 원문 */}
+      <Modal isOpen={!!openResume} onClose={() => setOpenResume(null)}
+        title={openResume ? `${openResume.name} — 지원 내용` : ''} maxWidthClass="max-w-2xl">
+        {openResume && (
+          <div className="p-2">
+            <p className="text-xs font-bold text-slate-500 mb-2">
+              {findPosition(openResume.position).label} · {openResume.source} · {openResume.phone}
+            </p>
+            <pre className="w-full max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words bg-slate-50 border border-slate-200 rounded-xl p-4 text-[13px] font-medium text-slate-700 leading-relaxed">
+              {openResume.resumeRaw}
+            </pre>
           </div>
         )}
       </Modal>

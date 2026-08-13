@@ -18,6 +18,14 @@ export const POSITIONS = [
   { id: 'lecturer', label: '강사', kind: '강사', interview: ['질문 시간', '강사 시험(필기)', '수업 시연'] }
 ];
 
+/** 포지션별 면접 준비 안내를 담는 설정 키. 값은 settings/recruitment 에 있습니다. */
+export const PREP_KEY = { ta: 'prepTa', desk: 'prepDesk', lecturer: 'prepLecturer' };
+
+/* 지원 경로. 강사는 훈장마을과 이메일, 조교는 알바몬으로 들어옵니다(원장 확인).
+   예전 목록에는 훈장마을도 이메일도 없었고 기본값이 '알바몬' 이라,
+   강사 지원 두 갈래가 통째로 알바몬으로 기록되고 있었습니다. */
+export const SOURCES = ['훈장마을', '이메일 지원', '알바몬', '알바천국', '지인추천', '기타'];
+
 /** 저장된 포지션 값을 찾습니다. 옛 기록은 라벨 문자열로 저장돼 있습니다. */
 export const findPosition = (value) => {
   const v = String(value || '').trim();
@@ -46,7 +54,10 @@ export const stageOf = (id) => STAGES.find(s => s.id === id) || STAGES[0];
    sms 가 있으면 문자를 함께 보냅니다(보내기 전에 반드시 내용을 보여 줍니다). */
 export const ACTIONS_BY_STAGE = {
   applied: [
-    { to: 'screening', label: '전화 안내 완료', hint: '기초 확인과 학원 안내를 마쳤습니다', tone: 'amber' }
+    /* 단계를 옮기지 않고 시도만 기록합니다. 모르는 번호라 안 받는 경우가 많은데
+       그 사실이 어디에도 남지 않아 같은 사람에게 두 번 걸고 있었습니다. */
+    { to: 'applied', label: '부재중 — 다시 걸기', hint: '통화를 시도했지만 받지 않았습니다', tone: 'amber', logCall: true },
+    { to: 'screening', label: '전화 안내 완료', hint: '기초 확인과 학원 안내를 마쳤습니다', tone: 'amber', logCall: true }
   ],
   screening: [
     { to: 'scheduled', label: '면접 일정 확정', hint: '날짜를 정하고 안내 문자를 보냅니다', tone: 'blue', needsSchedule: true, sms: 'interview_scheduled' }
@@ -71,6 +82,7 @@ export const CAN_REJECT = ['applied', 'screening', 'scheduled'];
    config 는 settings/recruitment 문서입니다. 값이 비어 있으면 보내지 않습니다. */
 
 export const REQUIRED_CONFIG = {
+  received: ['academyName', 'managerName', 'managerPhone'],
   interview_scheduled: ['academyName', 'managerName', 'managerPhone', 'address'],
   passed: ['academyName', 'crimsOrgId', 'crimsCode', 'orgHeadName'],
   rejected: ['academyName'],
@@ -126,9 +138,29 @@ export const buildMessage = (type, { applicant = {}, schedule = null, config = {
       + `면접일 : ${formatDate(schedule?.interviewDate)}\n`
       + `면접 시간 : ${formatTime(schedule?.interviewTime)}\n`
       + `면접장소 : ${config.address || academy}${note}\n`
+      /* 준비 안내는 환경설정에 값이 있을 때만 붙입니다. */
+      + (String(config[PREP_KEY[pos.id]] || '').trim()
+          ? `
+[준비 안내]
+${String(config[PREP_KEY[pos.id]]).trim()}
+` : '')
       + (config.mapUrl ? `찾아오시는 길 : ${config.mapUrl}\n` : '')
       + `담당자 연락처 : ${config.managerPhone} (담당자. ${config.managerName})\n`
       + `해당 일정에 면접이 불가능하시면 담당자 연락처로 사전에 연락주시면 감사하겠습니다.`;
+  }
+
+  if (type === 'received') {
+    /* 지원 직후 아무 연락이 없으면 지원자는 떨어진 줄 알고 다른 곳을 확정합니다.
+       담당자에게는 '연락 왔었나요' 문의 전화로 되돌아옵니다. */
+    const days = String(config.replyDays || '').trim();
+    return `[${academy}]
+${name} 지원자님의 ${pos.label} 지원서가 접수되었습니다.
+`
+      + (days ? `서류 검토 후 ${days}일 이내에 담당자가 연락드리겠습니다.
+`
+              : `서류 검토 후 담당자가 연락드리겠습니다.
+`)
+      + `문의 : ${config.managerPhone} (담당자. ${config.managerName})`;
   }
 
   if (type === 'rejected') {

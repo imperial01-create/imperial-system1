@@ -93,7 +93,8 @@ const SettingsManager = ({ currentUser }) => {
     /* 채용 문자에 들어가는 학원 정보. 예전에는 코드에 박혀 있어
        CRIMS 기관 아이디·검증번호와 담당자 개인 번호가 공개 JS 파일로 새어 나갔습니다. */
     const [recruit, setRecruit] = useState({ academyName: '', managerName: '', managerPhone: '',
-        address: '', mapUrl: '', crimsOrgId: '', crimsCode: '', orgHeadName: '' });
+        address: '', mapUrl: '', crimsOrgId: '', crimsCode: '', orgHeadName: '',
+        replyDays: '', prepLecturer: '', prepTa: '', prepDesk: '' });
     const [savingRecruit, setSavingRecruit] = useState(false);
 
     const [schools, setSchools] = useState({ elementary: [], middle: [], high: [], favorites: [] });
@@ -1105,6 +1106,38 @@ const SettingsManager = ({ currentUser }) => {
                                     <p className="text-[11px] font-bold text-gray-400 mt-1">조회 동의 화면에서 확인하는 이름입니다</p>
                                 </div>
                         </div>
+
+                        <div className="border-t border-slate-200 pt-5 space-y-4">
+                            <p className="text-sm font-black text-slate-700">면접 안내 문자에 붙일 준비 정보</p>
+                            <p className="text-xs font-bold text-slate-500 leading-relaxed">
+                                비워 두면 문자에 붙지 않습니다. 지원자가 무엇을 준비할지 몰라 되묻는 전화를 줄입니다.
+                            </p>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">회신 기한 (접수 확인 문자용)</label>
+                                <input type="text" placeholder="예: 3 (숫자만. 비우면 기한을 적지 않습니다)"
+                                    className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 font-bold"
+                                    value={recruit.replyDays || ''} onChange={e => setRecruit({ ...recruit, replyDays: e.target.value })} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">강사 면접 준비 안내</label>
+                                <textarea rows="3" placeholder="예: 강사 시험 — 고1 공통수학1 범위, 60분, 계산기 불가 / 수업 시연 — 중2 일차함수 15분, 판서 / 지참 — 신분증"
+                                    className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 text-sm font-medium"
+                                    value={recruit.prepLecturer || ''} onChange={e => setRecruit({ ...recruit, prepLecturer: e.target.value })} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">수업조교 면접 준비 안내</label>
+                                <textarea rows="3" placeholder="예: 소요 시간 약 30분 / 지참 — 신분증"
+                                    className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 text-sm font-medium"
+                                    value={recruit.prepTa || ''} onChange={e => setRecruit({ ...recruit, prepTa: e.target.value })} />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">행정조교 면접 준비 안내</label>
+                                <textarea rows="3" placeholder="예: 소요 시간 약 30분 / 지참 — 신분증"
+                                    className="w-full border-2 border-gray-200 p-3 rounded-xl outline-none focus:border-slate-700 text-sm font-medium"
+                                    value={recruit.prepDesk || ''} onChange={e => setRecruit({ ...recruit, prepDesk: e.target.value })} />
+                            </div>
+                        </div>
+
 
                         <Button onClick={handleSaveRecruit} disabled={savingRecruit}
                             className="w-full bg-slate-800 hover:bg-black font-bold py-4 text-lg border-0 shadow-md">
