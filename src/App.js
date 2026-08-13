@@ -20,6 +20,7 @@ import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from './firebase';
 import { DataProvider, useData } from './contexts/DataContext';
 import SmartSchoolSelect from './components/SmartSchoolSelect';
+import ErrorBoundary from './components/ErrorBoundary';
 import { toStorableSchoolName } from './utils/schoolName';
 import { toMainSubject, MAIN_SUBJECTS } from './utils/subjectMatch';
 import { APP_ID } from './constants';
@@ -637,6 +638,9 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                 (진단 결과: 화면 384px인데 컨테이너가 671px)
                 평범한 블록으로 두면 자식은 부모 폭을 넘지 않습니다. */}
             <div className="max-w-[1600px] w-full mx-auto px-3 sm:px-4 md:px-8 py-4 md:py-6">
+                {/* 화면 하나가 터져도 앱 전체가 흰 화면이 되지 않게 막습니다.
+                    주소가 바뀌면(resetKey) 오류 상태가 저절로 풀립니다. */}
+                <ErrorBoundary label={location.pathname} resetKey={location.pathname}>
                 <Suspense fallback={<div className="h-full flex items-center justify-center min-h-[50vh]"><Loader className="animate-spin text-blue-600" size={40} /></div>}>
                     <Routes>
                         <Route path="/dashboard" element={<Dashboard currentUser={currentUser} />} />
@@ -677,6 +681,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
                 </Suspense>
+                </ErrorBoundary>
             </div>
         </main>
       </div>
