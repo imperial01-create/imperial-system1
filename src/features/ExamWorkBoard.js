@@ -19,7 +19,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     ClipboardCheck, UserCheck, AlertTriangle, Loader, ExternalLink,
-    Grid3x3, ListChecks, RefreshCw, Inbox
+    Grid3x3, ListChecks, RefreshCw, Inbox, Stethoscope, CheckCircle2
 } from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -31,6 +31,8 @@ import {
 } from '../utils/examFileSlots';
 import { toMainSubject, activeMainSubjects } from '../utils/subjectMatch';
 import { checkDriveLink } from '../utils/driveLink';
+import { auditExamDocs, filledSlotCount } from '../utils/examDocAudit';
+import { countExamReferences } from '../utils/examDocRefs';
 
 const TYPE_KOR = { elementary: '초등학교', middle: '중학교', high: '고등학교' };
 const TERMS = ['1학기 중간고사', '1학기 기말고사', '2학기 중간고사', '2학기 기말고사'];
@@ -165,6 +167,40 @@ const ExamWorkBoard = ({ currentUser, isAdmin, schoolsData, activeDepartments, o
         finally { setBusy(''); }
     };
 
+    /* ───────────── 문서 점검 (관리자 전용, 읽기만) ─────────────
+       같은 시험이 표기 차이 때문에 두 문서로 갈려 있으면, 자료 4칸도 갈립니다.
+       한쪽엔 시험지만, 다른 쪽엔 해설만 있는 식이라 검색한 사람은 늘 반쪽만 봅니다.
+       여기서는 세어서 보여 주기만 합니다. 옮기지 않습니다. */
+    const [audit, setAudit] = useState(null);
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditError, setAuditError] = useState('');
+
+    const runAudit = async () => {
+        setAuditLoading(true); setAuditError(''); setAudit(null);
+        try {
+            const snap = await getDocs(collection(db, INTEGRATED_COLLECTION));
+            const exams = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const result = auditExamDocs(exams);
+
+            /* 갈린 문서에 학생 성적 진단이 몇 건 붙어 있는지.
+               옮길 때 같이 옮겨야 하는 분량이라, 결정에 꼭 필요한 숫자입니다.
+               전체가 아니라 문제 있는 문서에만 물어봅니다. */
+            const targets = result.groups.flatMap(g => g.docs);
+            const refs = await Promise.all(
+                targets.map(d => countExamReferences(d.id).catch(() => null))
+            );
+            const refMap = {};
+            targets.forEach((d, i) => { refMap[d.id] = refs[i]; });
+
+            setAudit({ ...result, refMap });
+        } catch (e) {
+            console.error('[업무 현황판] 문서 점검 실패', e);
+            setAuditError(`점검하지 못했습니다. (${e.code || e.message})`);
+        } finally {
+            setAuditLoading(false);
+        }
+    };
+
     /* ───────────── 화면 ───────────── */
     const summaryCard = (id, Icon, label, count, tone) => (
         <button
@@ -186,7 +222,12 @@ const ExamWorkBoard = ({ currentUser, isAdmin, schoolsData, activeDepartments, o
     return (
         <div className="space-y-4">
             <div className="flex gap-2 border-b border-gray-200">
-                {[['todo', ListChecks, '할 일'], ['gap', Grid3x3, '구멍 찾기']].map(([id, Icon, label]) => (
+                {[
+                    ['todo', ListChecks, '할 일'],
+                    ['gap', Grid3x3, '구멍 찾기'],
+                    // 문서 점검은 정리 작업이라 관리자에게만 보여 줍니다.
+                    ...(isAdmin ? [['audit', Stethoscope, '문서 점검']] : [])
+                ].map(([id, Icon, label]) => (
                     <button
                         key={id}
                         onClick={() => setTab(id)}
@@ -198,8 +239,11 @@ const ExamWorkBoard = ({ currentUser, isAdmin, schoolsData, activeDepartments, o
                     </button>
                 ))}
                 <div className="ml-auto flex items-center pb-1.5">
-                    <button onClick={tab === 'todo' ? loadTodo : loadGap} className="text-gray-400 hover:text-blue-600 p-1.5" title="새로고침">
-                        <RefreshCw size={15} className={(loading || gapLoading) ? 'animate-spin' : ''} />
+                    <button
+                        onClick={tab === 'todo' ? loadTodo : tab === 'gap' ? loadGap : runAudit}
+                        className="text-gray-400 hover:text-blue-600 p-1.5" title="새로고침"
+                    >
+                        <RefreshCw size={15} className={(loading || gapLoading || auditLoading) ? 'animate-spin' : ''} />
                     </button>
                 </div>
             </div>
@@ -420,6 +464,95 @@ const ExamWorkBoard = ({ currentUser, isAdmin, schoolsData, activeDepartments, o
                                     <div className="font-bold text-amber-800 mb-1">시험 자체가 등록되지 않은 학교 {gapMissing.length}곳</div>
                                     <div className="text-amber-700 leading-relaxed">{gapMissing.join(' · ')}</div>
                                     <div className="text-amber-600 mt-1.5">[자료 신규 등록]에서 먼저 시험을 만들어야 작업을 배정할 수 있습니다.</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {tab === 'audit' && isAdmin && (
+                <div className="space-y-4">
+                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 md:p-4">
+                        <p className="text-sm font-bold text-gray-800">같은 시험이 두 문서로 갈려 있지 않은지 봅니다</p>
+                        <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">
+                            문서 번호를 <b>연도·학교·학년·학기·고사·과목</b>으로 만드는데, 이 중 <b>과목과 학교명은 사람이 친 표기</b>입니다.<br />
+                            '미적분 I'과 '미적분I', '영일 고등학교'와 '영일고등학교'는 서로 다른 문서가 됩니다.
+                            갈리면 자료 4칸도 갈려서, 한쪽엔 시험지만 다른 쪽엔 해설만 남습니다.
+                        </p>
+                        <p className="text-xs text-gray-400 mt-2">읽기만 합니다. 아무것도 옮기거나 지우지 않습니다.</p>
+                        <Button className="w-full mt-3 py-2.5" icon={Stethoscope} onClick={runAudit} disabled={auditLoading}>
+                            {auditLoading ? '점검 중...' : '전체 문서 점검하기'}
+                        </Button>
+                    </div>
+
+                    {auditError && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">{auditError}</div>}
+
+                    {audit && (
+                        <div className="space-y-3">
+                            <div className="grid grid-cols-3 gap-2 md:gap-3">
+                                <div className="p-3 rounded-xl border border-gray-200 bg-white">
+                                    <div className="text-xs font-bold text-gray-500">전체 시험 문서</div>
+                                    <div className="text-2xl font-bold text-gray-900 mt-1">{audit.total}<span className="text-sm font-medium text-gray-400 ml-1">건</span></div>
+                                </div>
+                                <div className={`p-3 rounded-xl border ${audit.groups.length ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
+                                    <div className={`text-xs font-bold ${audit.groups.length ? 'text-red-700' : 'text-gray-500'}`}>갈려 있는 시험</div>
+                                    <div className="text-2xl font-bold text-gray-900 mt-1">{audit.groups.length}<span className="text-sm font-medium text-gray-400 ml-1">건</span></div>
+                                </div>
+                                <div className="p-3 rounded-xl border border-gray-200 bg-white">
+                                    <div className="text-xs font-bold text-gray-500">합치면 줄어드는 문서</div>
+                                    <div className="text-2xl font-bold text-gray-900 mt-1">{audit.mergedCount}<span className="text-sm font-medium text-gray-400 ml-1">건</span></div>
+                                </div>
+                            </div>
+
+                            {audit.groups.length === 0 ? (
+                                <div className="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
+                                    <CheckCircle2 className="mx-auto text-green-600 mb-2" size={26} />
+                                    <p className="font-bold text-green-900 text-sm">쪼개진 문서가 없습니다</p>
+                                    <p className="text-xs text-green-700 mt-1.5 leading-relaxed">
+                                        지금은 문서 번호 방식을 바꿀 이유가 없습니다.<br />
+                                        앞으로 표기가 흔들릴 때를 대비해, 이 점검은 가끔 눌러 보시면 됩니다.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-[42vh] overflow-y-auto">
+                                    {audit.groups.map(g => (
+                                        <div key={g.key} className="p-3 md:p-4">
+                                            <div className="flex items-center gap-2 flex-wrap mb-2">
+                                                <span className="font-bold text-gray-900 text-sm">{g.docs[0].schoolName}</span>
+                                                <span className="text-xs text-gray-500">
+                                                    {g.docs[0].year} {g.docs[0].grade} {g.docs[0].semester} {g.docs[0].termType}
+                                                </span>
+                                                <span className="text-[11px] font-bold text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5">
+                                                    {g.cause.join(' · ')} 때문에 {g.docs.length}개로 갈림
+                                                </span>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                {g.docs.map(d => {
+                                                    const refs = audit.refMap?.[d.id];
+                                                    return (
+                                                        <div key={d.id} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-2.5 py-2">
+                                                            <span className="font-bold text-indigo-700 shrink-0">{d.subject}</span>
+                                                            <span className="text-gray-400 truncate flex-1" title={d.id}>{d.id}</span>
+                                                            <span className="text-gray-600 shrink-0">자료 {filledSlotCount(d)}칸</span>
+                                                            <span className={`shrink-0 ${refs ? 'text-red-600 font-bold' : 'text-gray-400'}`}>
+                                                                {refs === null || refs === undefined ? '성적 ?' : `성적 ${refs}건`}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {audit.noCode.length > 0 && (
+                                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs">
+                                    <div className="font-bold text-amber-800 mb-1">표준 과목 코드가 없는 옛 문서 {audit.noCode.length}건</div>
+                                    <div className="text-amber-700 leading-relaxed">
+                                        이 문서들은 과목 원문으로만 비교했습니다. 코드를 채워 넣기 전에는 갈렸는지 정확히 알 수 없습니다.
+                                    </div>
                                 </div>
                             )}
                         </div>
