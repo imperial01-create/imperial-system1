@@ -356,6 +356,50 @@ const run = async () => {
        (버튼을 숨기는 것만으로는 서버에 직접 보내는 요청을 막지 못한다) */
     const examDoc = (who, id) => doc(who, `${BASE}/integrated_exams/${id}`);
 
+    /* 영단어 능력치(catScore)는 학부모 화면에 '어휘력 n/1000' 으로 표시된다.
+       예전에는 학생이 문서 전체를 쓸 수 있어 자기 능력치를 직접 고칠 수 있었다.
+       학생이 실제로 필요한 쓰기(단어 세트 뽑기)는 살아 있어야 한다. */
+    const engDoc = (who, sid) => doc(who, `${BASE}/english_stats/${sid}`);
+
+    await check('학생은 자기 어휘력 점수(catScore)를 바꿀 수 없다', async () => {
+        await setDoc(engDoc(as('admin1', staffToken('admin1')), 'stu1'), { catScore: 300, seenWordIds: [] });
+        await assertFails(updateDoc(engDoc(as('stu1', studentToken('stu1')), 'stu1'), { catScore: 999 }));
+    });
+    await check('학생은 단어 학습 진행은 쓸 수 있다 (보카 기능 유지)', () =>
+        assertSucceeds(updateDoc(engDoc(as('stu1', studentToken('stu1')), 'stu1'),
+            { adaptivePreset: '밸런스 모드', lastNewWordDifficulty: 3 })));
+    await check('학생이 허용 필드에 catScore 를 섞어도 막힌다', () =>
+        assertFails(updateDoc(engDoc(as('stu1', studentToken('stu1')), 'stu1'),
+            { adaptivePreset: '밸런스 모드', catScore: 999 })));
+    await check('학생은 남의 어휘력 문서를 쓸 수 없다', () =>
+        assertFails(updateDoc(engDoc(as('stu1', studentToken('stu1')), 'stu2'), { adaptivePreset: 'x' })));
+    await check('학생은 어휘력 문서를 새로 만들 수 없다', () =>
+        assertFails(setDoc(engDoc(as('stu1', studentToken('stu1')), 'stu1_new'), { catScore: 999 })));
+    await check('조교는 어휘력 점수를 쓸 수 있다', () =>
+        assertSucceeds(updateDoc(engDoc(as('ta1', taToken('ta1')), 'stu1'), { catScore: 640 })));
+    await check('학생은 단어 학습 이력을 직접 쓸 수 없다', () =>
+        assertFails(setDoc(doc(as('stu1', studentToken('stu1')), `${BASE}/english_stats/stu1/word_history/w1`), { status: 'mastered' })));
+    await check('학부모는 자녀 어휘력을 읽을 수 있다', () =>
+        assertSucceeds(getDoc(engDoc(as('mom2', parentToken('mom2')), 'stu1'))));
+
+    /* 순위표는 읽기가 전교생 실명이다. 남의 문서 번호를 알면 점수를 바꿀 수 있었다. */
+    const rankDoc = (who, id) => doc(who, `${BASE}/voca_rankings/${id}`);
+
+    await check('학생은 자기 순위 기록을 만들 수 있다', () =>
+        assertSucceeds(setDoc(rankDoc(as('stu1', studentToken('stu1')), 'r_stu1'),
+            { studentId: 'stu1', studentName: '학생일', score: 120 })));
+    await check('학생은 남의 이름으로 순위를 만들 수 없다', () =>
+        assertFails(setDoc(rankDoc(as('stu1', studentToken('stu1')), 'r_fake'),
+            { studentId: 'stu2', studentName: '학생이', score: 999 })));
+    await check('학생은 남의 순위 기록을 고칠 수 없다', async () => {
+        await setDoc(rankDoc(as('admin1', staffToken('admin1')), 'r_stu2'), { studentId: 'stu2', studentName: '학생이', score: 50 });
+        await assertFails(updateDoc(rankDoc(as('stu1', studentToken('stu1')), 'r_stu2'), { score: 1 }));
+    });
+    await check('학생은 자기 순위 기록의 주인을 바꿀 수 없다', () =>
+        assertFails(updateDoc(rankDoc(as('stu1', studentToken('stu1')), 'r_stu1'), { studentId: 'stu2' })));
+    await check('학생은 순위 기록을 지울 수 없다', () =>
+        assertFails(deleteDoc(rankDoc(as('stu1', studentToken('stu1')), 'r_stu1'))));
+
     await check('강사는 시험을 등록·수정할 수 있다', () =>
         assertSucceeds(setDoc(examDoc(as('teacher1', lecturerToken('teacher1')), 'exam_del_1'), { schoolName: '목동중', year: '2026' })));
     await check('강사는 시험을 삭제할 수 없다', () =>
