@@ -11,6 +11,7 @@ import { db } from '../firebase';
 import { Button, Card, Modal } from '../components/UI';
 import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import { fetchBySchool } from '../utils/schoolQuery';
+import { toStorableSchoolName } from '../utils/schoolName';
 import { reassignExamReferences, countExamReferences } from '../utils/examDocRefs';
 import { upsertExamData, INTEGRATED_COLLECTION, generateExamDocId } from '../utils/examDataManager';
 import { getAvailableSubjects, getStandardSubjectCode, getDynamicSubjectLabel, STANDARD_CODES, alignSubjectToSemester } from '../utils/subjectMapper'; // 🚀 번역기 로드
@@ -226,7 +227,10 @@ const ExamArchive = ({ currentUser }) => {
 
                 const baseData = {
                     schoolType: typeKor,
-                    schoolName: newExamForm.schoolName.trim(),
+                    /* 문서 번호에 학교명이 그대로 들어갑니다.
+                       '영일 고등학교'로 저장되면 '영일고등학교'와 다른 문서가 되어 자료가 갈립니다.
+                       회원가입·상담·회원관리는 이미 정본으로 바꿔 저장하는데 이 화면만 빠져 있었습니다. */
+                    schoolName: toStorableSchoolName(newExamForm.schoolName, schoolsData),
                     year: String(newExamForm.year),
                     semester: parsedSemester,
                     termType: parsedTerm,
@@ -312,7 +316,7 @@ const ExamArchive = ({ currentUser }) => {
 
             const updateData = {
                 schoolType: typeKor,
-                schoolName: editExamForm.schoolName.trim(),
+                schoolName: toStorableSchoolName(editExamForm.schoolName, schoolsData),
                 year: String(editExamForm.year),
                 semester: parsedSemester,
                 termType: parsedTerm,
