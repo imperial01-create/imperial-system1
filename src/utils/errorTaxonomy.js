@@ -64,6 +64,20 @@ export const ERROR_TAGS = [
 
 export const ERROR_TAG_BY_CODE = ERROR_TAGS.reduce((m, t) => { m[t.code] = t; return m; }, {});
 
+/* 옛 분류. 기록 관리 화면이 쓰던 목록이다.
+   'time(시간 부족)' 과 'blank(미시도)' 는 원인이 아니라 상태이고,
+   이제 채점의 무응답 표시(mark: 'blank')가 담당한다. 새로 고를 수는 없지만
+   이미 저장된 값은 화면에 그대로 보여야 하므로 이름만 남긴다. */
+export const LEGACY_ERROR_LABEL = {
+    concept: '개념 모름',      // → assembly
+    time: '시간 부족',          // → 무응답으로 대체됨
+    blank: '미시도'            // → 무응답으로 대체됨
+};
+
+/** 저장된 코드 하나를 화면에 쓸 이름으로. 옛 값도 읽힙니다. */
+export const errorLabelOf = (code) =>
+    ERROR_TAG_BY_CODE[code]?.label || LEGACY_ERROR_LABEL[code] || null;
+
 export const isErrorTagCode = (code) => Object.prototype.hasOwnProperty.call(ERROR_TAG_BY_CODE, code);
 
 /** 저장된 코드 배열을 화면에 쓸 정의로 바꿉니다. 모르는 코드는 버립니다. */

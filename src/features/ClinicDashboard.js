@@ -15,9 +15,10 @@ import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
 import { isClosedDay, getDayInfo } from '../utils/academyCalendar';
-/* 오답 원인은 자유 텍스트가 아니라 고정 칩으로 받습니다.
-   자유 텍스트는 아무리 쌓여도 셀 수 없고, 지표의 인지 4축과 붙지 않습니다. */
-import { ERROR_TAGS, isErrorTagCode, parentTagText, prescriptionsFor } from '../utils/errorTaxonomy';
+/* 오답 원인은 자유 텍스트가 아니라 고정 칩으로, 세션이 아니라 문항에 붙입니다.
+   자유 텍스트는 아무리 쌓여도 셀 수 없고, 세션 단위로는 '이 문제를 왜 못 풀었나' 에 답하지 못합니다. */
+import { isErrorTagCode, parentTagText, prescriptionsFor } from '../utils/errorTaxonomy';
+import ClinicWrongAnswerTagger from '../components/ClinicWrongAnswerTagger';
 
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -1600,39 +1601,30 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             </div>
         </div>
         
-        {/* 오답 원인은 자유 텍스트로 두면 '#개념보충' / '개념 보충' / '개념부족' 이
-            서로 다른 값이 되어 아무리 쌓여도 셀 수 없습니다.
-            고정 칩으로 받으면 조교 시간은 그대로면서 집계가 가능해집니다.
-            학부모 문자에는 진단명이 아니라 처방 쪽 표현이 나갑니다. */}
-        <div className="mb-4">
-            <label className="block text-sm font-bold text-gray-700 mb-1">
-                오늘 막힌 지점 <span className="font-normal text-xs text-gray-400">(해당되는 것 모두)</span>
-            </label>
-            <p className="text-[11px] text-gray-400 font-medium mb-2">
-                한 문제 안에서 여러 개가 겹치면 <b>가장 먼저 막힌 것</b>을 고르세요.
-            </p>
-            <div className="flex flex-wrap gap-2">
-                {ERROR_TAGS.map(t => {
-                    const on = (feedbackData.errorTags || []).includes(t.code);
-                    return (
-                        <button
-                            key={t.code} type="button" title={t.hint}
-                            onClick={() => setFeedbackData(f => {
-                                const cur = f.errorTags || [];
-                                return { ...f, errorTags: on ? cur.filter(c => c !== t.code) : [...cur, t.code] };
-                            })}
-                            className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-colors text-left ${
-                                on ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
-                            }`}
-                        >
-                            {on ? '✓ ' : ''}{t.label}
-                        </button>
-                    );
-                })}
-            </div>
+        {/* 막힌 지점은 세션이 아니라 '문항' 에 붙어야 합니다.
+            세션에 붙이면 "오늘 개념이 약했다" 까지만 남고,
+            "이 문제를 왜 못 풀었나" 에 답하지 못합니다.
 
+            클리닉은 이유를 알아내는 자리입니다 — 학생이 앞에 있으니 물어볼 수 있습니다.
+            그래서 여기서 바로 그 학생의 최근 오답에 붙입니다.
+            기록 관리 화면까지 찾아가야 하면 실제로는 아무도 안 합니다. */}
+        <ClinicWrongAnswerTagger
+            studentId={selectedSession?.studentId}
+            onSummaryChange={(codes) => setFeedbackData(f => ({ ...f, errorTags: codes }))}
+        />
+
+        <div className="mb-4">
+            <label className="block text-sm font-bold text-gray-700 mb-2">
+                그 밖의 메모 <span className="font-normal text-xs text-gray-400">(선택)</span>
+            </label>
+            <input
+                className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-300 font-bold"
+                placeholder="위 항목으로 담기지 않는 내용만"
+                value={feedbackData.tagNote || ''}
+                onChange={e => setFeedbackData({ ...feedbackData, tagNote: e.target.value })}
+            />
             {(feedbackData.errorTags || []).length > 0 && (
-                <div className="mt-2.5 bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-[11px] space-y-1">
+                <div className="mt-2 bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-[11px] space-y-1">
                     <div className="text-gray-500 font-bold">
                         학부모 문자에는 이렇게 나갑니다 —
                         <span className="text-gray-800 ml-1">{parentTagText(feedbackData.errorTags)}</span>
@@ -1642,13 +1634,6 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     </div>
                 </div>
             )}
-
-            <input
-                className="w-full mt-2.5 border-2 border-gray-200 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-blue-300 font-bold text-sm"
-                placeholder="위 항목으로 안 되는 내용만 적어주세요 (선택)"
-                value={feedbackData.tagNote || ''}
-                onChange={e => setFeedbackData({ ...feedbackData, tagNote: e.target.value })}
-            />
         </div>
 
         <div className="mb-4">

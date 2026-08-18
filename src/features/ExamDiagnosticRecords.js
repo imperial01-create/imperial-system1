@@ -23,6 +23,7 @@ import {
   CheckCircle, X, Save, FileText, Zap, ShieldAlert, WifiOff
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { ERROR_TAGS, ERROR_TAG_BY_CODE, errorLabelOf } from '../utils/errorTaxonomy';
 import { APP_ID } from '../constants';
 
 const DIAG_PATH = `artifacts/${APP_ID}/public/data/student_exam_diagnostics`;
@@ -39,13 +40,10 @@ const VALID_CATEGORY = ['school', 'concept', 'mock'];
    이 구분이 중요한 이유가 있습니다. 지금은 '시간이 없어 못 푼 것' 과 '틀린 것' 이
    똑같이 wrong 으로 남습니다. 그런데 시험지 뒷번호는 대개 어려운 문항이라,
    시간에 쫓긴 학생이 자동으로 '고난도 취약' 으로 진단됩니다. */
-const ERROR_TYPES = [
-  { id: 'calc', label: '계산 실수' },
-  { id: 'condition', label: '조건 누락' },
-  { id: 'concept', label: '개념 모름' },
-  { id: 'time', label: '시간 부족' },
-  { id: 'blank', label: '미시도' }
-];
+/* 오답 원인 분류는 utils/errorTaxonomy 한 곳에서만 정합니다.
+   여기와 클리닉 화면이 각자 목록을 가지면 같은 뜻에 다른 코드가 쌓입니다.
+   옛 목록('개념 모름'·'시간 부족'·'미시도')은 새로 고를 수 없지만,
+   이미 저장된 값은 errorLabelOf 로 그대로 읽힙니다. */
 
 const maxOf = (rec) => {
   const m = Number(rec?.maxScore);
@@ -680,7 +678,11 @@ export default function ExamDiagnosticRecords({ currentUser }) {
                                 })}
                               >
                                 <option value="">— 미분류 —</option>
-                                {ERROR_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                                {ERROR_TAGS.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                                {/* 옛 값이 저장돼 있으면 목록에 없어 사라져 보입니다. 그 값만 따로 보여 줍니다. */}
+                                {r.errorType && !ERROR_TAG_BY_CODE[r.errorType] && (
+                                  <option value={r.errorType}>{errorLabelOf(r.errorType) || r.errorType} (옛 분류)</option>
+                                )}
                               </select>
                             </div>
                           );
