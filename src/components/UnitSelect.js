@@ -16,7 +16,8 @@
    조용히 빠지면 나중에 왜 비었는지 알 수 없습니다.
 */
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Search, X, AlertTriangle, Check } from 'lucide-react';
 import { searchUnits, findUnit, isAmbiguousUnit } from '../utils/curriculumUnits';
 
@@ -40,6 +41,29 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, cou
     const [open, setOpen] = useState(false);
     const [customMode, setCustomMode] = useState(false);
     const boxRef = useRef(null);
+    const listRef = useRef(null);
+
+    /* 목록을 화면 최상단(body)에 그립니다.
+       이 입력칸은 교재 등록처럼 스크롤되는 목록 안에 들어갑니다.
+       그 부모가 overflow-y-auto 라서, 목록을 absolute 로 두면 부모 경계에서 잘립니다.
+       한 칸 아래로는 아예 보이지 않아 '단원이 다 안 뜬다' 로 보였습니다. */
+    const [rect, setRect] = useState(null);
+
+    const measure = useCallback(() => {
+        const el = boxRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const below = window.innerHeight - r.bottom;
+        const above = r.top;
+        // 아래가 좁으면 위로 펼칩니다. 모달 하단에서 목록이 잘리지 않게.
+        const openUp = below < 240 && above > below;
+        setRect({
+            left: r.left, width: r.width,
+            top: openUp ? null : r.bottom + 4,
+            bottom: openUp ? (window.innerHeight - r.top + 4) : null,
+            maxHeight: Math.max(160, (openUp ? above : below) - 16)
+        });
+    }, []);
 
     const selectedUnit = value?.unitId ? findUnit(value.unitId) : null;
 
@@ -51,13 +75,32 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, cou
         [queryText, open, preferUnitIds, course, curriculum]
     );
 
-    // 바깥을 누르면 닫습니다.
+    /* 바깥을 누르면 닫습니다. 목록이 body 에 그려지므로 두 곳 다 확인해야 합니다.
+       목록만 확인하면 입력칸을 눌러도 닫히고, 입력칸만 확인하면 목록을 눌러도 닫힙니다. */
     useEffect(() => {
         if (!open) return;
-        const onDown = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+        const onDown = (e) => {
+            const inBox = boxRef.current && boxRef.current.contains(e.target);
+            const inList = listRef.current && listRef.current.contains(e.target);
+            if (!inBox && !inList) setOpen(false);
+        };
         document.addEventListener('mousedown', onDown);
         return () => document.removeEventListener('mousedown', onDown);
     }, [open]);
+
+    /* 열려 있는 동안 위치를 따라갑니다.
+       capture 로 듣는 이유: 모달 안쪽 스크롤은 window 로 버블링되지 않습니다. */
+    useEffect(() => {
+        if (!open) { setRect(null); return; }
+        measure();
+        const onMove = () => measure();
+        window.addEventListener('resize', onMove);
+        window.addEventListener('scroll', onMove, true);
+        return () => {
+            window.removeEventListener('resize', onMove);
+            window.removeEventListener('scroll', onMove, true);
+        };
+    }, [open, measure]);
 
     const pick = (u) => {
         onChange({ unitId: u.unitId, unitName: u.unitName, unit: u });
@@ -131,8 +174,17 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, cou
                 />
             </div>
 
-            {open && (
-                <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-72 overflow-y-auto">
+            {open && rect && createPortal(
+                <div
+                    ref={listRef}
+                    style={{
+                        position: 'fixed',
+                        left: rect.left, width: rect.width,
+                        ...(rect.top !== null ? { top: rect.top } : { bottom: rect.bottom }),
+                        maxHeight: rect.maxHeight
+                    }}
+                    className="z-[100] bg-white border border-slate-200 rounded-xl shadow-2xl overflow-y-auto"
+                >
                     {results.truncated && (
                         <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-[11px] font-bold text-amber-800">
                             전체 {results.total}개 중 {results.length}개만 보입니다 — 단원 이름을 더 입력하세요.
@@ -161,7 +213,8 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, cou
                     >
                         목록에 없음 — 직접 입력
                     </button>
-                </div>
+                </div>,
+                document.body
             )}
         </div>
     );
