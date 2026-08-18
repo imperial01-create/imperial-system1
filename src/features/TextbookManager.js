@@ -30,20 +30,43 @@ import { APP_ID } from '../constants';
 const PATH = `artifacts/${APP_ID}/public/data/textbooks`;
 const DEPT_DOC = `artifacts/${APP_ID}/public/data/settings`;
 
-/* 과정 목록은 단원 마스터에서 만듭니다. 여기에 따로 적어 두면 두 곳이 어긋납니다. */
-const COURSES_BY_SUBJECT = { '수학': (() => {
-    const seen = [];
-    CURRICULUM_UNITS.forEach(u => { if (!seen.includes(u.course)) seen.push(u.course); });
-    return seen;
-})() };
+/* 과정 목록은 단원 마스터에서 만듭니다. 여기에 따로 적어 두면 두 곳이 어긋납니다.
+
+   ⚠️ 과정 이름만으로는 부족합니다. '수학 2-1' 과 '확률과 통계' 는 2015·2022 개정
+   양쪽에 같은 이름으로 있고, 단원 번호(unitId)가 서로 다릅니다.
+   교육과정을 같이 정하지 않으면 숙제가 개념테스트와 다른 단원에 쌓입니다. */
+const COURSE_OPTIONS = (() => {
+    const seen = new Map();
+    CURRICULUM_UNITS.forEach(u => {
+        const key = `${u.course}|${u.curriculum}`;
+        if (!seen.has(key)) seen.set(key, { key, course: u.course, curriculum: u.curriculum, schoolLevel: u.schoolLevel });
+    });
+    return [...seen.values()].sort((a, b) =>
+        (a.curriculum === '2022' ? 0 : 1) - (b.curriculum === '2022' ? 0 : 1)
+        || (a.schoolLevel === '중학교' ? 0 : 1) - (b.schoolLevel === '중학교' ? 0 : 1)
+        || a.course.localeCompare(b.course));
+})();
+
+const COURSE_GROUPS = COURSE_OPTIONS.reduce((acc, c) => {
+    const label = `${c.curriculum} 개정 · ${c.schoolLevel}${c.curriculum === '2015' ? ' (고3·재수생)' : ''}`;
+    const g = acc.find(x => x.label === label);
+    if (g) g.items.push(c); else acc.push({ label, items: [c] });
+    return acc;
+}, []);
+
+// 과정 목록이 있는 과목만 범위(단원)를 요구합니다. 지금은 수학뿐입니다.
+const SUBJECTS_WITH_COURSES = ['수학'];
 
 const emptyBook = () => ({
-    title: '', publisher: '', subject: '', course: '', sections: [], active: true
+    title: '', publisher: '', subject: '', course: '', curriculum: '', sections: [], active: true
 });
 
+/* startNo: 교재의 뒤쪽 단원은 문항 번호가 1번부터 시작하지 않습니다.
+   (예: 3단원이 101번부터 160번) 채점 화면의 번호판이 실제 번호와 같아야
+   조교가 답안지와 대조할 수 있습니다. */
 const newSection = () => ({
     key: `s_${Math.random().toString(36).slice(2, 9)}`,
-    unitId: null, unitName: '', label: '', count: ''
+    unitId: null, unitName: '', label: '', startNo: 1, count: ''
 });
 
 const TextbookManager = ({ currentUser }) => {
@@ -88,7 +111,7 @@ const TextbookManager = ({ currentUser }) => {
         if (!editing.subject) return alert('교재 과목을 선택해주세요.');
         /* 단원 마스터가 있는 과목(지금은 수학)만 범위를 요구합니다.
            다른 과목은 마스터가 없어 범위를 못 넣습니다 — 그때는 이름만 등록됩니다. */
-        const needsUnits = !!COURSES_BY_SUBJECT[editing.subject];
+        const needsUnits = SUBJECTS_WITH_COURSES.includes(editing.subject);
         const bad = (editing.sections || []).filter(s => needsUnits ? (!s.unitId || !(Number(s.count) > 0)) : !(Number(s.count) > 0));
         if (needsUnits && bad.length > 0) return alert('각 범위마다 단원과 문항 수를 채워주세요.');
 
@@ -100,6 +123,10 @@ const TextbookManager = ({ currentUser }) => {
                 publisher: (editing.publisher || '').trim(),
                 subject: editing.subject,
                 course: editing.course || '',
+                /* 과정 이름만으로는 부족합니다. '수학 2-1' 은 2015·2022 양쪽에 있고
+                   단원 번호가 서로 다릅니다. 교육과정을 같이 남겨야 숙제가
+                   개념테스트와 같은 단원에 쌓입니다. */
+                curriculum: editing.curriculum || '',
                 active: editing.active !== false,
                 sections: (editing.sections || []).map(s => ({
                     key: s.key,
@@ -108,6 +135,7 @@ const TextbookManager = ({ currentUser }) => {
                        조회하지 않아도 되고, 나중에 마스터가 바뀌어도 그때 무엇을 냈는지 남습니다. */
                     unitName: s.unitName || findUnit(s.unitId)?.unitName || '',
                     label: (s.label || '').trim(),
+                    startNo: Math.max(1, Number(s.startNo) || 1),
                     count: Number(s.count)
                 })),
                 updatedAt: serverTimestamp(),
@@ -230,16 +258,23 @@ const TextbookManager = ({ currentUser }) => {
                             </div>
                             <div>
                                 <label className="block text-xs font-bold text-gray-600 mb-1">
-                                    과정 <span className="font-normal text-gray-400">(선택)</span>
+                                    과정 <span className="font-normal text-gray-400">(선택 — 고르면 그 과정 단원만 보입니다)</span>
                                 </label>
                                 <select className="w-full border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-blue-400 disabled:opacity-50"
-                                        disabled={!COURSES_BY_SUBJECT[editing.subject]}
-                                        value={editing.course || ''}
-                                        onChange={e => setEditing({ ...editing, course: e.target.value })}>
+                                        disabled={!SUBJECTS_WITH_COURSES.includes(editing.subject)}
+                                        value={editing.course ? `${editing.course}|${editing.curriculum}` : ''}
+                                        onChange={e => {
+                                            const [course, curriculum] = (e.target.value || '').split('|');
+                                            setEditing({ ...editing, course: course || '', curriculum: curriculum || '' });
+                                        }}>
                                     <option value="">
-                                        {COURSES_BY_SUBJECT[editing.subject] ? '해당 없음 / 여러 과정' : '이 과목은 과정 목록이 없습니다'}
+                                        {SUBJECTS_WITH_COURSES.includes(editing.subject) ? '해당 없음 / 여러 과정' : '이 과목은 과정 목록이 없습니다'}
                                     </option>
-                                    {(COURSES_BY_SUBJECT[editing.subject] || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                    {SUBJECTS_WITH_COURSES.includes(editing.subject) && COURSE_GROUPS.map(g => (
+                                        <optgroup key={g.label} label={g.label}>
+                                            {g.items.map(c => <option key={c.key} value={c.key}>{c.course}</option>)}
+                                        </optgroup>
+                                    ))}
                                 </select>
                             </div>
                         </div>
@@ -256,39 +291,63 @@ const TextbookManager = ({ currentUser }) => {
                                 교재의 목차 단위로 넣으면 됩니다. 범위 표기는 숙제 낼 때 그대로 보입니다.
                             </p>
 
-                            <div className="space-y-2.5 max-h-[42vh] overflow-y-auto pr-1">
-                                {editing.sections.map((s, i) => (
-                                    <div key={s.key} className="grid grid-cols-12 gap-2 items-start bg-gray-50 border border-gray-200 rounded-xl p-2.5">
-                                        <div className="col-span-12 md:col-span-6">
-                                            <UnitSelect
-                                                value={{ unitId: s.unitId, unitName: s.unitName }}
-                                                onChange={({ unitId, unitName }) => setEditing(prev => ({
-                                                    ...prev,
-                                                    sections: prev.sections.map((x, j) => j === i ? { ...x, unitId, unitName } : x)
-                                                }))}
-                                                placeholder="단원 검색"
-                                            />
+                            {/* 예전에는 한 줄에 4칸을 욱여넣어 문항 수 칸이 화면 밖으로 잘렸습니다.
+                                단원(넓음)을 위에, 나머지 숫자 칸을 아래 한 줄에 둡니다. */}
+                            <div className="space-y-3 max-h-[46vh] overflow-y-auto pr-1">
+                                {editing.sections.map((s, i) => {
+                                    const start = Math.max(1, Number(s.startNo) || 1);
+                                    const cnt = Number(s.count) || 0;
+                                    const setField = (patch) => setEditing(prev => ({
+                                        ...prev, sections: prev.sections.map((x, j) => j === i ? { ...x, ...patch } : x)
+                                    }));
+                                    return (
+                                        <div key={s.key} className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-[11px] font-black bg-white border border-gray-300 text-gray-500 w-6 h-6 rounded flex items-center justify-center shrink-0">{i + 1}</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <UnitSelect
+                                                        value={{ unitId: s.unitId, unitName: s.unitName }}
+                                                        course={editing.course || null}
+                                                        curriculum={editing.curriculum || null}
+                                                        onChange={({ unitId, unitName }) => setField({ unitId, unitName })}
+                                                        placeholder={editing.course ? `${editing.course} 단원 고르기` : '단원 검색'}
+                                                    />
+                                                </div>
+                                                <button type="button" onClick={() => setEditing(prev => ({ ...prev, sections: prev.sections.filter((_, j) => j !== i) }))}
+                                                        className="text-gray-400 hover:text-red-600 shrink-0 p-1"><X size={16} /></button>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pl-8">
+                                                <div className="col-span-2">
+                                                    <label className="block text-[10px] font-bold text-gray-500 mb-1">범위 표기 (선택)</label>
+                                                    <input className="w-full border border-gray-300 p-2.5 rounded-lg text-sm font-bold outline-none focus:border-blue-400"
+                                                           placeholder="예: p.45-52" value={s.label || ''}
+                                                           onChange={e => setField({ label: e.target.value })} />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-500 mb-1">시작 번호</label>
+                                                    <input type="number" min="1"
+                                                           className="w-full border border-gray-300 p-2.5 rounded-lg text-sm font-black text-center outline-none focus:border-blue-400"
+                                                           value={s.startNo ?? 1}
+                                                           onChange={e => setField({ startNo: e.target.value })} />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-500 mb-1">문항 수</label>
+                                                    <input type="number" min="1"
+                                                           className="w-full border-2 border-blue-200 bg-white p-2.5 rounded-lg text-sm font-black text-center outline-none focus:border-blue-500"
+                                                           placeholder="60" value={s.count}
+                                                           onChange={e => setField({ count: e.target.value })} />
+                                                </div>
+                                            </div>
+
+                                            {cnt > 0 && (
+                                                <p className="text-[11px] font-bold text-blue-700 mt-1.5 pl-8">
+                                                    {start}번 ~ {start + cnt - 1}번 · {cnt}문항
+                                                </p>
+                                            )}
                                         </div>
-                                        <div className="col-span-7 md:col-span-3">
-                                            <input className="w-full border border-gray-300 p-2.5 rounded-lg text-sm font-bold outline-none focus:border-blue-400"
-                                                   placeholder="범위 표기 (예: p.45-52)" value={s.label}
-                                                   onChange={e => setEditing(prev => ({
-                                                       ...prev, sections: prev.sections.map((x, j) => j === i ? { ...x, label: e.target.value } : x)
-                                                   }))} />
-                                        </div>
-                                        <div className="col-span-4 md:col-span-2">
-                                            <input type="number" min="1" className="w-full border border-gray-300 p-2.5 rounded-lg text-sm font-black text-center outline-none focus:border-blue-400"
-                                                   placeholder="문항" value={s.count}
-                                                   onChange={e => setEditing(prev => ({
-                                                       ...prev, sections: prev.sections.map((x, j) => j === i ? { ...x, count: e.target.value } : x)
-                                                   }))} />
-                                        </div>
-                                        <div className="col-span-1 flex justify-end pt-1.5">
-                                            <button type="button" onClick={() => setEditing(prev => ({ ...prev, sections: prev.sections.filter((_, j) => j !== i) }))}
-                                                    className="text-gray-400 hover:text-red-600"><X size={16} /></button>
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
 

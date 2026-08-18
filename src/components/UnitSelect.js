@@ -35,7 +35,7 @@ const CurriculumTag = ({ unit }) => (
  * @param onChange   ({ unitId, unitName, unit }) => void   unit 은 마스터 원본(직접 입력이면 null)
  * @param preferUnitIds 위로 올릴 단원들 (예: 이 반이 이미 다룬 단원)
  */
-const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, placeholder = '단원 이름으로 검색 (예: 이차함수)' }) => {
+const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, course = null, curriculum = null, placeholder = '단원 이름으로 검색 (예: 이차함수)' }) => {
     const [queryText, setQueryText] = useState('');
     const [open, setOpen] = useState(false);
     const [customMode, setCustomMode] = useState(false);
@@ -43,9 +43,12 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, pla
 
     const selectedUnit = value?.unitId ? findUnit(value.unitId) : null;
 
+    /* 과정이 정해져 있으면 그 과정 단원을 전부 보여 줍니다(6~10개라 상한에 안 걸립니다).
+       과정이 없으면 194개 중 일부만 보이므로, 잘렸다는 사실을 화면에 적습니다.
+       예전에는 20개만 돌려주면서 그 말을 안 해 '단원이 다 안 뜬다' 로만 보였습니다. */
     const results = useMemo(
-        () => (open ? searchUnits(queryText, { limit: 20, preferUnitIds }) : []),
-        [queryText, open, preferUnitIds]
+        () => (open ? searchUnits(queryText, { limit: course ? 200 : 40, course, curriculum, preferUnitIds }) : []),
+        [queryText, open, preferUnitIds, course, curriculum]
     );
 
     // 바깥을 누르면 닫습니다.
@@ -130,6 +133,11 @@ const UnitSelect = ({ value, onChange, preferUnitIds = [], disabled = false, pla
 
             {open && (
                 <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-72 overflow-y-auto">
+                    {results.truncated && (
+                        <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-[11px] font-bold text-amber-800">
+                            전체 {results.total}개 중 {results.length}개만 보입니다 — 단원 이름을 더 입력하세요.
+                        </div>
+                    )}
                     {results.length === 0 ? (
                         <div className="p-3 text-xs text-slate-400 font-bold text-center">
                             찾는 단원이 없습니다

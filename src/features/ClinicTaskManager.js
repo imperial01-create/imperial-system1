@@ -581,7 +581,9 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                                             {item.unitName || '단원 미지정'}
                                                                         </span>
                                                                         <span className="text-xs font-bold text-gray-600">
-                                                                            낸 문항 {item.assignedCount}개 · 푼 {attempted}개 중 <span className="text-indigo-700 font-black">{correct}개 정답</span>
+                                                                            {(() => { const st = Math.max(1, Number(item.startNo) || 1);
+                                                                                return `${st}~${st + item.assignedCount - 1}번`; })()}
+                                                                            {' · '}푼 {attempted}개 중 <span className="text-indigo-700 font-black">{correct}개 정답</span>
                                                                             {attempted > 0 && <span className="text-gray-400 ml-1">{pct}%</span>}
                                                                         </span>
                                                                     </div>
@@ -591,8 +593,10 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                                         <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-gray-400 inline-block"/>안 풂</span>
                                                                         <span>— 누를 때마다 바뀝니다</span>
                                                                     </div>
+                                                                    {/* 교재 뒤쪽 단원은 1번부터 시작하지 않습니다(예: 101~160번).
+                                                                        번호판이 답안지와 같아야 조교가 대조할 수 있습니다. */}
                                                                     <div className="flex flex-wrap gap-1 p-2 bg-gray-50 rounded-xl border border-gray-100">
-                                                                        {Array.from({ length: item.assignedCount }, (_, i) => i + 1).map(no => {
+                                                                        {Array.from({ length: item.assignedCount }, (_, i) => (Math.max(1, Number(item.startNo) || 1)) + i).map(no => {
                                                                             const isWrong = wrongs.includes(no);
                                                                             const isBlank = blanks.includes(no);
                                                                             const tone = isWrong ? 'bg-rose-500 text-white border-rose-600'

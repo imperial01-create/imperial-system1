@@ -264,6 +264,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                     sectionKey: it.sectionKey || null,
                     unitId: it.unitId || null,
                     unitName: it.unitName || null,
+                    startNo: Math.max(1, Number(it.startNo) || 1),
                     assignedCount: Number(it.assignedCount) || null,
                     /* 조교가 채점하면서 채웁니다. 번호를 남기는 이유는,
                        그 번호를 클리닉에서 다시 꺼내 '왜 틀렸는지' 를 붙이기 위해서입니다. */

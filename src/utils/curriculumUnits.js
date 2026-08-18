@@ -124,12 +124,15 @@ export const isAmbiguousUnit = (unit) =>
 const searchNorm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
 
 export const searchUnits = (queryText, options = {}) => {
-    const { limit = 30, curriculum = null, schoolLevel = null, preferUnitIds = [] } = options;
+    const { limit = 30, curriculum = null, schoolLevel = null, course = null, preferUnitIds = [] } = options;
     const q = searchNorm(queryText);
 
     let pool = CURRICULUM_UNITS;
     if (curriculum) pool = pool.filter(u => u.curriculum === curriculum);
     if (schoolLevel) pool = pool.filter(u => u.schoolLevel === schoolLevel);
+    /* 과정이 정해져 있으면 그 과정의 단원만 봅니다.
+       한 과정은 6~10단원이라 상한에 걸리지 않고 전부 보입니다. */
+    if (course) pool = pool.filter(u => u.course === course);
 
     const prefer = new Set(preferUnitIds || []);
 
@@ -157,12 +160,19 @@ export const searchUnits = (queryText, options = {}) => {
         if (score !== null) scored.push({ u, score: score + bonus });
     });
 
-    return scored
+    const sorted = scored
         .sort((a, b) => a.score - b.score
             || a.u.course.localeCompare(b.u.course)
             || a.u.order - b.u.order)
-        .slice(0, limit)
         .map(x => x.u);
+
+    /* 잘렸는지 화면이 알 수 있어야 합니다.
+       예전에는 194개 중 20개만 돌려주면서 그 사실을 알리지 않아,
+       '단원이 다 안 뜬다' 를 사람이 원인 모른 채 겪었습니다. */
+    const out = sorted.slice(0, limit);
+    out.total = sorted.length;
+    out.truncated = sorted.length > out.length;
+    return out;
 };
 
 /* ── 옛 기록 붙이기 ──────────────────────────────────────────

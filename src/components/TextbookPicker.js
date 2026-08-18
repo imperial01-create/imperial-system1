@@ -82,6 +82,9 @@ const TextbookPicker = ({ onPick, onClose, subject = null }) => {
                                             onClick={() => onPick({
                                                 textbookId: b.id, textbookTitle: b.title, sectionKey: s.key,
                                                 unitId: s.unitId, unitName: s.unitName,
+                                                /* 시작 번호를 함께 넘깁니다. 교재 뒤쪽 단원은 1번부터 시작하지 않아서,
+                                                   이 값이 없으면 채점 번호판이 답안지와 어긋납니다. */
+                                                startNo: Math.max(1, Number(s.startNo) || 1),
                                                 assignedCount: Number(s.count) || 0,
                                                 text: `${b.title} ${s.label || s.unitName} (${s.count}문항)`
                                             })}
