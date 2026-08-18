@@ -15,6 +15,7 @@ import { Card, Badge, Button, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { getTierProgress } from '../utils/vocaTier';
 import { toMainSubject } from '../utils/subjectMatch';
+import MathUnitBoard from '../components/MathUnitBoard';
 import { APP_ID } from '../constants';
 
 
@@ -75,15 +76,25 @@ const SUBJECT_META = {
       { id: 'speed', name: '정보처리', desc: '제한된 시간 내에 방대한 텍스트 정보를 빠르고 정확하게 처리하는 능력' }
     ]
   },
+  /* 수학은 원장이 확정한 구조를 씁니다 (docs/academy-universe/MATH_INDICATORS_v2.md).
+     축을 '측정하기 쉬운 대비' 가 아니라 '학생이 실제로 문제를 푸는 순서' 에서 뽑았습니다.
+
+         조건 독해 → 개념 조립 → 유형 매칭 → 연산
+                            ↘ (파이프라인이 안 통하는 문항) → 심화 추론
+
+     파이프라인이라 오답 원인이 '가장 이른 실패 지점' 하나로 특정됩니다.
+     클리닉의 오답 칩이 이 네 축과 1:1 로 붙습니다.
+
+     ⚠️ 이 화면은 아직 네 축에 값을 넣지 않습니다.
+        1단계에 실제로 데이터가 들어오는 것은 단원별 현황뿐입니다.
+        값이 없는 축을 그럴듯한 숫자로 채우는 것이 이 시스템이 예전에 한 실수입니다. */
   '수학': {
     icon: Calculator, title: '수리 논리 및 추론력',
     stats: [
-      { id: 'calc', name: '연산력', desc: '복잡한 수식을 빠르고 정확하게 계산하여 실수를 최소화하는 기본기' },
-      { id: 'concept', name: '개념이해', desc: '수학적 정의와 정리의 본질을 완벽하게 이해하고 설명할 수 있는 능력' },
-      { id: 'application', name: '응용력', desc: '알고 있는 개념을 낯선 유형의 문제에 자유자재로 변형하여 적용하는 능력' },
-      { id: 'reasoning', name: '추론력', desc: '주어진 조건에서 숨겨진 단서를 찾아내어 논리적 연결고리를 만드는 능력' },
-      { id: 'problem', name: '문제해결', desc: '고난도 킬러 문항을 마주했을 때 끝까지 파고들어 해답을 찾아내는 끈기' },
-      { id: 'intuition', name: '직관력', desc: '문제의 형태만 보고도 올바른 풀이 방향 접근법을 즉각적으로 떠올리는 감각' }
+      { id: 'decoding', name: '조건 독해력', desc: '문제에 적힌 조건을 빠짐없이 찾아내고, 그 말이 무슨 뜻인지 알아보는 능력' },
+      { id: 'assembly', name: '개념 조립력', desc: '배운 개념을 정확히 알고, 문제에 필요한 개념을 꺼내어 풀이의 뼈대를 세우는 능력' },
+      { id: 'pattern', name: '유형 매칭력', desc: '훈련한 문제 유형을 기억하고, 같은 방식으로 다시 풀어내는 능력' },
+      { id: 'stability', name: '연산 견고함', desc: '세운 식을 끝까지 정확하게 계산해 내는 능력' }
     ]
   },
   '영어': {
@@ -244,6 +255,23 @@ const AcademyUniverse = ({ currentUser }) => {
         setConceptStats({});
       }
     });
+    return () => unsub();
+  }, [activeStudentId]);
+
+  /* 수학 단원 현황. Functions 의 syncMathProfile 이 만들어 둔 것을 읽기만 합니다.
+     화면에서 집계하지 않는 이유는 세 가지입니다 —
+     화면마다 값이 갈리고, 반 인원수만큼 읽기 요금이 곱해지고,
+     계산하려면 규칙을 열어야 하는데 열면 학생이 자기 능력치를 고칠 수 있습니다. */
+  const [mathProfile, setMathProfile] = useState(null);
+  useEffect(() => {
+    if (!activeStudentId) { setMathProfile(null); return; }
+    const ref = doc(db, `artifacts/${APP_ID}/public/data/student_math_profile`, activeStudentId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setMathProfile(snap.exists() ? snap.data() : null),
+      // 권한 실패가 '데이터 없음' 으로 위장되지 않도록 반드시 남깁니다.
+      (err) => { console.error('[유니버스] student_math_profile 구독 실패:', err?.code, err?.message); setMathProfile(null); }
+    );
     return () => unsub();
   }, [activeStudentId]);
 
@@ -591,8 +619,14 @@ const AcademyUniverse = ({ currentUser }) => {
               )}
           </div>
 
+          {/* 수학은 서버가 만든 단원 현황(student_math_profile)을 씁니다.
+              점수가 아니라 '몇 문제 중 몇 개' 를 그대로 보여줍니다 —
+              표본이 적을 때 점수는 임의적이지만 개수는 언제나 참입니다.
+              라벨은 표본이 충분할 때만 붙습니다. */}
+          {selectedSubject === '수학' && <MathUnitBoard profile={mathProfile} />}
+
           {/* 🚀 [CTO 패치] 단원별 개념 이해도 정밀 시각화 영역 (조회 전용 - DB 데이터 실시간 표시) */}
-          {selectedSubject !== '영어' && (
+          {selectedSubject !== '영어' && selectedSubject !== '수학' && (
             <div className="bg-white rounded-[40px] p-8 sm:p-10 border border-slate-200 shadow-sm">
               <div className="flex justify-between items-end mb-6 flex-wrap gap-4 border-b border-slate-100 pb-4">
                 <div>
