@@ -250,8 +250,15 @@ export default function ExamDiagnosticRecords({ currentUser }) {
       const next = prev.draft.responses.map((r, i) => {
         if (i !== idx) return r;
         const nowCorrect = r.verdict === 'wrong';
-        // 정답으로 되돌리면 오답 원인도 함께 지웁니다. 남겨 두면 앞뒤가 안 맞습니다.
-        return { ...r, verdict: nowCorrect ? 'correct' : 'wrong', errorType: nowCorrect ? null : (r.errorType || null) };
+        /* 정답으로 되돌리면 오답 원인도 함께 지웁니다. 남겨 두면 앞뒤가 안 맞습니다.
+           mark 도 같이 맞춥니다 — 여기서 손으로 뒤집었다면 '무응답' 이라는 관찰은
+           더 이상 유효하지 않습니다. 안 맞추면 verdict 와 mark 가 서로 모순됩니다. */
+        return {
+          ...r,
+          verdict: nowCorrect ? 'correct' : 'wrong',
+          mark: nowCorrect ? 'correct' : 'wrong',
+          errorType: nowCorrect ? null : (r.errorType || null)
+        };
       });
       editorDirty.current = true;
       const earned = next.reduce((s, r) => s + (r.verdict === 'wrong' ? 0 : Number(r.points) || 0), 0);

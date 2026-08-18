@@ -424,12 +424,19 @@ const run = async () => {
         studentId: 'stu1', studentName: '학생일',
         batchId: 'batch_abc', classId: 'c1', className: '고2 심화', season: 'summer2026',
         gradedBy: 'ta1', score: 64, maxScore: 80,
-        questionCount: 2, questionSignature: 'nkkv6i',
+        questionCount: 3, questionSignature: 'nkkv6i',
+        /* 단원 마스터 참조. 개념테스트는 시험 전체가 한 단원이라 문항마다 같은 값이 들어간다. */
+        unitId: null, courseCode: null, curriculum: null,
         responses: [
-            { no: '1', qIndex: 0, points: 4, unitRaw: '이차함수', verdict: 'correct', errorType: null },
-            { no: '2', qIndex: 1, points: 4, unitRaw: '이차함수', verdict: 'wrong', errorType: 'calc' }
+            { no: '1', qIndex: 0, points: 4, unitRaw: '이차함수', unitId: null, verdict: 'correct', mark: 'correct', errorType: null },
+            { no: '2', qIndex: 1, points: 4, unitRaw: '이차함수', unitId: null, verdict: 'wrong', mark: 'wrong', errorType: 'calc' },
+            /* 무응답: 점수는 오답과 같으므로 verdict 는 'wrong' 이고,
+               능력 지표에서 빼야 하므로 mark 만 'blank' 다. 둘이 어긋나면
+               기록 관리·리포트 화면이 무응답에 점수를 준다. */
+            { no: '3', qIndex: 2, points: 4, unitRaw: '이차함수', unitId: null, verdict: 'wrong', mark: 'blank', errorType: null }
         ],
-        wrongQuestionNumbers: ['2'], instructorComment: '', growthPlan: '', instructorId: 'ta1'
+        wrongQuestionNumbers: ['2'], blankQuestionNumbers: ['3'],
+        instructorComment: '', growthPlan: '', instructorId: 'ta1'
     };
     await check('동결한 저장 형식 전체가 규칙을 통과한다', () =>
         assertSucceeds(setDoc(diagDoc(as('ta1', taToken('ta1')), 'frozen1'), frozenPayload)));

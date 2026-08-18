@@ -133,7 +133,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
      예전에는 확인 없이 지워져서, 잘못 누르면 30명분이 한 번에 사라졌습니다. */
   const confirmDiscardInputs = (action) => {
     const typed = Object.values(inputsByStudent).filter(
-      v => (v?.wrongQuestions?.length || 0) > 0 || v?.comment || v?.plan || v?.manualScore
+      v => (v?.wrongQuestions?.length || 0) > 0 || (v?.blankQuestions?.length || 0) > 0
+        || v?.comment || v?.plan || v?.manualScore
     ).length;
     if (typed === 0) return true;
     return window.confirm(`입력 중인 ${typed}명의 채점 내용이 지워집니다. ${action}하시겠습니까?`);
@@ -346,9 +347,12 @@ export default function ExamDiagnosticInput({ currentUser }) {
     return Array.isArray(exam?.questions) && exam.questions.length > 0;
   }, [testCategory, selectedExamId, searchedExams]);
 
-  const scoreOf = useCallback((wrongList) => {
-    const wrong = new Set(wrongList || []);
-    const lost = examQuestions.reduce((sum, q) => sum + (wrong.has(q.key) ? q.points : 0), 0);
+  /* 무응답도 점수는 오답과 같습니다(안 맞았으니까).
+     다만 능력 지표를 낼 때는 분모에서 뺍니다 — 시간이 없어 못 푼 것을
+     '이 조건에서 무너진다'로 읽으면 안 되기 때문입니다. 그래서 따로 셉니다. */
+  const scoreOf = useCallback((wrongList, blankList) => {
+    const missed = new Set([...(wrongList || []), ...(blankList || [])]);
+    const lost = examQuestions.reduce((sum, q) => sum + (missed.has(q.key) ? q.points : 0), 0);
     return Math.max(0, Math.round((maxScore - lost) * 10) / 10);
   }, [examQuestions, maxScore]);
 
@@ -362,10 +366,13 @@ export default function ExamDiagnosticInput({ currentUser }) {
       const next = {};
       Object.entries(prev).forEach(([sId, v]) => {
         const kept = (v.wrongQuestions || []).filter(n => valid.has(n));
-        const recalculated = scoreOf(kept);
-        if (kept.length !== (v.wrongQuestions || []).length || v.score !== recalculated) {
+        const keptBlank = (v.blankQuestions || []).filter(n => valid.has(n));
+        const recalculated = scoreOf(kept, keptBlank);
+        if (kept.length !== (v.wrongQuestions || []).length
+            || keptBlank.length !== (v.blankQuestions || []).length
+            || v.score !== recalculated) {
           changed = true;
-          next[sId] = { ...v, wrongQuestions: kept, score: recalculated, manualScore: false };
+          next[sId] = { ...v, wrongQuestions: kept, blankQuestions: keptBlank, score: recalculated, manualScore: false };
         } else {
           next[sId] = v;
         }
@@ -381,21 +388,43 @@ export default function ExamDiagnosticInput({ currentUser }) {
     setSelectedStudentIds(prev => (prev.includes(sId) ? prev.filter(id => id !== sId) : [...prev, sId]));
     setInputsByStudent(prev => (prev[sId] ? prev : {
       ...prev,
-      [sId]: { wrongQuestions: [], score: maxScore, manualScore: false, comment: '', plan: '' }
+      [sId]: { wrongQuestions: [], blankQuestions: [], score: maxScore, manualScore: false, comment: '', plan: '' }
     }));
   }, [maxScore]);
 
-  const toggleWrongQuestion = (sId, qKey) => {
+  /* 정답 → 오답 → 무응답 → 정답 순으로 돕니다.
+     무응답을 따로 받는 이유: 시간이 없어 손도 못 댄 문항을 '틀렸다'로 묶으면
+     "이 학생은 계산이 무거우면 무너진다" 같은 판정이 시간 부족 때문에 나옵니다.
+     조교에게는 판단이 아니라 대조입니다 — 답안지에 빈칸이면 빈칸입니다. */
+  const cycleQuestionMark = (sId, qKey) => {
     setInputsByStudent(prev => {
-      const current = prev[sId] || { wrongQuestions: [], comment: '', plan: '' };
-      const isWrong = (current.wrongQuestions || []).includes(qKey);
-      // 시험지에 실린 순서대로 정렬합니다(키가 곧 순번).
-      const newWrongs = isWrong
-        ? current.wrongQuestions.filter(n => n !== qKey)
-        : [...(current.wrongQuestions || []), qKey].sort((a, b) => Number(a) - Number(b));
+      const current = prev[sId] || { wrongQuestions: [], blankQuestions: [], comment: '', plan: '' };
+      const wrongs = current.wrongQuestions || [];
+      const blanks = current.blankQuestions || [];
+      const bySeq = (a, b) => Number(a) - Number(b);   // 키가 곧 시험지 순번
+
+      let nextWrongs = wrongs, nextBlanks = blanks;
+      if (wrongs.includes(qKey)) {
+        // 오답 → 무응답
+        nextWrongs = wrongs.filter(n => n !== qKey);
+        nextBlanks = [...blanks, qKey].sort(bySeq);
+      } else if (blanks.includes(qKey)) {
+        // 무응답 → 정답
+        nextBlanks = blanks.filter(n => n !== qKey);
+      } else {
+        // 정답 → 오답
+        nextWrongs = [...wrongs, qKey].sort(bySeq);
+      }
 
       // 문항을 다시 만지면 자동 계산으로 되돌립니다.
-      return { ...prev, [sId]: { ...current, wrongQuestions: newWrongs, score: scoreOf(newWrongs), manualScore: false } };
+      return {
+        ...prev,
+        [sId]: {
+          ...current,
+          wrongQuestions: nextWrongs, blankQuestions: nextBlanks,
+          score: scoreOf(nextWrongs, nextBlanks), manualScore: false
+        }
+      };
     });
   };
 
@@ -454,6 +483,7 @@ export default function ExamDiagnosticInput({ currentUser }) {
         }
 
         const wrongSet = new Set(input.wrongQuestions || []);
+        const blankSet = new Set(input.blankQuestions || []);
 
         // Action 1: 진단 평가 원본 로그 생성 (student_exam_diagnostics)
         const diagRef = doc(collection(db, `artifacts/${APP_ID}/public/data/student_exam_diagnostics`));
@@ -514,11 +544,17 @@ export default function ExamDiagnosticInput({ currentUser }) {
             unitRaw: q.unit || null,
             // 문항 단위 마스터 참조. 개념테스트는 시험 전체가 한 단원이라 모든 문항이 같은 값입니다.
             unitId: q.unitId || null,
-            verdict: wrongSet.has(q.key) ? 'wrong' : 'correct',
+            /* verdict 는 점수 계산용입니다. 무응답도 점수는 오답과 같으므로 'wrong' 입니다.
+               이걸 'correct' 로 두면 기록 관리·리포트 화면이 무응답에 점수를 줍니다. */
+            verdict: (wrongSet.has(q.key) || blankSet.has(q.key)) ? 'wrong' : 'correct',
+            /* mark 는 능력 지표용입니다. 무응답은 모든 분모에서 빠집니다 —
+               시간이 없어 못 푼 것을 '이 조건에서 무너진다'로 읽으면 안 됩니다. */
+            mark: blankSet.has(q.key) ? 'blank' : (wrongSet.has(q.key) ? 'wrong' : 'correct'),
             errorType: null
           })),
           // 화면에서는 순번으로 다루지만, 저장은 시험지의 실제 문항 번호로 합니다.
           wrongQuestionNumbers: examQuestions.filter(q => wrongSet.has(q.key)).map(q => q.displayNumber),
+          blankQuestionNumbers: examQuestions.filter(q => blankSet.has(q.key)).map(q => q.displayNumber),
           instructorComment: input.comment || '',
           growthPlan: input.plan || '',
           instructorId: currentUser?.id || 'unknown',
@@ -561,7 +597,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
           id: sId,
           name: data.students.find(s => s.id === sId)?.name || '학생',
           score: Number(inputsByStudent[sId]?.score),
-          wrongCount: (inputsByStudent[sId]?.wrongQuestions || []).length
+          wrongCount: (inputsByStudent[sId]?.wrongQuestions || []).length,
+          blankCount: (inputsByStudent[sId]?.blankQuestions || []).length
         }))
       });
 
@@ -959,28 +996,44 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 </div>
 
                 <div>
-                  <p className="text-xs font-extrabold text-slate-500 uppercase mb-3 flex items-center gap-1.5">
-                    <CheckSquare className="w-4 h-4 text-indigo-600"/> 🎯 학생이 틀린 번호를 원클릭으로 선택하세요 (배점에 따라 점수가 자동 감점됩니다)
+                  <p className="text-xs font-extrabold text-slate-500 uppercase mb-2 flex items-center gap-1.5">
+                    <CheckSquare className="w-4 h-4 text-indigo-600"/> 문항을 눌러 표시하세요 — 누를 때마다 정답 → 오답 → 무응답 순으로 바뀝니다
                   </p>
+                  {/* 무응답을 따로 받는 이유:
+                      시간이 없어 손도 못 댄 문항을 '틀렸다'로 묶으면,
+                      "이 학생은 계산이 무거우면 무너진다" 같은 판정이 시간 부족 때문에 나옵니다.
+                      조교에게는 판단이 아니라 대조입니다 — 답안지가 비어 있으면 무응답입니다. */}
+                  <div className="flex items-center gap-3 mb-2.5 text-[11px] font-bold">
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-white border border-slate-300 inline-block"/> 정답</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-rose-600 inline-block"/> 오답</span>
+                    <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-slate-400 inline-block"/> 무응답</span>
+                    <span className="text-slate-400 font-medium">무응답도 점수는 오답과 같지만, 능력 분석에서는 빠집니다</span>
+                  </div>
                   <div className="flex flex-wrap gap-2 p-3 bg-slate-50/50 rounded-2xl border border-slate-100">
                     {examQuestions.map((q) => {
                       const isWrong = (input.wrongQuestions || []).includes(q.key);
+                      const isBlank = (input.blankQuestions || []).includes(q.key);
+                      const tone = isWrong ? 'bg-rose-600 text-white border-rose-700 shadow-md'
+                        : isBlank ? 'bg-slate-400 text-white border-slate-500 shadow-md'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300 shadow-sm';
                       return (
                         <button
                           key={q.key} type="button"
-                          onClick={(e) => { e.preventDefault(); toggleWrongQuestion(sId, q.key); }}
-                          className={`px-3 min-w-[3.25rem] h-12 rounded-xl font-black text-sm transition-colors duration-150 cursor-pointer border flex flex-col items-center justify-center leading-tight ${
-                            isWrong
-                              ? 'bg-rose-600 text-white border-rose-700 shadow-md'
-                              : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300 shadow-sm'
-                          }`}
+                          title={isWrong ? '오답 (누르면 무응답)' : isBlank ? '무응답 (누르면 정답)' : '정답 (누르면 오답)'}
+                          onClick={(e) => { e.preventDefault(); cycleQuestionMark(sId, q.key); }}
+                          className={`px-3 min-w-[3.25rem] h-12 rounded-xl font-black text-sm transition-colors duration-150 cursor-pointer border flex flex-col items-center justify-center leading-tight ${tone}`}
                         >
-                          <span>{q.displayNumber}번</span>
-                          <span className={`text-[10px] font-bold ${isWrong ? 'text-rose-100' : 'text-slate-400'}`}>{q.points}점</span>
+                          <span>{q.displayNumber}번{isBlank ? ' ―' : ''}</span>
+                          <span className={`text-[10px] font-bold ${isWrong || isBlank ? 'text-white/80' : 'text-slate-400'}`}>{q.points}점</span>
                         </button>
                       );
                     })}
                   </div>
+                  {(input.blankQuestions || []).length > 0 && (
+                    <p className="text-[11px] font-bold text-slate-500 mt-1.5">
+                      무응답 {input.blankQuestions.length}개 — 이 문항들은 능력 지표 계산에서 빠집니다.
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
@@ -1036,7 +1089,9 @@ export default function ExamDiagnosticInput({ currentUser }) {
               <li key={r.id} className="px-6 py-2.5 flex items-center justify-between text-sm">
                 <span className="font-black text-slate-800">{r.name}</span>
                 <span className="flex items-center gap-3">
-                  <span className="text-xs font-bold text-slate-500">오답 {r.wrongCount}개</span>
+                  <span className="text-xs font-bold text-slate-500">
+                    오답 {r.wrongCount}개{r.blankCount > 0 ? ` · 무응답 ${r.blankCount}개` : ''}
+                  </span>
                   <span className="font-black text-indigo-700">{r.score}<span className="text-slate-400 font-bold"> / {lastSaved.maxScore}</span></span>
                 </span>
               </li>
