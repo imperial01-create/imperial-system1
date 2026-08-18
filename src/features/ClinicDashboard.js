@@ -15,6 +15,9 @@ import { Button, Card, Badge, Modal } from '../components/UI';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
 import { isClosedDay, getDayInfo } from '../utils/academyCalendar';
+/* 오답 원인은 자유 텍스트가 아니라 고정 칩으로 받습니다.
+   자유 텍스트는 아무리 쌓여도 셀 수 없고, 지표의 인지 4축과 붙지 않습니다. */
+import { ERROR_TAGS, isErrorTagCode, parentTagText, prescriptionsFor } from '../utils/errorTaxonomy';
 
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -646,7 +649,9 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
     const [confirmConfig, setConfirmConfig] = useState(null);
     
     const [adminEditData, setAdminEditData] = useState({ students: [], topic: '', questionRange: '' });
-    const [feedbackData, setFeedbackData] = useState({ rating: 5, tags: '', clinicDetails: '', nextAction: '' });
+    const [feedbackData, setFeedbackData] = useState({
+        rating: 5, tags: '', errorTags: [], tagNote: '', clinicDetails: '', nextAction: ''
+    });
     const [isRefining, setIsRefining] = useState(false); 
     
     const [previewMessage, setPreviewMessage] = useState("");
@@ -994,6 +999,10 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             setFeedbackData({
                 rating: payload.rating || 5,
                 tags: payload.tags || '',
+                /* 옛 기록에는 errorTags 가 없습니다. 그때는 칩이 비어 있고
+                   자유 텍스트 tags 만 남아 있는 것이 정상입니다. */
+                errorTags: Array.isArray(payload.errorTags) ? payload.errorTags.filter(isErrorTagCode) : [],
+                tagNote: payload.tagNote || '',
                 clinicDetails: payload.clinicDetails || payload.clinicContent || '',
                 nextAction: payload.nextAction || payload.improvement || ''
             });
@@ -1591,9 +1600,55 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             </div>
         </div>
         
+        {/* 오답 원인은 자유 텍스트로 두면 '#개념보충' / '개념 보충' / '개념부족' 이
+            서로 다른 값이 되어 아무리 쌓여도 셀 수 없습니다.
+            고정 칩으로 받으면 조교 시간은 그대로면서 집계가 가능해집니다.
+            학부모 문자에는 진단명이 아니라 처방 쪽 표현이 나갑니다. */}
         <div className="mb-4">
-            <label className="block text-sm font-bold text-gray-700 mb-2">핵심 태그 <span className="font-normal text-xs text-gray-400">(쉼표로 구분)</span></label>
-            <input className="w-full border-2 border-gray-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-300 font-bold" placeholder="예: #개념보충, #서술형교정, #오답노트" value={feedbackData.tags} onChange={e=>setFeedbackData({...feedbackData, tags:e.target.value})}/>
+            <label className="block text-sm font-bold text-gray-700 mb-1">
+                오늘 막힌 지점 <span className="font-normal text-xs text-gray-400">(해당되는 것 모두)</span>
+            </label>
+            <p className="text-[11px] text-gray-400 font-medium mb-2">
+                한 문제 안에서 여러 개가 겹치면 <b>가장 먼저 막힌 것</b>을 고르세요.
+            </p>
+            <div className="flex flex-wrap gap-2">
+                {ERROR_TAGS.map(t => {
+                    const on = (feedbackData.errorTags || []).includes(t.code);
+                    return (
+                        <button
+                            key={t.code} type="button" title={t.hint}
+                            onClick={() => setFeedbackData(f => {
+                                const cur = f.errorTags || [];
+                                return { ...f, errorTags: on ? cur.filter(c => c !== t.code) : [...cur, t.code] };
+                            })}
+                            className={`px-3 py-2 rounded-xl text-xs font-bold border-2 transition-colors text-left ${
+                                on ? 'border-blue-500 bg-blue-50 text-blue-800' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                            }`}
+                        >
+                            {on ? '✓ ' : ''}{t.label}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {(feedbackData.errorTags || []).length > 0 && (
+                <div className="mt-2.5 bg-gray-50 border border-gray-200 rounded-xl p-2.5 text-[11px] space-y-1">
+                    <div className="text-gray-500 font-bold">
+                        학부모 문자에는 이렇게 나갑니다 —
+                        <span className="text-gray-800 ml-1">{parentTagText(feedbackData.errorTags)}</span>
+                    </div>
+                    <div className="text-gray-500 font-bold">
+                        권장 처방 — <span className="text-gray-800">{prescriptionsFor(feedbackData.errorTags).join(' · ')}</span>
+                    </div>
+                </div>
+            )}
+
+            <input
+                className="w-full mt-2.5 border-2 border-gray-200 rounded-xl p-2.5 outline-none focus:ring-2 focus:ring-blue-300 font-bold text-sm"
+                placeholder="위 항목으로 안 되는 내용만 적어주세요 (선택)"
+                value={feedbackData.tagNote || ''}
+                onChange={e => setFeedbackData({ ...feedbackData, tagNote: e.target.value })}
+            />
         </div>
 
         <div className="mb-4">
@@ -1626,6 +1681,15 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
             if (!selectedSession) { notify('세션 정보가 없습니다. 창을 닫고 다시 시도해주세요.', 'error'); return; }
             const ids = (selectedSession.originalIds || [selectedSession.id]).filter(Boolean);
             if (ids.length === 0) { notify('저장할 클리닉을 찾지 못했습니다.', 'error'); return; }
+
+            /* tags 는 학부모 문자와 리포트에 그대로 나가는 문구다.
+               칩(진단명)을 그대로 보내면 '손도 못 댐' 같은 말이 학부모에게 간다.
+               처방 쪽 표현으로 바꿔서 넣는다.
+               칩을 하나도 안 골랐으면 옛 자유 텍스트를 지우지 않는다 — 지우면 기록이 사라진다. */
+            const derivedTags = [parentTagText(feedbackData.errorTags), (feedbackData.tagNote || '').trim()]
+                .filter(Boolean).join(', ');
+            const feedbackPayload = { ...feedbackData, tags: derivedTags || feedbackData.tags || '' };
+
             const batch = writeBatch(db);
             ids.forEach(id => {
                 /* 예약 문서에는 '작성됨' 표시만 남긴다. 이 값은 목록 필터에 필요하고 민감하지 않다.
@@ -1636,7 +1700,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
                     studentId: selectedSession.studentId || '',
                     taId: selectedSession.taId || '',
                     date: selectedSession.date || '',
-                    ...feedbackData,
+                    ...feedbackPayload,
                     updatedAt: serverTimestamp()
                 }, { merge: true });
             });
@@ -1644,7 +1708,7 @@ const ClinicDashboard = ({ currentUser, mode = 'clinic' }) => {
 
             setFeedbackMap(prev => {
                 const next = { ...prev };
-                ids.forEach(id => { next[id] = { ...(next[id] || {}), ...feedbackData }; });
+                ids.forEach(id => { next[id] = { ...(next[id] || {}), ...feedbackPayload }; });
                 return next;
             });
             updateLocalAndCacheState(prev => {
