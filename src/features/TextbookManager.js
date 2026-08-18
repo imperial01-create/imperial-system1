@@ -109,11 +109,12 @@ const TextbookManager = ({ currentUser }) => {
     const save = async () => {
         if (!editing.title.trim()) return alert('교재 이름을 입력해주세요.');
         if (!editing.subject) return alert('교재 과목을 선택해주세요.');
-        /* 단원 마스터가 있는 과목(지금은 수학)만 범위를 요구합니다.
-           다른 과목은 마스터가 없어 범위를 못 넣습니다 — 그때는 이름만 등록됩니다. */
-        const needsUnits = SUBJECTS_WITH_COURSES.includes(editing.subject);
-        const bad = (editing.sections || []).filter(s => needsUnits ? (!s.unitId || !(Number(s.count) > 0)) : !(Number(s.count) > 0));
-        if (needsUnits && bad.length > 0) return alert('각 범위마다 단원과 문항 수를 채워주세요.');
+        /* 문항 수는 반드시 있어야 합니다 — 없으면 채점 번호판을 만들 수 없습니다.
+           단원은 비워 둘 수 있습니다. 교재에 따라 여러 단원이 한 장(章)에 섞여 있거나
+           종합 문제라 한 단원으로 못 묶는 범위가 있기 때문입니다.
+           단원이 없으면 정답률(과제 신뢰도)은 그대로 쌓이고, 단원별 현황에만 안 들어갑니다. */
+        const bad = (editing.sections || []).filter(s => !(Number(s.count) > 0));
+        if (bad.length > 0) return alert('각 범위마다 문항 수를 채워주세요.');
 
         setSaving(true);
         try {
@@ -182,6 +183,12 @@ const TextbookManager = ({ currentUser }) => {
                     쎈 한 권은 1000문항이 넘습니다. 전부 등록할 필요가 없습니다.
                     필요한 것은 <b>이 범위가 어느 단원이고 몇 문항인가</b> 뿐입니다.
                     한 번 등록하면 모든 반·모든 학기에 다시 쓰입니다.
+                </p>
+                <p className="text-xs text-blue-800 leading-relaxed mt-2 pt-2 border-t border-blue-200">
+                    <b>교재의 한 장에 두 단원이 묶여 있다면</b>(예: '부정적분과 정적분')
+                    <b> [범위 쪼개기]</b>로 번호를 나누세요. 채점 번호판은 그대로이고 결과만 단원별로 쌓입니다.
+                    정말 섞여 있어 못 나누는 범위는 <b>단원을 비워 두어도 됩니다</b> —
+                    정답률은 쌓이고 단원별 현황에만 안 들어갑니다.
                 </p>
             </Card>
 
@@ -313,6 +320,26 @@ const TextbookManager = ({ currentUser }) => {
                                                         placeholder={editing.course ? `${editing.course} 단원 고르기` : '단원 검색'}
                                                     />
                                                 </div>
+                                                {/* 교재의 한 장에 두 단원이 묶여 있는 경우
+                                                    (예: 마더텅 '부정적분과 정적분').
+                                                    번호로 쪼개면 단원별로 쌓입니다.
+                                                    손으로 번호를 계산하면 반드시 어긋나므로 여기서 계산합니다. */}
+                                                {cnt > 1 && (
+                                                    <button
+                                                        type="button" title="두 단원이 묶인 범위를 번호로 쪼갭니다"
+                                                        onClick={() => setEditing(prev => {
+                                                            const half = Math.floor(cnt / 2);
+                                                            const rest = cnt - half;
+                                                            const next = [...prev.sections];
+                                                            next.splice(i, 1,
+                                                                { ...s, count: half },
+                                                                { ...newSection(), label: '', startNo: start + half, count: rest }
+                                                            );
+                                                            return { ...prev, sections: next };
+                                                        })}
+                                                        className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-2 py-1.5 shrink-0"
+                                                    >범위 쪼개기</button>
+                                                )}
                                                 <button type="button" onClick={() => setEditing(prev => ({ ...prev, sections: prev.sections.filter((_, j) => j !== i) }))}
                                                         className="text-gray-400 hover:text-red-600 shrink-0 p-1"><X size={16} /></button>
                                             </div>
@@ -343,6 +370,15 @@ const TextbookManager = ({ currentUser }) => {
                                             {cnt > 0 && (
                                                 <p className="text-[11px] font-bold text-blue-700 mt-1.5 pl-8">
                                                     {start}번 ~ {start + cnt - 1}번 · {cnt}문항
+                                                </p>
+                                            )}
+
+                                            {/* 단원을 비워 두면 무엇을 잃는지 그 자리에서 알려 줍니다.
+                                                조용히 빠지면 나중에 왜 단원별 현황이 비었는지 알 수 없습니다. */}
+                                            {!s.unitId && cnt > 0 && (
+                                                <p className="text-[11px] font-bold text-amber-700 mt-1 pl-8">
+                                                    단원을 비워 두면 정답률은 쌓이지만 <b>단원별 현황에는 안 들어갑니다.</b>
+                                                    {' '}여러 단원이 섞인 범위라면, 번호로 쪼개면 단원별로 쌓입니다.
                                                 </p>
                                             )}
                                         </div>
