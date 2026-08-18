@@ -16,6 +16,10 @@ import SmartSchoolSelect from '../components/SmartSchoolSelect';
 import ExamDiagnosticRecords from './ExamDiagnosticRecords';
 import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
 import { isSubjectCompatible, toMainSubject } from '../utils/subjectMatch';
+/* 단원은 이제 자유 텍스트가 아니라 마스터에서 고릅니다.
+   '삼각함수' / '삼각함수 ' / '삼각함수(1)' 이 서로 다른 단원이 되어
+   히트맵에서 갈라지고 각각 따로 자료 부족으로 남던 문제를 막습니다. */
+import { CURRICULUM_UNITS, unitsOfCourse, groupByCategory } from '../utils/curriculumUnits';
 import { APP_ID } from '../constants';
 
 /* 기출 아카이브(ExamArchive.js:28)와 같은 범위를 씁니다.
@@ -24,6 +28,39 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: CURRENT_YEAR - 2000 + 1 }, (_, i) => String(CURRENT_YEAR - i));
 
 const SCHOOL_TYPE_LABEL = { high: '고등학교', middle: '중학교', elementary: '초등학교' };
+
+/* 과정 목록. 마스터에서 만들어 두 곳이 어긋날 수 없게 합니다.
+   같은 이름의 과목이 두 교육과정에 다 있으므로(확률과 통계·기하)
+   고르는 값은 이름이 아니라 '코드|교육과정' 입니다. */
+const COURSE_OPTIONS = (() => {
+    const seen = new Map();
+    CURRICULUM_UNITS.forEach(u => {
+        const key = `${u.courseCode}|${u.curriculum}`;
+        if (!seen.has(key)) {
+            seen.set(key, {
+                key, course: u.course, courseCode: u.courseCode,
+                curriculum: u.curriculum, schoolLevel: u.schoolLevel,
+                minOrder: u.order
+            });
+        }
+    });
+    const list = [...seen.values()];
+    /* 지금 쓰는 것(2022)을 위로, 고3·재수생용(2015)을 아래로.
+       중학교 → 고등학교 순서는 진학 순서와 같습니다. */
+    const rank = (c) =>
+        (c.curriculum === '2022' ? 0 : 2) + (c.schoolLevel === '중학교' ? 0 : 1);
+    return list.sort((a, b) => rank(a) - rank(b) || a.course.localeCompare(b.course));
+})();
+
+const COURSE_GROUPS = COURSE_OPTIONS.reduce((acc, c) => {
+    const label = `${c.schoolLevel} · ${c.curriculum} 개정${c.curriculum === '2015' ? ' (고3·재수생)' : ''}`;
+    const g = acc.find(x => x.label === label);
+    if (g) g.items.push(c); else acc.push({ label, items: [c] });
+    return acc;
+}, []);
+
+// 마스터에 없는 범위(특강·혼합)를 위한 탈출구. 이 기록은 히트맵에 쌓이지 않습니다.
+const CUSTOM_UNIT = '__custom__';
 
 /* 채점한 문항 구성의 지문(指紋).
    시험 마스터의 문항이 채점 이후에 바뀌면, 저장된 responses 를 마스터와
@@ -85,8 +122,20 @@ export default function ExamDiagnosticInput({ currentUser }) {
 
   // 2. 자체 개념/단원 및 모의고사용 직접 입력 메타 스테이트
   const [customTestMeta, setCustomTestMeta] = useState({
-    title: '', unitName: '', subject: '수학', totalQuestions: 10, questionScore: 10
+    title: '', unitName: '', subject: '수학', totalQuestions: 10, questionScore: 10,
+    /* courseKey = '과정코드|교육과정'. unitId 가 있으면 단원 마스터의 단원이고,
+       null 이면 마스터에 없는 범위를 직접 적은 것입니다(히트맵에 안 쌓입니다). */
+    courseKey: '', unitId: null
   });
+
+  const selectedCourse = useMemo(
+    () => COURSE_OPTIONS.find(c => c.key === customTestMeta.courseKey) || null,
+    [customTestMeta.courseKey]
+  );
+  const courseUnits = useMemo(
+    () => (selectedCourse ? unitsOfCourse(selectedCourse.course, selectedCourse.curriculum) : []),
+    [selectedCourse]
+  );
 
   // 3. 공통 대상 반 및 학생 선택 스테이트
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -291,10 +340,15 @@ export default function ExamDiagnosticInput({ currentUser }) {
     const count = Math.max(1, Math.min(100, Number(customTestMeta.totalQuestions) || 10));
     return Array.from({ length: count }, (_, i) => ({
       key: String(i), displayNumber: String(i + 1), points: fallbackPoint, pointFromExam: false,
-      // 개념테스트·모의고사는 문항별 단원이 없어 평가 전체의 범위명을 씁니다.
-      unit: customTestMeta.unitName.trim()
+      // 개념테스트·모의고사는 문항별 단원이 없어 평가 전체의 범위를 씁니다.
+      unit: customTestMeta.unitName.trim(),
+      unitId: customTestMeta.unitId || null
     }));
-  }, [testCategory, searchedExams, selectedExamId, customTestMeta.totalQuestions, customTestMeta.questionScore]);
+    /* ⚠️ unitName·unitId 가 의존성에 없으면, 단원을 나중에 고른 경우 이 값이 갱신되지 않습니다.
+       예전에는 이 둘이 빠져 있어 responses[].unitRaw 가 빈 값으로 저장됐습니다.
+       단원별 히트맵이 통째로 비는 원인이었습니다. */
+  }, [testCategory, searchedExams, selectedExamId, customTestMeta.totalQuestions,
+      customTestMeta.questionScore, customTestMeta.unitName, customTestMeta.unitId]);
 
   const maxScore = useMemo(
     () => Math.round(examQuestions.reduce((sum, q) => sum + q.points, 0) * 10) / 10,
@@ -433,6 +487,11 @@ export default function ExamDiagnosticInput({ currentUser }) {
           examDocId: testCategory === 'school' ? (selectedExamId || null) : null,
           examTitle: examTitle,
           unitName: testCategory === 'school' ? '학교 내신 기출' : customTestMeta.unitName.trim(),
+          /* 단원 마스터 참조. 이게 있어야 단원별 현황에 쌓입니다.
+             null 이면 마스터에 없는 범위를 직접 적은 것이고, 집계에서 빠집니다. */
+          unitId: testCategory === 'school' ? null : (customTestMeta.unitId || null),
+          courseCode: testCategory === 'school' ? null : (selectedCourse?.courseCode || null),
+          curriculum: testCategory === 'school' ? null : (selectedCourse?.curriculum || null),
           /* 내신은 고른 시험의 과목을 씁니다.
              예전에는 개념테스트용 select 의 값(초깃값 '수학')이 그대로 저장돼,
              영어 내신을 채점해도 '수학' 으로 남았습니다. 내신 화면에는 과목 선택 칸이
@@ -475,6 +534,8 @@ export default function ExamDiagnosticInput({ currentUser }) {
             qIndex: Number(q.key),
             points: q.points,
             unitRaw: q.unit || null,
+            // 문항 단위 마스터 참조. 개념테스트는 시험 전체가 한 단원이라 모든 문항이 같은 값입니다.
+            unitId: q.unitId || null,
             verdict: wrongSet.has(q.key) ? 'wrong' : 'correct',
             errorType: null
           })),
@@ -766,11 +827,61 @@ export default function ExamDiagnosticInput({ currentUser }) {
                 <input type="text" placeholder="시험 제목을 명확히 입력하세요" className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-bold outline-none focus:ring-2 focus:ring-indigo-500" value={customTestMeta.title} onChange={e => setCustomTestMeta({...customTestMeta, title: e.target.value})} />
               </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <div className="md:col-span-1">
-                <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">단원 / 평가 범위명 (유니버스 노출)</label>
-                <input type="text" placeholder="예: 함수의 극한과 연속" className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-bold outline-none focus:ring-2 focus:ring-indigo-500" value={customTestMeta.unitName} onChange={e => setCustomTestMeta({...customTestMeta, unitName: e.target.value})} />
+                <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">과정</label>
+                <select
+                  className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-bold outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={customTestMeta.courseKey}
+                  onChange={e => setCustomTestMeta({ ...customTestMeta, courseKey: e.target.value, unitId: null, unitName: '' })}
+                >
+                  <option value="">과정을 고르세요</option>
+                  {COURSE_GROUPS.map(g => (
+                    <optgroup key={g.label} label={g.label}>
+                      {g.items.map(c => <option key={c.key} value={c.key}>{c.course}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
               </div>
+              <div className="md:col-span-1">
+                <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">단원 (유니버스 노출)</label>
+                <select
+                  className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-bold outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                  disabled={!selectedCourse}
+                  value={customTestMeta.unitId || (customTestMeta.unitName && !customTestMeta.unitId ? CUSTOM_UNIT : '')}
+                  onChange={e => {
+                    const v = e.target.value;
+                    if (v === CUSTOM_UNIT) return setCustomTestMeta({ ...customTestMeta, unitId: null, unitName: '' });
+                    const u = courseUnits.find(x => x.unitId === v);
+                    setCustomTestMeta({ ...customTestMeta, unitId: u ? u.unitId : null, unitName: u ? u.unitName : '' });
+                  }}
+                >
+                  <option value="">{selectedCourse ? '단원을 고르세요' : '과정을 먼저 고르세요'}</option>
+                  {groupByCategory(courseUnits).map(g => (
+                    <optgroup key={g.category} label={g.category}>
+                      {g.units.map(u => <option key={u.unitId} value={u.unitId}>{u.unitName}</option>)}
+                    </optgroup>
+                  ))}
+                  {selectedCourse && <option value={CUSTOM_UNIT}>── 목록에 없음 (직접 입력)</option>}
+                </select>
+
+                {/* 마스터에 없는 범위(특강·혼합)를 위한 탈출구.
+                    이 기록은 단원 히트맵에 쌓이지 않으므로 그 사실을 화면에서 알려 줍니다. */}
+                {selectedCourse && !customTestMeta.unitId && (
+                  <div className="mt-2">
+                    <input
+                      type="text" placeholder="예: 중간고사 대비 종합"
+                      className="w-full border border-amber-300 bg-amber-50 p-2.5 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-amber-300"
+                      value={customTestMeta.unitName}
+                      onChange={e => setCustomTestMeta({ ...customTestMeta, unitName: e.target.value, unitId: null })}
+                    />
+                    <p className="text-[11px] text-amber-700 font-bold mt-1">
+                      목록에 없는 범위는 단원별 현황에 쌓이지 않습니다.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="md:col-span-1">
                 <label className="block text-xs font-extrabold text-slate-500 uppercase mb-1">총 문항 수</label>
                 <input type="number" min="1" max="100" className="w-full border border-slate-300 p-3 rounded-xl bg-slate-50 font-black text-indigo-600 outline-none focus:ring-2 focus:ring-indigo-500 text-center" value={customTestMeta.totalQuestions} onChange={e => setCustomTestMeta({...customTestMeta, totalQuestions: e.target.value})} />
