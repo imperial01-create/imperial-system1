@@ -11,14 +11,14 @@
 */
 
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Book, Loader, X } from 'lucide-react';
 import { APP_ID } from '../constants';
 
 const PATH = `artifacts/${APP_ID}/public/data/textbooks`;
 
-const TextbookPicker = ({ onPick, onClose }) => {
+const TextbookPicker = ({ onPick, onClose, subject = null }) => {
     const [books, setBooks] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -27,9 +27,13 @@ const TextbookPicker = ({ onPick, onClose }) => {
     useEffect(() => {
         (async () => {
             try {
-                const snap = await getDocs(query(collection(db, PATH), where('subject', '==', '수학')));
+                /* 반 과목이 정해져 있으면 그 과목 교재만 보여 줍니다.
+                   서버에서 거르지 않고 받아서 거릅니다 — 옛 교재에는 subject 가 없어
+                   where 로 걸면 통째로 사라지기 때문입니다. */
+                const snap = await getDocs(collection(db, PATH));
                 const list = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                     .filter(b => b.active !== false && (b.sections || []).length > 0)
+                    .filter(b => !subject || !b.subject || b.subject === subject)
                     .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
                 setBooks(list);
                 setOpenId(list[0]?.id || null);
@@ -40,7 +44,7 @@ const TextbookPicker = ({ onPick, onClose }) => {
                 setLoading(false);
             }
         })();
-    }, []);
+    }, [subject]);
 
     return (
         <div className="border-2 border-indigo-200 bg-indigo-50/40 rounded-xl p-3">

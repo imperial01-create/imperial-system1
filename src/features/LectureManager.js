@@ -265,7 +265,10 @@ const LectureManagementPanel = ({ selectedClass }) => {
                     unitId: it.unitId || null,
                     unitName: it.unitName || null,
                     assignedCount: Number(it.assignedCount) || null,
-                    correctCount: null      // 조교가 채점하면서 채웁니다
+                    /* 조교가 채점하면서 채웁니다. 번호를 남기는 이유는,
+                       그 번호를 클리닉에서 다시 꺼내 '왜 틀렸는지' 를 붙이기 위해서입니다. */
+                    wrongNumbers: [], blankNumbers: [],
+                    attemptedCount: null, correctCount: null
                 })),
                 callStatus: 'pending',
                 attendanceStatus: 'waiting',
@@ -553,6 +556,7 @@ const LectureManagementPanel = ({ selectedClass }) => {
                                 {pickerIdx === idx && (
                                     <div className="ml-7 mt-2">
                                         <TextbookPicker
+                                            subject={selectedClass?.subject || null}
                                             onClose={() => setPickerIdx(null)}
                                             onPick={(picked) => {
                                                 const copy = [...clinicItems];

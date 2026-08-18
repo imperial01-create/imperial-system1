@@ -257,19 +257,40 @@ const ClinicTaskManager = ({ currentUser }) => {
         setSelectedTask({ ...selectedTask, items: updatedItems });
     };
 
-    /* 맞은 개수. 빈칸은 '아직 안 셌다' 이지 0 이 아닙니다.
-       Number('') === 0 이라 그냥 넣으면 안 센 숙제가 전부 0점이 됩니다. */
-    const handleItemCorrectChange = (index, raw) => {
+    /* 문항 번호를 눌러 정답 → 오답 → 안 풂 순으로 표시합니다.
+       개수만 받으면 '몇 개 틀렸나' 만 남지만, 번호를 받으면 그 번호를 클리닉에서
+       다시 꺼내 '왜 틀렸는지' 를 붙일 수 있습니다. 숙제와 클리닉이 이어지는 지점입니다.
+
+       조교에게는 판단이 아니라 대조입니다 — 채점하면서 눈에 보이는 사실입니다. */
+    const cycleHomeworkMark = (index, no) => {
         if (!selectedTask || selectedTask._collection !== 'clinic') return;
         const items = [...selectedTask.items];
-        const max = Number(items[index].assignedCount) || 0;
-        if (raw === '') {
-            items[index] = { ...items[index], correctCount: null };
+        const it = items[index];
+        const wrongs = Array.isArray(it.wrongNumbers) ? it.wrongNumbers : [];
+        const blanks = Array.isArray(it.blankNumbers) ? it.blankNumbers : [];
+        const asc = (a, b) => a - b;
+
+        let nextWrongs = wrongs, nextBlanks = blanks;
+        if (wrongs.includes(no)) {
+            nextWrongs = wrongs.filter(n => n !== no);
+            nextBlanks = [...blanks, no].sort(asc);
+        } else if (blanks.includes(no)) {
+            nextBlanks = blanks.filter(n => n !== no);
         } else {
-            const n = Number(raw);
-            if (!Number.isFinite(n) || n < 0) return;
-            items[index] = { ...items[index], correctCount: Math.min(Math.round(n), max) };
+            nextWrongs = [...wrongs, no].sort(asc);
         }
+
+        const total = Number(it.assignedCount) || 0;
+        items[index] = {
+            ...it,
+            wrongNumbers: nextWrongs,
+            blankNumbers: nextBlanks,
+            /* 안 푼 문항은 분모에서 뺍니다 — 시간이 없어 못 푼 것을
+               '틀렸다' 로 묶으면 실력이 실제보다 낮게 기록됩니다. */
+            attemptedCount: Math.max(0, total - nextBlanks.length),
+            correctCount: Math.max(0, total - nextBlanks.length - nextWrongs.length),
+            gradedAt: new Date().toISOString()
+        };
         setSelectedTask({ ...selectedTask, items });
     };
 
@@ -547,29 +568,54 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                             틀린 이유는 여기서 받지 않습니다 — 학생이 앞에 없어 추측이 되고,
                                                             추측한 이유가 지표에 흘러들면 지표가 오염됩니다.
                                                             이유는 클리닉에서 학생에게 물어 붙입니다. */}
-                                                        {item.assignedCount > 0 && (
-                                                            <div className="pl-8">
-                                                                <div className="flex items-center gap-2 flex-wrap">
-                                                                    <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-1">
-                                                                        {item.unitName || '단원 미지정'}
-                                                                    </span>
-                                                                    <span className="text-xs font-bold text-gray-600">낸 문항 {item.assignedCount}개 중</span>
-                                                                    <input
-                                                                        type="number" min="0" max={item.assignedCount}
-                                                                        value={item.correctCount ?? ''}
-                                                                        onChange={(e) => handleItemCorrectChange(idx, e.target.value)}
-                                                                        placeholder="맞은 개수"
-                                                                        className="w-24 border-2 border-indigo-200 p-2 rounded-lg text-sm font-black text-center bg-white outline-none focus:border-indigo-500"
-                                                                    />
-                                                                    <span className="text-xs font-bold text-gray-600">개 정답</span>
-                                                                    {Number.isFinite(Number(item.correctCount)) && item.correctCount !== null && item.correctCount !== '' && (
-                                                                        <span className="text-xs font-black text-indigo-700">
-                                                                            {Math.round((Number(item.correctCount) / item.assignedCount) * 100)}%
+                                                        {item.assignedCount > 0 && (() => {
+                                                            const wrongs = Array.isArray(item.wrongNumbers) ? item.wrongNumbers : [];
+                                                            const blanks = Array.isArray(item.blankNumbers) ? item.blankNumbers : [];
+                                                            const attempted = item.assignedCount - blanks.length;
+                                                            const correct = attempted - wrongs.length;
+                                                            const pct = attempted > 0 ? Math.round((correct / attempted) * 100) : 0;
+                                                            return (
+                                                                <div className="pl-8">
+                                                                    <div className="flex items-center gap-2 flex-wrap mb-2">
+                                                                        <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-1">
+                                                                            {item.unitName || '단원 미지정'}
                                                                         </span>
+                                                                        <span className="text-xs font-bold text-gray-600">
+                                                                            낸 문항 {item.assignedCount}개 · 푼 {attempted}개 중 <span className="text-indigo-700 font-black">{correct}개 정답</span>
+                                                                            {attempted > 0 && <span className="text-gray-400 ml-1">{pct}%</span>}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-3 mb-1.5 text-[10px] font-bold text-gray-400">
+                                                                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-white border border-gray-300 inline-block"/>정답</span>
+                                                                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-rose-500 inline-block"/>오답</span>
+                                                                        <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-gray-400 inline-block"/>안 풂</span>
+                                                                        <span>— 누를 때마다 바뀝니다</span>
+                                                                    </div>
+                                                                    <div className="flex flex-wrap gap-1 p-2 bg-gray-50 rounded-xl border border-gray-100">
+                                                                        {Array.from({ length: item.assignedCount }, (_, i) => i + 1).map(no => {
+                                                                            const isWrong = wrongs.includes(no);
+                                                                            const isBlank = blanks.includes(no);
+                                                                            const tone = isWrong ? 'bg-rose-500 text-white border-rose-600'
+                                                                                : isBlank ? 'bg-gray-400 text-white border-gray-500'
+                                                                                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100';
+                                                                            return (
+                                                                                <button
+                                                                                    key={no} type="button"
+                                                                                    onClick={() => cycleHomeworkMark(idx, no)}
+                                                                                    className={`w-9 h-9 rounded-lg text-xs font-black border transition-colors ${tone}`}
+                                                                                    title={isWrong ? '오답 (누르면 안 풂)' : isBlank ? '안 풂 (누르면 정답)' : '정답 (누르면 오답)'}
+                                                                                >{no}</button>
+                                                                            );
+                                                                        })}
+                                                                    </div>
+                                                                    {blanks.length > 0 && (
+                                                                        <p className="text-[11px] font-bold text-gray-500 mt-1.5">
+                                                                            안 푼 {blanks.length}개는 정답률 계산에서 빠집니다.
+                                                                        </p>
                                                                     )}
                                                                 </div>
-                                                            </div>
-                                                        )}
+                                                            );
+                                                        })()}
 
                                                         {!item.isCompleted && (
                                                             <div className="pl-8 animate-in slide-in-from-top-2 duration-200">

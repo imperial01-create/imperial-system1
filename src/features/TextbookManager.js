@@ -17,19 +17,28 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-    collection, doc, getDocs, setDoc, deleteDoc, serverTimestamp, query, where
+    collection, doc, getDoc, getDocs, setDoc, deleteDoc, serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { BookOpen, Plus, Trash2, Edit3, Loader, X, Layers, AlertCircle } from 'lucide-react';
 import { Button, Card, Modal } from '../components/UI';
 import UnitSelect from '../components/UnitSelect';
-import { findUnit } from '../utils/curriculumUnits';
+import { findUnit, CURRICULUM_UNITS } from '../utils/curriculumUnits';
+import { activeMainSubjects } from '../utils/subjectMatch';
 import { APP_ID } from '../constants';
 
 const PATH = `artifacts/${APP_ID}/public/data/textbooks`;
+const DEPT_DOC = `artifacts/${APP_ID}/public/data/settings`;
+
+/* 과정 목록은 단원 마스터에서 만듭니다. 여기에 따로 적어 두면 두 곳이 어긋납니다. */
+const COURSES_BY_SUBJECT = { '수학': (() => {
+    const seen = [];
+    CURRICULUM_UNITS.forEach(u => { if (!seen.includes(u.course)) seen.push(u.course); });
+    return seen;
+})() };
 
 const emptyBook = () => ({
-    title: '', publisher: '', subject: '수학', sections: [], active: true
+    title: '', publisher: '', subject: '', course: '', sections: [], active: true
 });
 
 const newSection = () => ({
@@ -46,12 +55,22 @@ const TextbookManager = ({ currentUser }) => {
 
     const canEdit = ['admin', 'admin_assistant', 'lecturer'].includes(currentUser?.role);
 
+    /* 과목 드롭다운은 환경설정에서 켠 대과목만 보여 줍니다.
+       학원 전체가 쓰는 과목 어휘와 같아야, 나중에 반·시험과 이어 붙일 수 있습니다. */
+    const [subjects, setSubjects] = useState([]);
+    useEffect(() => {
+        getDoc(doc(db, DEPT_DOC, 'departments'))
+            .then(snap => setSubjects(activeMainSubjects(snap.exists() ? snap.data().active : null)))
+            .catch(e => { console.error('[교재] 대과목 로드 실패', e); setSubjects(activeMainSubjects(null)); });
+    }, []);
+
     const load = async () => {
         setLoading(true); setError('');
         try {
-            const snap = await getDocs(query(collection(db, PATH), where('subject', '==', '수학')));
+            const snap = await getDocs(collection(db, PATH));
             setBooks(snap.docs.map(d => ({ id: d.id, ...d.data() }))
-                .sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''))));
+                .sort((a, b) => String(a.subject || '').localeCompare(String(b.subject || ''))
+                    || String(a.title || '').localeCompare(String(b.title || ''))));
         } catch (e) {
             console.error('[교재] 목록 조회 실패', e);
             setError(`교재를 불러오지 못했습니다. (${e.code || e.message})`);
@@ -66,8 +85,12 @@ const TextbookManager = ({ currentUser }) => {
 
     const save = async () => {
         if (!editing.title.trim()) return alert('교재 이름을 입력해주세요.');
-        const bad = (editing.sections || []).filter(s => !s.unitId || !(Number(s.count) > 0));
-        if (bad.length > 0) return alert('각 범위마다 단원과 문항 수를 채워주세요.');
+        if (!editing.subject) return alert('교재 과목을 선택해주세요.');
+        /* 단원 마스터가 있는 과목(지금은 수학)만 범위를 요구합니다.
+           다른 과목은 마스터가 없어 범위를 못 넣습니다 — 그때는 이름만 등록됩니다. */
+        const needsUnits = !!COURSES_BY_SUBJECT[editing.subject];
+        const bad = (editing.sections || []).filter(s => needsUnits ? (!s.unitId || !(Number(s.count) > 0)) : !(Number(s.count) > 0));
+        if (needsUnits && bad.length > 0) return alert('각 범위마다 단원과 문항 수를 채워주세요.');
 
         setSaving(true);
         try {
@@ -75,7 +98,8 @@ const TextbookManager = ({ currentUser }) => {
             await setDoc(doc(db, PATH, id), {
                 title: editing.title.trim(),
                 publisher: (editing.publisher || '').trim(),
-                subject: '수학',
+                subject: editing.subject,
+                course: editing.course || '',
                 active: editing.active !== false,
                 sections: (editing.sections || []).map(s => ({
                     key: s.key,
@@ -149,7 +173,8 @@ const TextbookManager = ({ currentUser }) => {
                                 <div className="min-w-0">
                                     <h3 className="font-bold text-gray-900 truncate">{b.title}</h3>
                                     <p className="text-xs text-gray-500 font-bold mt-0.5">
-                                        {b.publisher || '출판사 미입력'} · 범위 {(b.sections || []).length}개 · 총 {totalOf(b)}문항
+                                        <span className="text-indigo-600">{b.subject || '과목 미지정'}{b.course ? ` · ${b.course}` : ''}</span>
+                                        {' · '}{b.publisher || '출판사 미입력'} · 범위 {(b.sections || []).length}개 · 총 {totalOf(b)}문항
                                     </p>
                                 </div>
                                 {canEdit && (
@@ -183,7 +208,7 @@ const TextbookManager = ({ currentUser }) => {
                             <div>
                                 <label className="block text-xs font-bold text-gray-600 mb-1">교재 이름</label>
                                 <input className="w-full border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-blue-400"
-                                       placeholder="예: 쎈 공통수학1" value={editing.title}
+                                       placeholder="예: 쎈" value={editing.title}
                                        onChange={e => setEditing({ ...editing, title: e.target.value })} />
                             </div>
                             <div>
@@ -191,6 +216,31 @@ const TextbookManager = ({ currentUser }) => {
                                 <input className="w-full border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-blue-400"
                                        placeholder="예: 좋은책신사고" value={editing.publisher}
                                        onChange={e => setEditing({ ...editing, publisher: e.target.value })} />
+                            </div>
+                            <div>
+                                {/* 환경설정에서 켠 대과목만 나옵니다.
+                                    학원 전체가 쓰는 과목 어휘와 같아야 나중에 반·시험과 이어 붙일 수 있습니다. */}
+                                <label className="block text-xs font-bold text-gray-600 mb-1">과목</label>
+                                <select className="w-full border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-blue-400"
+                                        value={editing.subject}
+                                        onChange={e => setEditing({ ...editing, subject: e.target.value, course: '' })}>
+                                    <option value="">과목을 고르세요</option>
+                                    {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">
+                                    과정 <span className="font-normal text-gray-400">(선택)</span>
+                                </label>
+                                <select className="w-full border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-blue-400 disabled:opacity-50"
+                                        disabled={!COURSES_BY_SUBJECT[editing.subject]}
+                                        value={editing.course || ''}
+                                        onChange={e => setEditing({ ...editing, course: e.target.value })}>
+                                    <option value="">
+                                        {COURSES_BY_SUBJECT[editing.subject] ? '해당 없음 / 여러 과정' : '이 과목은 과정 목록이 없습니다'}
+                                    </option>
+                                    {(COURSES_BY_SUBJECT[editing.subject] || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
                             </div>
                         </div>
 
