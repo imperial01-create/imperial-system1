@@ -432,6 +432,14 @@ service cloud.firestore {
         allow update, delete: if isDesk(appId);
       }
 
+      /* 시중 문제집 마스터. 숙제를 낼 때 범위와 단원을 골라 쓰는 참조 자료입니다.
+         학생 화면에는 안 나오지만, 숙제 기록에 교재 이름이 남으므로 읽기는 열어 둡니다. */
+      match /textbooks/{docId} {
+        allow read:   if isAuth();
+        allow create, update: if isStaff(appId);
+        allow delete: if isDesk(appId);
+      }
+
       /* 수학 능력 지표. Functions 의 syncMathProfile 만 씁니다.
          Admin SDK 는 규칙을 우회하므로, 여기서는 클라이언트 쓰기를 전부 막습니다.
 

@@ -35,6 +35,7 @@ const UserManager = React.lazy(() => import('./features/UserManager'));
 const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
+const TextbookManager = React.lazy(() => import('./features/TextbookManager'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
@@ -98,6 +99,7 @@ const getMenuGroups = (currentUser) => [
             // 🚀 CTO Patch: 상담 전환율을 극대화하는 AI 수학 지식 맵 메뉴 추가 (모든 역할군 오픈)
             { name: "AI 수학 지식 맵", path: "/ontology", icon: Share2, desc: "수학 커리큘럼 선행 및 취약점 시각화", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "교재 관리", path: "/textbooks", icon: Book, desc: "문제집 범위·단원 등록 (숙제 배정용)", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || toMainSubject(u?.subject) === '영어' },
             { name: "영단어 챌린지", path: "/voca-challenge", icon: Star, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
             { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
@@ -663,6 +665,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         {currentUser.role === 'admin_assistant' && <Route path="/work-schedule" element={<ClinicDashboard currentUser={currentUser} users={users} mode="work_schedule" />} />}
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
+                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/textbooks" element={<TextbookManager currentUser={currentUser} />} />}
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant', 'ta'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />

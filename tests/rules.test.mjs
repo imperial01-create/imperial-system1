@@ -356,6 +356,23 @@ const run = async () => {
        (버튼을 숨기는 것만으로는 서버에 직접 보내는 요청을 막지 못한다) */
     const examDoc = (who, id) => doc(who, `${BASE}/integrated_exams/${id}`);
 
+    /* 교재 마스터. 숙제를 낼 때 범위와 단원을 골라 쓰는 참조 자료다. */
+    const bookDoc = (who, id) => doc(who, `${BASE}/textbooks/${id}`);
+
+    await check('강사는 교재를 등록할 수 있다', () =>
+        assertSucceeds(setDoc(bookDoc(as('teacher1', lecturerToken('teacher1')), 'bk1'),
+            { title: '쎈 공통수학1', subject: '수학', sections: [] })));
+    await check('조교도 교재를 등록할 수 있다', () =>
+        assertSucceeds(setDoc(bookDoc(as('ta1', taToken('ta1')), 'bk2'), { title: '쎈 수학2', subject: '수학', sections: [] })));
+    await check('학생은 교재를 등록할 수 없다', () =>
+        assertFails(setDoc(bookDoc(as('stu1', studentToken('stu1')), 'bk3'), { title: '가짜', subject: '수학' })));
+    await check('학생도 교재 목록은 읽을 수 있다 (숙제에 이름이 남는다)', () =>
+        assertSucceeds(getDoc(bookDoc(as('stu1', studentToken('stu1')), 'bk1'))));
+    await check('강사는 교재를 지울 수 없다', () =>
+        assertFails(deleteDoc(bookDoc(as('teacher1', lecturerToken('teacher1')), 'bk1'))));
+    await check('행정조교는 교재를 지울 수 있다', () =>
+        assertSucceeds(deleteDoc(bookDoc(as('desk1', asstToken('desk1')), 'bk2'))));
+
     /* 수학 능력 지표는 Functions 만 쓴다. 클라이언트 쓰기가 열려 있으면
        학생이 자기 능력치를 브라우저에서 고칠 수 있다. */
     const mathProfile = (who, sid) => doc(who, `${BASE}/student_math_profile/${sid}`);

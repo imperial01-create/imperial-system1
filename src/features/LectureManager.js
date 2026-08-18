@@ -8,8 +8,9 @@ import {
     Plus, Trash2, Edit2, Check, Search, BookOpen, PenTool, Video, Users, 
     ChevronLeft, ChevronRight, Loader, CheckCircle, X, Youtube, Link as LinkIcon,
     FileText, Upload, Clock, Calendar, ChevronDown, AlertTriangle, ClipboardList,
-    CalendarDays, Filter, Inbox, CheckSquare, XSquare, Send, Copy, Map, AlertCircle
+    CalendarDays, Filter, Inbox, CheckSquare, XSquare, Send, Copy, Map, AlertCircle, Book
 } from 'lucide-react';
+import TextbookPicker from '../components/TextbookPicker';
 import { 
     collection, addDoc, updateDoc, deleteDoc, doc, 
     query, where, onSnapshot, serverTimestamp, writeBatch, getDocs
@@ -152,7 +153,11 @@ const LectureManagementPanel = ({ selectedClass }) => {
     const [clinicTargetStudent, setClinicTargetStudent] = useState('');
     const [clinicTargetDate, setClinicTargetDate] = useState(new Date().toISOString().split('T')[0]);
     const [clinicDayTotalCount, setClinicDayTotalCount] = useState(0);
-    const [clinicItems, setClinicItems] = useState(['']);
+    /* 항목이 문자열에서 객체가 됐습니다.
+       { text, textbookId?, sectionKey?, unitId?, unitName?, assignedCount? }
+       교재에서 고른 항목만 뒤쪽 필드를 갖습니다. */
+    const [clinicItems, setClinicItems] = useState([{ text: '' }]);
+    const [pickerIdx, setPickerIdx] = useState(null);
     const [isClinicSaving, setIsClinicSaving] = useState(false);
 
     const studentsInClass = useMemo(() => {
@@ -225,12 +230,13 @@ const LectureManagementPanel = ({ selectedClass }) => {
     const handleOpenClinicModal = () => {
         setClinicTargetStudent(studentsInClass[0]?.id || '');
         setClinicTargetDate(new Date().toISOString().split('T')[0]);
-        setClinicItems(['']);
+        setClinicItems([{ text: '' }]);
+        setPickerIdx(null);
         setIsClinicModalOpen(true);
     };
 
     const handleSaveClinicTask = async () => {
-        const filteredItems = clinicItems.filter(i => i.trim() !== '');
+        const filteredItems = clinicItems.filter(i => (i?.text || '').trim() !== '');
         if (!clinicTargetStudent) return alert('대상 학생을 선택해주세요.');
         if (filteredItems.length === 0) return alert('최소 1개 이상의 과제/미션을 추가해주세요.');
 
@@ -246,7 +252,21 @@ const LectureManagementPanel = ({ selectedClass }) => {
                 className: selectedClass.name,
                 lecturerId: selectedClass.lecturerId,
                 targetDate: clinicTargetDate,
-                items: filteredItems.map(content => ({ taskContent: content, isCompleted: false, incompleteDetails: '' })),
+                /* 교재에서 고른 항목은 단원과 문항 수를 함께 남깁니다.
+                   조교가 채점할 때 '맞은 개수' 를 받을 수 있게 되고,
+                   그 값이 과제 신뢰도(숙제와 시험 사이의 괴리)의 재료가 됩니다. */
+                items: filteredItems.map(it => ({
+                    taskContent: it.text.trim(),
+                    isCompleted: false,
+                    incompleteDetails: '',
+                    textbookId: it.textbookId || null,
+                    textbookTitle: it.textbookTitle || null,
+                    sectionKey: it.sectionKey || null,
+                    unitId: it.unitId || null,
+                    unitName: it.unitName || null,
+                    assignedCount: Number(it.assignedCount) || null,
+                    correctCount: null      // 조교가 채점하면서 채웁니다
+                })),
                 callStatus: 'pending',
                 attendanceStatus: 'waiting',
                 finalComment: '',
@@ -493,13 +513,55 @@ const LectureManagementPanel = ({ selectedClass }) => {
                         </div>
                     </div>
                     <div>
-                        <label className="text-xs font-bold text-gray-600 mb-1.5 flex justify-between">항목별 클리닉 임무 명세 <button onClick={() => setClinicItems([...clinicItems, ''])} className="text-xs text-indigo-600 font-bold">+ 할일 추가</button></label>
+                        <label className="text-xs font-bold text-gray-600 mb-1.5 flex justify-between">
+                            항목별 클리닉 임무 명세
+                            <button onClick={() => setClinicItems([...clinicItems, { text: '' }])} className="text-xs text-indigo-600 font-bold">+ 할일 추가</button>
+                        </label>
+                        {/* 교재에서 고르면 문항 수와 단원이 자동으로 붙습니다.
+                            자유 텍스트로만 두면 '쎈 p.20-25' 가 몇 문제인지 시스템이 모르고,
+                            숙제에서 나오는 데이터가 통째로 버려집니다. */}
                         {clinicItems.map((item, idx) => (
-                            <div key={idx} className="flex gap-2 mb-2 items-center animate-in fade-in-50">
-                                <span className="text-xs font-bold bg-gray-100 text-gray-500 w-5 h-5 rounded flex items-center justify-center shrink-0">{idx+1}</span>
-                                <input type="text" className="w-full border p-2.5 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500" value={item} onChange={e => { const copy = [...clinicItems]; copy[idx] = e.target.value; setClinicItems(copy); }} placeholder="예: 쎈 수학 p.20-25 오답 완수" />
-                                {clinicItems.length > 1 && (
-                                    <button onClick={() => setClinicItems(clinicItems.filter((_, i) => i !== idx))} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><X size={16}/></button>
+                            <div key={idx} className="mb-2 animate-in fade-in-50">
+                                <div className="flex gap-2 items-center">
+                                    <span className="text-xs font-bold bg-gray-100 text-gray-500 w-5 h-5 rounded flex items-center justify-center shrink-0">{idx+1}</span>
+                                    <input
+                                        type="text"
+                                        className="w-full border p-2.5 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500"
+                                        value={item.text || ''}
+                                        onChange={e => { const copy = [...clinicItems]; copy[idx] = { ...copy[idx], text: e.target.value }; setClinicItems(copy); }}
+                                        placeholder="예: 쎈 수학 p.20-25 오답 완수"
+                                    />
+                                    <button
+                                        type="button" title="교재에서 고르기"
+                                        onClick={() => setPickerIdx(pickerIdx === idx ? null : idx)}
+                                        className={`p-2 rounded-lg shrink-0 ${item.unitId ? 'text-indigo-600 bg-indigo-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                                    ><Book size={16}/></button>
+                                    {clinicItems.length > 1 && (
+                                        <button onClick={() => { setClinicItems(clinicItems.filter((_, i) => i !== idx)); setPickerIdx(null); }} className="text-red-500 hover:bg-red-50 p-2 rounded-lg"><X size={16}/></button>
+                                    )}
+                                </div>
+
+                                {item.unitId && (
+                                    <div className="ml-7 mt-1 text-[11px] font-bold text-indigo-700">
+                                        {item.unitName} · {item.assignedCount}문항
+                                        <button type="button"
+                                                onClick={() => { const copy=[...clinicItems]; copy[idx]={ text: copy[idx].text }; setClinicItems(copy); }}
+                                                className="ml-1.5 text-gray-400 hover:text-red-500">연결 해제</button>
+                                    </div>
+                                )}
+
+                                {pickerIdx === idx && (
+                                    <div className="ml-7 mt-2">
+                                        <TextbookPicker
+                                            onClose={() => setPickerIdx(null)}
+                                            onPick={(picked) => {
+                                                const copy = [...clinicItems];
+                                                copy[idx] = { ...copy[idx], ...picked };
+                                                setClinicItems(copy);
+                                                setPickerIdx(null);
+                                            }}
+                                        />
+                                    </div>
                                 )}
                             </div>
                         ))}

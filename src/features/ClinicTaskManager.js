@@ -257,6 +257,22 @@ const ClinicTaskManager = ({ currentUser }) => {
         setSelectedTask({ ...selectedTask, items: updatedItems });
     };
 
+    /* 맞은 개수. 빈칸은 '아직 안 셌다' 이지 0 이 아닙니다.
+       Number('') === 0 이라 그냥 넣으면 안 센 숙제가 전부 0점이 됩니다. */
+    const handleItemCorrectChange = (index, raw) => {
+        if (!selectedTask || selectedTask._collection !== 'clinic') return;
+        const items = [...selectedTask.items];
+        const max = Number(items[index].assignedCount) || 0;
+        if (raw === '') {
+            items[index] = { ...items[index], correctCount: null };
+        } else {
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n < 0) return;
+            items[index] = { ...items[index], correctCount: Math.min(Math.round(n), max) };
+        }
+        setSelectedTask({ ...selectedTask, items });
+    };
+
     const handleItemDetailChange = (index, text) => {
         if (!selectedTask || selectedTask._collection !== 'clinic') return;
         const updatedItems = [...selectedTask.items];
@@ -526,6 +542,35 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                                 {item.taskContent}
                                                             </label>
                                                         </div>
+                                                        {/* 교재에서 배정한 숙제만 채점을 받습니다.
+                                                            '맞은 개수' 하나면 과제 신뢰도(숙제와 시험 사이의 괴리)가 계산됩니다.
+                                                            틀린 이유는 여기서 받지 않습니다 — 학생이 앞에 없어 추측이 되고,
+                                                            추측한 이유가 지표에 흘러들면 지표가 오염됩니다.
+                                                            이유는 클리닉에서 학생에게 물어 붙입니다. */}
+                                                        {item.assignedCount > 0 && (
+                                                            <div className="pl-8">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <span className="text-[11px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-1">
+                                                                        {item.unitName || '단원 미지정'}
+                                                                    </span>
+                                                                    <span className="text-xs font-bold text-gray-600">낸 문항 {item.assignedCount}개 중</span>
+                                                                    <input
+                                                                        type="number" min="0" max={item.assignedCount}
+                                                                        value={item.correctCount ?? ''}
+                                                                        onChange={(e) => handleItemCorrectChange(idx, e.target.value)}
+                                                                        placeholder="맞은 개수"
+                                                                        className="w-24 border-2 border-indigo-200 p-2 rounded-lg text-sm font-black text-center bg-white outline-none focus:border-indigo-500"
+                                                                    />
+                                                                    <span className="text-xs font-bold text-gray-600">개 정답</span>
+                                                                    {Number.isFinite(Number(item.correctCount)) && item.correctCount !== null && item.correctCount !== '' && (
+                                                                        <span className="text-xs font-black text-indigo-700">
+                                                                            {Math.round((Number(item.correctCount) / item.assignedCount) * 100)}%
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )}
+
                                                         {!item.isCompleted && (
                                                             <div className="pl-8 animate-in slide-in-from-top-2 duration-200">
                                                                 <div className="flex gap-1 items-center text-[11px] font-black text-rose-500 mb-1.5"><AlertTriangle size={14}/> 미완료 시 사유/진도 기입 필수</div>
