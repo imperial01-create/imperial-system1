@@ -1812,3 +1812,60 @@ exports.purgeStoredPasswords = onCall({ timeoutSeconds: 540, memory: "512MiB" },
     }
     return { dryRun: false, cleared, total: targets.length };
 });
+/* =========================================================================
+   수학 능력 지표 — 단원별 집계
+   student_exam_diagnostics 가 바뀌면 student_math_profile 을 다시 만든다.
+
+   [왜 서버인가]
+   화면에서 집계하면 (1) 화면마다 다른 값이 나오고 (2) 반 인원수만큼 읽기 요금이
+   곱해지며 (3) 계산을 위해 규칙을 학생에게 열어야 한다.
+   마지막 것이 실제로 사고를 냈다 — english_stats 가 그렇게 뚫려 있었다.
+
+   계산 자체는 functions/mathProfile.js 에 순수 함수로 있다.
+   트리거 안에 묻어 두면 배포해야만 확인할 수 있기 때문이다.
+   ========================================================================= */
+const { buildMathProfile, aggregationSignature } = require("./mathProfile");
+
+const DIAG_PATH = `artifacts/${APP_ID}/public/data/student_exam_diagnostics`;
+const MATH_PROFILE_PATH = `artifacts/${APP_ID}/public/data/student_math_profile`;
+
+exports.syncMathProfile = onDocumentWritten(
+    { document: `artifacts/${APP_ID}/public/data/student_exam_diagnostics/{docId}`, timeoutSeconds: 120 },
+    async (event) => {
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+        const studentId = after?.studentId || before?.studentId;
+        if (!studentId) return null;
+
+        /* 클리닉에서 오답 원인 칩을 누를 때마다 responses 가 바뀐다.
+           그때마다 전 기록을 다시 읽으면 클리닉 한 번에 수백 번 읽게 된다.
+           집계에 실제로 쓰이는 값이 그대로면 아무것도 하지 않는다. */
+        if (before && after && aggregationSignature(before) === aggregationSignature(after)) {
+            return null;
+        }
+
+        try {
+            const snap = await admin.firestore()
+                .collection(DIAG_PATH)
+                .where('studentId', '==', studentId)
+                .get();
+
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const profile = buildMathProfile(docs);
+
+            await admin.firestore().doc(`${MATH_PROFILE_PATH}/${studentId}`).set({
+                studentId,
+                studentName: after?.studentName || before?.studentName || '',
+                ...profile,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: false });   // 지운 기록이 남지 않도록 통째로 갈아끼운다
+
+            console.log(`[수학 프로필] ${studentId} — 단원 ${profile.units.length}개 / 시도 ${profile.overall.attempted}문항`);
+            return null;
+        } catch (e) {
+            console.error(`[수학 프로필] 집계 실패: ${studentId}`, e);
+            return null;
+        }
+    }
+);

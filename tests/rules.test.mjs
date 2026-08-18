@@ -356,6 +356,23 @@ const run = async () => {
        (버튼을 숨기는 것만으로는 서버에 직접 보내는 요청을 막지 못한다) */
     const examDoc = (who, id) => doc(who, `${BASE}/integrated_exams/${id}`);
 
+    /* 수학 능력 지표는 Functions 만 쓴다. 클라이언트 쓰기가 열려 있으면
+       학생이 자기 능력치를 브라우저에서 고칠 수 있다. */
+    const mathProfile = (who, sid) => doc(who, `${BASE}/student_math_profile/${sid}`);
+
+    await check('교직원도 수학 지표를 직접 쓸 수 없다 (Functions 전용)', () =>
+        assertFails(setDoc(mathProfile(as('admin1', staffToken('admin1')), 'stu1'), { units: [] })));
+    await check('학생은 자기 수학 지표를 쓸 수 없다', () =>
+        assertFails(setDoc(mathProfile(as('stu1', studentToken('stu1')), 'stu1'), { units: [] })));
+    await check('학생은 자기 수학 지표를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(mathProfile(as('stu1', studentToken('stu1')), 'stu1'))));
+    await check('학부모는 자녀 수학 지표를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(mathProfile(as('mom2', parentToken('mom2')), 'stu1'))));
+    await check('학생은 남의 수학 지표를 읽을 수 없다', () =>
+        assertFails(getDoc(mathProfile(as('stu1', studentToken('stu1')), 'other'))));
+    await check('조교는 학생 수학 지표를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(mathProfile(as('ta1', taToken('ta1')), 'stu1'))));
+
     /* 영단어 능력치(catScore)는 학부모 화면에 '어휘력 n/1000' 으로 표시된다.
        예전에는 학생이 문서 전체를 쓸 수 있어 자기 능력치를 직접 고칠 수 있었다.
        학생이 실제로 필요한 쓰기(단어 세트 뽑기)는 살아 있어야 한다. */
