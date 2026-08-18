@@ -294,6 +294,24 @@ const ClinicTaskManager = ({ currentUser }) => {
         setSelectedTask({ ...selectedTask, items });
     };
 
+    /* 전부 정답인 경우. 번호를 하나도 안 누르면 '채점 안 함' 과 구분되지 않으므로
+       채점했다는 표시만 남깁니다. */
+    const markHomeworkAllCorrect = (index) => {
+        if (!selectedTask || selectedTask._collection !== 'clinic') return;
+        const items = [...selectedTask.items];
+        const it = items[index];
+        const total = Number(it.assignedCount) || 0;
+        items[index] = {
+            ...it,
+            wrongNumbers: Array.isArray(it.wrongNumbers) ? it.wrongNumbers : [],
+            blankNumbers: Array.isArray(it.blankNumbers) ? it.blankNumbers : [],
+            attemptedCount: total - (it.blankNumbers?.length || 0),
+            correctCount: total - (it.blankNumbers?.length || 0) - (it.wrongNumbers?.length || 0),
+            gradedAt: new Date().toISOString()
+        };
+        setSelectedTask({ ...selectedTask, items });
+    };
+
     const handleItemDetailChange = (index, text) => {
         if (!selectedTask || selectedTask._collection !== 'clinic') return;
         const updatedItems = [...selectedTask.items];
@@ -612,11 +630,33 @@ const ClinicTaskManager = ({ currentUser }) => {
                                                                             );
                                                                         })}
                                                                     </div>
-                                                                    {blanks.length > 0 && (
-                                                                        <p className="text-[11px] font-bold text-gray-500 mt-1.5">
-                                                                            안 푼 {blanks.length}개는 정답률 계산에서 빠집니다.
-                                                                        </p>
-                                                                    )}
+                                                                    {/* 전부 정답이면 아무 번호도 안 누르게 됩니다.
+                                                                        그러면 '채점을 안 한 것' 과 구분되지 않아, 집계가
+                                                                        갓 배정된 숙제까지 100점으로 셀 수 있습니다.
+                                                                        그래서 채점했다는 표시를 명시적으로 받습니다. */}
+                                                                    <div className="flex items-center gap-2 flex-wrap mt-1.5">
+                                                                        {item.gradedAt ? (
+                                                                            <span className="text-[11px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                                                                                ✓ 채점 완료
+                                                                            </span>
+                                                                        ) : (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => markHomeworkAllCorrect(idx)}
+                                                                                className="text-[11px] font-bold text-emerald-700 border border-emerald-300 hover:bg-emerald-50 rounded px-2 py-1"
+                                                                            >전부 정답 — 채점 완료</button>
+                                                                        )}
+                                                                        {!item.gradedAt && (
+                                                                            <span className="text-[11px] font-bold text-amber-600">
+                                                                                채점 표시가 없으면 지표에 반영되지 않습니다.
+                                                                            </span>
+                                                                        )}
+                                                                        {blanks.length > 0 && (
+                                                                            <span className="text-[11px] font-bold text-gray-500">
+                                                                                안 푼 {blanks.length}개는 정답률에서 빠집니다.
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
                                                                 </div>
                                                             );
                                                         })()}

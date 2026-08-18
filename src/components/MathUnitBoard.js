@@ -32,6 +32,8 @@ const MathUnitBoard = ({ profile }) => {
     const units = profile?.units || [];
     const overall = profile?.overall || null;
     const unmapped = profile?.unmapped || [];
+    const reliability = profile?.reliability || null;
+    const assignment = profile?.assignment || null;
 
     return (
         <div className="bg-white rounded-[40px] p-8 sm:p-10 border border-slate-200 shadow-sm">
@@ -83,15 +85,93 @@ const MathUnitBoard = ({ profile }) => {
                                     </div>
                                 </div>
 
+                                {/* 숙제는 시험과 합치지 않습니다. 시간 제한 없이 참고서를 보며
+                                    푸는 것이라 정답률이 체계적으로 높고, 합치면 시험 성적이
+                                    실제보다 좋아 보입니다. 둘의 차이 자체가 신호입니다. */}
+                                {u.hw && u.hw.attempted > 0 && (
+                                    <div className="mt-3 pt-3 border-t border-slate-100">
+                                        <div className="text-xs font-bold text-slate-500">
+                                            숙제 {u.hw.attempted}문제 중 <span className="text-slate-800 font-black">{u.hw.correct}개</span>
+                                            <span className="text-slate-400 ml-1.5">
+                                                {Math.round((u.hw.correct / u.hw.attempted) * 100)}%
+                                            </span>
+                                            <span className="text-slate-300 ml-1.5 font-medium">· {u.hw.taskCount}회</span>
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* 어떻게 쟀는가 / 몇 문제로 쟀는가 / 마지막 본 날 — 세 줄은 필수입니다. */}
                                 <div className="mt-3 text-[11px] font-bold text-slate-400 leading-relaxed">
-                                    개념테스트 {u.testCount}회로 측정
+                                    위 숫자는 개념테스트 {u.testCount}회로 측정
                                     {u.blank > 0 && <> · 무응답 {u.blank}개는 제외</>}
                                     {u.lastAt && <> · 마지막 {fmtDate(u.lastAt)}</>}
                                 </div>
                             </div>
                         );
                     })}
+                </div>
+            )}
+
+            {/* 과제 신뢰도 — 숙제와 시험 사이의 괴리.
+                숙제는 시간 제한이 없어 모든 학생에게 괴리가 있습니다.
+                그래서 '몇 %p 벌어졌다' 를 판정으로 쓰지 않고, 두 값을 나란히 보여줍니다.
+                또래 대비(반 평균 차감)가 붙기 전까지는 참고용입니다. */}
+            {reliability?.ready && (
+                <div className="mt-5 bg-slate-50 border border-slate-200 rounded-2xl p-5">
+                    <h4 className="font-black text-slate-800 mb-1">숙제와 시험, 얼마나 붙어 있나</h4>
+                    <p className="text-xs text-slate-400 font-bold mb-3">
+                        숙제는 시간 제한 없이 풀기 때문에 누구나 더 높습니다. 많이 벌어질 때만 의미가 있습니다.
+                    </p>
+                    <div className="flex flex-wrap items-end gap-6">
+                        <div>
+                            <div className="text-[11px] font-bold text-slate-400">숙제</div>
+                            <div className="text-xl font-black text-slate-800">
+                                {reliability.homework.attempted}문제 중 {reliability.homework.correct}개
+                                <span className="text-sm text-slate-400 ml-1.5">{Math.round(reliability.homework.pct * 100)}%</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div className="text-[11px] font-bold text-slate-400">개념테스트</div>
+                            <div className="text-xl font-black text-slate-800">
+                                {reliability.test.attempted}문제 중 {reliability.test.correct}개
+                                <span className="text-sm text-slate-400 ml-1.5">{Math.round(reliability.test.pct * 100)}%</span>
+                            </div>
+                        </div>
+                        {reliability.gap !== null && (
+                            <div className={`px-3 py-2 rounded-xl border text-sm font-black ${
+                                reliability.gap >= 0.3 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-white border-slate-200 text-slate-600'
+                            }`}>
+                                차이 {Math.round(reliability.gap * 100)}%p
+                            </div>
+                        )}
+                    </div>
+                    {reliability.gap >= 0.3 && (
+                        <p className="text-xs font-bold text-amber-700 mt-3 leading-relaxed">
+                            숙제에서는 잘 맞는데 시험에서 떨어집니다. 공부하는 방식을 함께 봐야 할 수 있습니다.
+                            <span className="text-amber-600 font-medium"> (또래와 비교하는 기준은 아직 준비 중입니다)</span>
+                        </p>
+                    )}
+                </div>
+            )}
+
+            {/* 실행 지구력 — 비율이 아니라 개수입니다.
+                '70%' 는 학부모에게 '게으르다' 로 읽히고 '12건 중 9건' 은 사실로 읽힙니다. */}
+            {assignment?.assigned > 0 && (
+                <div className="mt-4 flex items-center gap-3 flex-wrap bg-white border border-slate-200 rounded-2xl p-4">
+                    <span className="text-sm font-black text-slate-700">과제 이행</span>
+                    <div className="flex gap-1">
+                        {Array.from({ length: Math.min(assignment.assigned, 24) }, (_, i) => (
+                            <span key={i} className={`w-3 h-6 rounded-sm ${i < assignment.completed ? 'bg-indigo-500' : 'bg-slate-200'}`} />
+                        ))}
+                    </div>
+                    <span className="text-sm font-bold text-slate-600">
+                        {assignment.assigned}건 중 <span className="text-indigo-700 font-black">{assignment.completed}건</span> 완료
+                    </span>
+                    {assignment.gradedItems < assignment.assigned && (
+                        <span className="text-[11px] font-bold text-slate-400">
+                            그중 {assignment.gradedItems}건 채점됨
+                        </span>
+                    )}
                 </div>
             )}
 

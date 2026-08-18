@@ -1824,10 +1824,37 @@ exports.purgeStoredPasswords = onCall({ timeoutSeconds: 540, memory: "512MiB" },
    계산 자체는 functions/mathProfile.js 에 순수 함수로 있다.
    트리거 안에 묻어 두면 배포해야만 확인할 수 있기 때문이다.
    ========================================================================= */
-const { buildMathProfile, aggregationSignature } = require("./mathProfile");
+const { buildMathProfile, aggregationSignature, taskAggregationSignature } = require("./mathProfile");
 
 const DIAG_PATH = `artifacts/${APP_ID}/public/data/student_exam_diagnostics`;
 const MATH_PROFILE_PATH = `artifacts/${APP_ID}/public/data/student_math_profile`;
+
+const CLINIC_TASKS_PATH = `artifacts/${APP_ID}/public/data/clinic_tasks`;
+
+/* 한 학생의 프로필을 통째로 다시 만든다.
+   개념테스트와 숙제 두 곳을 모두 읽는다 — 어느 쪽이 바뀌어도 같은 결과가 나와야 한다. */
+async function rebuildMathProfile(studentId, studentName) {
+    const db = admin.firestore();
+    const [diagSnap, taskSnap] = await Promise.all([
+        db.collection(DIAG_PATH).where('studentId', '==', studentId).get(),
+        db.collection(CLINIC_TASKS_PATH).where('studentId', '==', studentId).get()
+    ]);
+
+    const profile = buildMathProfile({
+        diagnostics: diagSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        tasks: taskSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    });
+
+    await db.doc(`${MATH_PROFILE_PATH}/${studentId}`).set({
+        studentId,
+        studentName: studentName || '',
+        ...profile,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: false });   // 지운 기록이 남지 않도록 통째로 갈아끼운다
+
+    console.log(`[수학 프로필] ${studentId} — 단원 ${profile.units.length}개 / 시험 ${profile.overall.attempted}문항 / 숙제 ${profile.overall.hw.attempted}문항`);
+    return profile;
+}
 
 exports.syncMathProfile = onDocumentWritten(
     { document: `artifacts/${APP_ID}/public/data/student_exam_diagnostics/{docId}`, timeoutSeconds: 120 },
@@ -1846,26 +1873,36 @@ exports.syncMathProfile = onDocumentWritten(
         }
 
         try {
-            const snap = await admin.firestore()
-                .collection(DIAG_PATH)
-                .where('studentId', '==', studentId)
-                .get();
-
-            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            const profile = buildMathProfile(docs);
-
-            await admin.firestore().doc(`${MATH_PROFILE_PATH}/${studentId}`).set({
-                studentId,
-                studentName: after?.studentName || before?.studentName || '',
-                ...profile,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            }, { merge: false });   // 지운 기록이 남지 않도록 통째로 갈아끼운다
-
-            console.log(`[수학 프로필] ${studentId} — 단원 ${profile.units.length}개 / 시도 ${profile.overall.attempted}문항`);
-            return null;
+            await rebuildMathProfile(studentId, after?.studentName || before?.studentName);
         } catch (e) {
             console.error(`[수학 프로필] 집계 실패: ${studentId}`, e);
+        }
+        return null;
+    }
+);
+
+/* 숙제(클리닉 임무)가 바뀌어도 같은 프로필을 다시 만든다.
+   조교가 교재 범위를 채점하면 그 결과가 단원별 현황과 과제 신뢰도로 간다. */
+exports.syncMathProfileFromHomework = onDocumentWritten(
+    { document: `artifacts/${APP_ID}/public/data/clinic_tasks/{docId}`, timeoutSeconds: 120 },
+    async (event) => {
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+        const studentId = after?.studentId || before?.studentId;
+        if (!studentId) return null;
+
+        /* 클리닉 문서는 전화 상태·출석 같은 값으로도 자주 바뀐다.
+           집계에 쓰이는 값이 그대로면 다시 계산하지 않는다. */
+        if (before && after && taskAggregationSignature(before) === taskAggregationSignature(after)) {
             return null;
         }
+
+        try {
+            await rebuildMathProfile(studentId, after?.studentName || before?.studentName);
+        } catch (e) {
+            console.error(`[수학 프로필] 숙제 집계 실패: ${studentId}`, e);
+        }
+        return null;
     }
 );
