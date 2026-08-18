@@ -95,6 +95,76 @@ export const groupByCategory = (units) => {
 export const findUnit = (unitId) =>
     CURRICULUM_UNITS.find(u => u.unitId === unitId) || null;
 
+/* 두 교육과정에 같은 이름으로 존재하는 단원.
+   예) 중등 '수학 3-1 · 인수분해' 는 2015·2022 양쪽에 있습니다.
+   목록에 똑같은 줄이 두 번 뜨면 조교가 무엇을 골라야 할지 알 수 없으므로,
+   이런 단원에만 교육과정을 표시합니다. 전부에 붙이면 잡음이 됩니다. */
+const AMBIGUOUS_KEYS = (() => {
+    const byKey = new Map();
+    CURRICULUM_UNITS.forEach(u => {
+        const k = `${u.course}|${u.unitName}`;
+        if (!byKey.has(k)) byKey.set(k, new Set());
+        byKey.get(k).add(u.curriculum);
+    });
+    const out = new Set();
+    byKey.forEach((curs, k) => { if (curs.size > 1) out.add(k); });
+    return out;
+})();
+
+export const isAmbiguousUnit = (unit) =>
+    !!unit && AMBIGUOUS_KEYS.has(`${unit.course}|${unit.unitName}`);
+
+/* ── 단원 검색 ───────────────────────────────────────────────
+   이 학원은 반마다 강사마다 나가는 과정이 다릅니다.
+   한 반이 중1-1·중2-1·중3-1·공통수학1 에서 일부씩 뽑아 나가기도 합니다.
+   그래서 '과정을 고른 뒤 단원을 고르는' 2단계 방식은 오히려 방해가 됩니다.
+   조교가 단원 이름만 알아도 찾을 수 있어야 합니다.
+
+   별칭(aliases)까지 훑으므로 교재 표기로 쳐도 찾아집니다. */
+const searchNorm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+
+export const searchUnits = (queryText, options = {}) => {
+    const { limit = 30, curriculum = null, schoolLevel = null, preferUnitIds = [] } = options;
+    const q = searchNorm(queryText);
+
+    let pool = CURRICULUM_UNITS;
+    if (curriculum) pool = pool.filter(u => u.curriculum === curriculum);
+    if (schoolLevel) pool = pool.filter(u => u.schoolLevel === schoolLevel);
+
+    const prefer = new Set(preferUnitIds || []);
+
+    const scored = [];
+    pool.forEach(u => {
+        // 자주 쓰는 단원(예: 이 반이 이미 다룬 단원)을 위로 올립니다.
+        const bonus = prefer.has(u.unitId) ? -100 : 0;
+
+        if (!q) { scored.push({ u, score: bonus }); return; }
+
+        const name = searchNorm(u.unitName);
+        const cat = searchNorm(u.category);
+        const course = searchNorm(u.course);
+        const alias = (u.aliases || []).map(searchNorm);
+
+        let score = null;
+        if (name === q) score = 0;
+        else if (name.startsWith(q)) score = 1;
+        else if (alias.some(a => a === q)) score = 2;
+        else if (name.includes(q)) score = 3;
+        else if (alias.some(a => a.includes(q))) score = 4;
+        else if (cat.includes(q)) score = 5;
+        else if (course.includes(q)) score = 6;
+
+        if (score !== null) scored.push({ u, score: score + bonus });
+    });
+
+    return scored
+        .sort((a, b) => a.score - b.score
+            || a.u.course.localeCompare(b.u.course)
+            || a.u.order - b.u.order)
+        .slice(0, limit)
+        .map(x => x.u);
+};
+
 /* ── 옛 기록 붙이기 ──────────────────────────────────────────
    자유 텍스트로 저장된 옛 단원명을 마스터에 맞춰 봅니다.
    백필과, 강사가 손으로 친 값을 확인할 때 씁니다.
