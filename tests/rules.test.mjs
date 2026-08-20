@@ -356,6 +356,25 @@ const run = async () => {
        (버튼을 숨기는 것만으로는 서버에 직접 보내는 요청을 막지 못한다) */
     const examDoc = (who, id) => doc(who, `${BASE}/integrated_exams/${id}`);
 
+    /* 숙제. 학생 한 명 · 한 번 배정이 문서 하나다. */
+    const hwDoc = (who, id) => doc(who, `${BASE}/homework/${id}`);
+
+    await check('강사는 숙제를 낼 수 있다', () =>
+        assertSucceeds(setDoc(hwDoc(as('teacher1', lecturerToken('teacher1')), 'hw1'),
+            { studentId: 'stu1', studentName: '학생일', classId: 'c1', items: [] })));
+    await check('조교는 숙제를 채점할 수 있다', () =>
+        assertSucceeds(updateDoc(hwDoc(as('ta1', taToken('ta1')), 'hw1'), { status: 'graded' })));
+    await check('학생은 자기 숙제를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(hwDoc(as('stu1', studentToken('stu1')), 'hw1'))));
+    await check('학부모는 자녀 숙제를 읽을 수 있다', () =>
+        assertSucceeds(getDoc(hwDoc(as('mom2', parentToken('mom2')), 'hw1'))));
+    await check('학생은 숙제를 채점할 수 없다', () =>
+        assertFails(updateDoc(hwDoc(as('stu1', studentToken('stu1')), 'hw1'), { status: 'graded' })));
+    await check('학생은 남의 숙제를 읽을 수 없다', async () => {
+        await setDoc(hwDoc(as('admin1', staffToken('admin1')), 'hw2'), { studentId: 'other', classId: 'c2', items: [] });
+        await assertFails(getDoc(hwDoc(as('stu1', studentToken('stu1')), 'hw2')));
+    });
+
     /* 교재 마스터. 숙제를 낼 때 범위와 단원을 골라 쓰는 참조 자료다. */
     const bookDoc = (who, id) => doc(who, `${BASE}/textbooks/${id}`);
 

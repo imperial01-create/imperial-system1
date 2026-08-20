@@ -1830,19 +1830,27 @@ const DIAG_PATH = `artifacts/${APP_ID}/public/data/student_exam_diagnostics`;
 const MATH_PROFILE_PATH = `artifacts/${APP_ID}/public/data/student_math_profile`;
 
 const CLINIC_TASKS_PATH = `artifacts/${APP_ID}/public/data/clinic_tasks`;
+const HOMEWORK_PATH = `artifacts/${APP_ID}/public/data/homework`;
 
 /* 한 학생의 프로필을 통째로 다시 만든다.
    개념테스트와 숙제 두 곳을 모두 읽는다 — 어느 쪽이 바뀌어도 같은 결과가 나와야 한다. */
 async function rebuildMathProfile(studentId, studentName) {
     const db = admin.firestore();
-    const [diagSnap, taskSnap] = await Promise.all([
+    /* 숙제는 homework 컬렉션이 정본이다.
+       clinic_tasks 도 함께 읽는 이유: 숙제를 분리하기 전에 클리닉 임무에 붙여
+       배정한 기록이 남아 있을 수 있다. 그것까지 세어야 숫자가 갑자기 줄지 않는다. */
+    const [diagSnap, taskSnap, hwSnap] = await Promise.all([
         db.collection(DIAG_PATH).where('studentId', '==', studentId).get(),
-        db.collection(CLINIC_TASKS_PATH).where('studentId', '==', studentId).get()
+        db.collection(CLINIC_TASKS_PATH).where('studentId', '==', studentId).get(),
+        db.collection(HOMEWORK_PATH).where('studentId', '==', studentId).get()
     ]);
 
     const profile = buildMathProfile({
         diagnostics: diagSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-        tasks: taskSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        tasks: [
+            ...taskSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+            ...hwSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        ]
     });
 
     await db.doc(`${MATH_PROFILE_PATH}/${studentId}`).set({
@@ -1894,6 +1902,30 @@ exports.syncMathProfileFromHomework = onDocumentWritten(
 
         /* 클리닉 문서는 전화 상태·출석 같은 값으로도 자주 바뀐다.
            집계에 쓰이는 값이 그대로면 다시 계산하지 않는다. */
+        if (before && after && taskAggregationSignature(before) === taskAggregationSignature(after)) {
+            return null;
+        }
+
+        try {
+            await rebuildMathProfile(studentId, after?.studentName || before?.studentName);
+        } catch (e) {
+            console.error(`[수학 프로필] 숙제 집계 실패: ${studentId}`, e);
+        }
+        return null;
+    }
+);
+
+/* 숙제가 바뀌면 프로필을 다시 만든다.
+   조교가 번호를 찍어 채점하면 그 결과가 단원별 현황과 과제 신뢰도로 간다. */
+exports.syncMathProfileFromHomeworkDoc = onDocumentWritten(
+    { document: `artifacts/${APP_ID}/public/data/homework/{docId}`, timeoutSeconds: 120 },
+    async (event) => {
+        const before = event.data?.before?.exists ? event.data.before.data() : null;
+        const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+        const studentId = after?.studentId || before?.studentId;
+        if (!studentId) return null;
+
         if (before && after && taskAggregationSignature(before) === taskAggregationSignature(after)) {
             return null;
         }

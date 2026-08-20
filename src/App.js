@@ -11,7 +11,7 @@ import {
   Home, Calendar as CalendarIcon, Settings, LayoutDashboard, LogOut, Menu, X, CheckCircle, Eye, EyeOff, AlertCircle, 
   Video, Loader, DollarSign, Briefcase, Printer, BookOpen, User, Target, Compass, FileText, Activity,
   Clock, Trash2, MessageSquare, Globe, Phone, Search, Clipboard, Book, Users, Star, ArrowRight, ChevronDown, ChevronRight,
-  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays, Share2 
+  PieChart, UserPlus, UserCheck, Brain, GraduationCap, Sparkles, CalendarDays, Share2, ClipboardList 
 } from 'lucide-react'; // 🚀 CTO Patch: 온톨로지 맵을 위한 Share2 아이콘 추가
 
 import { doc, updateDoc, getDoc } from 'firebase/firestore';
@@ -36,6 +36,7 @@ const PayrollManager = React.lazy(() => import('./features/PayrollManager'));
 const PickupRequest = React.lazy(() => import('./features/PickupRequest'));
 const ExamArchive = React.lazy(() => import('./features/ExamArchive'));
 const TextbookManager = React.lazy(() => import('./features/TextbookManager'));
+const HomeworkManager = React.lazy(() => import('./features/HomeworkManager'));
 const SchoolStrategy = React.lazy(() => import('./features/SchoolStrategy'));
 const ExamDiagnosticInput = React.lazy(() => import('./features/ExamDiagnosticInput'));
 const ExamDiagnosticReport = React.lazy(() => import('./features/ExamDiagnosticReport'));
@@ -100,6 +101,7 @@ const getMenuGroups = (currentUser) => [
             { name: "AI 수학 지식 맵", path: "/ontology", icon: Share2, desc: "수학 커리큘럼 선행 및 취약점 시각화", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'] },
             { name: "기출 아카이브", path: "/exams", icon: BookOpen, desc: "학교별 기출문제 은행", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "교재 관리", path: "/textbooks", icon: Book, desc: "문제집 범위·단원 등록 (숙제 배정용)", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
+            { name: "숙제 관리", path: "/homework", icon: ClipboardList, desc: "교재에서 숙제 출제 및 오답 채점", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
             { name: "Voca 출제/관리", studentName: "오늘의 영단어", path: "/voca", icon: Book, desc: "맞춤형 단어장 및 고속 채점 시스템", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student', 'parent'], condition: (u) => !['lecturer', 'ta'].includes(u?.role) || toMainSubject(u?.subject) === '영어' },
             { name: "영단어 챌린지", path: "/voca-challenge", icon: Star, desc: "게이미피케이션 기반 단어 암기", roles: ['admin', 'admin_assistant', 'lecturer', 'ta', 'student'] },
             { name: "시험 진단 입력", path: "/exam-diagnostics", icon: Target, desc: "시험 결과를 입력하고 리포트 생성", roles: ['admin', 'admin_assistant', 'lecturer', 'ta'] },
@@ -666,6 +668,7 @@ const AppLayout = ({ currentUser, handleLogout }) => {
                         <Route path="/pickup" element={<PickupRequest currentUser={currentUser} />} />
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/exams" element={<ExamArchive currentUser={currentUser} />} />}
                         {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/textbooks" element={<TextbookManager currentUser={currentUser} />} />}
+                        {['admin', 'lecturer', 'ta', 'admin_assistant'].includes(currentUser.role) && <Route path="/homework" element={<HomeworkManager currentUser={currentUser} />} />}
                         <Route path="/payroll-mgmt" element={<PayrollManager currentUser={currentUser} users={users} viewMode="management" />} />
                         <Route path="/payroll-check" element={<PayrollManager currentUser={currentUser} users={users} viewMode="personal" />} />
                         <Route path="/exam-diagnostics" element={['admin', 'lecturer', 'admin_assistant', 'ta'].includes(currentUser.role) ? <ExamDiagnosticInput currentUser={currentUser} /> : <Navigate to="/dashboard" replace />} />
