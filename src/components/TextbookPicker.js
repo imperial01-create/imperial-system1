@@ -86,6 +86,12 @@ const TextbookPicker = ({ onPick, onClose, subject = null }) => {
                                                    이 값이 없으면 채점 번호판이 답안지와 어긋납니다. */
                                                 startNo: Math.max(1, Number(s.startNo) || 1),
                                                 assignedCount: Number(s.count) || 0,
+                                                /* 교재에 등록된 전체 범위. 숙제는 그 일부만 내는 경우가 많으므로
+                                                   배정 화면에서 좁힐 수 있어야 하고, 좁힐 때 벗어나지 않는지
+                                                   확인하려면 원래 범위를 알아야 합니다. */
+                                                sectionStartNo: Math.max(1, Number(s.startNo) || 1),
+                                                sectionCount: Number(s.count) || 0,
+                                                sectionLabel: s.label || '',
                                                 text: `${b.title} ${s.label || s.unitName} (${s.count}문항)`
                                             })}
                                             className="text-[11px] font-bold border border-gray-200 hover:border-indigo-400 hover:bg-indigo-50 rounded px-2 py-1.5 text-left"

@@ -101,10 +101,37 @@ const HomeworkManager = ({ currentUser }) => {
     const toggleAll = () => setPicked(allPicked ? [] : studentsInClass.map(s => s.id));
     const toggleOne = (id) => setPicked(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
+    /* 이 반에 같은 교재 범위를 지금까지 어디까지 냈는지.
+       안 보이면 지난주와 겹치거나 사이가 빕니다. */
+    const assignedRangesOf = useCallback((textbookId, sectionKey) => {
+        if (!textbookId || !sectionKey) return [];
+        const seen = new Map();   // batchId 단위로 한 번만 (같은 숙제가 학생 수만큼 있으므로)
+        list.forEach(hw => (hw.items || []).forEach(it => {
+            if (it.textbookId !== textbookId || it.sectionKey !== sectionKey) return;
+            const from = Number(it.startNo) || 0;
+            const cnt = Number(it.assignedCount) || 0;
+            if (!from || !cnt) return;
+            const key = `${hw.batchId || hw.id}|${from}|${cnt}`;
+            if (!seen.has(key)) seen.set(key, { from, to: from + cnt - 1, date: hw.assignedDate });
+        }));
+        return [...seen.values()].sort((a, b) => a.from - b.from);
+    }, [list]);
+
     const assign = async () => {
         const real = items.filter(i => (i.taskContent || '').trim() !== '');
         if (picked.length === 0) return alert('숙제를 받을 학생을 골라주세요.');
         if (real.length === 0) return alert('숙제 항목을 최소 하나 입력해주세요.');
+
+        /* 범위를 좁히다 교재 밖으로 나가면, 채점 번호판이 없는 번호를 만들어 냅니다. */
+        const bad = real.find(it => {
+            if (!it.unitId) return false;
+            const secStart = Number(it.sectionStartNo) || Number(it.startNo) || 1;
+            const secEnd = secStart + (Number(it.sectionCount) || Number(it.assignedCount) || 0) - 1;
+            const from = Number(it.startNo) || secStart;
+            const to = from + (Number(it.assignedCount) || 0) - 1;
+            return from < secStart || to > secEnd || from > to;
+        });
+        if (bad) return alert(`'${bad.taskContent}' 의 낼 범위가 교재 범위를 벗어났습니다.`);
 
         setAssigning(true);
         try {
@@ -128,7 +155,11 @@ const HomeworkManager = ({ currentUser }) => {
                     status: 'assigned',
                     items: real.map(it => ({
                         key: it.key,
-                        taskContent: it.taskContent.trim(),
+                        /* 범위를 좁혔으면 적힌 문구도 맞춥니다.
+                           '(60문항)' 이라 적힌 채 30문항이 나가면 학생·조교가 헷갈립니다. */
+                        taskContent: (it.unitId && Number(it.assignedCount) !== Number(it.sectionCount))
+                            ? `${it.textbookTitle || ''} ${it.unitName} ${it.startNo}~${it.startNo + it.assignedCount - 1}번 (${it.assignedCount}문항)`.trim()
+                            : it.taskContent.trim(),
                         textbookId: it.textbookId || null,
                         textbookTitle: it.textbookTitle || null,
                         sectionKey: it.sectionKey || null,
@@ -350,14 +381,63 @@ const HomeworkManager = ({ currentUser }) => {
                                     )}
                                 </div>
 
-                                {it.unitId && (
-                                    <div className="ml-7 mt-1 text-[11px] font-bold text-indigo-700">
-                                        {it.unitName} · {it.startNo}~{it.startNo + it.assignedCount - 1}번 ({it.assignedCount}문항)
-                                        <button type="button"
-                                                onClick={() => setItems(items.map((x, j) => j === idx ? { key: x.key, taskContent: x.taskContent } : x))}
-                                                className="ml-1.5 text-gray-400 hover:text-red-500">연결 해제</button>
-                                    </div>
-                                )}
+                                {/* 교재는 목차 그대로 등록하고, 낼 때 범위를 좁힙니다.
+                                    한 단원을 여러 주에 나눠 내는 일이 많아서, 여기서 못 좁히면
+                                    단원 전체를 한 번에 내거나 교재를 잘게 쪼개 등록해야 합니다. */}
+                                {it.unitId && (() => {
+                                    const secStart = Number(it.sectionStartNo) || Number(it.startNo) || 1;
+                                    const secCount = Number(it.sectionCount) || Number(it.assignedCount) || 0;
+                                    const secEnd = secStart + secCount - 1;
+                                    const from = Number(it.startNo) || secStart;
+                                    const to = from + (Number(it.assignedCount) || 0) - 1;
+                                    const outOfRange = from < secStart || to > secEnd || from > to;
+
+                                    const setRange = (nf, nt) => setItems(items.map((x, j) => j === idx
+                                        ? { ...x, startNo: nf, assignedCount: Math.max(0, nt - nf + 1) } : x));
+
+                                    return (
+                                        <div className="ml-7 mt-1.5 bg-indigo-50/60 border border-indigo-100 rounded-xl p-2.5">
+                                            <div className="text-[11px] font-bold text-indigo-800 mb-1.5">
+                                                {it.unitName}
+                                                <span className="text-indigo-400 font-medium ml-1.5">
+                                                    교재 전체 {secStart}~{secEnd}번 ({secCount}문항)
+                                                </span>
+                                                <button type="button"
+                                                        onClick={() => setItems(items.map((x, j) => j === idx ? { key: x.key, taskContent: x.taskContent } : x))}
+                                                        className="ml-1.5 text-gray-400 hover:text-red-500">연결 해제</button>
+                                            </div>
+
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-[11px] font-bold text-gray-600">낼 범위</span>
+                                                <input type="number" min={secStart} max={secEnd} value={from}
+                                                       onChange={e => setRange(Math.max(1, Number(e.target.value) || secStart), to)}
+                                                       className="w-20 border border-indigo-200 p-1.5 rounded-lg text-sm font-black text-center outline-none focus:border-indigo-500" />
+                                                <span className="text-gray-400 font-bold">~</span>
+                                                <input type="number" min={secStart} max={secEnd} value={to}
+                                                       onChange={e => setRange(from, Math.max(1, Number(e.target.value) || from))}
+                                                       className="w-20 border border-indigo-200 p-1.5 rounded-lg text-sm font-black text-center outline-none focus:border-indigo-500" />
+                                                <span className={`text-[11px] font-black ${outOfRange ? 'text-rose-600' : 'text-indigo-700'}`}>
+                                                    {outOfRange ? '교재 범위를 벗어났습니다' : `${it.assignedCount}문항`}
+                                                </span>
+                                                {(from !== secStart || to !== secEnd) && !outOfRange && (
+                                                    <button type="button" onClick={() => setRange(secStart, secEnd)}
+                                                            className="text-[11px] font-bold text-gray-400 hover:text-indigo-700">전체로</button>
+                                                )}
+                                            </div>
+
+                                            {/* 지난주에 어디까지 냈는지 안 보이면 겹치거나 빠집니다. */}
+                                            {(() => {
+                                                const past = assignedRangesOf(it.textbookId, it.sectionKey);
+                                                if (past.length === 0) return null;
+                                                return (
+                                                    <div className="text-[11px] font-bold text-gray-500 mt-1.5">
+                                                        이 반에 이미 낸 범위 — {past.map(p => `${p.from}~${p.to}번(${p.date?.slice(5) || ''})`).join(' · ')}
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    );
+                                })()}
 
                                 {pickerIdx === idx && (
                                     <div className="ml-7 mt-2">
