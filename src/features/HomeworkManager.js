@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { Button, Card, Modal } from '../components/UI';
 import TextbookPicker from '../components/TextbookPicker';
+import { pickSeasonForToday } from '../hooks/useSeasonAutoSelect';
 import { useData } from '../contexts/DataContext';
 import { APP_ID } from '../constants';
 
@@ -41,23 +42,51 @@ const HomeworkManager = ({ currentUser }) => {
     const data = useData();
     const [tab, setTab] = useState('grade');
 
-    const classes = useMemo(
-        () => (data?.classes || []).filter(c => c.status !== 'inactive'),
-        [data?.classes]
-    );
+    /* 시즌은 고르지 않습니다. 숙제는 늘 지금 진행 중인 시즌의 반에 내므로
+       오늘 날짜에 해당하는 시즌을 자동으로 적용합니다.
+       시험 진단 입력(ExamDiagnosticInput)과 같은 규칙이어야 두 화면의 반 목록이 어긋나지 않습니다. */
+    const activeSeason = useMemo(() => {
+        const list = Array.isArray(data?.masterData?.seasons) ? data.masterData.seasons : [];
+        const id = pickSeasonForToday(list, 'all');
+        return { id, name: list.find(s => s.id === id)?.name || '전체 시즌' };
+    }, [data?.masterData]);
+
+    const classes = useMemo(() => {
+        const seasonId = activeSeason.id;
+        return (data?.classes || []).filter(c => {
+            if (seasonId !== 'all' && c.season !== seasonId) return false;
+            // 아직 승인 전이거나 반려된 반에는 숙제를 낼 수 없습니다.
+            if (c.status === 'proposed' || c.status === 'rejected' || c.status === 'inactive') return false;
+            /* 강사는 자기 반만, 나머지 교직원은 전부 봅니다.
+               조교는 담당 반 정보가 따로 없어 반을 특정할 수 없습니다. */
+            if (currentUser?.role === 'lecturer') {
+                return c.lecturerId === currentUser?.id || c.instructorId === currentUser?.id || c.teacherId === currentUser?.id;
+            }
+            return true;
+        });
+    }, [data?.classes, activeSeason, currentUser]);
+
     const [classId, setClassId] = useState('');
-    useEffect(() => { if (!classId && classes.length) setClassId(classes[0].id); }, [classes, classId]);
+    /* 시즌이 바뀌어 지금 고른 반이 목록에서 사라지면 선택을 비웁니다.
+       안 비우면 지난 시즌 반에 숙제를 내게 됩니다. */
+    useEffect(() => {
+        if (classId && !classes.some(c => c.id === classId)) { setClassId(''); return; }
+        if (!classId && classes.length) setClassId(classes[0].id);
+    }, [classes, classId]);
     const selectedClass = classes.find(c => c.id === classId) || null;
 
+    /* ⚠️ 컨텍스트에는 students 가 없습니다. users 에서 걸러 만들어야 합니다.
+       (ExamDiagnosticInput 도 같은 방식입니다) data.students 를 그냥 쓰면
+       목록이 늘 비어 있고, 화면은 '이 반에 학생이 없습니다' 로만 보입니다. */
     const studentsInClass = useMemo(() => {
         if (!classId) return [];
-        const ids = (data?.enrollments || [])
+        const ids = new Set((data?.enrollments || [])
             .filter(e => e.classId === classId && e.status === 'active')
-            .map(e => e.studentId);
-        return (data?.students || [])
-            .filter(s => ids.includes(s.id))
+            .map(e => e.studentId));
+        return (Array.isArray(data?.users) ? data.users : [])
+            .filter(u => u && u.role === 'student' && ids.has(u.id))
             .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-    }, [classId, data?.enrollments, data?.students]);
+    }, [classId, data?.enrollments, data?.users]);
 
     /* ───────── 출제 ───────── */
     const [picked, setPicked] = useState([]);          // studentId[]
@@ -233,13 +262,20 @@ const HomeworkManager = ({ currentUser }) => {
                         교재에서 범위를 골라 내고, 틀린 번호로 채점합니다.
                     </span>
                 </div>
-                <select
-                    className="border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-indigo-400 min-w-[200px]"
-                    value={classId} onChange={e => setClassId(e.target.value)}
-                >
-                    {classes.length === 0 && <option value="">반이 없습니다</option>}
-                    {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                {/* 어느 시즌이 적용됐는지 보여 줍니다.
+                    안 보이면 '반이 왜 안 뜨지' 를 사람이 원인 모른 채 겪습니다. */}
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-2.5 py-2 whitespace-nowrap">
+                        {activeSeason.name}
+                    </span>
+                    <select
+                        className="border-2 border-gray-200 p-2.5 rounded-xl font-bold outline-none focus:border-indigo-400 min-w-[200px]"
+                        value={classId} onChange={e => setClassId(e.target.value)}
+                    >
+                        {classes.length === 0 && <option value="">이 시즌에 담당 반이 없습니다</option>}
+                        {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                </div>
             </div>
 
             <div className="flex gap-2 border-b border-gray-200">
