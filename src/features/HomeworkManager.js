@@ -88,6 +88,15 @@ const HomeworkManager = ({ currentUser }) => {
             .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
     }, [classId, data?.enrollments, data?.users]);
 
+    /* 배정한 숙제 목록. 채점 탭에서 쓰지만, 출제할 때 '이미 낸 범위' 를 보여주는 데도 씁니다.
+       그래서 두 섹션보다 위에 둡니다 — 아래에 두면 assignedRangesOf 의 의존성이
+       선언 전에 평가되어 'Cannot access before initialization' 으로 화면이 죽습니다. */
+    const [list, setList] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [savingId, setSavingId] = useState('');
+    const [onlyUngraded, setOnlyUngraded] = useState(true);
+
     /* ───────── 출제 ───────── */
     const [picked, setPicked] = useState([]);          // studentId[]
     const [items, setItems] = useState([newItem()]);
@@ -189,11 +198,6 @@ const HomeworkManager = ({ currentUser }) => {
     };
 
     /* ───────── 채점 ───────── */
-    const [list, setList] = useState([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const [savingId, setSavingId] = useState('');
-    const [onlyUngraded, setOnlyUngraded] = useState(true);
 
     const loadList = useCallback(async () => {
         if (!classId) { setList([]); return; }
